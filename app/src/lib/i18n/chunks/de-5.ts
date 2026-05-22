@@ -226,8 +226,7 @@ const de5: TranslationMap = {
   'settings.mcpServer.openConfigFile': 'Konfigurationsdatei öffnen',
   'settings.mcpServer.binaryPathNotFound':
     'OpenHuman-Binärdatei nicht gefunden. Wenn du aus dem Quellcode arbeitest, baue sie mit: cargo build --bin openhuman-core',
-  'settings.mcpServer.openConfigError':
-    'Konfigurationsdatei konnte nicht geöffnet werden',
+  'settings.mcpServer.openConfigError': 'Konfigurationsdatei konnte nicht geöffnet werden',
   'settings.mcpServer.clientClaudeDesktop': 'Claude Desktop',
   'settings.mcpServer.clientCursor': 'Cursor',
   'settings.mcpServer.clientCodex': 'Codex',
