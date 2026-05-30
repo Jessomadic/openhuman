@@ -37,10 +37,29 @@ impl LocalAiService {
         }
         let system = "You summarize internal assistant context. Keep concise bullet points.";
         let prompt = format!(
-            "Summarize this text in concise bullet points. Preserve decisions and commitments.\\n\\n{}",
+            "Summarize this text in concise bullet points. Preserve decisions and commitments.\n\n{}",
             text
         );
         self.inference(config, system, &prompt, max_tokens.or(Some(128)), true)
+            .await
+    }
+
+    pub async fn summarize_interactive(
+        &self,
+        config: &Config,
+        text: &str,
+        max_tokens: Option<u32>,
+    ) -> Result<String, String> {
+        log::trace!("[local_ai] summarize_interactive bypasses scheduler_gate permit");
+        if !config.local_ai.runtime_enabled {
+            return Err("local ai is disabled".to_string());
+        }
+        let system = "You summarize internal assistant context. Keep concise bullet points.";
+        let prompt = format!(
+            "Summarize this text in concise bullet points. Preserve decisions and commitments.\n\n{}",
+            text
+        );
+        self.inference_interactive(config, system, &prompt, max_tokens.or(Some(128)), true)
             .await
     }
 
@@ -60,6 +79,26 @@ impl LocalAiService {
             "You are a helpful assistant."
         };
         self.inference(config, system, prompt, max_tokens.or(Some(160)), no_think)
+            .await
+    }
+
+    pub async fn prompt_interactive(
+        &self,
+        config: &Config,
+        prompt: &str,
+        max_tokens: Option<u32>,
+        no_think: bool,
+    ) -> Result<String, String> {
+        log::trace!("[local_ai] prompt_interactive bypasses scheduler_gate permit");
+        if !config.local_ai.runtime_enabled {
+            return Err("local ai is disabled".to_string());
+        }
+        let system = if no_think {
+            "You are a concise assistant. Return only the final answer. Do not include reasoning or chain-of-thought."
+        } else {
+            "You are a helpful assistant."
+        };
+        self.inference_interactive(config, system, prompt, max_tokens.or(Some(160)), no_think)
             .await
     }
 
@@ -94,9 +133,12 @@ impl LocalAiService {
     /// turn against it than show stale or empty completions for the
     /// duration of the backfill.
     ///
-    /// This is the only path inside [`LocalAiService`] that opts out of
-    /// the gate. Every other entry point (`inference`, `prompt`,
-    /// `summarize`, `inline_complete`, `vision_prompt`, `embed`)
+    /// Along with [`Self::prompt_interactive`],
+    /// [`Self::summarize_interactive`], and
+    /// [`Self::chat_with_history_interactive`], this is one of the paths
+    /// inside [`LocalAiService`] that opts out of the gate. Every other
+    /// entry point (`inference`, `prompt`, `summarize`,
+    /// `inline_complete`, `vision_prompt`, `embed`, `chat_with_history`)
     /// acquires before talking to Ollama.
     pub async fn inline_complete_interactive(
         &self,
@@ -194,6 +236,28 @@ impl LocalAiService {
         messages: Vec<crate::openhuman::inference::local::ollama::OllamaChatMessage>,
         max_tokens: Option<u32>,
     ) -> Result<String, String> {
+        self.chat_with_history_internal(config, messages, max_tokens, true)
+            .await
+    }
+
+    pub(crate) async fn chat_with_history_interactive(
+        &self,
+        config: &Config,
+        messages: Vec<crate::openhuman::inference::local::ollama::OllamaChatMessage>,
+        max_tokens: Option<u32>,
+    ) -> Result<String, String> {
+        log::trace!("[local_ai] chat_with_history_interactive bypasses scheduler_gate permit");
+        self.chat_with_history_internal(config, messages, max_tokens, false)
+            .await
+    }
+
+    async fn chat_with_history_internal(
+        &self,
+        config: &Config,
+        messages: Vec<crate::openhuman::inference::local::ollama::OllamaChatMessage>,
+        max_tokens: Option<u32>,
+        gated: bool,
+    ) -> Result<String, String> {
         if !config.local_ai.runtime_enabled {
             return Err("local ai is disabled".to_string());
         }
@@ -206,8 +270,11 @@ impl LocalAiService {
             return Err("messages must not be empty".to_string());
         }
 
-        // Multi-turn local chat is background LLM-bound work — gate it.
-        let _gate_permit = crate::openhuman::scheduler_gate::wait_for_capacity().await;
+        let _gate_permit = if gated {
+            crate::openhuman::scheduler_gate::wait_for_capacity().await
+        } else {
+            None
+        };
 
         if provider_from_config(config) == LocalAiProvider::LmStudio {
             let started = std::time::Instant::now();
@@ -350,13 +417,15 @@ impl LocalAiService {
     /// the scheduler gate's LLM permit**.
     ///
     /// Used by user-arrival paths where the user is staring at the
-    /// output (push-to-talk dictation cleanup, in particular). If we
+    /// output (push-to-talk dictation cleanup and debug summary tests, in
+    /// particular). If we
     /// queue these behind a long-running memory backfill, the user
     /// experiences a frozen UI; better to race the call against
     /// background work and accept the contention than to silently
     /// degrade interactivity.
     ///
-    /// Sibling to [`Self::inline_complete_interactive`] for autocomplete.
+    /// Sibling to [`Self::inline_complete_interactive`] for autocomplete and
+    /// [`Self::summarize_interactive`] for explicit debug summary requests.
     /// Every other entry point (`inference`, `prompt`, `summarize`,
     /// `inline_complete`, `vision_prompt`, `embed`, `chat_with_history`)
     /// remains gated.

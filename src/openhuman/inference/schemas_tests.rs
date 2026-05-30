@@ -5,7 +5,7 @@ fn inference_catalog_counts_match_and_nonempty() {
     let declared = all_controller_schemas();
     let registered = all_registered_controllers();
     assert_eq!(declared.len(), registered.len());
-    assert!(declared.len() >= 20);
+    assert!(declared.len() >= 19);
 }
 
 #[test]
@@ -38,12 +38,13 @@ fn inference_schema_function_names_are_stable() {
     assert!(functions.contains(&"diagnostics"));
     assert!(functions.contains(&"openai_oauth_start"));
     assert!(functions.contains(&"openai_oauth_complete"));
+    assert!(functions.contains(&"openai_oauth_import_codex_cli"));
     assert!(functions.contains(&"openai_oauth_status"));
     assert!(functions.contains(&"openai_oauth_disconnect"));
     assert!(functions.contains(&"prompt"));
     assert!(functions.contains(&"vision_prompt"));
-    assert!(functions.contains(&"embed"));
-    assert!(functions.contains(&"chat"));
+    // embed moved to the embeddings domain (openhuman.embeddings_embed)
+    assert!(!functions.contains(&"embed"));
     assert!(!functions.contains(&"should_send_gif"));
     assert!(!functions.contains(&"tenor_search"));
 }
@@ -58,17 +59,6 @@ fn inference_prompt_schema_reuses_local_ai_shape_with_new_namespace() {
 }
 
 #[test]
-fn inference_chat_schema_requires_messages() {
-    let schema = schemas("chat");
-    assert_eq!(schema.namespace, "inference");
-    assert_eq!(schema.function, "chat");
-    assert!(schema
-        .inputs
-        .iter()
-        .any(|field| field.name == "messages" && field.required));
-}
-
-#[test]
 fn inference_openai_oauth_schemas_are_registered_with_expected_shapes() {
     let registered: Vec<&str> = all_registered_controllers()
         .into_iter()
@@ -77,6 +67,7 @@ fn inference_openai_oauth_schemas_are_registered_with_expected_shapes() {
     for function in [
         "openai_oauth_start",
         "openai_oauth_complete",
+        "openai_oauth_import_codex_cli",
         "openai_oauth_status",
         "openai_oauth_disconnect",
     ] {
@@ -94,6 +85,7 @@ fn inference_openai_oauth_schemas_are_registered_with_expected_shapes() {
     assert!(complete.inputs[0].required);
 
     assert!(schemas("openai_oauth_start").inputs.is_empty());
+    assert!(schemas("openai_oauth_import_codex_cli").inputs.is_empty());
     assert!(schemas("openai_oauth_status").inputs.is_empty());
     assert!(schemas("openai_oauth_disconnect").inputs.is_empty());
 }

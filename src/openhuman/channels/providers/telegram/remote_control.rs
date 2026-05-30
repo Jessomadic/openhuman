@@ -5,7 +5,9 @@ use crate::openhuman::channels::context::{
     clear_sender_history, conversation_history_key, ChannelRouteSelection, ChannelRuntimeContext,
 };
 use crate::openhuman::channels::traits::ChannelMessage;
-use crate::openhuman::memory::conversations::{self, ConversationThread, CreateConversationThread};
+use crate::openhuman::memory_conversations::{
+    self as conversations, ConversationThread, CreateConversationThread,
+};
 
 const LOG_PREFIX: &str = "[telegram-remote]";
 
@@ -232,6 +234,7 @@ async fn build_new_session_response(ctx: &ChannelRuntimeContext, msg: &ChannelMe
             created_at,
             parent_thread_id: None,
             labels: Some(vec!["telegram".to_string(), "remote".to_string()]),
+            personality_id: None,
         },
     ) {
         tracing::warn!("{LOG_PREFIX} new: ensure_thread failed: {error}");

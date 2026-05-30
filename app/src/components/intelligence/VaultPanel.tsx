@@ -5,7 +5,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { useT } from '../../lib/i18n/I18nContext';
 import type { ToastNotification } from '../../types/intelligence';
+import { openUrl, revealPath } from '../../utils/openUrl';
 import {
   type CoreVault,
   type CoreVaultSyncState,
@@ -24,6 +26,7 @@ interface VaultPanelProps {
 }
 
 export function VaultPanel({ onToast }: VaultPanelProps) {
+  const { t } = useT();
   const [vaults, setVaults] = useState<CoreVault[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -83,8 +86,10 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
         const resp = await openhumanVaultCreate({ name, rootPath, excludeGlobs });
         onToast?.({
           type: 'success',
-          title: 'Vault added',
-          message: `Created "${resp.result.name}". Click Sync to ingest.`,
+          title: t('vault.added'),
+          message: t('vault.createdMessage')
+            .replace('{name}', resp.result.name)
+            .replace('{sync}', t('sync.sync')),
         });
         setNewName('');
         setNewPath('');
@@ -95,14 +100,14 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
         console.error('[ui-flow][vault-panel] create failed', err);
         onToast?.({
           type: 'error',
-          title: 'Could not add vault',
+          title: t('vault.couldNotAdd'),
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
         setCreating(false);
       }
     },
-    [newName, newPath, newExcludes, onToast, reload]
+    [newExcludes, newName, newPath, onToast, reload, t]
   );
 
   const handleSync = useCallback(
@@ -117,7 +122,7 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
         console.error('[ui-flow][vault-panel] sync start failed', err);
         onToast?.({
           type: 'error',
-          title: 'Sync failed',
+          title: t('vault.syncFailed'),
           message: err instanceof Error ? err.message : String(err),
         });
         setBusy(b => ({ ...b, [vault.id]: undefined }));
@@ -143,7 +148,7 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
           setSyncProgress(p => ({ ...p, [vaultId]: undefined }));
           onToast?.({
             type: 'error',
-            title: 'Sync failed',
+            title: t('vault.syncFailed'),
             message: err instanceof Error ? err.message : String(err),
           });
           return;
@@ -170,21 +175,17 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
           if (st.status === 'failed') {
             onToast?.({
               type: 'error',
-              title: `Sync failed for "${vaultName}"`,
+              title: t('vault.syncFailedFor').replace('{name}', vaultName),
               message:
                 st.errors.length > 0
                   ? st.errors.slice(0, 3).join('; ')
-                  : `Failed ${st.failed} file(s)`,
+                  : t('vault.syncFailedFiles').replace('{count}', String(st.failed)),
             });
           } else {
             onToast?.({
               type: st.failed > 0 ? 'info' : 'success',
-              title: `Synced "${vaultName}"`,
-              message:
-                `Ingested ${st.ingested}, unchanged ${st.unchanged}, removed ${st.removed}` +
-                (st.failed > 0 ? `, failed ${st.failed}` : '') +
-                (st.skipped_unsupported > 0 ? `, skipped ${st.skipped_unsupported}` : '') +
-                (st.duration_ms > 0 ? ` · ${(st.duration_ms / 1000).toFixed(1)}s` : ''),
+              title: t('vault.syncedTitle').replace('{name}', vaultName),
+              message: formatSyncSummary(st, t),
             });
           }
           await reload();
@@ -202,40 +203,62 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
         void poll();
       }, 0);
     },
-    [onToast, reload]
+    [onToast, reload, t]
   );
 
   const handleRemove = useCallback(
     async (vault: CoreVault) => {
       const purge = window.confirm(
-        `Remove vault "${vault.name}"?\n\nClick OK to also purge its memory (delete all ${vault.file_count} ingested document(s)).\nClick Cancel to keep the documents in memory.`
+        t('vault.confirmRemovePurge')
+          .replace('{name}', vault.name)
+          .replace('{count}', String(vault.file_count))
       );
       // Confirm step #2: ensure the user actually meant to remove the vault row.
-      const ok = window.confirm(`Really remove vault "${vault.name}"?`);
+      const ok = window.confirm(t('vault.confirmRemove').replace('{name}', vault.name));
       if (!ok) return;
       setBusy(b => ({ ...b, [vault.id]: 'remove' }));
       try {
         await openhumanVaultRemove(vault.id, purge);
         onToast?.({
           type: 'success',
-          title: 'Vault removed',
+          title: t('vault.removed'),
           message: purge
-            ? `Removed "${vault.name}" and purged its memory.`
-            : `Removed "${vault.name}". Documents kept in memory.`,
+            ? t('vault.removedPurgedMessage').replace('{name}', vault.name)
+            : t('vault.removedKeptMessage').replace('{name}', vault.name),
         });
         await reload();
       } catch (err) {
         console.error('[ui-flow][vault-panel] remove failed', err);
         onToast?.({
           type: 'error',
-          title: 'Could not remove vault',
+          title: t('vault.couldNotRemove'),
           message: err instanceof Error ? err.message : String(err),
         });
       } finally {
         setBusy(b => ({ ...b, [vault.id]: undefined }));
       }
     },
-    [onToast, reload]
+    [onToast, reload, t]
+  );
+
+  const handleOpenVault = useCallback(
+    async (rootPath: string) => {
+      try {
+        await openUrl(`obsidian://open?path=${encodeURIComponent(rootPath)}`);
+        onToast?.({ type: 'info', title: t('vault.openSuccess'), message: rootPath });
+        return;
+      } catch (err) {
+        console.error('[ui-flow][vault-panel] obsidian deep link failed', err);
+      }
+      try {
+        await revealPath(rootPath);
+        onToast?.({ type: 'info', title: t('vault.openFallback'), message: rootPath });
+      } catch (err) {
+        console.error('[ui-flow][vault-panel] reveal vault failed', err);
+        onToast?.({ type: 'error', title: t('vault.openError'), message: String(err) });
+      }
+    },
+    [onToast, t]
   );
 
   return (
@@ -245,11 +268,9 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-stone-800 dark:text-neutral-100">
-            Knowledge vaults
+            {t('vault.title')}
           </h3>
-          <p className="text-xs text-stone-500 dark:text-neutral-400">
-            Point at a local folder; files are chunked and mirrored into memory.
-          </p>
+          <p className="text-xs text-stone-500 dark:text-neutral-400">{t('vault.description')}</p>
         </div>
         <button
           type="button"
@@ -259,7 +280,7 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
                      transition-colors hover:bg-primary-50 dark:hover:bg-primary-500/15
                      focus:outline-none focus:ring-2 focus:ring-primary-200"
           data-testid="vault-add-toggle">
-          {showForm ? 'Cancel' : '+ Add vault'}
+          {showForm ? t('common.cancel') : t('vault.add')}
         </button>
       </div>
 
@@ -269,40 +290,42 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
           className="mb-3 space-y-2 rounded-md border border-stone-100 dark:border-neutral-800 bg-stone-50 dark:bg-neutral-800/60 p-3"
           data-testid="vault-add-form">
           <label className="block">
-            <span className="text-xs font-medium text-stone-600 dark:text-neutral-300">Name</span>
+            <span className="text-xs font-medium text-stone-600 dark:text-neutral-300">
+              {t('vault.name')}
+            </span>
             <input
               type="text"
               value={newName}
               onChange={e => setNewName(e.target.value)}
               required
-              placeholder="My research notes"
+              placeholder={t('vault.namePlaceholder')}
               className="mt-1 w-full rounded border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm
                          focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
             />
           </label>
           <label className="block">
             <span className="text-xs font-medium text-stone-600 dark:text-neutral-300">
-              Folder path (absolute)
+              {t('vault.folderPath')}
             </span>
             <input
               type="text"
               value={newPath}
               onChange={e => setNewPath(e.target.value)}
               required
-              placeholder="/Users/you/Documents/notes"
+              placeholder={t('vault.folderPathPlaceholder')}
               className="mt-1 w-full rounded border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2 py-1.5 font-mono text-xs
                          focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
             />
           </label>
           <label className="block">
             <span className="text-xs font-medium text-stone-600 dark:text-neutral-300">
-              Excludes (comma-separated substrings, optional)
+              {t('vault.excludes')}
             </span>
             <input
               type="text"
               value={newExcludes}
               onChange={e => setNewExcludes(e.target.value)}
-              placeholder="drafts/, .secret"
+              placeholder={t('vault.excludesPlaceholder')}
               className="mt-1 w-full rounded border border-stone-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2 py-1.5 text-xs
                          focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
             />
@@ -314,7 +337,7 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
               className="rounded-md bg-primary-500 px-3 py-1.5 text-xs font-semibold text-white
                          shadow-sm transition-colors hover:bg-primary-600
                          disabled:cursor-not-allowed disabled:opacity-50">
-              {creating ? 'Creating…' : 'Create vault'}
+              {creating ? t('vault.creating') : t('vault.create')}
             </button>
           </div>
         </form>
@@ -322,20 +345,26 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
 
       {loading ? (
         <div className="py-4 text-center text-xs text-stone-400 dark:text-neutral-500">
-          Loading vaults…
+          {t('vault.loading')}
         </div>
       ) : loadError ? (
         <div className="rounded border border-coral-200 dark:border-coral-500/30 bg-coral-50 dark:bg-coral-500/10 px-3 py-2 text-xs text-coral-800">
-          Failed to load vaults: {loadError}
+          {t('vault.failedToLoad').replace('{error}', loadError)}
         </div>
       ) : vaults.length === 0 ? (
         <div className="py-4 text-center text-xs text-stone-400 dark:text-neutral-500">
-          No vaults yet. Add one above to start ingesting a folder.
+          {t('vault.empty')}
         </div>
       ) : (
         <ul className="divide-y divide-stone-100 dark:divide-neutral-800" data-testid="vault-list">
           {vaults.map(v => {
             const state = busy[v.id];
+            const writeStateReason = v.write_state_reason
+              ? t(
+                  `vault.writeState.reasons.${v.write_state_reason}`,
+                  t('vault.writeState.unknownReason')
+                )
+              : t('vault.writeState.unknownReason');
             return (
               <li key={v.id} className="flex items-center justify-between gap-3 py-2">
                 <div className="min-w-0 flex-1">
@@ -348,13 +377,37 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
                     {v.root_path}
                   </div>
                   <div className="mt-0.5 text-[11px] text-stone-400 dark:text-neutral-500">
-                    {v.file_count.toLocaleString()} file(s) ·{' '}
+                    {t('vault.fileCount').replace('{count}', v.file_count.toLocaleString())} ·{' '}
                     {v.last_synced_at
-                      ? `synced ${formatRelative(v.last_synced_at)}`
-                      : 'never synced'}
+                      ? t('vault.syncedRelative').replace(
+                          '{time}',
+                          formatRelative(v.last_synced_at, t)
+                        )
+                      : t('vault.neverSynced')}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span
+                      className={writeStateBadgeClass(v.write_state)}
+                      title={writeStateReason}
+                      data-testid={`vault-write-state-${v.id}`}>
+                      {t(`vault.writeState.${v.write_state}`)}
+                    </span>
+                    <span className="text-[11px] text-stone-400 dark:text-neutral-500">
+                      {writeStateReason}
+                    </span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleOpenVault(v.root_path)}
+                    disabled={state === 'sync' || state === 'remove'}
+                    className="rounded-md border border-stone-300 bg-white dark:bg-neutral-900 px-3 py-1.5 text-xs
+                               font-semibold text-stone-700 dark:text-neutral-200 shadow-sm transition-colors
+                               hover:bg-stone-50 dark:hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    data-testid="vault-open">
+                    {t('vault.openButton')}
+                  </button>
                   <button
                     type="button"
                     onClick={() => void handleSync(v)}
@@ -364,9 +417,11 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
                                hover:bg-primary-50 dark:hover:bg-primary-500/15 disabled:cursor-not-allowed disabled:opacity-50">
                     {state === 'sync'
                       ? (syncProgress[v.id]?.total ?? 0) > 0
-                        ? `Syncing… ${syncProgress[v.id]!.ingested}/${syncProgress[v.id]!.total}`
-                        : 'Syncing…'
-                      : 'Sync'}
+                        ? t('vault.syncingProgress')
+                            .replace('{ingested}', String(syncProgress[v.id]!.ingested))
+                            .replace('{total}', String(syncProgress[v.id]!.total))
+                        : t('sync.syncing')
+                      : t('sync.sync')}
                   </button>
                   <button
                     type="button"
@@ -375,7 +430,7 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
                     className="rounded-md border border-coral-200 dark:border-coral-500/30 bg-white dark:bg-neutral-900 px-3 py-1.5 text-xs
                                font-semibold text-coral-700 dark:text-coral-300 shadow-sm transition-colors
                                hover:bg-coral-50 dark:hover:bg-coral-500/10 disabled:cursor-not-allowed disabled:opacity-50">
-                    {state === 'remove' ? 'Removing…' : 'Remove'}
+                    {state === 'remove' ? t('vault.removing') : t('common.remove')}
                   </button>
                 </div>
               </li>
@@ -387,16 +442,49 @@ export function VaultPanel({ onToast }: VaultPanelProps) {
   );
 }
 
-function formatRelative(iso: string): string {
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  const diff = Math.max(0, Date.now() - t);
+function writeStateBadgeClass(state: CoreVault['write_state']): string {
+  const base = 'inline-flex h-5 items-center rounded px-1.5 text-[10px] font-semibold';
+  switch (state) {
+    case 'writable':
+      return `${base} bg-sage-50 text-sage-700 dark:bg-sage-500/10 dark:text-sage-300`;
+    case 'read_only':
+      return `${base} bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300`;
+    case 'unavailable':
+    default:
+      return `${base} bg-coral-50 text-coral-700 dark:bg-coral-500/10 dark:text-coral-300`;
+  }
+}
+
+function formatRelative(iso: string, translate: (key: string) => string): string {
+  const timestamp = new Date(iso).getTime();
+  if (Number.isNaN(timestamp)) return iso;
+  const diff = Math.max(0, Date.now() - timestamp);
   const sec = Math.floor(diff / 1000);
-  if (sec < 60) return `${sec}s ago`;
+  if (sec < 60) return translate('vault.relative.sec').replace('{count}', String(sec));
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return translate('vault.relative.min').replace('{count}', String(min));
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return translate('vault.relative.hr').replace('{count}', String(hr));
   const day = Math.floor(hr / 24);
-  return `${day}d ago`;
+  return translate('vault.relative.day').replace('{count}', String(day));
+}
+
+function formatSyncSummary(state: CoreVaultSyncState, t: (key: string) => string): string {
+  let summary = t('vault.syncSummary')
+    .replace('{ingested}', String(state.ingested))
+    .replace('{unchanged}', String(state.unchanged))
+    .replace('{removed}', String(state.removed));
+  if (state.failed > 0) {
+    summary += t('vault.syncSummaryFailed').replace('{count}', String(state.failed));
+  }
+  if (state.skipped_unsupported > 0) {
+    summary += t('vault.syncSummarySkipped').replace('{count}', String(state.skipped_unsupported));
+  }
+  if (state.duration_ms > 0) {
+    summary += t('vault.syncSummaryDuration').replace(
+      '{seconds}',
+      (state.duration_ms / 1000).toFixed(1)
+    );
+  }
+  return summary;
 }

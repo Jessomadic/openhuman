@@ -6,6 +6,8 @@
 mod compatible_dump;
 #[path = "compatible_parse.rs"]
 mod compatible_parse;
+#[path = "compatible_request.rs"]
+mod compatible_request;
 #[path = "compatible_stream.rs"]
 mod compatible_stream;
 #[path = "compatible_types.rs"]
@@ -25,10 +27,6 @@ use crate::openhuman::inference::provider::traits::{
 };
 use async_trait::async_trait;
 use futures_util::{stream, StreamExt};
-use reqwest::{
-    header::{HeaderMap, HeaderValue, USER_AGENT},
-    Client,
-};
 
 use compatible_dump::{dump_prompt_if_enabled, dump_response_if_enabled, reserve_dump_seq};
 use compatible_parse::{
@@ -53,7 +51,12 @@ pub struct OpenAiCompatibleProvider {
     /// When false, do not fall back to /v1/responses on chat completions 404.
     /// GLM/Zhipu does not support the responses API.
     supports_responses_fallback: bool,
+    /// When true, call the Responses API directly instead of first trying
+    /// chat completions. Required for ChatGPT-account Codex OAuth.
+    responses_api_primary: bool,
     user_agent: Option<String>,
+    extra_headers: Vec<(String, String)>,
+    extra_query_params: Vec<(String, String)>,
     /// When true, collect all `system` messages and prepend their content
     /// to the first `user` message, then drop the system messages.
     /// Required for providers that reject `role: system` (e.g. MiniMax).
@@ -184,7 +187,10 @@ impl OpenAiCompatibleProvider {
             credential: credential.map(ToString::to_string),
             auth_header: auth_style,
             supports_responses_fallback,
+            responses_api_primary: false,
             user_agent: user_agent.map(ToString::to_string),
+            extra_headers: Vec::new(),
+            extra_query_params: Vec::new(),
             merge_system_into_user,
             emit_openhuman_thread_id: false,
             temperature_unsupported_models: Vec::new(),
@@ -207,232 +213,41 @@ impl OpenAiCompatibleProvider {
         self
     }
 
-    /// Resolve the effective temperature for `model`. Returns `None` when the
-    /// model matches a pattern in `temperature_unsupported_models` (causing the
-    /// field to be omitted from the serialised request). Otherwise yields the
-    /// per-workload override if one was configured, else the caller's value.
-    fn effective_temperature(&self, model: &str, temperature: f64) -> Option<f64> {
-        if self
-            .temperature_unsupported_models
-            .iter()
-            .any(|pat| super::temperature::glob_match(pat, model))
-        {
-            tracing::debug!(
-                "[provider:{}] model='{}' matched temperature_unsupported_models — omitting temperature",
-                self.name,
-                model
-            );
-            None
-        } else {
-            Some(self.temperature_override.unwrap_or(temperature))
+    pub fn with_extra_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        let name = name.into();
+        let value = value.into();
+        if !name.trim().is_empty() && !value.trim().is_empty() {
+            self.extra_headers
+                .push((name.trim().to_string(), value.trim().to_string()));
         }
+        self
     }
 
-    /// Read the ambient `thread_id` only when this provider has been
-    /// opted in via [`with_openhuman_thread_id`]. Returns `None` for
-    /// every third-party provider so the field is omitted by
-    /// `skip_serializing_if`.
-    fn outbound_thread_id(&self) -> Option<String> {
-        if self.emit_openhuman_thread_id {
-            super::thread_context::current_thread_id()
-        } else {
-            None
+    pub fn with_user_agent(mut self, value: impl Into<String>) -> Self {
+        let value = value.into();
+        if !value.trim().is_empty() {
+            self.user_agent = Some(value.trim().to_string());
         }
+        self
     }
 
-    /// Collect all `system` role messages, concatenate their content,
-    /// and prepend to the first `user` message. Drop all system messages.
-    /// Used for providers (e.g. MiniMax) that reject `role: system`.
-    fn flatten_system_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
-        let system_content: String = messages
-            .iter()
-            .filter(|m| m.role == "system")
-            .map(|m| m.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        if system_content.is_empty() {
-            return messages.to_vec();
-        }
-
-        let mut result: Vec<ChatMessage> = messages
-            .iter()
-            .filter(|m| m.role != "system")
-            .cloned()
-            .collect();
-
-        if let Some(first_user) = result.iter_mut().find(|m| m.role == "user") {
-            first_user.content = format!("{system_content}\n\n{}", first_user.content);
-        } else {
-            // No user message found: insert a synthetic user message with system content
-            result.insert(0, ChatMessage::user(&system_content));
-        }
-
-        result
+    pub fn with_responses_api_primary(mut self) -> Self {
+        self.responses_api_primary = true;
+        self
     }
 
-    fn http_client(&self) -> Client {
-        if let Some(ua) = self.user_agent.as_deref() {
-            let mut headers = HeaderMap::new();
-            if let Ok(value) = HeaderValue::from_str(ua) {
-                headers.insert(USER_AGENT, value);
-            }
-
-            // Platform-appropriate TLS backend — see [`crate::openhuman::tls`].
-            let builder = crate::openhuman::tls::tls_client_builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .default_headers(headers);
-            let builder = crate::openhuman::config::apply_runtime_proxy_to_builder(
-                builder,
-                "provider.compatible",
-            );
-
-            return builder.build().unwrap_or_else(|error| {
-                tracing::warn!("Failed to build proxied timeout client with user-agent: {error}");
-                crate::openhuman::tls::tls_client_builder()
-                    .build()
-                    .unwrap_or_default()
-            });
+    pub fn with_extra_query_param(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        let name = name.into();
+        let value = value.into();
+        if !name.trim().is_empty() && !value.trim().is_empty() {
+            self.extra_query_params
+                .push((name.trim().to_string(), value.trim().to_string()));
         }
-
-        // Platform-appropriate TLS backend — see [`crate::openhuman::tls`].
-        let builder = crate::openhuman::tls::tls_client_builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .connect_timeout(std::time::Duration::from_secs(10));
-        let builder = crate::openhuman::config::apply_runtime_proxy_to_builder(
-            builder,
-            "provider.compatible",
-        );
-        builder.build().unwrap_or_else(|error| {
-            tracing::warn!("Failed to build proxied timeout client: {error}");
-            crate::openhuman::tls::tls_client_builder()
-                .build()
-                .unwrap_or_default()
-        })
-    }
-
-    /// Build the full URL for chat completions, detecting if base_url already includes the path.
-    /// This allows custom providers with non-standard endpoints (e.g., VolcEngine ARK uses
-    /// `/api/coding/v3/chat/completions` instead of `/v1/chat/completions`).
-    fn chat_completions_url(&self) -> String {
-        let has_full_endpoint = reqwest::Url::parse(&self.base_url)
-            .map(|url| {
-                url.path()
-                    .trim_end_matches('/')
-                    .ends_with("/chat/completions")
-            })
-            .unwrap_or_else(|_| {
-                self.base_url
-                    .trim_end_matches('/')
-                    .ends_with("/chat/completions")
-            });
-
-        let url = if has_full_endpoint {
-            self.base_url.clone()
-        } else {
-            format!("{}/chat/completions", self.base_url)
-        };
-        log::info!(
-            "[provider:{}] outbound chat/completions -> {}",
-            self.name,
-            url
-        );
-        url
-    }
-
-    fn path_ends_with(&self, suffix: &str) -> bool {
-        if let Ok(url) = reqwest::Url::parse(&self.base_url) {
-            return url.path().trim_end_matches('/').ends_with(suffix);
-        }
-
-        self.base_url.trim_end_matches('/').ends_with(suffix)
-    }
-
-    fn has_explicit_api_path(&self) -> bool {
-        let Ok(url) = reqwest::Url::parse(&self.base_url) else {
-            return false;
-        };
-
-        let path = url.path().trim_end_matches('/');
-        !path.is_empty() && path != "/"
-    }
-
-    /// Build the full URL for responses API, detecting if base_url already includes the path.
-    fn responses_url(&self) -> String {
-        if self.path_ends_with("/responses") {
-            return self.base_url.clone();
-        }
-
-        let normalized_base = self.base_url.trim_end_matches('/');
-
-        // If chat endpoint is explicitly configured, derive sibling responses endpoint.
-        if let Some(prefix) = normalized_base.strip_suffix("/chat/completions") {
-            return format!("{prefix}/responses");
-        }
-
-        // If an explicit API path already exists (e.g. /v1, /openai, /api/coding/v3),
-        // append responses directly to avoid duplicate /v1 segments.
-        if self.has_explicit_api_path() {
-            format!("{normalized_base}/responses")
-        } else {
-            format!("{normalized_base}/v1/responses")
-        }
-    }
-
-    fn tool_specs_to_openai_format(
-        tools: &[crate::openhuman::tools::ToolSpec],
-    ) -> Vec<serde_json::Value> {
-        tools
-            .iter()
-            .map(|tool| {
-                serde_json::json!({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.parameters
-                    }
-                })
-            })
-            .collect()
-    }
-
-    fn credential_for_request(&self) -> anyhow::Result<Option<&str>> {
-        if matches!(&self.auth_header, AuthStyle::None) {
-            return Ok(None);
-        }
-
-        self.credential
-            .as_deref()
-            .map(str::trim)
-            .filter(|credential| !credential.is_empty())
-            .map(Some)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{} API key not set. Configure via the web UI or set the appropriate env var.",
-                    self.name
-                )
-            })
-    }
-
-    fn apply_auth_header(
-        &self,
-        req: reqwest::RequestBuilder,
-        credential: Option<&str>,
-    ) -> reqwest::RequestBuilder {
-        match (&self.auth_header, credential) {
-            (AuthStyle::None, _) => req,
-            (_, None) => req,
-            (AuthStyle::Bearer, Some(credential)) => {
-                req.header("Authorization", format!("Bearer {credential}"))
-            }
-            (AuthStyle::XApiKey, Some(credential)) => req.header("x-api-key", credential),
-            (AuthStyle::Anthropic, Some(credential)) => req
-                .header("x-api-key", credential)
-                .header("anthropic-version", "2023-06-01"),
-            (AuthStyle::Custom(header), Some(credential)) => req.header(header, credential),
-        }
+        self
     }
 
     async fn chat_via_responses(
@@ -528,96 +343,251 @@ impl OpenAiCompatibleProvider {
         tools: Option<&[crate::openhuman::tools::ToolSpec]>,
     ) -> Option<Vec<serde_json::Value>> {
         tools.map(|items| {
-            items
-                .iter()
-                .map(|tool| {
-                    serde_json::json!({
-                        "type": "function",
-                        "function": {
-                            "name": tool.name,
-                            "description": tool.description,
-                            "parameters": tool.parameters,
-                        }
-                    })
-                })
-                .collect()
+            let mut seen: std::collections::HashSet<&str> =
+                std::collections::HashSet::with_capacity(items.len());
+            let mut dropped: Vec<&str> = Vec::new();
+            let mut out: Vec<serde_json::Value> = Vec::with_capacity(items.len());
+            for tool in items {
+                if !seen.insert(tool.name.as_str()) {
+                    dropped.push(tool.name.as_str());
+                    continue;
+                }
+                out.push(serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    }
+                }));
+            }
+            if !dropped.is_empty() {
+                log::warn!(
+                    "[providers][compatible] dropped {} duplicate tool spec(s) at wire \
+                     boundary (TAURI-RUST-2E): {:?}",
+                    dropped.len(),
+                    dropped
+                );
+            }
+            out
         })
     }
 
     fn convert_messages_for_native(messages: &[ChatMessage]) -> Vec<NativeMessage> {
-        messages
-            .iter()
-            .map(|message| {
-                if message.role == "assistant" {
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&message.content)
-                    {
-                        if let Some(tool_calls_value) = value.get("tool_calls") {
-                            if let Ok(parsed_calls) =
-                                serde_json::from_value::<Vec<ProviderToolCall>>(
-                                    tool_calls_value.clone(),
-                                )
-                            {
-                                let tool_calls = parsed_calls
-                                    .into_iter()
-                                    .map(|tc| ToolCall {
-                                        id: Some(tc.id),
-                                        kind: Some("function".to_string()),
-                                        function: Some(Function {
-                                            name: Some(tc.name),
-                                            arguments: Some(serde_json::Value::String(
-                                                tc.arguments,
-                                            )),
-                                        }),
-                                    })
-                                    .collect::<Vec<_>>();
+        let converted: Vec<NativeMessage> =
+            messages
+                .iter()
+                .map(|message| {
+                    // Extract reasoning_content stored in extra_metadata by the
+                    // agent harness after each assistant turn. Thinking models
+                    // (DeepSeek-R1, Qwen3, GLM-4) require this to be echoed back
+                    // verbatim in subsequent requests, or the API returns HTTP 400.
+                    let reasoning_content = if message.role == "assistant" {
+                        message
+                            .extra_metadata
+                            .as_ref()
+                            .and_then(|m| m.get("reasoning_content"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string)
+                    } else {
+                        None
+                    };
 
-                                let content = value
-                                    .get("content")
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(ToString::to_string);
+                    if message.role == "assistant" {
+                        if let Ok(value) =
+                            serde_json::from_str::<serde_json::Value>(&message.content)
+                        {
+                            if let Some(tool_calls_value) = value.get("tool_calls") {
+                                if let Ok(parsed_calls) =
+                                    serde_json::from_value::<Vec<ProviderToolCall>>(
+                                        tool_calls_value.clone(),
+                                    )
+                                {
+                                    let tool_calls = parsed_calls
+                                        .into_iter()
+                                        .map(|tc| ToolCall {
+                                            id: Some(tc.id),
+                                            kind: Some("function".to_string()),
+                                            function: Some(Function {
+                                                name: Some(tc.name),
+                                                arguments: Some(serde_json::Value::String(
+                                                    tc.arguments,
+                                                )),
+                                            }),
+                                        })
+                                        .collect::<Vec<_>>();
 
-                                return NativeMessage {
-                                    role: "assistant".to_string(),
-                                    content,
-                                    tool_call_id: None,
-                                    tool_calls: Some(tool_calls),
-                                };
+                                    let content = value
+                                        .get("content")
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(ToString::to_string);
+
+                                    // Replay the assistant's reasoning so
+                                    // DeepSeek thinking mode accepts the
+                                    // tool-call turn on the follow-up request
+                                    // (Sentry TAURI-RUST-4KB). Prefer the value
+                                    // embedded in the JSON content (written by
+                                    // `build_native_assistant_history` in the
+                                    // tool-loop path); fall back to the value
+                                    // stored in `extra_metadata` (written by the
+                                    // main session-turn path).
+                                    let reasoning_content = value
+                                        .get("reasoning_content")
+                                        .and_then(serde_json::Value::as_str)
+                                        .filter(|s| !s.trim().is_empty())
+                                        .map(ToString::to_string)
+                                        .or_else(|| reasoning_content.clone());
+
+                                    return NativeMessage {
+                                        role: "assistant".to_string(),
+                                        content,
+                                        tool_call_id: None,
+                                        tool_calls: Some(tool_calls),
+                                        reasoning_content,
+                                    };
+                                }
                             }
                         }
                     }
+
+                    if message.role == "tool" {
+                        if let Ok(value) =
+                            serde_json::from_str::<serde_json::Value>(&message.content)
+                        {
+                            let tool_call_id = value
+                                .get("tool_call_id")
+                                .and_then(serde_json::Value::as_str)
+                                .map(ToString::to_string);
+                            let content = value
+                                .get("content")
+                                .and_then(serde_json::Value::as_str)
+                                .map(ToString::to_string)
+                                .or_else(|| Some(message.content.clone()));
+
+                            return NativeMessage {
+                                role: "tool".to_string(),
+                                content,
+                                tool_call_id,
+                                tool_calls: None,
+                                reasoning_content: None,
+                            };
+                        }
+                    }
+
+                    NativeMessage {
+                        role: message.role.clone(),
+                        content: Some(message.content.clone()),
+                        tool_call_id: None,
+                        tool_calls: None,
+                        reasoning_content,
+                    }
+                })
+                .collect();
+
+        Self::enforce_tool_message_invariants(converted)
+    }
+
+    /// Enforce the OpenAI-compatible tool-message ordering invariants on the
+    /// fully-serialized wire array, immediately before it goes on the wire.
+    ///
+    /// Several upstream defects can leave the array malformed and trip a 400
+    /// (`messages with role 'tool' must be a response to a preceding message
+    /// with 'tool_calls'`). That 400 streams back as an empty completion, which
+    /// the agent loop collapses to "The model returned an empty response" and
+    /// the chat surface shows as a generic "Something went wrong":
+    ///
+    /// * **(A)** History tail-trimming (`session::turn::trim_history` /
+    ///   `bound_cached_transcript_messages`) cuts *between* an
+    ///   `assistant(tool_calls)` and its `tool` result, dropping the assistant
+    ///   and orphaning the result at the head of the window.
+    /// * **(B)** A persisted assistant tool-call message whose `content` no
+    ///   longer deserializes as `tool_calls` (format drift) falls through the
+    ///   parser above and is emitted as plain text with its `tool_calls`
+    ///   stripped — again orphaning the following `tool` result.
+    /// * **(C)** An `assistant(tool_calls)` whose results never arrived (an
+    ///   aborted / max-iteration turn, or a partially-answered multi-call
+    ///   cycle) leaves dangling tool-call ids with no matching `tool` response.
+    ///
+    /// This pass makes the contract hold *by construction* regardless of which
+    /// path produced the array. It is **position-aware**: each
+    /// `assistant(tool_calls)` is paired with the *contiguous run of `tool`
+    /// messages that immediately follows it* (the only place valid responses can
+    /// live in the OpenAI wire format), then:
+    ///
+    /// * `tool_calls` entries with no matching response *in that run* are pruned
+    ///   (C); if none survive, the field is dropped so the message serializes as
+    ///   plain assistant text rather than an empty tool-call block.
+    /// * `tool` messages that are **not** part of such a run — a leading orphan
+    ///   from trimming (A), or one stranded after an assistant whose `tool_calls`
+    ///   were stripped (B) — are dropped.
+    ///
+    /// Pairing by adjacency (rather than a global "is this id answered anywhere"
+    /// set) is what keeps **sequential** cycles (`asst(A)→tool(A)`,
+    /// `asst(B)→tool(B)`, …) and **parallel** calls (one `asst([X,Y,Z])` answered
+    /// by `tool(X) tool(Y) tool(Z)`) correct, and makes the result well-formed
+    /// even if responses are reordered or a cycle is bisected mid-sequence — no
+    /// causal-ordering assumption required.
+    fn enforce_tool_message_invariants(messages: Vec<NativeMessage>) -> Vec<NativeMessage> {
+        use std::collections::HashSet;
+
+        let mut out: Vec<NativeMessage> = Vec::with_capacity(messages.len());
+        let mut dropped_orphans = 0usize;
+        let mut pruned_calls = 0usize;
+
+        let mut iter = messages.into_iter().peekable();
+        while let Some(mut msg) = iter.next() {
+            if msg.role == "assistant" && msg.tool_calls.is_some() {
+                // Gather the contiguous run of `tool` messages that answer this
+                // block (responses must immediately follow, in any order).
+                let mut run: Vec<NativeMessage> = Vec::new();
+                while iter.peek().is_some_and(|m| m.role == "tool") {
+                    run.push(iter.next().expect("peeked tool message"));
                 }
+                let responded: HashSet<String> =
+                    run.iter().filter_map(|t| t.tool_call_id.clone()).collect();
 
-                if message.role == "tool" {
-                    if let Ok(value) =
-                        serde_json::from_str::<serde_json::Value>(&message.content)
-                    {
-                        let tool_call_id = value
-                            .get("tool_call_id")
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToString::to_string);
-                        let content = value
-                            .get("content")
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToString::to_string)
-                            .or_else(|| Some(message.content.clone()));
+                // (C) keep only tool_calls answered within this run.
+                let calls = msg.tool_calls.take().unwrap_or_default();
+                let before = calls.len();
+                let kept: Vec<ToolCall> = calls
+                    .into_iter()
+                    .filter(|c| c.id.as_deref().is_some_and(|id| responded.contains(id)))
+                    .collect();
+                pruned_calls += before - kept.len();
+                let kept_ids: HashSet<String> = kept.iter().filter_map(|c| c.id.clone()).collect();
+                msg.tool_calls = if kept.is_empty() { None } else { Some(kept) };
+                out.push(msg);
 
-                        return NativeMessage {
-                            role: "tool".to_string(),
-                            content,
-                            tool_call_id,
-                            tool_calls: None,
-                        };
+                // Emit the run's responses that map to a surviving call; drop the
+                // rest (e.g. a stray tool whose id wasn't in this block).
+                for tool_msg in run {
+                    let kept = tool_msg
+                        .tool_call_id
+                        .as_deref()
+                        .is_some_and(|id| kept_ids.contains(id));
+                    if kept {
+                        out.push(tool_msg);
+                    } else {
+                        dropped_orphans += 1;
                     }
                 }
+            } else if msg.role == "tool" {
+                // (A, B) a `tool` not consumed by a preceding assistant block.
+                dropped_orphans += 1;
+            } else {
+                out.push(msg);
+            }
+        }
 
-                NativeMessage {
-                    role: message.role.clone(),
-                    content: Some(message.content.clone()),
-                    tool_call_id: None,
-                    tool_calls: None,
-                }
-            })
-            .collect()
+        if dropped_orphans > 0 || pruned_calls > 0 {
+            log::warn!(
+                "[provider] sanitized malformed tool-message ordering before send: \
+                 dropped {dropped_orphans} orphaned tool result(s), pruned {pruned_calls} \
+                 unanswered tool_call(s)"
+            );
+        }
+
+        out
     }
 
     fn with_prompt_guided_tool_instructions(
@@ -662,6 +632,17 @@ impl OpenAiCompatibleProvider {
             .ok_or_else(|| anyhow::anyhow!("No choices in response from {}", provider_name))?;
 
         let mut text = message.effective_content_optional();
+        // Capture reasoning_content before the message fields are moved into
+        // the tool-call extractors below. This must be passed back verbatim on
+        // the next turn for thinking models (e.g. DeepSeek-R1, Qwen3) whose APIs
+        // return HTTP 400 ("reasoning_content in thinking mode must be passed back")
+        // when the field is omitted from subsequent assistant messages.
+        let reasoning_content = message
+            .reasoning_content
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
         let mut tool_calls = message
             .tool_calls
             .unwrap_or_default()
@@ -706,10 +687,17 @@ impl OpenAiCompatibleProvider {
             }
         }
 
+        tracing::debug!(
+            has_reasoning_content = reasoning_content.is_some(),
+            reasoning_content_chars = reasoning_content.as_ref().map_or(0, |r| r.chars().count()),
+            "[provider:parse_native_response] reasoning_content capture"
+        );
+
         Ok(ProviderChatResponse {
             text,
             tool_calls,
             usage,
+            reasoning_content,
         })
     }
 
@@ -872,6 +860,16 @@ impl OpenAiCompatibleProvider {
                     "streaming_chat",
                     self.name.as_str(),
                     Some(native_request.model.as_str()),
+                    status,
+                );
+            } else if Self::is_native_tool_schema_unsupported(status, &body) {
+                // Model rejects tool definitions (e.g. Ollama "does not support tools").
+                // The caller's retry loop already handles this by re-issuing without
+                // tools — suppress the Sentry event so noise doesn't accumulate for
+                // every model that lacks tool-calling support (TAURI-RUST-4K7).
+                log::info!(
+                    "[stream] {} model rejected tool schema (status={}) — caller will retry without tools",
+                    self.name,
                     status,
                 );
             } else if super::should_report_provider_http_failure(status) {
@@ -1293,6 +1291,12 @@ impl Provider for OpenAiCompatibleProvider {
             fallback_messages
         };
 
+        if self.responses_api_primary {
+            return self
+                .chat_via_responses(credential, &fallback_messages, model)
+                .await;
+        }
+
         let response = match self
             .apply_auth_header(self.http_client().post(&url).json(&request), credential)
             .send()
@@ -1341,7 +1345,20 @@ impl Provider for OpenAiCompatibleProvider {
                 format!("{} API error ({status}): {sanitized}", self.name),
                 status,
             );
-            if super::is_budget_exhausted_http_400(status, &error) {
+            if super::is_backend_auth_failure(self.name.as_str(), status) {
+                // Backend rejected the app session JWT (401/403): expected
+                // session-expiry (token expired/revoked/rotated), not a code
+                // bug. Publish SessionExpired so the credentials subscriber
+                // drives reauth and the scheduler-gate halts downstream LLM
+                // work, and skip the Sentry report (TAURI-RUST-N). Mirrors the
+                // `is_backend_auth_failure` arm in `super::api_error`.
+                super::publish_backend_session_expired(
+                    "chat_completions",
+                    self.name.as_str(),
+                    status,
+                    &message,
+                );
+            } else if super::is_budget_exhausted_http_400(status, &error) {
                 super::log_budget_exhausted_http_400(
                     "chat_completions",
                     self.name.as_str(),
@@ -1443,6 +1460,12 @@ impl Provider for OpenAiCompatibleProvider {
         };
 
         let url = self.chat_completions_url();
+        if self.responses_api_primary {
+            return self
+                .chat_via_responses(credential, &effective_messages, model)
+                .await;
+        }
+
         let response = match self
             .apply_auth_header(self.http_client().post(&url).json(&request), credential)
             .send()
@@ -1569,6 +1592,7 @@ impl Provider for OpenAiCompatibleProvider {
                     text: Some(text),
                     tool_calls: vec![],
                     usage: None,
+                    reasoning_content: None,
                 });
             }
         };
@@ -1587,6 +1611,15 @@ impl Provider for OpenAiCompatibleProvider {
             .ok_or_else(|| anyhow::anyhow!("No response from {}", self.name))?;
 
         let text = choice.message.effective_content_optional();
+        // See `parse_native_response`: replay reasoning on the follow-up
+        // request so DeepSeek thinking mode accepts the tool-call turn.
+        let reasoning_content = choice
+            .message
+            .reasoning_content
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string);
         let tool_calls = choice
             .message
             .tool_calls
@@ -1608,6 +1641,7 @@ impl Provider for OpenAiCompatibleProvider {
             text,
             tool_calls,
             usage,
+            reasoning_content,
         })
     }
 
@@ -1625,6 +1659,32 @@ impl Provider for OpenAiCompatibleProvider {
         } else {
             request.messages.to_vec()
         };
+
+        if self.responses_api_primary {
+            let response_messages = if request.tools.is_some() {
+                Self::with_prompt_guided_tool_instructions(request.messages, request.tools)
+            } else {
+                effective_messages.clone()
+            };
+            let text = self
+                .chat_via_responses(credential, &response_messages, model)
+                .await?;
+            if let Some(tx) = request.stream {
+                let _ = tx
+                    .send(
+                        crate::openhuman::inference::provider::ProviderDelta::TextDelta {
+                            delta: text.clone(),
+                        },
+                    )
+                    .await;
+            }
+            return Ok(ProviderChatResponse {
+                text: Some(text),
+                tool_calls: vec![],
+                usage: None,
+                reasoning_content: None,
+            });
+        }
 
         // ── Streaming branch ─────────────────────────────────────────
         // When the caller supplied a `ProviderDelta` sender, request
@@ -1742,6 +1802,7 @@ impl Provider for OpenAiCompatibleProvider {
                             text: Some(text),
                             tool_calls: vec![],
                             usage: None,
+                            reasoning_content: None,
                         })
                         .map_err(|responses_err| {
                             let fb = super::format_anyhow_chain(&responses_err);
@@ -1771,6 +1832,7 @@ impl Provider for OpenAiCompatibleProvider {
                     text: Some(text),
                     tool_calls: vec![],
                     usage: None,
+                    reasoning_content: None,
                 });
             }
 
@@ -1782,6 +1844,7 @@ impl Provider for OpenAiCompatibleProvider {
                         text: Some(text),
                         tool_calls: vec![],
                         usage: None,
+                        reasoning_content: None,
                     })
                     .map_err(|responses_err| {
                         let fb = super::format_anyhow_chain(&responses_err);
@@ -1900,6 +1963,7 @@ impl Provider for OpenAiCompatibleProvider {
         let url = self.chat_completions_url();
         let client = self.http_client();
         let auth_header = self.auth_header.clone();
+        let extra_headers = self.extra_headers.clone();
         let provider_name = self.name.clone();
         let model_owned = model.to_string();
 
@@ -1926,6 +1990,10 @@ impl Provider for OpenAiCompatibleProvider {
                     req_builder.header(header, credential)
                 }
             };
+
+            for (name, value) in &extra_headers {
+                req_builder = req_builder.header(name.as_str(), value.as_str());
+            }
 
             // Set accept header for streaming
             req_builder = req_builder.header("Accept", "text/event-stream");

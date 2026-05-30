@@ -20,19 +20,18 @@ use super::handoff::{
 };
 use super::tool_prep::{
     build_text_mode_tool_instructions, filter_tool_indices, is_subagent_spawn_tool,
-    is_welcome_only_tool, load_prompt_source, top_k_for_toolkit,
+    load_prompt_source, top_k_for_toolkit,
 };
 use super::types::{SubagentMode, SubagentRunError, SubagentRunOptions, SubagentRunOutcome};
 use crate::openhuman::agent::harness::definition::{AgentDefinition, PromptSource};
 use crate::openhuman::agent::harness::{
     current_spawn_depth, with_current_sandbox_mode, with_spawn_depth, MAX_SPAWN_DEPTH,
 };
-use crate::openhuman::agent::progress::AgentProgress;
 use crate::openhuman::context::prompt::{
     render_subagent_system_prompt, PromptContext, PromptTool, SubagentRenderOptions,
 };
-use crate::openhuman::inference::provider::{ChatMessage, ChatRequest, Provider, ToolCall};
-use crate::openhuman::memory::conversations::ConversationMessage;
+use crate::openhuman::inference::provider::{ChatMessage, ChatRequest, Provider};
+use crate::openhuman::memory_conversations::ConversationMessage;
 use crate::openhuman::tools::{Tool, ToolCategory, ToolSpec};
 
 /// Prompt suffix injected into every typed sub-agent run.
@@ -147,11 +146,20 @@ pub(super) fn resolve_subagent_provider(
                         (std::sync::Arc::from(p), m)
                     }
                     Err(e) => {
+                        let suggested_key = match workload.as_str() {
+                            "summarization" | "memory" => "memory_provider".to_string(),
+                            _ => format!("{workload}_provider"),
+                        };
                         log::warn!(
-                        "[subagent_runner] workload '{}' provider build failed ({}) for agent_id={} — \
-                         falling back to parent provider + parent model '{}'",
-                        workload, e, agent_id, parent_model
-                    );
+                            "[subagent_runner] workload='{}' provider build failed for agent_id={} error='{}' \
+                             falling back to parent provider (parent_model='{}'). \
+                             Consider setting {} in config.",
+                            workload,
+                            agent_id,
+                            e,
+                            parent_model,
+                            suggested_key
+                        );
                         (parent_provider, parent_model)
                     }
                 }
@@ -190,7 +198,7 @@ struct LazyToolkitResolver {
 
 impl LazyToolkitResolver {
     fn resolve(&self, name: &str) -> Option<Box<dyn Tool>> {
-        let action = self.actions.iter().find(|a| a.name == name)?;
+        let action = self.find_action(name)?;
         Some(Box::new(
             crate::openhuman::composio::ComposioActionTool::new(
                 self.config.clone(),
@@ -201,11 +209,79 @@ impl LazyToolkitResolver {
         ))
     }
 
+    /// Match a model-supplied tool name to a real toolkit action, tolerant
+    /// of the near-miss slugs models routinely emit — case differences and
+    /// separator/prefix drift (bug-report-2026-05-26 A2). Tries, in order:
+    /// exact, case-insensitive, then a normalized alphanumeric match
+    /// (accepted only when **unique**, so a fabricated slug can't silently
+    /// resolve to the wrong action — those still fall through to the
+    /// "tool not available" error, which lists `known_slugs` for the model
+    /// to self-correct).
+    fn find_action(
+        &self,
+        name: &str,
+    ) -> Option<&crate::openhuman::context::prompt::ConnectedIntegrationTool> {
+        if let Some(action) = self.actions.iter().find(|a| a.name == name) {
+            return Some(action);
+        }
+        if let Some(action) = self
+            .actions
+            .iter()
+            .find(|a| a.name.eq_ignore_ascii_case(name))
+        {
+            tracing::debug!(
+                requested = %name,
+                matched = %action.name,
+                "[subagent_runner] resolved tool by case-insensitive match"
+            );
+            return Some(action);
+        }
+        let norm = normalize_slug(name);
+        if !norm.is_empty() {
+            let mut matches = self
+                .actions
+                .iter()
+                .filter(|a| normalize_slug(&a.name) == norm);
+            if let Some(action) = matches.next() {
+                if matches.next().is_none() {
+                    tracing::info!(
+                        requested = %name,
+                        matched = %action.name,
+                        "[subagent_runner] resolved tool by normalized-slug match"
+                    );
+                    return Some(action);
+                }
+                // Ambiguous: 2+ actions normalize to the same slug (e.g.
+                // `read_file` and `ReadFile` → `readfile`). We deliberately
+                // refuse to guess. Warn (not debug): a slug collision is a
+                // toolkit configuration anomaly that should surface in normal
+                // operator logs, not stay hidden behind debug filtering.
+                tracing::warn!(
+                    requested = %name,
+                    norm = %norm,
+                    "[subagent_runner] ambiguous normalized-slug match — multiple actions resolve to the same slug; not resolving"
+                );
+            }
+        }
+        None
+    }
+
     /// Slugs from the bound toolkit, for inclusion in unknown-tool
     /// errors so the model can self-correct without burning a turn.
     fn known_slugs(&self) -> Vec<&str> {
         self.actions.iter().map(|a| a.name.as_str()).collect()
     }
+}
+
+/// Lowercased, non-alphanumerics stripped — collapses separator/prefix
+/// drift (`GOOGLESLIDES_BATCH_UPDATE` vs `googleslides_batch_update`) so
+/// near-miss tool slugs still resolve, while genuinely different slugs
+/// (e.g. a hallucinated `GMAIL_GET_LAST_3_MESSAGES`) stay distinct.
+fn normalize_slug(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
 }
 
 /// Run a sub-agent based on its definition and a task prompt.
@@ -500,14 +576,6 @@ async fn run_typed_mode(
             .or(definition.skill_filter.as_deref()),
     );
 
-    // `complete_onboarding` is a welcome-only tool — it flips the
-    // onboarding-complete flag in workspace config and is meaningless
-    // (and potentially destructive) from any other agent. Strip it
-    // from every non-welcome subagent regardless of their scope.
-    if definition.id != "welcome" {
-        allowed_indices.retain(|&i| !is_welcome_only_tool(parent.all_tools[i].name()));
-    }
-
     // Sub-agents must never spawn their own sub-agents. Nested spawns
     // create a recursion tree the harness doesn't budget, observe, or
     // cost-attribute — and historically produced runaway dispatch loops
@@ -670,7 +738,9 @@ async fn run_typed_mode(
                 // behaviour on network failure.
                 let fresh_actions = match &client_kind {
                     Some(ComposioClientKind::Backend(client)) => {
-                        match crate::openhuman::composio::fetch_toolkit_actions(client, tk).await {
+                        match crate::openhuman::composio::fetch_toolkit_actions(client, tk, None)
+                            .await
+                        {
                             Ok(actions) if !actions.is_empty() => actions,
                             Ok(_) => {
                                 tracing::debug!(
@@ -727,6 +797,10 @@ async fn run_typed_mode(
                     // the user pref and doesn't change per-spawn.
                     gated_tools: cached_integration.gated_tools.clone(),
                     connected: cached_integration.connected,
+                    // Inherit the cached non-active status — this spawn
+                    // path only fires on connected toolkits, but keep the
+                    // field consistent with the source row for #2365.
+                    non_active_status: cached_integration.non_active_status.clone(),
                 };
                 let integration = &integration;
                 // Fuzzy-filter the toolkit's actions against the task prompt
@@ -862,20 +936,37 @@ async fn run_typed_mode(
         None
     };
 
-    let mut filtered_specs: Vec<ToolSpec> = allowed_indices
-        .iter()
-        .map(|&i| parent.all_tool_specs[i].clone())
-        .collect();
+    // Build provider-visible tool schemas in EXECUTION-PRECEDENCE order:
+    // `dynamic_tools` (extra_tools at runtime) before parent specs, because
+    // the inner loop's name lookup (see end of this fn) resolves
+    // `extra_tools` first and only falls back to `parent_tools`. Aligning
+    // the dedup order with the runtime lookup order guarantees the schema
+    // the model sees and the tool that actually executes describe the same
+    // behaviour. (CodeRabbit review on PR #2446.)
+    let mut filtered_specs: Vec<ToolSpec> = dynamic_tools.iter().map(|t| t.spec()).collect();
+    filtered_specs.extend(
+        allowed_indices
+            .iter()
+            .map(|&i| parent.all_tool_specs[i].clone()),
+    );
     let mut allowed_names: HashSet<String> = allowed_indices
         .iter()
         .map(|&i| parent.all_tools[i].name().to_string())
         .collect();
-    // Append dynamic tool specs / names so they're discoverable by the
-    // provider (native tool-calling) and by the inner loop's allowlist.
+    // Dynamic tool names must also be in the allowlist so the inner loop
+    // accepts model tool_calls that reference them.
     for tool in &dynamic_tools {
-        filtered_specs.push(tool.spec());
         allowed_names.insert(tool.name().to_string());
     }
+    // Dedup by name: first occurrence wins. Dynamic Composio action tools
+    // can share a name with an inherited parent-registry spec when the
+    // agent's AllowedAll scope includes a same-named skill tool. Some
+    // providers (Anthropic, OpenHuman cloud after the uniqueness-enforcement
+    // rollout) 400 on duplicate tool names — see TAURI-RUST-4. Because
+    // `filtered_specs` is in execution order (dynamic first), the kept
+    // schema matches what the runtime will actually dispatch.
+    let filtered_specs =
+        crate::openhuman::agent::harness::session::dedup_visible_tool_specs(filtered_specs);
 
     // Dedup by tool name before the specs reach the provider (see
     // `dedup_tool_specs_by_name` for why duplicates appear here).
@@ -996,6 +1087,10 @@ async fn run_typed_mode(
         include_memory_md: !definition.omit_memory_md,
         curated_snapshot: None,
         user_identity: crate::openhuman::app_state::peek_cached_current_user_identity(),
+        personality_soul_md: None,
+        personality_memory_md: None,
+        personality_roster: vec![],
+        workflows: &[],
     };
 
     let system_prompt = match &definition.system_prompt {
@@ -1124,9 +1219,9 @@ async fn run_inner_loop(
     provider: &dyn Provider,
     history: &mut Vec<ChatMessage>,
     parent_tools: &[Box<dyn Tool>],
-    mut extra_tools: Vec<Box<dyn Tool>>,
+    extra_tools: Vec<Box<dyn Tool>>,
     tool_specs: &[ToolSpec],
-    mut allowed_names: HashSet<String>,
+    allowed_names: HashSet<String>,
     lazy_resolver: Option<LazyToolkitResolver>,
     model: &str,
     temperature: f64,
@@ -1137,22 +1232,20 @@ async fn run_inner_loop(
     handoff_cache: Option<&ResultHandoffCache>,
     parent: &ParentExecutionContext,
 ) -> Result<(String, usize, AggregatedUsage), SubagentRunError> {
-    let max_iterations = max_iterations.max(1);
+    // An autonomous skill run (set via `with_autonomous_iter_cap`) lifts the
+    // per-agent cap so sub-agents run until done / the circuit breaker trips.
+    let max_iterations = super::autonomous::autonomous_iter_cap()
+        .map(|cap| cap.max(max_iterations))
+        .unwrap_or(max_iterations)
+        .max(1);
 
-    // Sub-agent transcript stem — mirrors what
-    // `persist_subagent_transcript` used to compute on one-shot
-    // post-loop writes. We compute it once up front so **every
-    // iteration's** persist call resolves to the same file on disk:
-    //   `{parent_chain}__{unix_ts}_{agent_id}.jsonl`.
+    // Sub-agent transcript stem — computed once up front so every iteration's
+    // persist resolves to the same file: `{parent_chain}__{unix_ts}_{agent_id}`.
     let child_session_key = {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
         let unix_ts = now.as_secs();
-        // Nanos component + task_id suffix disambiguate sibling sub-agents
-        // spawned within the same wall-clock second (tests and fan-out
-        // flows routinely do this, and a shared stem would overwrite the
-        // earlier sibling's transcript file).
         let nanos = now.subsec_nanos();
         let sanitized: String = agent_id
             .chars()
@@ -1183,47 +1276,15 @@ async fn run_inner_loop(
         format!("{parent_chain}__{child_session_key}")
     };
 
-    // ── Text-mode override for integrations_agent ────────────────────────────
-    //
-    // Large Composio toolkits (Notion, Salesforce, HubSpot, GitHub) ship
-    // per-action JSON schemas that are extraordinarily dense — deeply
-    // nested object/block types, recursive refs, huge discriminated
-    // unions. Fireworks-style providers (which the backend forwards to)
-    // auto-compile every entry in `tools: [...]` into a grammar and
-    // index rules with a `uint16_t` — max 65 535 rules. Even with the
-    // upstream fuzzy filter narrowing Notion 48 → 16, a single request
-    // generates 100 000+ rules and the provider rejects it with 400
-    // before generation starts.
-    //
-    // The fuzzy filter can't fix this because the bound is per-action,
-    // not per-toolkit: one Notion schema alone can produce thousands of
-    // rules. The only client-side lever is to **not send `tools: [...]`
-    // at all** — the backend has nothing to compile, so no grammar, so
-    // no ceiling. We then describe the tools in the system prompt as
-    // prose (XmlToolDispatcher format) and parse `<tool_call>` tags out
-    // of the model's free-form response text.
-    //
-    // Scoped to `integrations_agent` because that's the only path where we
-    // pass Composio toolkit schemas. Every other typed sub-agent
-    // (welcome, researcher, summarizer, …) uses small built-in tool
-    // sets that stay well under the grammar ceiling and benefit from
-    // native mode's stricter formatting guarantees.
+    // ── Text-mode override for integrations_agent ──
+    // Large Composio toolkits compile into provider grammars that blow the
+    // 65 535-rule ceiling, so for `integrations_agent` we omit `tools: [...]`
+    // and describe them in the system prompt as prose, parsing `<tool_call>`
+    // tags out of the model's response. Forcing `request_specs() == &[]` makes
+    // the engine skip native tools and fall back to its XML parse + batched
+    // `[Tool results]` path — exactly what text mode needs.
     let force_text_mode = agent_id == "integrations_agent" && !tool_specs.is_empty();
-
-    let supports_native =
-        !force_text_mode && provider.supports_native_tools() && !tool_specs.is_empty();
-    let request_tools = if supports_native {
-        Some(tool_specs)
-    } else {
-        None
-    };
-
     if force_text_mode {
-        // Append the XML tool protocol + available-tool list to the
-        // existing system prompt. `history[0]` is the system message
-        // built by `run_typed_mode` upstream; we
-        // augment it in-place so the model learns the call format for
-        // this session without an extra message round-trip.
         if let Some(sys) = history.iter_mut().find(|m| m.role == "system") {
             sys.content.push_str("\n\n");
             sys.content
@@ -1237,24 +1298,282 @@ async fn run_inner_loop(
         );
     }
 
-    let mut usage = AggregatedUsage::default();
+    let advertised_specs: Vec<ToolSpec> = if force_text_mode {
+        Vec::new()
+    } else {
+        tool_specs.to_vec()
+    };
 
-    // Per-iteration transcript persistence. Mirrors the main-agent
-    // turn loop: right after each provider response lands (and again
-    // after the final response is pushed) we flush the full history
-    // to disk. A crash during tool execution no longer erases the
-    // sub-agent's response — the bytes are on disk before any tool
-    // runs. Best-effort: write failures are logged at `debug` and the
-    // loop continues.
-    let persist_transcript = |history: &[ChatMessage], usage: &AggregatedUsage| {
+    let mut tool_source = SubagentToolSource {
+        parent_tools,
+        extra_tools,
+        allowed_names,
+        lazy_resolver,
+        advertised_specs,
+        handoff_cache,
+        policy: crate::openhuman::tools::policy::DefaultToolPolicy,
+        agent_id: agent_id.to_string(),
+    };
+    let mut observer = SubagentObserver {
+        worker_thread_id,
+        workspace_dir: parent.workspace_dir.clone(),
+        transcript_stem,
+        agent_id: agent_id.to_string(),
+        task_id: task_id.to_string(),
+        force_text_mode,
+        usage: AggregatedUsage::default(),
+    };
+    let checkpoint = SubagentCheckpoint {
+        provider,
+        model: model.to_string(),
+        temperature,
+        agent_id: agent_id.to_string(),
+    };
+    let progress = super::super::engine::SubagentProgress {
+        sink: parent.on_progress.clone(),
+        agent_id: agent_id.to_string(),
+        task_id: task_id.to_string(),
+    };
+
+    let parser = super::super::engine::DefaultParser;
+    let outcome = super::super::engine::run_turn_engine(
+        provider,
+        history,
+        &mut tool_source,
+        &progress,
+        &mut observer,
+        &checkpoint,
+        &parser,
+        "subagent",
+        model,
+        temperature,
+        true, // silent — sub-agents never echo to stdout
+        &crate::openhuman::config::MultimodalConfig::default(),
+        max_iterations,
+        None, // sub-agents don't stream a draft
+    )
+    .await?;
+
+    Ok((outcome.text, outcome.iterations as usize, observer.usage))
+}
+
+/// Apply the progressive-disclosure handoff to a tool result. If a cache is
+/// present and the (cleaned) result is large and not an error / not from the
+/// extractor tool, stash the raw payload and substitute a short placeholder the
+/// sub-agent can drill into with `extract_from_result`. Errors and
+/// already-extracted output pass through unchanged.
+fn apply_handoff(
+    cache: &ResultHandoffCache,
+    tool_name: &str,
+    task_id: &str,
+    agent_id: &str,
+    result_text: String,
+) -> String {
+    let skip_cleaning = tool_name == "extract_from_result" || result_text.starts_with("Error");
+    let cleaned = if skip_cleaning {
+        result_text
+    } else {
+        let pre_len = result_text.len();
+        let cleaned = clean_tool_output(&result_text);
+        if cleaned.len() < pre_len {
+            tracing::debug!(
+                tool = %tool_name,
+                before_bytes = pre_len,
+                after_bytes = cleaned.len(),
+                saved_pct = ((pre_len - cleaned.len()) * 100) / pre_len.max(1),
+                "[subagent_runner:handoff] cleaned tool output (stripped markup/data-uris/whitespace)"
+            );
+        }
+        cleaned
+    };
+    let tokens = cleaned.len().div_ceil(4);
+    if !skip_cleaning && tokens > HANDOFF_OVERSIZE_THRESHOLD_TOKENS {
+        let id = cache.store(tool_name.to_string(), cleaned.clone());
+        let placeholder = build_handoff_placeholder(tool_name, &id, &cleaned);
+        tracing::info!(
+            task_id = %task_id,
+            agent_id = %agent_id,
+            tool = %tool_name,
+            raw_tokens = tokens,
+            raw_bytes = cleaned.len(),
+            threshold_tokens = HANDOFF_OVERSIZE_THRESHOLD_TOKENS,
+            result_id = %id,
+            "[subagent_runner:handoff] stashed oversized tool output; substituted placeholder into history"
+        );
+        placeholder
+    } else {
+        cleaned
+    }
+}
+
+/// Sub-agent [`ToolSource`]: looks up tools in `extra_tools` then the parent
+/// registry, lazily registers toolkit actions the fuzzy filter omitted, rejects
+/// names outside the allowlist, and routes execution through the shared
+/// [`run_one_tool`] (so sub-agents now get the same approval gate, audit,
+/// credential scrub, tokenjuice and timeout as the channel loop), then applies
+/// the progressive-disclosure handoff.
+struct SubagentToolSource<'a> {
+    parent_tools: &'a [Box<dyn Tool>],
+    extra_tools: Vec<Box<dyn Tool>>,
+    allowed_names: HashSet<String>,
+    lazy_resolver: Option<LazyToolkitResolver>,
+    advertised_specs: Vec<ToolSpec>,
+    handoff_cache: Option<&'a ResultHandoffCache>,
+    policy: crate::openhuman::tools::policy::DefaultToolPolicy,
+    agent_id: String,
+}
+
+#[async_trait::async_trait]
+impl super::super::engine::ToolSource for SubagentToolSource<'_> {
+    fn request_specs(&self) -> &[ToolSpec] {
+        &self.advertised_specs
+    }
+
+    async fn execute_call(
+        &mut self,
+        call: &super::super::parse::ParsedToolCall,
+        iteration: usize,
+        progress: &dyn super::super::engine::ProgressReporter,
+        progress_call_id: &str,
+    ) -> super::super::engine::ToolRunResult {
+        // Lazy registration: a call for an unknown tool that matches a real
+        // action slug in the bound toolkit gets built on the spot and admitted
+        // to the allowlist. The fuzzy top-K filter keeps schemas out of the
+        // prompt, not out of execution.
+        if !self.allowed_names.contains(&call.name) {
+            if let Some(resolver) = self.lazy_resolver.as_ref() {
+                if let Some(tool) = resolver.resolve(&call.name) {
+                    tracing::info!(
+                        agent_id = %self.agent_id,
+                        tool = %call.name,
+                        "[subagent_runner] lazily registered toolkit action outside fuzzy top-K"
+                    );
+                    self.allowed_names.insert(tool.name().to_string());
+                    self.extra_tools.push(tool);
+                }
+            }
+        }
+
+        if !self.allowed_names.contains(&call.name) {
+            tracing::warn!(
+                agent_id = %self.agent_id,
+                tool = %call.name,
+                "[subagent_runner] tool not in allowlist for this sub-agent"
+            );
+            let iteration_u32 = (iteration + 1) as u32;
+            progress
+                .tool_started(progress_call_id, &call.name, &call.arguments, iteration_u32)
+                .await;
+            let mut available: Vec<&str> = self.allowed_names.iter().map(|s| s.as_str()).collect();
+            if let Some(resolver) = self.lazy_resolver.as_ref() {
+                available.extend(resolver.known_slugs());
+            }
+            available.sort_unstable();
+            available.dedup();
+            let text = format!(
+                "Error: tool '{}' is not available to the {} sub-agent. Available tools: {}",
+                call.name,
+                self.agent_id,
+                available.join(", ")
+            );
+            progress
+                .tool_completed(
+                    progress_call_id,
+                    &call.name,
+                    false,
+                    text.chars().count(),
+                    0,
+                    iteration_u32,
+                )
+                .await;
+            return super::super::engine::ToolRunResult {
+                text,
+                success: false,
+            };
+        }
+
+        let tool_opt: Option<&dyn Tool> = self
+            .extra_tools
+            .iter()
+            .find(|t| t.name() == call.name)
+            .or_else(|| self.parent_tools.iter().find(|t| t.name() == call.name))
+            .map(|b| b.as_ref());
+        let outcome = super::super::engine::run_one_tool(
+            tool_opt,
+            call,
+            iteration,
+            progress,
+            &self.policy,
+            None,
+            progress_call_id,
+        )
+        .await;
+
+        let text = match self.handoff_cache {
+            Some(cache) => apply_handoff(cache, &call.name, "", &self.agent_id, outcome.text),
+            None => outcome.text,
+        };
+        super::super::engine::ToolRunResult {
+            text,
+            success: outcome.success,
+        }
+    }
+}
+
+/// Sub-agent [`TurnObserver`]: accumulates usage, persists the per-iteration
+/// transcript, and mirrors assistant intents / tool results / final responses
+/// to the spawn's worker thread (when one is attached).
+struct SubagentObserver {
+    worker_thread_id: Option<String>,
+    workspace_dir: std::path::PathBuf,
+    transcript_stem: String,
+    agent_id: String,
+    task_id: String,
+    force_text_mode: bool,
+    usage: AggregatedUsage,
+}
+
+impl SubagentObserver {
+    fn append_worker_message(
+        &self,
+        content: String,
+        sender: String,
+        extra_metadata: serde_json::Value,
+    ) {
+        let Some(ref thread_id) = self.worker_thread_id else {
+            return;
+        };
+        let message = ConversationMessage {
+            id: format!("{}:{}", sender, uuid::Uuid::new_v4()),
+            content,
+            message_type: "text".to_string(),
+            extra_metadata,
+            sender,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        if let Err(err) = crate::openhuman::memory_conversations::append_message(
+            self.workspace_dir.clone(),
+            thread_id,
+            message,
+        ) {
+            tracing::debug!(
+                agent_id = %self.agent_id,
+                thread_id = %thread_id,
+                error = %err,
+                "[subagent_runner] failed to append message to worker thread"
+            );
+        }
+    }
+
+    fn persist_transcript(&self, history: &[ChatMessage]) {
         let path = match transcript::resolve_keyed_transcript_path(
-            &parent.workspace_dir,
-            &transcript_stem,
+            &self.workspace_dir,
+            &self.transcript_stem,
         ) {
             Ok(p) => p,
             Err(err) => {
                 tracing::debug!(
-                    agent_id = %agent_id,
+                    agent_id = %self.agent_id,
                     error = %err,
                     "[subagent_runner] failed to resolve transcript path"
                 );
@@ -1263,438 +1582,184 @@ async fn run_inner_loop(
         };
         let now = chrono::Utc::now().to_rfc3339();
         let meta = transcript::TranscriptMeta {
-            agent_name: agent_id.to_string(),
+            agent_name: self.agent_id.clone(),
             dispatcher: "native".into(),
             created: now.clone(),
             updated: now,
             turn_count: 1,
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cached_input_tokens: usage.cached_input_tokens,
-            charged_amount_usd: usage.charged_amount_usd,
+            input_tokens: self.usage.input_tokens,
+            output_tokens: self.usage.output_tokens,
+            cached_input_tokens: self.usage.cached_input_tokens,
+            charged_amount_usd: self.usage.charged_amount_usd,
             thread_id: crate::openhuman::inference::provider::thread_context::current_thread_id(),
         };
         if let Err(err) = transcript::write_transcript(&path, history, &meta, None) {
             tracing::debug!(
-                agent_id = %agent_id,
+                agent_id = %self.agent_id,
                 error = %err,
                 "[subagent_runner] failed to write transcript"
             );
         }
-    };
+    }
+}
 
-    let append_worker_message =
-        |content: String, sender: String, extra_metadata: serde_json::Value| {
-            if let Some(ref thread_id) = worker_thread_id {
-                let message = ConversationMessage {
-                    id: format!("{}:{}", sender, uuid::Uuid::new_v4()),
-                    content,
-                    message_type: "text".to_string(),
-                    extra_metadata,
-                    sender,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                };
-                if let Err(err) = crate::openhuman::memory::conversations::append_message(
-                    parent.workspace_dir.clone(),
-                    thread_id,
-                    message,
-                ) {
-                    tracing::debug!(
-                        agent_id = %agent_id,
-                        thread_id = %thread_id,
-                        error = %err,
-                        "[subagent_runner] failed to append message to worker thread"
-                    );
-                }
-            }
-        };
-
-    // Per-turn progress sink shared with the parent — `None` for runs
-    // that don't have a subscriber (CLI / triage / tests). Cloned upfront
-    // so the inner loop body doesn't repeatedly re-resolve `parent.on_progress`.
-    let progress_sink = parent.on_progress.clone();
-
-    for iteration in 0..max_iterations {
-        tracing::debug!(
-            task_id = %task_id,
-            agent_id = %agent_id,
-            iteration,
-            history_len = history.len(),
-            "[subagent_runner] iteration start"
-        );
-
-        if let Some(ref tx) = progress_sink {
-            let _ = tx
-                .send(AgentProgress::SubagentIterationStarted {
-                    agent_id: agent_id.to_string(),
-                    task_id: task_id.to_string(),
-                    iteration: (iteration + 1) as u32,
-                    max_iterations: max_iterations as u32,
-                })
-                .await;
-        }
-
-        let resp = provider
-            .chat(
-                ChatRequest {
-                    messages: history.as_slice(),
-                    tools: request_tools,
-                    stream: None,
-                },
-                model,
-                temperature,
-            )
-            .await?;
-
-        if let Some(ref u) = resp.usage {
-            usage.input_tokens += u.input_tokens;
-            usage.output_tokens += u.output_tokens;
-            usage.cached_input_tokens += u.cached_input_tokens;
-            usage.charged_amount_usd += u.charged_amount_usd;
-        }
-
-        let response_text = resp.text.clone().unwrap_or_default();
-
-        // In text mode the model emits `<tool_call>{…}</tool_call>` tags
-        // inline inside `resp.text` (and `resp.tool_calls` is empty
-        // because we told the provider not to structure them). Parse
-        // them ourselves via the shared harness helper and synthesise a
-        // `ToolCall` per parsed block so the rest of the loop can stay
-        // uniform.
-        let native_calls: Vec<ToolCall> = if force_text_mode {
-            let (_cleaned, parsed) = super::super::parse::parse_tool_calls(&response_text);
-            parsed
-                .into_iter()
-                .enumerate()
-                .map(|(i, call)| {
-                    let args_str = if call.arguments.is_null() {
-                        "{}".to_string()
-                    } else {
-                        call.arguments.to_string()
-                    };
-                    ToolCall {
-                        id: call
-                            .id
-                            .clone()
-                            .unwrap_or_else(|| format!("call_text_{iteration}_{i}")),
-                        name: call.name,
-                        arguments: args_str,
-                    }
-                })
-                .collect()
-        } else {
-            resp.tool_calls.clone()
-        };
-
-        if native_calls.is_empty() {
-            tracing::debug!(
-                task_id = %task_id,
-                agent_id = %agent_id,
-                iteration,
-                final_chars = response_text.chars().count(),
-                "[subagent_runner] no tool calls — returning final response"
-            );
-            history.push(ChatMessage::assistant(response_text.clone()));
-            append_worker_message(
-                response_text.clone(),
-                "agent".to_string(),
-                serde_json::json!({
-                    "scope": "worker_thread",
-                    "agent_id": agent_id,
-                    "task_id": task_id,
-                    "iteration": iteration + 1,
-                    "final": true,
-                }),
-            );
-            // Persist the final response before returning so the
-            // transcript always captures the last provider reply.
-            persist_transcript(history, &usage);
-            return Ok((response_text, iteration + 1, usage));
-        }
-
-        // Persist the assistant turn. In native mode use the canonical
-        // serialiser (wraps text + structured tool_calls for the
-        // backend's jinja template). In text mode the raw response
-        // already contains the `<tool_call>` tags inline, so persist it
-        // verbatim — on the next turn the model sees its own prior
-        // emissions exactly as it wrote them.
-        if force_text_mode {
-            history.push(ChatMessage::assistant(response_text.clone()));
-        } else {
-            let assistant_history_content =
-                super::super::parse::build_native_assistant_history(&response_text, &native_calls);
-            history.push(ChatMessage::assistant(assistant_history_content));
-        }
-
-        append_worker_message(
-            response_text.clone(),
-            "agent".to_string(),
-            serde_json::json!({
-                "scope": "worker_thread",
-                "agent_id": agent_id,
-                "task_id": task_id,
-                "iteration": iteration + 1,
-                "tool_calls": native_calls.len(),
-            }),
-        );
-
-        // Persist the assistant response + tool-call intents **before**
-        // executing tools. If the session crashes mid-tool-call we
-        // still have what the model emitted on disk.
-        persist_transcript(history, &usage);
-
-        // Execute each call, collect outputs. Native mode pushes one
-        // `role=tool` message per call with the structured `tool_call_id`
-        // reference. Text mode has no such reference (the model just
-        // emitted tags in prose), so we batch all results into a single
-        // user message formatted with `<tool_result>` tags — mirroring
-        // XmlToolDispatcher's `format_results`.
-        let mut text_mode_result_block = String::new();
-        for call in &native_calls {
-            let call_started = Instant::now();
-            if let Some(ref tx) = progress_sink {
-                let _ = tx
-                    .send(AgentProgress::SubagentToolCallStarted {
-                        agent_id: agent_id.to_string(),
-                        task_id: task_id.to_string(),
-                        call_id: call.id.clone(),
-                        tool_name: call.name.clone(),
-                        iteration: (iteration + 1) as u32,
-                    })
-                    .await;
-            }
-
-            // Lazy registration: if the call is for an unknown tool but
-            // matches a real action slug in the bound toolkit's full
-            // catalogue, build the [`ComposioActionTool`] on the spot and
-            // admit it to the allowlist for this and subsequent turns.
-            // The fuzzy top-K filter exists to keep schemas out of the
-            // system prompt, not to gate execution — when the model
-            // names the slug correctly we should just dispatch.
-            if !allowed_names.contains(&call.name) {
-                if let Some(resolver) = lazy_resolver.as_ref() {
-                    if let Some(tool) = resolver.resolve(&call.name) {
-                        tracing::info!(
-                            task_id = %task_id,
-                            agent_id = %agent_id,
-                            tool = %call.name,
-                            "[subagent_runner] lazily registered toolkit action outside fuzzy top-K"
-                        );
-                        allowed_names.insert(tool.name().to_string());
-                        extra_tools.push(tool);
-                    }
-                }
-            }
-
-            let result_text = if !allowed_names.contains(&call.name) {
-                tracing::warn!(
-                    task_id = %task_id,
-                    agent_id = %agent_id,
-                    tool = %call.name,
-                    "[subagent_runner] tool not in allowlist for this sub-agent"
-                );
-                let mut available: Vec<&str> = allowed_names.iter().map(|s| s.as_str()).collect();
-                if let Some(resolver) = lazy_resolver.as_ref() {
-                    available.extend(resolver.known_slugs());
-                }
-                available.sort_unstable();
-                available.dedup();
-                format!(
-                    "Error: tool '{}' is not available to the {} sub-agent. Available tools: {}",
-                    call.name,
-                    agent_id,
-                    available.join(", ")
-                )
-            } else if let Some(tool) = extra_tools
-                .iter()
-                .find(|t| t.name() == call.name)
-                .or_else(|| parent_tools.iter().find(|t| t.name() == call.name))
-            {
-                let args = parse_tool_arguments(&call.arguments);
-                let timeout = crate::openhuman::tool_timeout::tool_execution_timeout_duration();
-                // ── External-effect approval gate (#1339) ─────
-                // Subagents share the same gate as the parent loop;
-                // see `tool_loop.rs` for the rationale.
-                let gate_denial: Option<String> = if tool.external_effect_with_args(&args) {
-                    if let Some(gate) = crate::openhuman::approval::ApprovalGate::try_global() {
-                        let summary =
-                            crate::openhuman::approval::summarize_action(&call.name, &args);
-                        let redacted = crate::openhuman::approval::redact_args(&args);
-                        match gate.intercept(&call.name, &summary, redacted).await {
-                            crate::openhuman::approval::GateOutcome::Allow => None,
-                            crate::openhuman::approval::GateOutcome::Deny { reason } => {
-                                tracing::warn!(
-                                    tool = call.name.as_str(),
-                                    reason = %reason,
-                                    "[subagent_runner] approval gate denied tool call"
-                                );
-                                Some(reason)
-                            }
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(reason) = gate_denial {
-                    // Prefix as Error so the downstream `call_success`
-                    // computation (`!result_text.starts_with("Error")`)
-                    // marks the denial as a failed tool call in
-                    // progress events and tool_result blocks.
-                    // (CodeRabbit review on PR #2149.)
-                    format!("Error: {reason}")
-                } else {
-                    match tokio::time::timeout(timeout, tool.execute(args)).await {
-                        Ok(Ok(result)) => {
-                            let raw = result.output();
-                            if result.is_error {
-                                format!("Error: {raw}")
-                            } else {
-                                raw
-                            }
-                        }
-                        Ok(Err(err)) => format!("Error executing {}: {err}", call.name),
-                        Err(_) => format!("Error: tool '{}' timed out", call.name),
-                    }
-                }
-            } else {
-                format!("Unknown tool: {}", call.name)
-            };
-
-            // Progressive-disclosure handoff: if this spawn has a cache
-            // (integrations_agent-with-toolkit path) and the result is large
-            // and not itself an error / not from the extractor tool,
-            // stash the raw payload and replace it in history with a
-            // short placeholder. The sub-agent can drill in with
-            // `extract_from_result(result_id=..., query=...)` on the
-            // next turn. Errors and already-extracted output go through
-            // unchanged — no point handing off a 200-byte error or an
-            // already-compressed summary.
-            //
-            // Cleaning happens before the size check so HTML-heavy tool
-            // outputs (Gmail bodies, HTML-embedded Notion blocks) that
-            // drop below threshold after stripping markup skip the
-            // extract pipeline entirely. For anything still over
-            // threshold, the cache stores the cleaned text — chunks see
-            // real content, not `<div>` soup.
-            let result_text = if let Some(cache) = handoff_cache {
-                let skip_cleaning =
-                    call.name == "extract_from_result" || result_text.starts_with("Error");
-                let cleaned = if skip_cleaning {
-                    result_text
-                } else {
-                    let pre_len = result_text.len();
-                    let cleaned = clean_tool_output(&result_text);
-                    if cleaned.len() < pre_len {
-                        tracing::debug!(
-                            tool = %call.name,
-                            before_bytes = pre_len,
-                            after_bytes = cleaned.len(),
-                            saved_pct = ((pre_len - cleaned.len()) * 100) / pre_len.max(1),
-                            "[subagent_runner:handoff] cleaned tool output (stripped markup/data-uris/whitespace)"
-                        );
-                    }
-                    cleaned
-                };
-                let tokens = cleaned.len().div_ceil(4);
-                if !skip_cleaning && tokens > HANDOFF_OVERSIZE_THRESHOLD_TOKENS {
-                    let id = cache.store(call.name.clone(), cleaned.clone());
-                    let placeholder = build_handoff_placeholder(&call.name, &id, &cleaned);
-                    tracing::info!(
-                        task_id = %task_id,
-                        agent_id = %agent_id,
-                        tool = %call.name,
-                        raw_tokens = tokens,
-                        raw_bytes = cleaned.len(),
-                        threshold_tokens = HANDOFF_OVERSIZE_THRESHOLD_TOKENS,
-                        result_id = %id,
-                        "[subagent_runner:handoff] stashed oversized tool output; substituted placeholder into history"
-                    );
-                    placeholder
-                } else {
-                    cleaned
-                }
-            } else {
-                result_text
-            };
-
-            let call_success = !result_text.starts_with("Error");
-            let call_output_chars = result_text.chars().count();
-            let call_elapsed_ms = call_started.elapsed().as_millis() as u64;
-
-            if force_text_mode {
-                let status = if call_success { "ok" } else { "error" };
-                let _ = std::fmt::Write::write_fmt(
-                    &mut text_mode_result_block,
-                    format_args!(
-                        "<tool_result name=\"{}\" status=\"{}\">\n{}\n</tool_result>\n",
-                        call.name, status, result_text
-                    ),
-                );
-            } else {
-                let tool_msg = serde_json::json!({
-                    "tool_call_id": call.id,
-                    "content": result_text.clone(),
-                });
-                history.push(ChatMessage::tool(tool_msg.to_string()));
-                append_worker_message(
-                    result_text.clone(),
-                    "user".to_string(),
-                    serde_json::json!({
-                        "scope": "worker_thread",
-                        "agent_id": agent_id,
-                        "task_id": task_id,
-                        "iteration": iteration + 1,
-                        "tool_call_id": call.id,
-                        "tool_name": call.name,
-                    }),
-                );
-            }
-
-            if let Some(ref tx) = progress_sink {
-                let _ = tx
-                    .send(AgentProgress::SubagentToolCallCompleted {
-                        agent_id: agent_id.to_string(),
-                        task_id: task_id.to_string(),
-                        call_id: call.id.clone(),
-                        tool_name: call.name.clone(),
-                        success: call_success,
-                        output_chars: call_output_chars,
-                        elapsed_ms: call_elapsed_ms,
-                        iteration: (iteration + 1) as u32,
-                    })
-                    .await;
-            }
-        }
-
-        if force_text_mode && !text_mode_result_block.is_empty() {
-            let content = format!("[Tool results]\n{text_mode_result_block}");
-            history.push(ChatMessage::user(content.clone()));
-            append_worker_message(
-                content,
-                "user".to_string(),
-                serde_json::json!({
-                    "scope": "worker_thread",
-                    "agent_id": agent_id,
-                    "task_id": task_id,
-                    "iteration": iteration + 1,
-                    "mode": "text",
-                }),
-            );
-        }
-
-        // Persist again after tool results have been appended so the
-        // on-disk transcript reflects each round's complete
-        // assistant-intent + tool-result pair. Without this, a crash
-        // between `persist_transcript` at line ~1044 and the next
-        // iteration's provider call would leave the transcript without
-        // the tool outputs the next turn will be reasoning from.
-        persist_transcript(history, &usage);
+#[async_trait::async_trait]
+impl super::super::engine::TurnObserver for SubagentObserver {
+    fn record_usage(
+        &mut self,
+        _model: &str,
+        usage: &crate::openhuman::inference::provider::UsageInfo,
+    ) {
+        self.usage.input_tokens += usage.input_tokens;
+        self.usage.output_tokens += usage.output_tokens;
+        self.usage.cached_input_tokens += usage.cached_input_tokens;
+        self.usage.charged_amount_usd += usage.charged_amount_usd;
     }
 
-    Err(SubagentRunError::MaxIterationsExceeded(max_iterations))
+    fn on_assistant(
+        &mut self,
+        _display_text: &str,
+        response_text: &str,
+        _reasoning_content: Option<&str>,
+        _native_tool_calls: &[crate::openhuman::inference::provider::ToolCall],
+        parsed_calls: &[super::super::parse::ParsedToolCall],
+        iteration: usize,
+        is_final: bool,
+    ) {
+        let tool_calls = parsed_calls.len();
+        let extra = if is_final {
+            serde_json::json!({
+                "scope": "worker_thread",
+                "agent_id": self.agent_id,
+                "task_id": self.task_id,
+                "iteration": iteration + 1,
+                "final": true,
+            })
+        } else {
+            serde_json::json!({
+                "scope": "worker_thread",
+                "agent_id": self.agent_id,
+                "task_id": self.task_id,
+                "iteration": iteration + 1,
+                "tool_calls": tool_calls,
+            })
+        };
+        self.append_worker_message(response_text.to_string(), "agent".to_string(), extra);
+    }
+
+    fn on_tool_result(
+        &mut self,
+        call_id: &str,
+        tool_name: &str,
+        result_text: &str,
+        _success: bool,
+        iteration: usize,
+    ) {
+        // Native mode mirrors each tool result individually; text mode batches
+        // them in `on_results_batch` instead.
+        if self.force_text_mode {
+            return;
+        }
+        self.append_worker_message(
+            result_text.to_string(),
+            "user".to_string(),
+            serde_json::json!({
+                "scope": "worker_thread",
+                "agent_id": self.agent_id,
+                "task_id": self.task_id,
+                "iteration": iteration + 1,
+                "tool_call_id": call_id,
+                "tool_name": tool_name,
+            }),
+        );
+    }
+
+    fn on_results_batch(&mut self, content: &str, iteration: usize) {
+        self.append_worker_message(
+            content.to_string(),
+            "user".to_string(),
+            serde_json::json!({
+                "scope": "worker_thread",
+                "agent_id": self.agent_id,
+                "task_id": self.task_id,
+                "iteration": iteration + 1,
+                "mode": "text",
+            }),
+        );
+    }
+
+    fn after_iteration(&mut self, history: &[ChatMessage], _iteration: usize) {
+        self.persist_transcript(history);
+    }
+}
+
+/// Sub-agent [`CheckpointStrategy`]: when the iteration cap is hit, summarize
+/// the run-so-far into a resumable checkpoint (so the delegating agent can
+/// continue from partial progress) instead of erroring. Falls back to a
+/// deterministic digest summary if the summarization call fails or returns no
+/// prose.
+struct SubagentCheckpoint<'a> {
+    provider: &'a dyn Provider,
+    model: String,
+    temperature: f64,
+    agent_id: String,
+}
+
+#[async_trait::async_trait]
+impl super::super::engine::CheckpointStrategy for SubagentCheckpoint<'_> {
+    async fn on_max_iter(
+        &self,
+        digest: &str,
+        max_iterations: usize,
+    ) -> anyhow::Result<super::super::engine::CheckpointOutcome> {
+        let agent_id = &self.agent_id;
+        let deterministic = format!(
+            "I reached my tool-call limit ({max_iterations} steps) before finishing this task. \
+             Progress so far (tool calls + results):\n{digest}\n\nThe task is incomplete — the above is \
+             what I accomplished; continue from here."
+        );
+        let summary_input = vec![ChatMessage::user(format!(
+            "You are sub-agent `{agent_id}` and reached your tool-call limit before finishing. Here are \
+             the tool calls you made and their results — compile a brief progress checkpoint (what you \
+             accomplished, what still remains) for the agent that delegated to you. Do not call tools.\n\n{digest}"
+        ))];
+        match self
+            .provider
+            .chat(
+                ChatRequest {
+                    messages: &summary_input,
+                    tools: None,
+                    stream: None,
+                },
+                &self.model,
+                self.temperature,
+            )
+            .await
+        {
+            Ok(resp) => {
+                let usage = resp.usage.clone();
+                let raw = resp.text.unwrap_or_default();
+                let (prose, _) = super::super::parse::parse_tool_calls(&raw);
+                let text = if prose.trim().is_empty() {
+                    deterministic
+                } else {
+                    prose
+                };
+                Ok(super::super::engine::CheckpointOutcome { text, usage })
+            }
+            Err(e) => {
+                tracing::warn!(
+                    agent_id = %self.agent_id,
+                    error = %e,
+                    "[subagent_runner] checkpoint summary call failed — using deterministic fallback"
+                );
+                Ok(super::super::engine::CheckpointOutcome {
+                    text: deterministic,
+                    usage: None,
+                })
+            }
+        }
+    }
 }
 
 fn parse_tool_arguments(arguments: &str) -> serde_json::Value {

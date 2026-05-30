@@ -2,7 +2,7 @@
 //!
 //! A `Vault` points at a local directory; on `vault.sync` we walk it, route
 //! files to extractors by extension, and feed them into the memory pipeline
-//! under namespace `vault:<id>`. Per-file dedup uses (path, mtime, content
+//! under a vault-derived namespace. Per-file dedup uses (path, mtime, content
 //! hash) so re-syncs only touch what changed.
 
 pub mod ops;
@@ -18,6 +18,7 @@ pub use schemas::{
 };
 pub use types::{
     Vault, VaultFile, VaultFileStatus, VaultSyncReport, VaultSyncState, VaultSyncStatus,
+    VaultWriteMarkdownReport, VaultWriteState,
 };
 
 #[cfg(test)]

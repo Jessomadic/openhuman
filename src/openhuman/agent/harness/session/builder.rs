@@ -20,7 +20,9 @@ use crate::openhuman::config::{Config, ContextConfig};
 use crate::openhuman::context::prompt::SystemPromptBuilder;
 use crate::openhuman::context::{ContextManager, ProviderSummarizer, SegmentRecapSummarizer};
 use crate::openhuman::inference::provider::{self, Provider};
-use crate::openhuman::memory::{self, Memory};
+use crate::openhuman::memory::Memory;
+use crate::openhuman::memory_store;
+use crate::openhuman::memory_tools::{ToolMemoryCaptureHook, ToolMemoryRule, ToolMemoryStore};
 use crate::openhuman::security::SecurityPolicy;
 use crate::openhuman::tools::{self, Tool, ToolSpec};
 use anyhow::Result;
@@ -39,7 +41,7 @@ use std::sync::Arc;
 /// list — initial build, post-composio refresh, scope-filter change —
 /// so the request the provider sees is always name-unique regardless
 /// of which path produced it.
-pub(super) fn dedup_visible_tool_specs(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
+pub(crate) fn dedup_visible_tool_specs(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut deduped: Vec<ToolSpec> = Vec::with_capacity(specs.len());
     let mut dropped: Vec<String> = Vec::new();
@@ -92,6 +94,7 @@ impl AgentBuilder {
             temperature: None,
             workspace_dir: None,
             skills: None,
+            workflows: None,
             auto_save: None,
             post_turn_hooks: Vec::new(),
             learning_enabled: false,
@@ -200,6 +203,20 @@ impl AgentBuilder {
     /// Sets the skills available to the agent.
     pub fn skills(mut self, skills: Vec<crate::openhuman::skills::Skill>) -> Self {
         self.skills = Some(skills);
+        self
+    }
+
+    /// Sets the agent workflows available to the agent.
+    ///
+    /// Populated at session start via
+    /// [`crate::openhuman::agent_workflows::load_workflows`]; defaults to empty
+    /// when not set so callers that do not participate in the workflow system
+    /// do not need to change.
+    pub fn workflows(
+        mut self,
+        workflows: Vec<crate::openhuman::agent_workflows::Workflow>,
+    ) -> Self {
+        self.workflows = Some(workflows);
         self
     }
 
@@ -529,9 +546,10 @@ impl AgentBuilder {
             memory: self
                 .memory
                 .ok_or_else(|| anyhow::anyhow!("memory is required"))?,
-            tool_dispatcher: self
-                .tool_dispatcher
-                .ok_or_else(|| anyhow::anyhow!("tool_dispatcher is required"))?,
+            tool_dispatcher: std::sync::Arc::from(
+                self.tool_dispatcher
+                    .ok_or_else(|| anyhow::anyhow!("tool_dispatcher is required"))?,
+            ),
             memory_loader: self
                 .memory_loader
                 .unwrap_or_else(|| Box::new(DefaultMemoryLoader::default())),
@@ -542,6 +560,7 @@ impl AgentBuilder {
                 .workspace_dir
                 .unwrap_or_else(|| std::path::PathBuf::from(".")),
             skills: self.skills.unwrap_or_default(),
+            workflows: self.workflows.unwrap_or_default(),
             auto_save: self.auto_save.unwrap_or(false),
             last_memory_context: None,
             last_turn_citations: Vec::new(),
@@ -827,7 +846,7 @@ impl Agent {
         )?;
 
         let local_embedding = config.workload_local_model("embeddings");
-        let memory: Arc<dyn Memory> = Arc::from(memory::create_memory_with_local_ai(
+        let memory: Arc<dyn Memory> = Arc::from(memory_store::create_memory_with_local_ai(
             &config.memory,
             local_embedding.as_deref(),
             &config.embedding_routes,
@@ -847,17 +866,6 @@ impl Agent {
             &config.agents,
             config,
         );
-
-        // `complete_onboarding` is the terminal step of the welcome
-        // flow and must never be callable from any other session.
-        // Stripping it here (before prompt + delegation assembly) keeps
-        // it out of both the LLM's function-calling schema and the
-        // rendered `## Tools` section.
-        if agent_id != "welcome" {
-            tools.retain(|t| {
-                !crate::openhuman::agent::harness::subagent_runner::is_welcome_only_tool(t.name())
-            });
-        }
 
         // Filter tools by user preference stored in app state.
         {
@@ -933,6 +941,13 @@ impl Agent {
         };
         let (provider, mut model_name): (Box<dyn Provider>, String) =
             crate::openhuman::inference::provider::create_chat_provider(provider_role, config)?;
+        log::info!(
+            "[session-builder] agent_id={} provider_role={} resolved_model={} supports_native_tools={}",
+            agent_id,
+            provider_role,
+            model_name,
+            provider.supports_native_tools()
+        );
         let target_agent_id = target_def
             .map(|def| def.id.as_str())
             .unwrap_or("orchestrator");
@@ -961,21 +976,10 @@ impl Agent {
         // definition's `prompt.md` body and respects its `omit_*` flags.
         //
         // The narrow path is selected whenever we resolved a
-        // non-orchestrator definition from the registry. Welcome agent
-        // is the first real consumer: its TOML sets
-        // `omit_identity = true`, `omit_memory_context = false`,
-        // `omit_safety_preamble = true`, `omit_skills_catalog = true`,
-        // so the rendered prompt becomes:
-        //
-        //   (welcome persona body)
-        //   ── Memory context (user profile, learned observations)
-        //   ── Tools (2 entries: complete_onboarding + memory_recall)
-        //   ── Workspace directory
-        //
-        // The orchestrator continues to use `with_defaults` so its
-        // prompt stays byte-identical to the legacy CLI/REPL behaviour
-        // except for the tool-scope tightening we already landed in
-        // earlier commits.
+        // non-orchestrator definition from the registry. The orchestrator
+        // continues to use `with_defaults` so its prompt stays
+        // byte-identical to the legacy CLI/REPL behaviour except for the
+        // tool-scope tightening we already landed in earlier commits.
         // Every agent with a resolved definition (built-in or workspace
         // override) goes through the per-agent pipeline — the legacy
         // `with_defaults()` branch only fires when the registry is
@@ -1164,9 +1168,7 @@ impl Agent {
             }
 
             if config.learning.tool_memory_capture_enabled {
-                post_turn_hooks.push(Arc::new(
-                    crate::openhuman::memory::ToolMemoryCaptureHook::new(memory.clone(), true),
-                ));
+                post_turn_hooks.push(Arc::new(ToolMemoryCaptureHook::new(memory.clone(), true)));
                 log::info!("[learning] tool_memory_capture hook registered");
             }
 
@@ -1561,6 +1563,15 @@ impl Agent {
             .temperature(effective_temperature)
             .workspace_dir(config.workspace_dir.clone())
             .skills(crate::openhuman::skills::load_skills(&config.workspace_dir))
+            .workflows({
+                let wf = crate::openhuman::agent_workflows::load_workflows(&config.workspace_dir);
+                log::debug!(
+                    "[workflows][phase] loaded {} workflow(s) from workspace={}",
+                    wf.len(),
+                    config.workspace_dir.display()
+                );
+                wf
+            })
             .auto_save(config.memory.auto_save)
             .post_turn_hooks(post_turn_hooks)
             .learning_enabled(config.learning.enabled)
@@ -1604,7 +1615,7 @@ impl Agent {
 fn prefetch_tool_memory_rules_blocking(
     memory: Arc<dyn Memory>,
     tool_names: &[String],
-) -> Vec<crate::openhuman::memory::ToolMemoryRule> {
+) -> Vec<ToolMemoryRule> {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         return Vec::new();
     };
@@ -1614,7 +1625,7 @@ fn prefetch_tool_memory_rules_blocking(
     let tool_names = tool_names.to_vec();
     tokio::task::block_in_place(|| {
         handle.block_on(async move {
-            let store = crate::openhuman::memory::ToolMemoryStore::new(memory);
+            let store = ToolMemoryStore::new(memory);
             match store.rules_for_prompt(&tool_names).await {
                 Ok(grouped) => {
                     let mut flat: Vec<_> = grouped.into_values().flatten().collect();

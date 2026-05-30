@@ -108,15 +108,6 @@ export interface LocalAiTtsResult {
   voice_id: string;
 }
 
-export interface LocalAiChatMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-}
-
-export interface LocalAiChatResult {
-  result: string;
-}
-
 export interface ReactionDecision {
   should_react: boolean;
   emoji: string | null;
@@ -203,6 +194,7 @@ export interface InstalledModelInfo {
 
 export interface LocalAiDiagnostics {
   ollama_running: boolean;
+  ollama_runner_ok?: boolean;
   ollama_base_url: string;
   ollama_binary_path: string | null;
   vision_mode?: string;
@@ -321,19 +313,6 @@ export async function openhumanLocalAiTts(
   return await callCoreRpc<CommandResponse<LocalAiTtsResult>>({
     method: 'openhuman.local_ai_tts',
     params: { text, output_path: outputPath },
-  });
-}
-
-/**
- * Multi-turn chat completion via the configured inference provider.
- */
-export async function openhumanLocalAiChat(
-  messages: LocalAiChatMessage[],
-  maxTokens?: number
-): Promise<CommandResponse<string>> {
-  return await callCoreRpc<CommandResponse<string>>({
-    method: 'openhuman.inference_chat',
-    params: { messages, max_tokens: maxTokens },
   });
 }
 
