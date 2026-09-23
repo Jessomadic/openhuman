@@ -57,6 +57,12 @@ class FakeHttp:
         self.send_timeout = False
         self.stream_eof = False
         self.stream_error = False
+        self.gate_response = {"result": {
+            "installed": True, "disabledByEnv": False,
+            "overrideIgnored": False, "host": "cli",
+        }}
+        self.gate_error = None
+        self.rpc_methods: list[str] = []
 
     def json_request(self, origin, path, token, *, payload=None, timeout=20):
         if path.startswith("/api/v1/events?"):
@@ -64,6 +70,12 @@ class FakeHttp:
             after = int(query["after"][0])
             limit = int(query["limit"][0])
             return {"data": [row for row in self.events if row["sequence"] > after][:limit]}
+        if path == "/rpc":
+            self.rpc_methods.append(payload["method"])
+        if path == "/rpc" and payload["method"] == "openhuman.approval_get_gate_state":
+            if self.gate_error is not None:
+                raise self.gate_error
+            return self.gate_response
         if path == "/rpc" and payload["method"] == "openhuman.channel_web_queue_status":
             return {"result": {"result": {"active": False}}}
         if path == "/rpc" and payload["method"] == "openhuman.channel_web_chat":
@@ -125,6 +137,54 @@ class AdapterTests(unittest.TestCase):
         )
         self.http = FakeHttp()
         self.adapter = Adapter(self.config, self.store, self.http)
+
+    def test_direct_approval_gate_rpc_shape_precedes_chat(self):
+        self.store.initialize(0)
+        self.http.events.append(inbound(1, "00000000-0000-4000-8000-000000000001"))
+        self.adapter.step()
+        self.assertEqual(self.http.rpc_methods, [
+            "openhuman.approval_get_gate_state",
+            "openhuman.channel_web_queue_status",
+            "openhuman.channel_web_chat",
+        ])
+        self.assertEqual(self.store.counts(), {"sent": 1})
+
+    def test_approval_gate_must_be_explicitly_active_before_core_turn(self):
+        self.store.initialize(0)
+        self.store.ingest(
+            [inbound(1, "00000000-0000-4000-8000-000000000001")],
+            self.adapter.eligible,
+        )
+        item = self.store.next_inbox()
+        for gate_response in (
+            {"result": {"installed": False, "disabledByEnv": False}},
+            {"result": {"installed": True, "disabledByEnv": True}},
+            {"result": {"installed": True}},
+            {"result": {"installed": True, "disabledByEnv": "false"}},
+            {"result": {"result": {"installed": True, "disabledByEnv": False}}},
+            {"result": None},
+            {"error": {"code": -32603}, "result": {"installed": True, "disabledByEnv": False}},
+        ):
+            with self.subTest(gate_response=gate_response):
+                self.http.gate_response = gate_response
+                self.http.rpc_methods.clear()
+                with self.assertRaisesRegex(ManualReview, "approval gate is not confirmed active"):
+                    self.adapter.run_core(item)
+                self.assertEqual(self.http.rpc_methods, ["openhuman.approval_get_gate_state"])
+                self.assertEqual(self.http.chat_calls, 0)
+                self.assertEqual(self.http.sends, [])
+                self.assertEqual(self.store.counts(), {"pending": 1})
+
+    def test_approval_gate_rpc_failure_leaves_turn_pending(self):
+        self.store.initialize(0)
+        self.http.events.append(inbound(1, "00000000-0000-4000-8000-000000000001"))
+        self.http.gate_error = TimeoutError("mock timeout")
+        with self.assertRaisesRegex(ManualReview, "approval gate state is unavailable"):
+            self.adapter.step()
+        self.assertEqual(self.http.rpc_methods, ["openhuman.approval_get_gate_state"])
+        self.assertEqual(self.http.chat_calls, 0)
+        self.assertEqual(self.http.sends, [])
+        self.assertEqual(self.store.counts(), {"pending": 1})
 
     def test_two_identical_messages_with_different_guids_get_distinct_sends(self):
         self.store.initialize(0)

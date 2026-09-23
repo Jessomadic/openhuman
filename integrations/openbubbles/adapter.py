@@ -268,6 +268,32 @@ class Adapter:
 
     def run_core(self, item) -> None:
         config = self.config
+        # A headless core can boot with its approval gate disabled by an env
+        # override. Never deliver owner instructions to such a core: tools
+        # with external effects would otherwise run without a decision.
+        try:
+            gate_response = self.http.json_request(
+                config.core_url,
+                "/rpc",
+                config.core_token,
+                payload={
+                    "jsonrpc": "2.0", "id": 0,
+                    "method": "openhuman.approval_get_gate_state",
+                    "params": {},
+                },
+            )
+        except (OSError, TimeoutError, ValueError, urllib.error.URLError) as error:
+            raise ManualReview("OpenHuman approval gate state is unavailable") from error
+        # This RPC has no audit logs, so RpcOutcome serializes its value
+        # directly in JSON-RPC's result (not under result.result).
+        gate = gate_response.get("result")
+        if (
+            gate_response.get("error") is not None
+            or not isinstance(gate, dict)
+            or gate.get("installed") is not True
+            or gate.get("disabledByEnv") is not False
+        ):
+            raise ManualReview("OpenHuman approval gate is not confirmed active")
         status = self.http.json_request(
             config.core_url,
             "/rpc",

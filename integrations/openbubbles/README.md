@@ -11,7 +11,9 @@ The tested wire contract is:
 1. Read OpenBubbles `GET /api/v1/events?after=<sequence>&limit=1000` with a
    bearer token. Only native runtime text messages with the configured chat,
    sender, GUID, and direct-chat participants enter the SQLite inbox.
-2. Open an authenticated OpenHuman `GET /events?client_id=<id>` stream, then
+2. Require `openhuman.approval_get_gate_state` to confirm the standalone core's
+   approval gate is installed and not disabled. Open an authenticated OpenHuman
+   `GET /events?client_id=<id>` stream, then
    submit `openhuman.channel_web_chat` to `POST /rpc`. Correlate `chat_done` or
    `chat_error` by request and thread IDs. Only a completed `chat_done` can
    create outbound work.
@@ -32,7 +34,10 @@ this channel. Configure and verify the LM Studio local API independently
 before enabling the adapter. The adapter invokes OpenHuman's normal agent
 tools and memory according to that core's settings; it does not grant or
 restrict individual tools. Review that core's permissions before starting it
-with personal messages.
+with personal messages. For a first chat pilot, use supervised autonomy and
+keep broader mutations behind a later approval relay. Explicit preferences
+and remembered facts use OpenHuman's local memory tools; this adapter does
+not expose a general settings API over iMessage.
 
 ## Private setup
 
