@@ -13,7 +13,7 @@ pub(super) fn lookup(function: &str) -> Option<ControllerSchema> {
             inputs: vec![
                 optional_string(
                     "engine",
-                    "Active engine: disabled | managed | parallel | brave | querit | exa | tavily.",
+                    "Active engine: disabled | managed | parallel | brave | querit | exa | searxng | tavily.",
                 ),
                 FieldSchema {
                     name: "max_results",

@@ -502,7 +502,7 @@ Capability {
         domain: "intelligence",
         category: CapabilityCategory::Intelligence,
         description: "Search a configured self-hosted SearXNG instance from agent and MCP tools, returning normalized title, URL, snippet, and source results.",
-        how_to: "Set `[searxng] enabled = true` and `base_url` in config.toml, or use OPENHUMAN_SEARXNG_* environment variables.",
+        how_to: "Set `[search] engine = \"searxng\"` and `[searxng] enabled = true` with `base_url` in config.toml. The standalone SearXNG RPC/MCP tool only needs the `[searxng]` block.",
         status: CapabilityStatus::Beta,
         privacy: SEARXNG_RAW_TO_CONFIGURED_INSTANCE,
     },

@@ -1,0 +1,12 @@
+{
+  "bridge_url": "http://127.0.0.1:12345",
+  "core_url": "http://127.0.0.1:8787",
+  "chat_guid": "replace-with-the-one-allowlisted-chat-guid",
+  "owner_handle": "tel:+15555550123",
+  "bot_handle": "mailto:bot@example.invalid",
+  "state_db": "C:\\absolute\\private\\OpenHumanPilot\\state.sqlite3",
+  "client_id": "openbubbles-pilot-client",
+  "thread_id": "openbubbles-pilot-thread",
+  "poll_seconds": 2,
+  "turn_timeout_seconds": 900
+}

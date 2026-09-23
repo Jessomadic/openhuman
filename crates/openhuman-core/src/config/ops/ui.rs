@@ -164,12 +164,13 @@ pub async fn apply_search_settings(
     if let Some(engine) = update.engine {
         let trimmed = engine.trim();
         match trimmed {
-            "disabled" | "managed" | "parallel" | "brave" | "querit" | "exa" | "tavily" => {
+            "disabled" | "managed" | "parallel" | "brave" | "querit" | "exa" | "searxng"
+            | "tavily" => {
                 config.search.engine = trimmed.to_string();
             }
             other => {
                 return Err(format!(
-                    "engine must be one of disabled/managed/parallel/brave/querit/exa/tavily (got {other:?})"
+                    "engine must be one of disabled/managed/parallel/brave/querit/exa/searxng/tavily (got {other:?})"
                 ));
             }
         }
@@ -291,6 +292,7 @@ pub async fn get_search_settings() -> Result<RpcOutcome<serde_json::Value>, Stri
             crate::config::SearchEngine::Brave => "brave",
             crate::config::SearchEngine::Querit => "querit",
             crate::config::SearchEngine::Exa => "exa",
+            crate::config::SearchEngine::Searxng => "searxng",
             crate::config::SearchEngine::Tavily => "tavily",
         },
         "max_results": config.search.max_results,

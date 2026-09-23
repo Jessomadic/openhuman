@@ -4,10 +4,45 @@ use crate::config::Config;
 fn disabled_engine_registers_no_search_tools() {
     let mut cfg = Config::default();
     cfg.search.engine = "disabled".to_string();
+    cfg.searxng.enabled = true;
 
     let tools = super::build_search_tools(&cfg);
 
     assert!(tools.is_empty());
+}
+
+#[test]
+fn selected_searxng_registers_direct_canonical_search_without_a_key() {
+    let mut cfg = Config::default();
+    cfg.search.engine = "searxng".to_string();
+    cfg.searxng.enabled = true;
+    cfg.searxng.base_url = "http://127.0.0.1:8888".to_string();
+
+    let tools = super::build_search_tools(&cfg);
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name(), "web_search_tool");
+    assert!(tools[0].description().contains("SearXNG"));
+}
+
+#[test]
+fn selected_but_disabled_searxng_does_not_fall_back_to_managed() {
+    let mut cfg = Config::default();
+    cfg.search.engine = "searxng".to_string();
+
+    assert!(super::build_search_tools(&cfg).is_empty());
+}
+
+#[test]
+fn searxng_rpc_enablement_does_not_override_selected_managed_engine() {
+    let mut cfg = Config::default();
+    cfg.searxng.enabled = true;
+
+    let tools = super::build_search_tools(&cfg);
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name(), "web_search_tool");
+    assert!(!tools[0].description().contains("SearXNG"));
 }
 
 #[test]

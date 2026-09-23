@@ -5,7 +5,7 @@ Top-level home for web search selection and agent-facing search tool registratio
 ## Shape
 
 - `registry.rs` builds the active search tool surface from `Config.search`.
-- `engines/` contains one file per search engine (`managed`, `parallel`, `brave`, `querit`, `exa`, `tavily`, and `disabled`) so provider-specific registration stays isolated.
+- `engines/` contains one file per search engine (`managed`, `parallel`, `brave`, `querit`, `exa`, `tavily`, `searxng`, and `disabled`) so provider-specific registration stays isolated.
 - `tools/` contains all search-owned agent tools: `WebSearchTool`, Parallel, Brave, Querit, Exa, Tavily, SearXNG, Seltz, and TinyFish.
 - Search tools may use the shared `IntegrationClient` for backend-proxied requests, but their implementations live in this module.
 
@@ -20,6 +20,7 @@ Top-level home for web search selection and agent-facing search tool registratio
 - `querit` — register Querit search plus `web_search_tool` when configured.
 - `exa` — BYOK: register `exa_search`, `exa_find_similar`, `exa_get_contents` plus `web_search_tool` when configured. Calls go directly to `https://api.exa.ai` with the user's own key, never through the managed backend.
 - `tavily` — BYOK: register `tavily_search` (web/news/finance, search depth, time-range/date filters, domain include/exclude) and `tavily_extract` plus `web_search_tool` when configured. Calls go directly to `https://api.tavily.com` with the user's own key, never through the managed backend.
+- `searxng` — register direct, self-hosted SearXNG as `web_search_tool` when `[searxng] enabled = true`. No managed fallback or API key; a selected but disabled SearXNG registers no search tool.
 
 A BYO engine with no key configured falls back to the managed surface, so `managed` stays the effective default until a key is saved.
 
@@ -36,9 +37,9 @@ When search is disabled, search tools are absent from the agent runtime tool lis
   (`build_backend_search_tools`) pushes them on top of whichever engine is
   active when the engine is not `disabled`, an `IntegrationClient` can be
   built, and `config.integrations.tinyfish.is_active()`.
-- `SearxngSearchTool` and `SeltzSearchTool` bypass the engine registry
-  entirely. They are constructed per call by the `tools.searxng_search`
-  and `tools.seltz_search` RPC handlers
+- `SearxngSearchTool` can also be selected as the agent's canonical
+  `web_search_tool`. Independently, it and `SeltzSearchTool` are constructed
+  per call by the `tools.searxng_search` and `tools.seltz_search` RPC handlers
   (`crates/openhuman-core/src/tools/schemas/web_search.rs`), which take the query from the
   RPC params and the endpoint, key, timeout, and `enabled` gate from the
   top-level `config.searxng` / `config.seltz` sections, not `Config.search`.
@@ -46,7 +47,7 @@ When search is disabled, search tools are absent from the agent runtime tool lis
 ## `engines/`
 
 `engines` is `pub(crate)`. Each file (`managed`, `parallel`, `brave`,
-`querit`, `exa`, `tavily`, `disabled`) exports a single
+`querit`, `exa`, `tavily`, `searxng`, `disabled`) exports a single
 `pub(crate) fn build(root_config: &Config, params: SearchToolParams) -> Vec<Box<dyn Tool>>`
 that constructs that engine's tool set — e.g. `managed::build` returns a single
 `WebSearchTool`, which posts to the backend's

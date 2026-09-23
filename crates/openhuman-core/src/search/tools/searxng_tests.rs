@@ -5,6 +5,19 @@ fn tool(base_url: String) -> SearxngSearchTool {
 }
 
 #[test]
+fn canonical_agent_name_does_not_change_rpc_tool_name() {
+    assert_eq!(
+        tool("http://localhost:8080".into()).name(),
+        "searxng_search"
+    );
+    assert_eq!(
+        SearxngSearchTool::new_web_search_tool("http://localhost:8080".into(), 10, "en".into(), 5,)
+            .name(),
+        "web_search_tool"
+    );
+}
+
+#[test]
 fn normalizes_categories_and_maps_web_to_general() {
     let categories = normalize_categories(vec![
         "web".into(),

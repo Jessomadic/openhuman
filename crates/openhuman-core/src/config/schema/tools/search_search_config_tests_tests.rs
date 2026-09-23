@@ -94,6 +94,15 @@ fn tavily_key_does_not_disturb_the_managed_default() {
 }
 
 #[test]
+fn searxng_is_selected_without_an_api_key() {
+    let cfg = SearchConfig {
+        engine: SEARCH_ENGINE_SEARXNG.into(),
+        ..Default::default()
+    };
+    assert_eq!(cfg.effective_engine(), SearchEngine::Searxng);
+}
+
+#[test]
 fn http_request_defaults_to_allow_all() {
     // Web research works out of the box: the default allowlist is the
     // wildcard. The SSRF guard (url_guard) still blocks local/private

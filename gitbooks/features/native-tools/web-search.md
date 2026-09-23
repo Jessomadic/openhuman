@@ -7,7 +7,7 @@ icon: magnifying-glass
 
 # Web Search
 
-The agent can search the live web on its own. By default this runs on **OpenHuman Managed** search: the query goes through the OpenHuman backend, currently powered by [Exa](https://exa.ai), so you never carry a search API key. You can also bring your own key for Exa, Brave, or Querit, or enable the backend-proxied Parallel engine. If you run your own [SearXNG](https://docs.searxng.org/) instance, you can expose `searxng_search` to RPC and MCP clients as a private, self-hosted search tool.
+The agent can search the live web on its own. By default this runs on **OpenHuman Managed** search: the query goes through the OpenHuman backend, currently powered by [Exa](https://exa.ai), so you never carry a search API key. You can also bring your own key for Exa, Brave, or Querit, enable the backend-proxied Parallel engine, or select a self-hosted [SearXNG](https://docs.searxng.org/) instance without an OpenHuman backend session or paid search API key.
 
 ## What it's good for
 
@@ -27,6 +27,7 @@ Pick the engine under **Connections → Search**. Exactly one engine is active a
 | **Parallel**                    | Local enablement value | Parallel-specific tools go through the OpenHuman backend to Parallel; the canonical `web_search_tool` keeps using the backend-resolved managed provider (currently Exa). The value selects the engine locally and is not sent to Parallel for authentication or billing. |
 | **Brave**                       | Your API key           | Straight to the Brave Search API with your key.                                                                                                                                                                                                                          |
 | **Querit**                      | Your API key           | Straight to the Querit API with your key.                                                                                                                                                                                                                                |
+| **SearXNG**                     | Self-hosted instance   | Straight to the configured SearXNG `/search?format=json` endpoint. No OpenHuman backend session or paid search API key is required.                                                                                                                                      |
 | **Disabled**                    | Not needed             | Nowhere. All agent-facing search tools are removed; an enabled SearXNG endpoint remains available through RPC/MCP.                                                                                                                                                       |
 
 Selecting a bring-your-own-key engine without saving a key falls back to managed search. That fallback requires a backend-authenticated session; local or offline users must configure a direct provider key. Once a search finishes, the chat timeline names the provider that answered it ("Searched with Exa"), so the managed path is never an unattributed black box.
@@ -98,11 +99,14 @@ TAVILY_API_KEY=tvly-your-tavily-api-key
 
 ## Self-hosted SearXNG
 
-SearXNG search is opt-in and exposed through the `openhuman.tools_searxng_search` RPC controller and MCP catalog; it is not registered as an agent tool. The controller calls your configured SearXNG `/search?format=json` endpoint and returns normalized `{ title, url, snippet, source }` results.
+SearXNG search is opt-in. Selecting it as `search.engine` registers the direct SearXNG client as the agent's canonical `web_search_tool`; no managed-search fallback is used. The separate `openhuman.tools_searxng_search` RPC controller and MCP catalog remain available when `[searxng] enabled = true`. Both paths call your configured SearXNG `/search?format=json` endpoint and return normalized `{ title, url, snippet, source }` results.
 
 Enable it in `config.toml`:
 
 ```toml
+[search]
+engine = "searxng"
+
 [searxng]
 enabled = true
 base_url = "http://localhost:8080"
@@ -110,6 +114,8 @@ max_results = 10
 default_language = "en"
 timeout_seconds = 10
 ```
+
+The `[search]` selection is required for agent search; `[searxng] enabled = true` alone enables only the RPC/MCP surface. If SearXNG is selected but disabled, the agent gets no search tool rather than silently falling back to managed search. The `[searxng]` result limit and timeout apply to both agent and RPC calls.
 
 Or via environment:
 

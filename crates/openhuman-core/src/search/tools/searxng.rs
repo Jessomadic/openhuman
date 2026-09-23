@@ -89,6 +89,7 @@ struct RawSearxngResult {
 }
 
 pub struct SearxngSearchTool {
+    tool_name: &'static str,
     base_url: String,
     max_results: usize,
     default_language: String,
@@ -113,6 +114,19 @@ impl SearxngSearchTool {
         )
     }
 
+    /// Register the same direct SearXNG search under the agent's canonical
+    /// search slot. The RPC/MCP constructor retains `searxng_search`.
+    pub fn new_web_search_tool(
+        base_url: String,
+        max_results: usize,
+        default_language: String,
+        timeout_secs: u64,
+    ) -> Self {
+        let mut tool = Self::new(base_url, max_results, default_language, timeout_secs);
+        tool.tool_name = "web_search_tool";
+        tool
+    }
+
     /// Build a SearXNG search tool with a caller-provided HTTP client.
     pub fn with_http_client(
         base_url: String,
@@ -124,6 +138,7 @@ impl SearxngSearchTool {
         let timeout = timeout_secs.max(1);
 
         Self {
+            tool_name: "searxng_search",
             base_url,
             max_results: max_results.clamp(1, MAX_RESULTS),
             default_language,
@@ -244,7 +259,7 @@ impl SearxngSearchTool {
 #[async_trait]
 impl Tool for SearxngSearchTool {
     fn name(&self) -> &str {
-        "searxng_search"
+        self.tool_name
     }
 
     fn description(&self) -> &str {

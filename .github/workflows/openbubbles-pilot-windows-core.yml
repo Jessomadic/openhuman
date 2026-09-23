@@ -1,0 +1,54 @@
+---
+# Fork-only build for the OpenBubbles adapter pilot. It does not publish a
+# release, create a tag, or use the Production environment.
+name: OpenBubbles pilot Windows core
+
+on:
+  push:
+    branches: [codex/openbubbles-pilot]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: openbubbles-pilot-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-core:
+    if: github.repository == 'Jessomadic/openhuman' && github.ref == 'refs/heads/codex/openbubbles-pilot'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - name: Check out pilot branch and vendored crates
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.1
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          key: openbubbles-pilot-windows-core
+
+      - name: Build standalone core
+        shell: bash
+        run: bash scripts/ci-cancel-aware.sh cargo build --locked --release -p openhuman-cli --bin openhuman-core
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: openhuman-core-windows-x86_64
+          path: target/release/openhuman-core.exe
+          if-no-files-found: error
+          retention-days: 7

@@ -47,7 +47,8 @@ impl Default for SeltzConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct SearxngConfig {
-    /// When `true`, register `searxng_search` as an agent and MCP tool.
+    /// When `true`, expose `searxng_search` through RPC/MCP and, if selected
+    /// with `search.engine = "searxng"`, as the agent's `web_search_tool`.
     #[serde(default)]
     pub enabled: bool,
     /// Base URL for the user's SearXNG instance.
@@ -127,6 +128,7 @@ impl Default for WebSearchConfig {
 // (search/extract/chat/research/enrich/dataset); `brave` → direct Brave Search
 // tools (web/news/images/videos); `querit` → direct Querit web search;
 // `exa` → direct Exa neural search (search / find similar / contents);
+// `searxng` → direct self-hosted SearXNG search;
 // `tavily` → direct Tavily Search + Extract (web / news / finance).
 
 pub const SEARCH_ENGINE_DISABLED: &str = "disabled";
@@ -135,6 +137,7 @@ pub const SEARCH_ENGINE_PARALLEL: &str = "parallel";
 pub const SEARCH_ENGINE_BRAVE: &str = "brave";
 pub const SEARCH_ENGINE_QUERIT: &str = "querit";
 pub const SEARCH_ENGINE_EXA: &str = "exa";
+pub const SEARCH_ENGINE_SEARXNG: &str = "searxng";
 pub const SEARCH_ENGINE_TAVILY: &str = "tavily";
 
 fn default_search_engine() -> String {
@@ -183,14 +186,15 @@ impl SearchEngineCredentials {
 /// registration at a time. `disabled` suppresses all search tools; `managed` is
 /// the backend-proxied default and requires no key; `parallel`, `brave`,
 /// `querit`, `exa`, and `tavily` are BYO and require their own API key in the
-/// matching sub-block.
+/// matching sub-block. `searxng` uses a self-hosted endpoint instead of a key.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct SearchConfig {
     /// Active search engine. One of [`SEARCH_ENGINE_DISABLED`],
     /// [`SEARCH_ENGINE_MANAGED`], [`SEARCH_ENGINE_PARALLEL`],
     /// [`SEARCH_ENGINE_BRAVE`], [`SEARCH_ENGINE_QUERIT`],
-    /// [`SEARCH_ENGINE_EXA`], or [`SEARCH_ENGINE_TAVILY`]. Unknown values fall
+    /// [`SEARCH_ENGINE_EXA`], [`SEARCH_ENGINE_SEARXNG`], or
+    /// [`SEARCH_ENGINE_TAVILY`]. Unknown values fall
     /// back to managed at registration time.
     #[serde(default = "default_search_engine")]
     pub engine: String,
@@ -244,7 +248,7 @@ impl Default for SearchConfig {
 
 /// Normalized search-engine enum used at tool-registration time. Falls
 /// back to [`SearchEngine::Managed`] for unknown strings and for BYO
-/// engines that have no API key configured.
+/// engines that have no API key configured. SearXNG needs no API key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchEngine {
     Disabled,
@@ -253,14 +257,16 @@ pub enum SearchEngine {
     Brave,
     Querit,
     Exa,
+    Searxng,
     Tavily,
 }
 
 impl SearchConfig {
     /// Resolve the *effective* engine after gating on API-key
-    /// availability. A BYO engine without a key silently falls back to
-    /// managed so the agent never ends up with zero search tools — the
-    /// UI surfaces the misconfiguration separately.
+    /// availability. A keyed BYO engine without a key silently falls back
+    /// to managed so the agent never ends up with zero search tools — the
+    /// UI surfaces the misconfiguration separately. SearXNG is keyless and
+    /// never falls back to managed when selected.
     pub fn effective_engine(&self) -> SearchEngine {
         match self.engine.trim().to_ascii_lowercase().as_str() {
             SEARCH_ENGINE_DISABLED => SearchEngine::Disabled,
@@ -268,6 +274,7 @@ impl SearchConfig {
             SEARCH_ENGINE_BRAVE if self.brave.has_key() => SearchEngine::Brave,
             SEARCH_ENGINE_QUERIT if self.querit.has_key() => SearchEngine::Querit,
             SEARCH_ENGINE_EXA if self.exa.has_key() => SearchEngine::Exa,
+            SEARCH_ENGINE_SEARXNG => SearchEngine::Searxng,
             SEARCH_ENGINE_TAVILY if self.tavily.has_key() => SearchEngine::Tavily,
             _ => SearchEngine::Managed,
         }

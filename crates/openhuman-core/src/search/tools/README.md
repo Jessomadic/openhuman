@@ -12,7 +12,7 @@ provider family; `mod.rs` re-exports the full public surface with
 | `exa.rs` | `ExaSearchTool`, `ExaFindSimilarTool`, `ExaGetContentsTool` | `exa_search` or `web_search_tool` (constructor-selected), `exa_find_similar`, `exa_get_contents` | BYOK, direct to `api.exa.ai`, `x-api-key` header — never proxied |
 | `parallel.rs` (+ `parallel/` — `search.rs`, `extract.rs`, `chat.rs`, `research.rs`, `enrich.rs`, `dataset.rs`) | `ParallelSearchTool`, `ParallelExtractTool`, `ParallelChatTool`, `ParallelResearchTool`, `ParallelEnrichTool`, `ParallelDatasetTool` | `parallel_search`, `parallel_extract`, `parallel_chat`, `parallel_research`, `parallel_enrich`, `parallel_dataset` | Backend-proxied via `crate::integrations::IntegrationClient` (`/agent-integrations/parallel/*`) |
 | `querit.rs` | `QueritSearchTool` | `querit_search` or `web_search_tool` (constructor-selected) | Direct to `api.querit.ai`, `Authorization: Bearer` header |
-| `searxng.rs` | `SearxngSearchTool`, plus `normalize_categories`, `SearxngSearchArgs`, `SearxngSearchResponse`, `MAX_RESULTS` (re-exported as `SEARXNG_MAX_RESULTS`) | `searxng_search` | Direct to a user-configured, self-hosted SearXNG instance (`GET /search?format=json`) |
+| `searxng.rs` | `SearxngSearchTool`, plus `normalize_categories`, `SearxngSearchArgs`, `SearxngSearchResponse`, `MAX_RESULTS` (re-exported as `SEARXNG_MAX_RESULTS`) | `searxng_search` or `web_search_tool` (constructor-selected) | Direct to a user-configured, self-hosted SearXNG instance (`GET /search?format=json`) |
 | `seltz.rs` | `SeltzSearchTool` | `seltz_search` | Direct to `api.seltz.ai`, `x-api-key` header |
 | `tavily.rs` (+ `tavily/` — `client.rs`, `search_tool.rs`, `extract_tool.rs`, `types.rs`) | `TavilySearchTool`, `TavilyExtractTool` | `tavily_search` or `web_search_tool` (constructor-selected), `tavily_extract` | BYOK, direct to `api.tavily.com`, `Authorization: Bearer` header — never proxied |
 | `tinyfish.rs` | `TinyFishSearchTool`, `TinyFishFetchTool`, `TinyFishAgentRunTool` | `tinyfish_search`, `tinyfish_fetch`, `tinyfish_agent_run` | Backend-proxied via `IntegrationClient` (`/agent-integrations/tinyfish/*`); search/fetch are read-oriented, agent-run drives goal-based browser automation |
@@ -33,8 +33,10 @@ Most families are selected by `search::registry::build_search_tools` based on
 active, provided the engine is not `disabled`, an `IntegrationClient` can be
 built (user signed in), and `config.integrations.tinyfish.is_active()`.
 
-`SearxngSearchTool` and `SeltzSearchTool` are not reachable through the engine
-registry at all — they are constructed per call by the `tools.searxng_search`
+`SearxngSearchTool` is registered as the agent's canonical `web_search_tool`
+when `search.engine = "searxng"` and `[searxng] enabled = true`. It remains
+available to RPC/MCP clients under `searxng_search`. `SeltzSearchTool` remains
+RPC-only. The two are constructed per call by the `tools.searxng_search`
 (`handle_searxng_search`) and `tools.seltz_search` (`handle_seltz_search`)
 RPC handlers, both in `crates/openhuman-core/src/tools/schemas/web_search.rs`.
 Those handlers take the query and `max_results` from the RPC

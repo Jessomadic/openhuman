@@ -30,6 +30,7 @@ pub fn build_search_tools(root_config: &Config) -> Vec<Box<dyn Tool>> {
         SearchEngine::Parallel => engines::parallel::build(root_config, params),
         SearchEngine::Brave => engines::brave::build(root_config, params),
         SearchEngine::Querit => engines::querit::build(root_config, params),
+        SearchEngine::Searxng => engines::searxng::build(root_config, params),
         SearchEngine::Exa => engines::exa::build(root_config, params),
         SearchEngine::Tavily => engines::tavily::build(root_config, params),
     };
