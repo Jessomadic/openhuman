@@ -368,7 +368,7 @@ pub fn start_node(
         storage_url,
         extra,
         backend,
-        "info,openhuman::storage::lease=debug",
+        "info,openhuman_core::storage::lease=debug",
     )
 }
 
