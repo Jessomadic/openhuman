@@ -399,7 +399,10 @@ fn detach_progress_releases_every_sender_of_the_turns_channel() {
     assert!(context.progress.is_none());
     assert!(context.parent.as_ref().unwrap().on_progress.is_none());
     assert!(
-        matches!(rx.try_recv(), Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)),
+        matches!(
+            rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ),
         "no sender of the turn's channel survives in the kept context"
     );
 }

@@ -39,7 +39,7 @@ mod storm;
 mod world;
 
 use generators::{assert_covers_user_surface, GENERATORS};
-use world::{canary, credential, foreign_in, steps_from_env, seed_from_env, World, USERS, VICTIM};
+use world::{canary, credential, foreign_in, seed_from_env, steps_from_env, World, USERS, VICTIM};
 
 const LIVE_THREAD: &str = "live-alice";
 const LIVE_CLIENT: &str = "c-live";
@@ -88,7 +88,10 @@ fn act(w: &mut World, actor: usize, method: &str, params: Value) -> Value {
         _ => stat.2 += 1,
     }
     if status != 200 {
-        w.fail(&format!("{method} as {} answered HTTP {status}: {body}", USERS[actor]));
+        w.fail(&format!(
+            "{method} as {} answered HTTP {status}: {body}",
+            USERS[actor]
+        ));
     }
     let leaked = foreign_in(&text, actor);
     if !leaked.is_empty() {
@@ -107,8 +110,16 @@ fn check_response(w: &mut World, actor: usize, method: &str, params: &Value, bod
     let text = body.to_string();
     if method == "openhuman.channel_web_cancel" {
         if let Some(request) = params["request_id"].as_str() {
-            let theirs = w.pools.requests.iter().any(|o| o.owner != actor && o.value == request);
-            let ours = w.pools.requests.iter().any(|o| o.owner == actor && o.value == request);
+            let theirs = w
+                .pools
+                .requests
+                .iter()
+                .any(|o| o.owner != actor && o.value == request);
+            let ours = w
+                .pools
+                .requests
+                .iter()
+                .any(|o| o.owner == actor && o.value == request);
             if theirs && !ours && text.contains("\"cancelled\":true") {
                 w.fail(&format!(
                     "{} cancelled another user's request {request}: {text}",
@@ -140,14 +151,23 @@ fn check_response(w: &mut World, actor: usize, method: &str, params: &Value, bod
 fn seed_keep(w: &mut World, user: usize) {
     let thread = keep_thread(user);
     w.protected[user].insert(thread.clone());
-    act(w, user, "openhuman.threads_upsert",
-        json!({ "id": thread, "title": canary(user, "keep-title"), "created_at": "2026-10-10T00:00:00Z" }));
-    act(w, user, "openhuman.threads_message_append", json!({
-        "thread_id": thread,
-        "message": { "id": format!("keep-msg-{}", USERS[user]), "content": canary(user, "keep"),
-                     "type": "text", "extraMetadata": {}, "sender": "user",
-                     "createdAt": "2026-10-10T00:00:00Z" }
-    }));
+    act(
+        w,
+        user,
+        "openhuman.threads_upsert",
+        json!({ "id": thread, "title": canary(user, "keep-title"), "created_at": "2026-10-10T00:00:00Z" }),
+    );
+    act(
+        w,
+        user,
+        "openhuman.threads_message_append",
+        json!({
+            "thread_id": thread,
+            "message": { "id": format!("keep-msg-{}", USERS[user]), "content": canary(user, "keep"),
+                         "type": "text", "extraMetadata": {}, "sender": "user",
+                         "createdAt": "2026-10-10T00:00:00Z" }
+        }),
+    );
 }
 
 /// Every kind of state the user surface writes, once per user, plus the
@@ -161,17 +181,31 @@ fn seed_state(w: &mut World) {
     for user in 0..USERS.len() {
         seed_keep(w, user);
         let message = canary(user, "hello");
-        act(w, user, "openhuman.channel_web_chat",
-            json!({ "client_id": "c1", "thread_id": format!("chat-{}", USERS[user]), "message": message }));
+        act(
+            w,
+            user,
+            "openhuman.channel_web_chat",
+            json!({ "client_id": "c1", "thread_id": format!("chat-{}", USERS[user]), "message": message }),
+        );
         let params = json!({ "channel": "telegram", "chat_id": "777", "sender_id": "555",
                              "message_id": "tg-1", "text": canary(user, "relayed") });
         act(w, user, "openhuman.channel_relay_inbound", params);
-        act(w, user, "openhuman.memory_learn", json!({ "text": canary(user, "memory") }));
+        act(
+            w,
+            user,
+            "openhuman.memory_learn",
+            json!({ "text": canary(user, "memory") }),
+        );
     }
-    let body = act(w, VICTIM, "openhuman.channel_web_chat", json!({
-        "client_id": LIVE_CLIENT, "thread_id": LIVE_THREAD,
-        "message": format!("{} {}", canary(VICTIM, "live"), mock_llm::HANG),
-    }));
+    let body = act(
+        w,
+        VICTIM,
+        "openhuman.channel_web_chat",
+        json!({
+            "client_id": LIVE_CLIENT, "thread_id": LIVE_THREAD,
+            "message": format!("{} {}", canary(VICTIM, "live"), mock_llm::HANG),
+        }),
+    );
     let request = find_key(&body, "request_id")
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("no request_id for the live turn: {body}"))
@@ -179,9 +213,12 @@ fn seed_state(w: &mut World) {
     w.protected[VICTIM].insert(LIVE_THREAD.to_string());
     w.protected_requests[VICTIM].insert(request);
     let node = &w.node;
-    wait_until("the victim's live turn", node, Duration::from_secs(60), || {
-        active(node, USERS[VICTIM], LIVE_THREAD)
-    });
+    wait_until(
+        "the victim's live turn",
+        node,
+        Duration::from_secs(60),
+        || active(node, USERS[VICTIM], LIVE_THREAD),
+    );
 }
 
 fn drive(w: &mut World, steps: usize) {
@@ -229,26 +266,47 @@ fn settle(llm: &mock_llm::MockLlm, quiet: Duration, max: Duration) {
 
 fn verify_victims(w: &mut World) {
     for user in 0..USERS.len() {
-        let body = act(w, user, "openhuman.threads_messages_list",
-            json!({ "thread_id": keep_thread(user) }));
+        let body = act(
+            w,
+            user,
+            "openhuman.threads_messages_list",
+            json!({ "thread_id": keep_thread(user) }),
+        );
         if !body.to_string().contains(&canary(user, "keep")) {
-            w.fail(&format!("{}'s sentinel thread lost its message: {body}", USERS[user]));
+            w.fail(&format!(
+                "{}'s sentinel thread lost its message: {body}",
+                USERS[user]
+            ));
         }
     }
-    let status = act(w, VICTIM, "openhuman.channel_web_queue_status",
-        json!({ "thread_id": LIVE_THREAD }));
+    let status = act(
+        w,
+        VICTIM,
+        "openhuman.channel_web_queue_status",
+        json!({ "thread_id": LIVE_THREAD }),
+    );
     if !status.to_string().contains("\"active\":true") {
-        let state = act(w, VICTIM, "openhuman.threads_turn_state_get",
-            json!({ "thread_id": LIVE_THREAD }));
+        let state = act(
+            w,
+            VICTIM,
+            "openhuman.threads_turn_state_get",
+            json!({ "thread_id": LIVE_THREAD }),
+        );
         w.fail(&format!(
             "the victim's live turn ended during the run: {status}\nturn state: {state}"
         ));
     }
     let request = w.protected_requests[VICTIM].iter().next().cloned().unwrap();
-    let body = act(w, VICTIM, "openhuman.channel_web_cancel",
-        json!({ "client_id": LIVE_CLIENT, "thread_id": LIVE_THREAD, "request_id": request }));
+    let body = act(
+        w,
+        VICTIM,
+        "openhuman.channel_web_cancel",
+        json!({ "client_id": LIVE_CLIENT, "thread_id": LIVE_THREAD, "request_id": request }),
+    );
     if !body.to_string().contains("\"cancelled\":true") {
-        w.fail(&format!("the victim cannot cancel their own live turn: {body}"));
+        w.fail(&format!(
+            "the victim cannot cancel their own live turn: {body}"
+        ));
     }
 }
 
@@ -267,8 +325,14 @@ fn verify_frames(w: &World) {
             own[*user] += 1;
         }
     }
-    eprintln!("[isolation] /events frames: {} total, own-canary frames per user {own:?}", frames.len());
-    assert!(own.iter().all(|&n| n > 0), "every user's stream saw their own turns: {own:?}");
+    eprintln!(
+        "[isolation] /events frames: {} total, own-canary frames per user {own:?}",
+        frames.len()
+    );
+    assert!(
+        own.iter().all(|&n| n > 0),
+        "every user's stream saw their own turns: {own:?}"
+    );
 }
 
 #[test]
@@ -279,7 +343,13 @@ fn random_cross_profile_calls_never_leak() {
     eprintln!("[isolation] seed {seed} steps {steps} (OH_FUZZ_SEED / OH_FUZZ_STEPS)");
     let d = deployment(true);
     let llm = mock_llm::mock_llm();
-    let node = start_node(&d, "1", None, "max_profiles_open = 3\nidle_evict_secs = 2\n", Some(llm.port));
+    let node = start_node(
+        &d,
+        "1",
+        None,
+        "max_profiles_open = 3\nidle_evict_secs = 2\n",
+        Some(llm.port),
+    );
     provision_users(&node);
     let mut w = World::new(node, seed);
     seed_state(&mut w);
@@ -292,16 +362,30 @@ fn random_cross_profile_calls_never_leak() {
 
     let (violations, per_user) = scan::audit_backend(&llm.recorded());
     if !violations.is_empty() {
-        w.fail(&format!("backend requests crossed profiles:\n{}", violations.join("\n")));
+        w.fail(&format!(
+            "backend requests crossed profiles:\n{}",
+            violations.join("\n")
+        ));
     }
-    assert!(per_user.iter().all(|&n| n > 0), "every user reached inference: {per_user:?}");
+    assert!(
+        per_user.iter().all(|&n| n > 0),
+        "every user reached inference: {per_user:?}"
+    );
     let (violations, own) = scan::scan_files(&d.root, d.tmp.path());
     if !violations.is_empty() {
-        w.fail(&format!("files hold other profiles' canaries:\n{}", violations.join("\n")));
+        w.fail(&format!(
+            "files hold other profiles' canaries:\n{}",
+            violations.join("\n")
+        ));
     }
-    assert!(own.iter().all(|&n| n > 0), "every user's tree holds their own data: {own:?}");
+    assert!(
+        own.iter().all(|&n| n > 0),
+        "every user's tree holds their own data: {own:?}"
+    );
 
-    let summary: Vec<String> = w.stats.iter()
+    let summary: Vec<String> = w
+        .stats
+        .iter()
         .map(|(m, (ok, err, other))| {
             let first = w.first_error.get(m).map(String::as_str).unwrap_or("");
             format!("  {m}: ok {ok} err {err} other {other} {first}")

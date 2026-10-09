@@ -25,7 +25,9 @@ pub(crate) async fn provision_on(
 ) -> Result<Outcome<ProvisionResult>, String> {
     let profile_id = ProfileId::for_user(user_id, host.saas().profile_ids)?;
     if names_operator_state(&profile_id, &host.saas().operator_dir()) {
-        log::warn!("[profiles] refusing to provision a profile named like the operator's state dir");
+        log::warn!(
+            "[profiles] refusing to provision a profile named like the operator's state dir"
+        );
         return Err(format!(
             "profile id {profile_id} is reserved on this deployment: it is the name of the \
              operator's state directory"

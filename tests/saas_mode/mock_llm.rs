@@ -160,8 +160,8 @@ fn read_chunked(reader: &mut BufReader<TcpStream>) -> Vec<u8> {
         if reader.read_line(&mut size).unwrap_or(0) == 0 {
             break;
         }
-        let size = usize::from_str_radix(size.trim().split(';').next().unwrap_or("0"), 16)
-            .unwrap_or(0);
+        let size =
+            usize::from_str_radix(size.trim().split(';').next().unwrap_or("0"), 16).unwrap_or(0);
         if size == 0 {
             let mut trailer = String::new();
             let _ = reader.read_line(&mut trailer);
@@ -279,7 +279,11 @@ fn sse_response(reply: &Reply, model: &str) -> String {
     );
     let finish = match reply {
         Reply::Text(text) => {
-            out.push_str(&chunk(json!({ "role": "assistant", "content": text }), None, None));
+            out.push_str(&chunk(
+                json!({ "role": "assistant", "content": text }),
+                None,
+                None,
+            ));
             "stop"
         }
         Reply::Tool { name, arguments } => {

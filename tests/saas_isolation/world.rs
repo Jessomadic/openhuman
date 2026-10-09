@@ -309,7 +309,12 @@ impl World {
         }
         let sent: HashSet<String> = params
             .as_object()
-            .map(|m| m.values().filter_map(Value::as_str).map(str::to_owned).collect())
+            .map(|m| {
+                m.values()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
             .unwrap_or_default();
         let mut stack = vec![(body.clone(), thread)];
         while let Some((value, thread)) = stack.pop() {
@@ -332,11 +337,15 @@ impl World {
                         let t = here.as_deref();
                         let pools = &mut self.pools;
                         match key.as_str() {
-                            "thread_id" | "threadId" => Pools::push(&mut pools.threads, actor, s, None),
+                            "thread_id" | "threadId" => {
+                                Pools::push(&mut pools.threads, actor, s, None)
+                            }
                             "request_id" | "requestId" => {
                                 Pools::push_unless(&mut pools.requests, actor, s, t, &sent)
                             }
-                            "client_id" | "clientId" => Pools::push(&mut pools.clients, actor, s, None),
+                            "client_id" | "clientId" => {
+                                Pools::push(&mut pools.clients, actor, s, None)
+                            }
                             "item_id" | "itemId" => {
                                 Pools::push_unless(&mut pools.queue_items, actor, s, t, &sent)
                             }
@@ -350,7 +359,9 @@ impl World {
                                 {
                                     Pools::push(&mut pools.threads, actor, s, None)
                                 }
-                                m if m.contains("messages_list") || m.contains("message_append") => {
+                                m if m.contains("messages_list")
+                                    || m.contains("message_append") =>
+                                {
                                     Pools::push(&mut pools.messages, actor, s, t)
                                 }
                                 m if m.contains("memory_") => {

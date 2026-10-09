@@ -22,9 +22,10 @@ pub const GENERATORS: &[(&str, Generator)] = &[
         }
         params
     }),
-    ("openhuman.threads_delete", |w, a| {
-        json!({ "thread_id": w.thread_for(a, true), "deleted_at": NOW })
-    }),
+    (
+        "openhuman.threads_delete",
+        |w, a| json!({ "thread_id": w.thread_for(a, true), "deleted_at": NOW }),
+    ),
     ("openhuman.threads_purge", |_, _| json!({})),
     ("openhuman.threads_create_new", |w, a| {
         match w.rng.below(6) {
@@ -34,9 +35,10 @@ pub const GENERATORS: &[(&str, Generator)] = &[
             _ => json!({ "labels": [w.canary(a)] }),
         }
     }),
-    ("openhuman.threads_messages_list", |w, a| {
-        json!({ "thread_id": w.thread_for(a, false) })
-    }),
+    (
+        "openhuman.threads_messages_list",
+        |w, a| json!({ "thread_id": w.thread_for(a, false) }),
+    ),
     ("openhuman.threads_message_append", |w, a| {
         let id = if w.rng.chance(40) {
             w.message_for(a)
@@ -62,41 +64,51 @@ pub const GENERATORS: &[(&str, Generator)] = &[
             "extra_metadata": { "note": w.canary(a) },
         })
     }),
-    ("openhuman.threads_update_labels", |w, a| {
-        json!({ "thread_id": w.thread_for(a, true), "labels": [w.canary(a)] })
-    }),
-    ("openhuman.threads_update_title", |w, a| {
-        json!({ "thread_id": w.thread_for(a, true), "title": w.canary(a) })
-    }),
-    ("openhuman.threads_turn_state_get", |w, a| {
-        json!({ "thread_id": w.thread_for(a, false) })
-    }),
+    (
+        "openhuman.threads_update_labels",
+        |w, a| json!({ "thread_id": w.thread_for(a, true), "labels": [w.canary(a)] }),
+    ),
+    (
+        "openhuman.threads_update_title",
+        |w, a| json!({ "thread_id": w.thread_for(a, true), "title": w.canary(a) }),
+    ),
+    (
+        "openhuman.threads_turn_state_get",
+        |w, a| json!({ "thread_id": w.thread_for(a, false) }),
+    ),
     ("openhuman.threads_turn_state_list", |_, _| json!({})),
-    ("openhuman.threads_turn_state_history", |w, a| {
-        json!({ "thread_id": w.thread_for(a, false) })
-    }),
+    (
+        "openhuman.threads_turn_state_history",
+        |w, a| json!({ "thread_id": w.thread_for(a, false) }),
+    ),
     ("openhuman.threads_turn_state_get_turn", |w, a| {
         let (request, thread) = w.request_on_thread(a);
         json!({ "thread_id": thread, "request_id": request })
     }),
-    ("openhuman.threads_turn_state_clear", |w, a| {
-        json!({ "thread_id": w.thread_for(a, true) })
-    }),
-    ("openhuman.threads_token_usage", |w, a| {
-        json!({ "thread_id": w.thread_for(a, false) })
-    }),
-    ("openhuman.threads_transcript_get", |w, a| {
-        json!({ "thread_id": w.thread_for(a, false), "limit": 50 })
-    }),
-    ("openhuman.threads_goal_get", |w, a| {
-        json!({ "thread_id": w.thread_for(a, false) })
-    }),
-    ("openhuman.threads_todos_get", |w, a| {
-        json!({ "thread_id": w.thread_for(a, false) })
-    }),
-    ("openhuman.threads_generate_title", |w, a| {
-        json!({ "thread_id": w.thread_for(a, true), "assistant_message": w.canary(a) })
-    }),
+    (
+        "openhuman.threads_turn_state_clear",
+        |w, a| json!({ "thread_id": w.thread_for(a, true) }),
+    ),
+    (
+        "openhuman.threads_token_usage",
+        |w, a| json!({ "thread_id": w.thread_for(a, false) }),
+    ),
+    (
+        "openhuman.threads_transcript_get",
+        |w, a| json!({ "thread_id": w.thread_for(a, false), "limit": 50 }),
+    ),
+    (
+        "openhuman.threads_goal_get",
+        |w, a| json!({ "thread_id": w.thread_for(a, false) }),
+    ),
+    (
+        "openhuman.threads_todos_get",
+        |w, a| json!({ "thread_id": w.thread_for(a, false) }),
+    ),
+    (
+        "openhuman.threads_generate_title",
+        |w, a| json!({ "thread_id": w.thread_for(a, true), "assistant_message": w.canary(a) }),
+    ),
     ("openhuman.threads_edit_message", |w, a| {
         json!({
             "thread_id": w.thread_for(a, true),
@@ -120,7 +132,8 @@ pub const GENERATORS: &[(&str, Generator)] = &[
         if a != VICTIM && w.rng.chance(4) {
             message.push_str(&format!(" {}", mock_llm::HANG));
         }
-        let mut params = json!({ "client_id": w.client_for(a), "thread_id": thread, "message": message });
+        let mut params =
+            json!({ "client_id": w.client_for(a), "thread_id": thread, "message": message });
         let mode = ["interrupt", "steer", "followup", "collect"][w.rng.below(4)];
         if w.rng.chance(60) {
             params["queue_mode"] = json!(mode);
@@ -135,12 +148,14 @@ pub const GENERATORS: &[(&str, Generator)] = &[
             json!({ "client_id": w.client_for(a), "thread_id": w.thread_for(a, true) })
         }
     }),
-    ("openhuman.channel_web_queue_status", |w, a| {
-        json!({ "thread_id": w.thread_for(a, false) })
-    }),
-    ("openhuman.channel_web_queue_clear", |w, a| {
-        json!({ "thread_id": w.thread_for(a, true) })
-    }),
+    (
+        "openhuman.channel_web_queue_status",
+        |w, a| json!({ "thread_id": w.thread_for(a, false) }),
+    ),
+    (
+        "openhuman.channel_web_queue_clear",
+        |w, a| json!({ "thread_id": w.thread_for(a, true) }),
+    ),
     ("openhuman.channel_web_queue_remove", |w, a| {
         json!({
             "client_id": w.client_for(a),
@@ -179,12 +194,27 @@ pub const GENERATORS: &[(&str, Generator)] = &[
         }
         params
     }),
-    ("openhuman.memory_recall", |w, a| json!({ "question": w.canary(a) })),
-    ("openhuman.memory_fetch", |w, a| json!({ "query": w.canary(a), "limit": 5 })),
-    ("openhuman.memory_learn", |w, a| json!({ "text": w.canary(a) })),
-    ("openhuman.memory_forget", |w, a| json!({ "ids": [w.memory_id_for(a)] })),
+    (
+        "openhuman.memory_recall",
+        |w, a| json!({ "question": w.canary(a) }),
+    ),
+    (
+        "openhuman.memory_fetch",
+        |w, a| json!({ "query": w.canary(a), "limit": 5 }),
+    ),
+    (
+        "openhuman.memory_learn",
+        |w, a| json!({ "text": w.canary(a) }),
+    ),
+    (
+        "openhuman.memory_forget",
+        |w, a| json!({ "ids": [w.memory_id_for(a)] }),
+    ),
     ("openhuman.memory_items_list", |_, _| json!({ "limit": 20 })),
-    ("openhuman.memory_explore", |_, _| json!({})),
+    (
+        "openhuman.memory_explore",
+        |w, _| json!({ "facet": ["kind", "source", "workspace", "folder"][w.rng.below(4)] }),
+    ),
 ];
 
 impl World {

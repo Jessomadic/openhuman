@@ -238,4 +238,3 @@ fn two_users_with_the_same_thread_id_stay_apart() {
         "alice's turn on the same thread id is untouched"
     );
 }
-
