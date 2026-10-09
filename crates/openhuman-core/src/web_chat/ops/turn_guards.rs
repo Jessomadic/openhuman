@@ -32,6 +32,30 @@ fn web_turn_deadline() -> Option<Duration> {
     (secs > 0).then(|| Duration::from_secs(secs))
 }
 
+/// The backstop for a turn that has to be allowed to run long: one on a local /
+/// self-hosted provider (#6042), whose prefill alone can take many minutes. The
+/// explicit `OPENHUMAN_WEB_TURN_TIMEOUT_SECS` override still wins; otherwise the
+/// default is the local turn ceiling plus a grace period, never the hosted 900s,
+/// which sat below the harness's own ceilings and pre-empted them.
+async fn resolve_web_turn_deadline() -> Option<Duration> {
+    if std::env::var("OPENHUMAN_WEB_TURN_TIMEOUT_SECS").is_ok() {
+        return web_turn_deadline();
+    }
+    let local = match crate::config::rpc::load_config_with_timeout().await {
+        Ok(config) => crate::agent::tinyagents::chat_provider_is_local(&config),
+        Err(error) => {
+            log::debug!("[web-channel] backstop locality probe skipped: {error}");
+            false
+        }
+    };
+    if local {
+        let secs = crate::agent::tinyagents::local_web_turn_backstop_secs();
+        log::debug!("[web-channel] local provider: turn backstop {secs:?}s (#6042)");
+        return secs.map(Duration::from_secs);
+    }
+    web_turn_deadline()
+}
+
 /// Drive a chat-turn future under the wall-clock backstop.
 ///
 /// On elapse the inner future is dropped (cooperative teardown at its next
@@ -89,7 +113,7 @@ where
         biased;
         _ = cancel_token.cancelled() => None,
         res = drive_turn_with_deadline(
-            web_turn_deadline(),
+            resolve_web_turn_deadline().await,
             crate::agent::turn_origin::with_origin(
                 origin,
                 crate::security::approval::APPROVAL_CHAT_CONTEXT.scope(approval_ctx, fut),
