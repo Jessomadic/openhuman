@@ -335,8 +335,10 @@ impl wiremock::Respond for EchoCompletion {
                 "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
             });
             wiremock::ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(format!("data: {chunk}\n\ndata: {done}\n\ndata: [DONE]\n\n"))
+                .set_body_raw(
+                    format!("data: {chunk}\n\ndata: {done}\n\ndata: [DONE]\n\n"),
+                    "text/event-stream",
+                )
         } else {
             wiremock::ResponseTemplate::new(200).set_body_json(chat_completion(&reply))
         }

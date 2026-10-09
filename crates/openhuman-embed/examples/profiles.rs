@@ -118,8 +118,10 @@ impl Respond for Echo {
             let done = json!({ "id": "c", "object": "chat.completion.chunk", "created": 0,
                 "model": "echo", "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] });
             return ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(format!("data: {chunk}\n\ndata: {done}\n\ndata: [DONE]\n\n"));
+                .set_body_raw(
+                    format!("data: {chunk}\n\ndata: {done}\n\ndata: [DONE]\n\n"),
+                    "text/event-stream",
+                );
         }
         ResponseTemplate::new(200).set_body_json(json!({
             "id": "c", "object": "chat.completion", "created": 0, "model": "echo",
