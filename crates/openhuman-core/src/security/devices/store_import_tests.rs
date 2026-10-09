@@ -44,7 +44,9 @@ fn legacy_devices_are_imported_once_through_the_public_api() {
     assert!(!tables.contains(&"paired_devices".to_string()));
     let conn = rusqlite::Connection::open(&db).unwrap();
     let kept: i64 = conn
-        .query_row("SELECT COUNT(*) FROM _legacy_paired_devices", [], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM _legacy_paired_devices", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(kept, 3);
 

@@ -708,9 +708,9 @@ pub fn get_settings(config: &Config, provider: &str) -> Result<NotificationSetti
     })
 }
 
-mod store_rows;
 #[path = "store_import.rs"]
 pub(super) mod import;
+mod store_rows;
 use store_rows::rows_to_notifications;
 
 #[cfg(test)]

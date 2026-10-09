@@ -178,7 +178,11 @@ fn open_default(
     }
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| {
-            format!("[{}] create the directory {}", plan.domain, parent.display())
+            format!(
+                "[{}] create the directory {}",
+                plan.domain,
+                parent.display()
+            )
         })?;
     }
     let url = tinystoragedrivers::StorageConfig::parse(&format!("sqlite:{}", db_path.display()))

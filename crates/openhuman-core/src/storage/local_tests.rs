@@ -28,7 +28,9 @@ fn config(url: Option<&str>) -> Config {
 
 fn plan(path: &std::path::Path) -> Vec<ImportDoc> {
     let conn = Connection::open(path).unwrap();
-    let mut stmt = conn.prepare("SELECT id, n FROM old_things ORDER BY id").unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, n FROM old_things ORDER BY id")
+        .unwrap();
     stmt.query_map([], |row| {
         Ok(ImportDoc {
             collection: "things",

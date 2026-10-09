@@ -90,7 +90,13 @@ fn legacy_sources_and_ledger_are_imported_once_through_the_public_api() {
     assert_eq!(got.last_status.as_deref(), Some("periodic: ok"));
     assert!(live::was_ingested(&default, &first.id, "t-1").unwrap());
     assert!(live::was_ingested(&default, &second.id, "t-1").unwrap());
-    assert!(live::is_ingested(&default, &first.id, "t-1", &live::content_hash(&task("t-1", "First"))).unwrap());
+    assert!(live::is_ingested(
+        &default,
+        &first.id,
+        "t-1",
+        &live::content_hash(&task("t-1", "First"))
+    )
+    .unwrap());
     let titles: Vec<_> = live::list_ingested(&default, &first.id, 10)
         .unwrap()
         .into_iter()
@@ -98,7 +104,10 @@ fn legacy_sources_and_ledger_are_imported_once_through_the_public_api() {
         .collect();
     assert_eq!(titles.len(), 2);
     assert!(titles.contains(&"First".to_string()));
-    assert_eq!(live::list_ingested_refs(&default, &first.id).unwrap().len(), 2);
+    assert_eq!(
+        live::list_ingested_refs(&default, &first.id).unwrap().len(),
+        2
+    );
 
     let tables = table_names(&db);
     assert!(tables.contains(&"_legacy_task_sources".to_string()));

@@ -64,7 +64,9 @@ fn the_default_url_is_sqlite_on_the_workspace_directory() {
 #[tokio::test]
 async fn the_default_url_opens_in_directory_mode() {
     let dir = tempfile::tempdir().unwrap();
-    let backend = crate::storage::open(&default_url(dir.path())).await.unwrap();
+    let backend = crate::storage::open(&default_url(dir.path()))
+        .await
+        .unwrap();
     assert_eq!(backend.driver(), "sqlite");
     // Directory mode: a named database is its own file in the directory.
     backend.database("approvals").unwrap();

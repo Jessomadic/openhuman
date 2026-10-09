@@ -15,8 +15,8 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use tinystoragedrivers::{CollectionSpec, Filter, IndexSpec, Precondition, Query, Sort, Versioned};
 
-use crate::security::devices::types::PairedDevice;
 use crate::config::Config;
+use crate::security::devices::types::PairedDevice;
 use crate::storage::documents::{compare_and_swap, text, Repo};
 use crate::storage::local::{self, ImportPlan};
 use crate::storage::DocumentStoreExt;

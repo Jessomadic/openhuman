@@ -63,7 +63,10 @@ fn legacy_rows_are_imported_once_through_the_public_api() {
     ids.sort_unstable();
     // Listing expires the stale request, as it always did.
     assert_eq!(ids, ["pending-1"]);
-    let first = pending.iter().find(|p| p.request_id == "pending-1").unwrap();
+    let first = pending
+        .iter()
+        .find(|p| p.request_id == "pending-1")
+        .unwrap();
     assert_eq!(first.tool_name, "composio");
     assert_eq!(first.action_summary, "summary pending-1");
     assert_eq!(first.args_redacted["id"], "pending-1");
