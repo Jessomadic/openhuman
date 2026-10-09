@@ -95,7 +95,7 @@ pub fn free_port() -> u16 {
 
 pub fn rpc(
     client: &reqwest::blocking::Client,
-    pub base: &str,
+    base: &str,
     bearer: Option<&str>,
     method: &str,
 ) -> (u16, Value) {
@@ -104,7 +104,7 @@ pub fn rpc(
 
 pub fn rpc_with(
     client: &reqwest::blocking::Client,
-    pub base: &str,
+    base: &str,
     bearer: Option<&str>,
     method: &str,
     params: Value,
@@ -164,7 +164,7 @@ pub fn now() -> u64 {
 /// POST /rpc for gateway user `user`, signed unless `sig` overrides it.
 pub fn user_rpc(
     client: &reqwest::blocking::Client,
-    pub base: &str,
+    base: &str,
     bearer: &str,
     user: &str,
     sig: Option<&str>,
@@ -175,7 +175,7 @@ pub fn user_rpc(
 
 pub fn user_rpc_with(
     client: &reqwest::blocking::Client,
-    pub base: &str,
+    base: &str,
     bearer: &str,
     user: &str,
     sig: Option<&str>,
@@ -357,7 +357,7 @@ impl Node {
 /// Write node `name`'s operator file on deployment `d` and start it.
 pub fn start_node(
     d: &Deployment,
-    pub name: &str,
+    name: &str,
     storage_url: Option<&str>,
     extra: &str,
     backend: Option<u16>,
