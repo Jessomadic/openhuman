@@ -156,9 +156,9 @@ impl ProfileRuntimeBuilder {
         if let Some(url) = config.resolved_storage_url() {
             if openhuman_core::storage::installed().is_none() {
                 log::debug!("[embed][profiles] opening the configured storage backend");
-                let backend = openhuman_core::storage::open(&url).await.map_err(|e| {
-                    ProfileError::Boot(format!("opening the storage backend: {e}"))
-                })?;
+                let backend = openhuman_core::storage::open(&url)
+                    .await
+                    .map_err(|e| ProfileError::Boot(format!("opening the storage backend: {e}")))?;
                 openhuman_core::storage::install(backend);
             }
         }

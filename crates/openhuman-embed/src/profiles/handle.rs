@@ -265,7 +265,10 @@ impl ProfileHandle {
     /// background; the reply arrives on [`events`](Self::events) as a
     /// `channel_outbound` event for the host to deliver. A message id already
     /// recorded is acknowledged as a duplicate and runs nothing.
-    pub async fn relay_inbound(&self, message: RelayMessage) -> Result<RelayAccepted, ProfileError> {
+    pub async fn relay_inbound(
+        &self,
+        message: RelayMessage,
+    ) -> Result<RelayAccepted, ProfileError> {
         let accepted: RelayAccepted = self.call(CHANNEL_RELAY_INBOUND, message).await?;
         log::debug!(
             "[embed][profiles] relay profile={} accepted={} duplicate={}",

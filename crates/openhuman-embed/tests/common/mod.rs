@@ -257,7 +257,11 @@ impl openhuman_embed::BackendTransport for PointedTransport {
         reqwest::Client::new()
     }
 
-    fn base_url(&self, _configured: Option<&str>, _purpose: openhuman_embed::BaseUrlPurpose) -> String {
+    fn base_url(
+        &self,
+        _configured: Option<&str>,
+        _purpose: openhuman_embed::BaseUrlPurpose,
+    ) -> String {
         self.base_url.clone()
     }
 
@@ -334,11 +338,10 @@ impl wiremock::Respond for EchoCompletion {
                 "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }],
                 "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
             });
-            wiremock::ResponseTemplate::new(200)
-                .set_body_raw(
-                    format!("data: {chunk}\n\ndata: {done}\n\ndata: [DONE]\n\n"),
-                    "text/event-stream",
-                )
+            wiremock::ResponseTemplate::new(200).set_body_raw(
+                format!("data: {chunk}\n\ndata: {done}\n\ndata: [DONE]\n\n"),
+                "text/event-stream",
+            )
         } else {
             wiremock::ResponseTemplate::new(200).set_body_json(chat_completion(&reply))
         }

@@ -55,7 +55,10 @@ async fn scenario() {
         Err(ProfileError::Open(OpenError::NotProvisioned(id))) => assert_eq!(id.as_str(), "carol"),
         other => panic!("an unprovisioned profile must not open: {other:?}"),
     }
-    for (id, key) in [(&alice.profile_id, "alice-key"), (&bob.profile_id, "bob-key")] {
+    for (id, key) in [
+        (&alice.profile_id, "alice-key"),
+        (&bob.profile_id, "bob-key"),
+    ] {
         profiles
             .set_credential(id, ProfileCredentialKind::ApiKey, key)
             .await
@@ -67,9 +70,15 @@ async fn scenario() {
     let bob_h = profiles.open("bob").await.expect("open bob");
     assert_ne!(alice_h.workspace_dir(), bob_h.workspace_dir());
 
-    eprintln!("DBG after-open in_use={}", alice_h.context().tenant_in_use());
+    eprintln!(
+        "DBG after-open in_use={}",
+        alice_h.context().tenant_in_use()
+    );
     let _ = alice_h.threads().await;
-    eprintln!("DBG after-threads in_use={}", alice_h.context().tenant_in_use());
+    eprintln!(
+        "DBG after-threads in_use={}",
+        alice_h.context().tenant_in_use()
+    );
     let a = tokio::time::timeout(TURN, alice_h.chat("t1", "alice's secret plan"))
         .await
         .expect("alice's turn finishes")
@@ -119,7 +128,11 @@ async fn scenario() {
     assert!(!bob_t1.contains("alice's secret plan"), "{bob_t1}");
 
     for i in 0..4 {
-        eprintln!("DBG t={i} ctx_count={} in_use={}", std::sync::Arc::strong_count(alice_h.context()), alice_h.context().tenant_in_use());
+        eprintln!(
+            "DBG t={i} ctx_count={} in_use={}",
+            std::sync::Arc::strong_count(alice_h.context()),
+            alice_h.context().tenant_in_use()
+        );
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     // ── a handle holds its profile ──────────────────────────────────────
@@ -144,10 +157,20 @@ async fn scenario() {
             Err(e) => panic!("alice never went idle: {e}"),
         }
     }
-    assert!(!profiles.list().await.unwrap().iter().any(|s| s.open && s.profile_id == alice.profile_id));
+    assert!(!profiles
+        .list()
+        .await
+        .unwrap()
+        .iter()
+        .any(|s| s.open && s.profile_id == alice.profile_id));
     // Reopening picks the same thread back up.
     let alice_h = profiles.open("alice").await.expect("reopen alice");
-    assert!(alice_h.threads().await.unwrap().iter().any(|t| t.id == "t1"));
+    assert!(alice_h
+        .threads()
+        .await
+        .unwrap()
+        .iter()
+        .any(|t| t.id == "t1"));
 
     // ── a relayed platform message ──────────────────────────────────────
     let mut bob_events = bob_h.events();
@@ -183,10 +206,19 @@ async fn scenario() {
         "{outbound:?}"
     );
     let again = bob_h
-        .relay_inbound(RelayMessage::new("telegram", "777", "555", "tg-1", "hello from telegram"))
+        .relay_inbound(RelayMessage::new(
+            "telegram",
+            "777",
+            "555",
+            "tg-1",
+            "hello from telegram",
+        ))
         .await
         .unwrap();
-    assert!(again.duplicate, "a retried delivery runs nothing: {again:?}");
+    assert!(
+        again.duplicate,
+        "a retried delivery runs nothing: {again:?}"
+    );
     assert!(bob_h
         .threads()
         .await
@@ -210,7 +242,10 @@ async fn scenario() {
     // ── the process is locked to SaaS ───────────────────────────────────
     let second = ProfileRuntime::build(SaasConfig::new(root.path())).await;
     assert!(matches!(second, Err(ProfileError::Boot(_))), "{second:?}");
-    let desktop = Runtime::builder().workspace(Workspace::Ephemeral).build().await;
+    let desktop = Runtime::builder()
+        .workspace(Workspace::Ephemeral)
+        .build()
+        .await;
     assert!(desktop.is_err(), "no single-user runtime beside SaaS");
 
     drop((alice_h, bob_h));

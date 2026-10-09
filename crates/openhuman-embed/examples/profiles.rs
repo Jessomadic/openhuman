@@ -112,7 +112,11 @@ impl Respond for Echo {
             .unwrap_or_default();
         // The core prefixes the turn's message with context lines (the date);
         // the user's own text is the last line.
-        let said = said.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or_default();
+        let said = said
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or_default();
         let reply = format!("echo: {said}");
         if body["stream"] == true {
             let chunk = json!({ "id": "c", "object": "chat.completion.chunk", "created": 0,
@@ -120,11 +124,10 @@ impl Respond for Echo {
                 "delta": { "role": "assistant", "content": reply }, "finish_reason": null }] });
             let done = json!({ "id": "c", "object": "chat.completion.chunk", "created": 0,
                 "model": "echo", "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] });
-            return ResponseTemplate::new(200)
-                .set_body_raw(
-                    format!("data: {chunk}\n\ndata: {done}\n\ndata: [DONE]\n\n"),
-                    "text/event-stream",
-                );
+            return ResponseTemplate::new(200).set_body_raw(
+                format!("data: {chunk}\n\ndata: {done}\n\ndata: [DONE]\n\n"),
+                "text/event-stream",
+            );
         }
         ResponseTemplate::new(200).set_body_json(json!({
             "id": "c", "object": "chat.completion", "created": 0, "model": "echo",
