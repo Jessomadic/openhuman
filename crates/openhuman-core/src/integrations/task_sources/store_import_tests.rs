@@ -72,7 +72,7 @@ fn legacy_sources_and_ledger_are_imported_once_through_the_public_api() {
         &classic,
         &first.id,
         chrono::Utc::now(),
-        super::super::types::FetchReason::Periodic,
+        crate::integrations::task_sources::FetchReason::Periodic,
         "ok",
     )
     .unwrap();

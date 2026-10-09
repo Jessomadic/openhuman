@@ -48,7 +48,7 @@ fn legacy_rows_are_imported_once_through_the_public_api() {
     live::insert_pending(&classic, &request("approved-1", 10), "sess").unwrap();
     live::insert_pending(&classic, &request("denied-1", 10), "sess").unwrap();
     live::insert_pending(&classic, &request("stale-1", -5), "sess").unwrap();
-    live::decide(&classic, "approved-1", ApprovalDecision::Approve).unwrap();
+    live::decide(&classic, "approved-1", ApprovalDecision::ApproveOnce).unwrap();
     live::record_execution(&classic, "approved-1", ExecutionOutcome::Success, None).unwrap();
     live::decide(&classic, "denied-1", ApprovalDecision::Deny).unwrap();
     live::insert_flow_trust(&classic, "flow-1", "shell").unwrap();
@@ -61,7 +61,8 @@ fn legacy_rows_are_imported_once_through_the_public_api() {
     let pending = live::list_pending(&default).unwrap();
     let mut ids: Vec<_> = pending.iter().map(|p| p.request_id.as_str()).collect();
     ids.sort_unstable();
-    assert_eq!(ids, ["pending-1", "stale-1"]);
+    // Listing expires the stale request, as it always did.
+    assert_eq!(ids, ["pending-1"]);
     let first = pending.iter().find(|p| p.request_id == "pending-1").unwrap();
     assert_eq!(first.tool_name, "composio");
     assert_eq!(first.action_summary, "summary pending-1");
@@ -74,7 +75,7 @@ fn legacy_rows_are_imported_once_through_the_public_api() {
     ));
     assert_eq!(
         live::get_decision(&default, "approved-1").unwrap(),
-        Some(ApprovalDecision::Approve)
+        Some(ApprovalDecision::ApproveOnce)
     );
     assert_eq!(
         live::get_decision(&default, "denied-1").unwrap(),
@@ -83,13 +84,20 @@ fn legacy_rows_are_imported_once_through_the_public_api() {
     let audit = live::list_recent_decisions(&default, 10).unwrap();
     let mut audited: Vec<_> = audit.iter().map(|a| a.decision).collect();
     audited.sort_by_key(|d| d.as_str());
-    assert_eq!(audit.len(), 3, "approve, deny and the flow pre-authorization");
+    assert_eq!(
+        audit.len(),
+        4,
+        "approve, deny, the flow pre-authorization and the expired request"
+    );
     assert!(audited.contains(&ApprovalDecision::ApproveAlwaysForFlow));
     assert!(live::is_flow_tool_trusted(&default, "flow-1", "shell").unwrap());
     assert!(live::is_flow_tool_trusted(&default, "flow-1", "http").unwrap());
     assert!(!live::is_flow_tool_trusted(&default, "flow-2", "http").unwrap());
-    // The expiry key was imported: the stale request expires.
-    assert_eq!(live::expire_stale(&default).unwrap(), 1);
+    // The expiry key was imported: the stale request was expired.
+    assert_eq!(
+        live::get_decision(&default, "stale-1").unwrap(),
+        Some(ApprovalDecision::Deny)
+    );
 
     // The old tables are kept under their retired names.
     let tables = table_names(&db);
