@@ -409,7 +409,7 @@ pub fn start_node_logging(
         .env("HOME", d.tmp.path())
         .env("USERPROFILE", d.tmp.path())
         .env("RUST_LOG", rust_log)
-        .env("DEBUG_NOCACHE", "1")
+        .env("DEBUG_CLEAR", "1")
         .stdout(std::fs::File::create(&log).unwrap())
         .stderr(Stdio::null());
     for var in SCRUBBED_ENV {

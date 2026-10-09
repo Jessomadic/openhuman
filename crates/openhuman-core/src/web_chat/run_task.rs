@@ -321,6 +321,12 @@ pub(crate) async fn run_chat_task(
     log::debug!("[web-channel] DEBUGSENDERS before-clear={}", progress_probe.strong_count());
     agent.set_on_progress(None);
     log::debug!("[web-channel] DEBUGSENDERS after-clear={}", progress_probe.strong_count());
+    if std::env::var("DEBUG_CLEAR").is_ok() {
+        agent.debug_drop_runtime_session_only();
+        log::debug!("[web-channel] DEBUGSENDERS after-drop-runtime-session={}", progress_probe.strong_count());
+        agent.clear_history();
+        log::debug!("[web-channel] DEBUGSENDERS after-clear-history={}", progress_probe.strong_count());
+    }
 
     // The caller publishes the terminal `chat_done`/`chat_error` as soon as
     // this returns. Let the bridge forward everything the turn queued first,
@@ -397,8 +403,6 @@ pub(crate) async fn run_chat_task(
                 thread_id,
                 request_id
             );
-        } else if std::env::var("DEBUG_NOCACHE").is_ok() {
-            drop(agent);
         } else {
             checkin_session_agent(thread_id, agent, current_fp).await;
         }
