@@ -498,10 +498,8 @@ impl TurnModelSource {
                 .unwrap_or_else(|| "injected".to_string());
             let native_tools = profile.tool_calling;
             let supports_vision = profile.modalities.image_in;
-            let is_local = crate::agent::tinyagents::turn_policy::provider_is_self_hosted(
-                &provider_id,
-                None,
-            );
+            let is_local =
+                crate::agent::tinyagents::turn_policy::provider_is_self_hosted(&provider_id, None);
             let context_window = context_window.or(profile.max_input_tokens);
             let primary: TurnChatModel = Arc::new(
                 ProfileOverrideModel::new(direct.clone(), profile)
@@ -534,10 +532,12 @@ impl TurnModelSource {
             let provider_string = cn.primary_override.clone().unwrap_or_else(|| {
                 crate::inference::provider::provider_for_role(&cn.role, &cn.config)
             });
-            let is_local = crate::agent::tinyagents::turn_policy::provider_is_self_hosted(
+            // Tool/vision gating keeps its historical provider-name rule; only
+            // the wall-clock ceilings use endpoint-aware self-hosted detection.
+            let is_local = tinyinference_local::profile::is_local_provider_string(&provider_string);
+            let self_hosted = crate::agent::tinyagents::turn_policy::provider_is_self_hosted(
                 &provider_string,
-                crate::agent::tinyagents::turn_policy::local_openai_endpoint(&cn.config)
-                    .as_deref(),
+                crate::agent::tinyagents::turn_policy::local_openai_endpoint(&cn.config).as_deref(),
             );
             let provider_id = if provider_string == "openhuman"
                 || provider_string.is_empty()
@@ -561,7 +561,7 @@ impl TurnModelSource {
                 provider_id,
                 !is_local,
                 !is_local,
-                is_local,
+                self_hosted,
                 thread_id,
             );
         }
