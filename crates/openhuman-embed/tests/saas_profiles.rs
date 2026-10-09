@@ -115,6 +115,10 @@ async fn scenario() {
     assert!(bob_t1.contains("bob's grocery list"), "{bob_t1}");
     assert!(!bob_t1.contains("alice's secret plan"), "{bob_t1}");
 
+    for i in 0..10 {
+        eprintln!("DBG t={i} ctx_count={} in_use={}", std::sync::Arc::strong_count(alice_h.context()), alice_h.context().tenant_in_use());
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
     // ── a handle holds its profile ──────────────────────────────────────
     let held = profiles.release(&alice.profile_id).await;
     assert!(
