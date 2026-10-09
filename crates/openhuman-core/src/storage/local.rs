@@ -98,10 +98,16 @@ impl Opened {
     }
 }
 
-/// Databases already opened (and imported) by this process.
+/// A database this process has opened, and whether its import finished.
 #[cfg(feature = "storage-sqlite")]
-static OPENED: LazyLock<Mutex<HashMap<PathBuf, Arc<dyn StorageBackend>>>> =
-    LazyLock::new(Mutex::default);
+struct OpenedDb {
+    backend: Arc<dyn StorageBackend>,
+    imported: bool,
+}
+
+/// Databases opened by this process, by path.
+#[cfg(feature = "storage-sqlite")]
+static OPENED: LazyLock<Mutex<HashMap<PathBuf, OpenedDb>>> = LazyLock::new(Mutex::default);
 
 /// The storage a small store uses for this call, or `None` for its legacy
 /// tables.
