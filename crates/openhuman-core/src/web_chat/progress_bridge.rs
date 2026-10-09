@@ -1253,6 +1253,7 @@ pub(crate) fn spawn_progress_bridge(
         // The response presenter waits only briefly for this signal before
         // publishing an error. Trace export is best-effort I/O and must not
         // hold up terminal delivery after the progress stream closed.
+        log::debug!("[web_channel][bridge] DEBUGBRIDGE exited request_id={request_id}");
         let _ = drained_tx.send(true);
         if let Some(mut collector) = span_collector.take() {
             collector.finish(unix_epoch_ms());
