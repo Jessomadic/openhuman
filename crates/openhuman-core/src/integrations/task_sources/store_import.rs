@@ -2,8 +2,8 @@
 //! (`store_documents.rs`): `task_sources` becomes one `task_sources` document
 //! per source (the store's own `to_doc`) and `ingested_tasks` one
 //! `ingested_tasks` document per dedup-ledger entry, with `ingested_ms`
-//! derived from `ingested_at`. A source row that no longer decodes is logged
-//! and left in the retired table instead of stopping the import. The driver
+//! derived from `ingested_at`. A source row that no longer decodes fails the
+//! import, leaving the legacy tables in service. The driver
 //! ([`crate::storage::local`]) writes the documents and then renames the
 //! tables to `_legacy_<name>`.
 
@@ -37,16 +37,14 @@ fn read_rows(conn: &Connection) -> Result<Vec<ImportDoc>> {
             .query_map([], super::map_source_row)
             .context("[task_sources::import] query task_sources")?;
         for row in rows {
-            match row {
-                Ok(source) => docs.push(ImportDoc {
-                    collection: SOURCES,
-                    id: source.id.clone(),
-                    doc: to_doc(&source)?,
-                }),
-                Err(error) => tracing::warn!(
-                    "[task_sources::import] skipping an undecodable source row: {error}"
-                ),
-            }
+            // A row that does not decode fails the import, so the legacy
+            // table is not retired with a source missing from the new one.
+            let source = row.context("[task_sources::import] decode a task_sources row")?;
+            docs.push(ImportDoc {
+                collection: SOURCES,
+                id: source.id.clone(),
+                doc: to_doc(&source)?,
+            });
         }
     }
     if table_exists(conn, "ingested_tasks")? {

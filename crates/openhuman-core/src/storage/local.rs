@@ -176,29 +176,37 @@ fn open_default(
 ) -> Result<Option<Opened>> {
     // Held across the import so two threads never both import one file.
     let mut opened = OPENED.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(backend) = opened.get(db_path) {
-        return Ok(Some(Opened {
-            backend: Arc::clone(backend),
-            scope: Scope::local(),
-        }));
+    if !opened.contains_key(db_path) {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "[{}] create the directory {}",
+                    plan.domain,
+                    parent.display()
+                )
+            })?;
+        }
+        let url =
+            tinystoragedrivers::StorageConfig::parse(&format!("sqlite:{}", db_path.display()))
+                .map_err(|error| anyhow!("[{}] storage url: {error}", plan.domain))?;
+        let backend = super::block_on(async move { tinystoragedrivers::open(&url).await })
+            .map_err(|error| anyhow!("[{}] open {}: {error}", plan.domain, db_path.display()))?;
+        opened.insert(
+            db_path.to_path_buf(),
+            OpenedDb {
+                backend,
+                imported: false,
+            },
+        );
     }
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "[{}] create the directory {}",
-                plan.domain,
-                parent.display()
-            )
-        })?;
-    }
-    let url = tinystoragedrivers::StorageConfig::parse(&format!("sqlite:{}", db_path.display()))
-        .map_err(|error| anyhow!("[{}] storage url: {error}", plan.domain))?;
-    let backend = super::block_on(async move { tinystoragedrivers::open(&url).await })
-        .map_err(|error| anyhow!("[{}] open {}: {error}", plan.domain, db_path.display()))?;
+    let entry = opened.get_mut(db_path).expect("inserted above");
     let handle = Opened {
-        backend,
+        backend: Arc::clone(&entry.backend),
         scope: Scope::local(),
     };
+    if entry.imported {
+        return Ok(Some(handle));
+    }
     match import(db_path, &handle, collections, plan) {
         Ok(count) => {
             tracing::debug!(
@@ -207,16 +215,22 @@ fn open_default(
                 imported = count,
                 "[storage::local] opened the default store"
             );
-            opened.insert(db_path.to_path_buf(), Arc::clone(&handle.backend));
+            entry.imported = true;
+            Ok(Some(handle))
         }
-        // Not remembered, so the next call retries; the import is resumable.
-        Err(error) => tracing::error!(
-            domain = plan.domain,
-            path = %db_path.display(),
-            "[storage::local] importing the legacy tables failed, will retry: {error:#}"
-        ),
+        // The old tables are untouched (they are retired last), so the store
+        // keeps serving them rather than showing an empty document store, and
+        // the next call tries the import again.
+        Err(error) => {
+            tracing::error!(
+                domain = plan.domain,
+                path = %db_path.display(),
+                "[storage::local] importing the legacy tables failed; \
+                 serving the legacy tables, will retry: {error:#}"
+            );
+            Ok(None)
+        }
     }
-    Ok(Some(handle))
 }
 
 /// Copies `plan`'s old rows into `handle` and retires the old tables.
@@ -231,11 +245,14 @@ fn import(
     if !db_path.exists() {
         return Ok(0);
     }
-    let present = present_tables(db_path, plan.tables)?;
-    if present.is_empty() {
+    if present_tables(db_path, plan.tables)?.is_empty() {
         return Ok(0);
     }
     let rows = (plan.read)().with_context(|| format!("[{}] read the legacy rows", plan.domain))?;
+    // The reader brings an old schema forward, which can create tables that
+    // were missing (empty); look again so every one is retired together and
+    // none is left to trigger another import.
+    let present = present_tables(db_path, plan.tables)?;
     let total = rows.len();
     let repo = Repo::on(&handle.backend, &handle.scope, plan.domain, collections)?;
     let written = repo.run(|docs| async move {
@@ -333,6 +350,9 @@ fn retire_tables(db_path: &Path, tables: &[&str]) -> Result<()> {
         tx.execute_batch(&format!("ALTER TABLE \"{table}\" RENAME TO \"{target}\""))
             .with_context(|| format!("rename {table} to {target}"))?;
     }
+    // The schema these tables belonged to is gone; a legacy open must not
+    // trust a version stamp that says it is initialized.
+    tx.pragma_update(None, "user_version", 0)?;
     tx.commit()?;
     Ok(())
 }

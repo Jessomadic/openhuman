@@ -113,12 +113,12 @@ fn an_import_that_cannot_read_is_retried_not_remembered() {
         read: &fails,
     };
     let opened = open(&config(None), &path, collections, &failing).unwrap();
-    assert!(opened.is_some(), "the store stays usable");
+    assert!(opened.is_none(), "the legacy tables keep serving");
     assert!(
         table_names(&path).contains(&"old_things".to_string()),
         "the old table is untouched"
     );
     // The next call imports properly.
-    open_things(&config(None), &path).unwrap();
+    assert!(open_things(&config(None), &path).is_some());
     assert!(table_names(&path).contains(&"_legacy_old_things".to_string()));
 }
