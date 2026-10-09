@@ -21,7 +21,11 @@ const TURN: Duration = Duration::from_secs(120);
 #[test]
 fn profiles_are_isolated_held_and_relayed() {
     let _ = env_logger::builder().is_test(true).try_init();
-    runtime().block_on(scenario());
+    // On a worker thread: a turn dispatched from the test thread itself would
+    // overflow its default stack.
+    let rt = runtime();
+    rt.block_on(async { tokio::spawn(scenario()).await })
+        .expect("scenario");
 }
 
 async fn scenario() {

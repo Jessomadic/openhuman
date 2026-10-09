@@ -38,7 +38,8 @@ fn main() -> anyhow::Result<()> {
         .thread_stack_size(AGENT_WORKER_STACK_BYTES)
         .max_blocking_threads(MAX_BLOCKING_THREADS)
         .build()?;
-    runtime.block_on(run())
+    // Run on a worker thread, whose stack is the tuned one.
+    runtime.block_on(async { tokio::spawn(run()).await? })
 }
 
 async fn run() -> anyhow::Result<()> {
