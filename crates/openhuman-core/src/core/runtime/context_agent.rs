@@ -80,6 +80,10 @@ impl CoreContext {
         Arc::strong_count(self) > 1 || Arc::strong_count(&self.agent.state) > 1
     }
 
+    pub fn agent_state_arc(&self) -> &Arc<super::super::agent_scope::AgentScopedState> {
+        &self.agent.state
+    }
+
     /// The state slots this context owns.
     pub fn agent_state(&self) -> &super::super::agent_scope::AgentScopedState {
         &self.agent.state
