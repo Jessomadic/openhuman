@@ -619,7 +619,7 @@ impl ApprovalGate {
             gate: self,
             request_id: request_id.clone(),
             thread_key: thread_key.clone(),
-            docs: store::capture_docs(&self.gate.config),
+            docs: store::capture_docs(&self.config),
             armed: true,
         };
 

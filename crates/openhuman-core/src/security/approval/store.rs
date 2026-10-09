@@ -202,13 +202,13 @@ fn migrate_session_id_scrub(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn db_path(config: &Config) -> std::path::PathBuf {
+pub(super) fn db_path(config: &Config) -> std::path::PathBuf {
     config.workspace_dir.join("approval").join("approval.db")
 }
 
 /// Open (and migrate) the approval DB, then call `f` with a live
 /// connection. Mirrors `notifications/store.rs::with_connection`.
-fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+pub(super) fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
     let db_path = db_path(config);
 
     tracing::trace!(
@@ -740,6 +740,8 @@ fn parse_rfc3339(input: &str) -> DateTime<Utc> {
         .unwrap_or_else(|_| Utc::now())
 }
 
+#[path = "store_import.rs"]
+pub(super) mod import;
 #[path = "store_agent.rs"]
 mod agent_rows;
 pub use agent_rows::{exists, list_pending_for_agent, pending_agent};
