@@ -397,6 +397,8 @@ pub(crate) async fn run_chat_task(
                 thread_id,
                 request_id
             );
+        } else if std::env::var("DEBUG_NOCACHE").is_ok() {
+            drop(agent);
         } else {
             checkin_session_agent(thread_id, agent, current_fp).await;
         }
