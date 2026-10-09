@@ -143,3 +143,112 @@ fn goal_tools_are_registered_on_a_threaded_turn() {
         );
     }
 }
+
+/// A model whose first (and only) byte arrives `delay` after the call starts,
+/// like a local model prefilling a huge prompt (#6042).
+struct SlowFirstByteModel {
+    delay: std::time::Duration,
+    provider: &'static str,
+}
+
+#[async_trait]
+impl ChatModel<()> for SlowFirstByteModel {
+    fn profile(&self) -> Option<&ModelProfile> {
+        static LOCAL: std::sync::OnceLock<ModelProfile> = std::sync::OnceLock::new();
+        static HOSTED: std::sync::OnceLock<ModelProfile> = std::sync::OnceLock::new();
+        let (cell, provider) = if self.provider == "ollama" {
+            (&LOCAL, "ollama")
+        } else {
+            (&HOSTED, "openai")
+        };
+        Some(cell.get_or_init(|| {
+            let mut profile = ModelProfile::default();
+            profile.provider = Some(provider.to_string());
+            profile
+        }))
+    }
+
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        tokio::time::sleep(self.delay).await;
+        Ok(ModelResponse::assistant("done"))
+    }
+}
+
+/// Assemble over a [`SlowFirstByteModel`] and run one turn on the virtual clock.
+async fn run_slow_first_byte_turn(
+    provider: &'static str,
+    delay_secs: u64,
+) -> Result<String, String> {
+    let model: Arc<dyn ChatModel<()>> = Arc::new(SlowFirstByteModel {
+        delay: std::time::Duration::from_secs(delay_secs),
+        provider,
+    });
+    let models = TurnModelSource::from_model(model)
+        .build("slow-model", 0.0, None, None)
+        .expect("turn models build");
+    let assembled = assemble_turn_harness(
+        models,
+        "slow-model",
+        Vec::new(),
+        None,
+        3,
+        None,
+        None,
+        None,
+        &[],
+        TurnContextMiddleware::default(),
+        Vec::new(),
+        None,
+        None,
+        false,
+        false,
+        false,
+        tinyagents_harness::config::ToolDispatcher::default(),
+        Arc::new(HashSet::new()),
+        None,
+        None,
+        false,
+        None,
+        None,
+    );
+    assembled
+        .harness
+        .invoke_default(&(), vec![tinyagents_harness::message::Message::user("hi")])
+        .await
+        .map(|run| run.text().unwrap_or_default())
+        .map_err(|err| err.to_string())
+}
+
+/// #6042: a ~57K-token prefill on a local model can take longer than the hosted
+/// 900s per-call ceiling before its first byte. A local provider must survive
+/// it; a hosted provider with the identical silence must still be cut off.
+#[tokio::test(start_paused = true)]
+async fn local_provider_survives_a_slow_first_byte_that_a_hosted_one_does_not() {
+    let delay_secs = DEFAULT_MODEL_CALL_TIMEOUT_SECS + 100;
+
+    let hosted = run_slow_first_byte_turn("openai", delay_secs).await;
+    let err = hosted.expect_err("hosted provider must hit the per-call ceiling");
+    assert!(
+        crate::web_chat::web_errors::is_turn_timeout_error(&err),
+        "unexpected error: {err}"
+    );
+
+    let local = run_slow_first_byte_turn("ollama", delay_secs).await;
+    assert_eq!(local.expect("local provider must wait out the prefill"), "done");
+}
+
+/// The local ceiling is still a ceiling: a call that outlasts it times out.
+#[tokio::test(start_paused = true)]
+async fn local_provider_is_still_bounded_by_the_local_ceiling() {
+    let err = run_slow_first_byte_turn("ollama", LOCAL_MODEL_CALL_TIMEOUT_SECS + 100)
+        .await
+        .expect_err("a call past the local ceiling must time out");
+    assert!(
+        crate::web_chat::web_errors::is_turn_timeout_error(&err),
+        "unexpected error: {err}"
+    );
+}
