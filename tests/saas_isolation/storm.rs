@@ -86,7 +86,12 @@ fn an_eviction_storm_keeps_live_turns_controllable() {
                         json!({ "client_id": "c-live", "thread_id": "live", "request_id": request }));
                     assert!(!body.to_string().contains("\"cancelled\":true"), "{user} cancelled alice: {body}");
                 }
-                503 => refused += 1,
+                503 => {
+                    refused += 1;
+                    if refused == 1 {
+                        eprintln!("[isolation] first busy refusal ({user}, round {round}): {body}");
+                    }
+                }
                 other => panic!("{user} during the storm: HTTP {other}: {body}"),
             }
             let status = queue(&node, alice, "live");
@@ -128,32 +133,4 @@ fn an_eviction_storm_keeps_live_turns_controllable() {
         assert!(world::foreign_in(&text, i + 1).is_empty(), "{text}");
     }
     eprintln!("[isolation] storm took {:.1}s", started.elapsed().as_secs_f64());
-}
-
-#[test]
-fn zz_experiment_pin_after_turn() {
-    let d = deployment(true);
-    let llm = mock_llm();
-    let node = start_node_logging(&d, "1", None, "max_profiles_open = 1\nidle_evict_secs = 0\n",
-        Some(llm.port), "info,openhuman_core::profiles=debug,openhuman_core::web_chat=debug");
-    for (user, name) in USERS.iter().enumerate() {
-        provision(&client(), &node.base, name);
-        operator(&node, "openhuman.profiles_set_credential",
-            json!({ "profile_id": name, "kind": "session", "token": credential(user) }));
-    }
-    let t0 = Instant::now();
-    let (s, _, _) = call(&node, "bob", "openhuman.threads_upsert", json!({"id":"x","title":"x","created_at":"2026-10-10T00:00:00Z"}));
-    eprintln!("bob upsert {s}");
-    let (s, _, _) = call(&node, "bob", "openhuman.channel_web_chat", json!({"client_id":"c1","thread_id":"x","message":"hi"}));
-    eprintln!("bob chat {s}");
-    wait_until("bob turn", &node, Duration::from_secs(30), || !active(&node, "bob", "x"));
-    eprintln!("bob turn done at {:?}", t0.elapsed());
-    let (s, _, b) = call(&node, "bob", "openhuman.channel_web_cancel", json!({"client_id":"c-live","thread_id":"live","request_id":"r-x"}));
-    eprintln!("bob cancel {s} {b}");
-    for _ in 0..40 {
-        let (s, _, _) = call(&node, "carol", "core.ping", json!({}));
-        if s == 200 { eprintln!("carol admitted at {:?}", t0.elapsed()); return; }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    eprintln!("carol never admitted");
 }
