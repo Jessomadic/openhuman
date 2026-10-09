@@ -148,6 +148,8 @@ fn zz_experiment_pin_after_turn() {
     eprintln!("bob chat {s}");
     wait_until("bob turn", &node, Duration::from_secs(30), || !active(&node, "bob", "x"));
     eprintln!("bob turn done at {:?}", t0.elapsed());
+    let (s, _, b) = call(&node, "bob", "openhuman.channel_web_cancel", json!({"client_id":"c-live","thread_id":"live","request_id":"r-x"}));
+    eprintln!("bob cancel {s} {b}");
     for _ in 0..40 {
         let (s, _, _) = call(&node, "carol", "core.ping", json!({}));
         if s == 200 { eprintln!("carol admitted at {:?}", t0.elapsed()); return; }
