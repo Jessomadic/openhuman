@@ -2,8 +2,10 @@
 //! shared tools end up registered on the assembled harness.
 
 use super::*;
+use crate::agent::tinyagents::turn_policy::{
+    DEFAULT_MODEL_CALL_TIMEOUT_SECS, LOCAL_MODEL_CALL_TIMEOUT_SECS,
+};
 use crate::agent::tinyagents::TurnModelSource;
-use crate::agent::tinyagents::turn_policy::{DEFAULT_MODEL_CALL_TIMEOUT_SECS, LOCAL_MODEL_CALL_TIMEOUT_SECS};
 use async_trait::async_trait;
 use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse};
 use tinytools::{Tool, ToolResult};
@@ -233,13 +235,13 @@ async fn local_provider_survives_a_slow_first_byte_that_a_hosted_one_does_not() 
 
     let hosted = run_slow_first_byte_turn("openai", delay_secs).await;
     let err = hosted.expect_err("hosted provider must hit the per-call ceiling");
-    assert!(
-        err.contains("timed out"),
-        "unexpected error: {err}"
-    );
+    assert!(err.contains("timed out"), "unexpected error: {err}");
 
     let local = run_slow_first_byte_turn("ollama", delay_secs).await;
-    assert_eq!(local.expect("local provider must wait out the prefill"), "done");
+    assert_eq!(
+        local.expect("local provider must wait out the prefill"),
+        "done"
+    );
 }
 
 /// The local ceiling is still a ceiling: a call that outlasts it times out.
@@ -248,8 +250,5 @@ async fn local_provider_is_still_bounded_by_the_local_ceiling() {
     let err = run_slow_first_byte_turn("ollama", LOCAL_MODEL_CALL_TIMEOUT_SECS + 100)
         .await
         .expect_err("a call past the local ceiling must time out");
-    assert!(
-        err.contains("timed out"),
-        "unexpected error: {err}"
-    );
+    assert!(err.contains("timed out"), "unexpected error: {err}");
 }

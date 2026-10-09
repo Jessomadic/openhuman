@@ -114,8 +114,7 @@ fn parse_turn_ms_with_default(env_value: Option<&str>, default_secs: u64) -> Opt
 /// ceiling is disabled. The backstop must sit above the harness ceiling or it
 /// pre-empts it (#6042: it was 900s, under even the hosted 3600s ceiling).
 pub(crate) fn local_web_turn_backstop_secs() -> Option<u64> {
-    agent_turn_wall_clock_ms_for(true)
-        .map(|ms| ms / 1_000 + LOCAL_WEB_TURN_BACKSTOP_GRACE_SECS)
+    agent_turn_wall_clock_ms_for(true).map(|ms| ms / 1_000 + LOCAL_WEB_TURN_BACKSTOP_GRACE_SECS)
 }
 
 /// Pure core of [`agent_turn_wall_clock_ms`]: map an optional
