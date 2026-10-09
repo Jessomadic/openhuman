@@ -121,7 +121,34 @@ fn legacy_sources_and_ledger_are_imported_once_through_the_public_api() {
 }
 
 #[test]
-fn the_classic_opt_out_still_works_after_an_import() {
+fn switching_between_classic_and_default_keeps_working() {
+    let (_dir, classic, default) = workspace();
+    let add = |config: &Config, interval: u64| {
+        live::add_source(
+            config,
+            ProviderSlug::Github,
+            None,
+            None,
+            filter(),
+            interval,
+            SourceTarget::AgentTodoProactive,
+            10,
+        )
+        .unwrap()
+    };
+    add(&classic, 600);
+    assert_eq!(live::list_sources(&default).unwrap().len(), 1);
+    // The tables were retired; a classic call starts a clean legacy schema
+    // (it does not trust a stale version stamp) ...
+    assert!(live::list_sources(&classic).unwrap().is_empty());
+    add(&classic, 900);
+    // ... and the next default call imports what it holds, on top of what the
+    // document tables already had.
+    assert_eq!(live::list_sources(&default).unwrap().len(), 2);
+}
+
+#[test]
+fn a_deleted_database_is_reopened_not_served_from_a_stale_handle() {
     let (_dir, classic, default) = workspace();
     live::add_source(
         &classic,
@@ -135,21 +162,15 @@ fn the_classic_opt_out_still_works_after_an_import() {
     )
     .unwrap();
     assert_eq!(live::list_sources(&default).unwrap().len(), 1);
-    // The retired tables are gone from the legacy name; the legacy store
-    // starts again from a clean schema instead of trusting a stale version.
-    forget(&live::db_path(&default));
-    assert!(live::list_sources(&classic).unwrap().is_empty());
-    live::add_source(
-        &classic,
-        ProviderSlug::Github,
-        None,
-        None,
-        filter(),
-        600,
-        SourceTarget::AgentTodoProactive,
-        10,
-    )
-    .unwrap();
+    // A data reset removes the workspace while this process keeps running.
+    let db = live::db_path(&default);
+    for suffix in ["", "-wal", "-shm"] {
+        let mut file = db.clone().into_os_string();
+        file.push(suffix);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(file));
+    }
+    assert!(live::list_sources(&default).unwrap().is_empty());
+    assert!(db.exists(), "the store was created again");
 }
 
 #[test]
@@ -176,9 +197,9 @@ fn an_undecodable_source_row_keeps_the_legacy_table_in_service() {
             [],
         )
         .unwrap();
-    // The import fails, so nothing is retired and the store serves the
-    // legacy table (which cannot decode that row either).
-    assert!(live::list_sources(&default).is_err());
+    // The import fails, so nothing is retired and the call reports it.
+    let error = live::list_sources(&default).unwrap_err();
+    assert!(format!("{error:#}").contains("importing the legacy tables failed"));
     let tables = table_names(&db);
     assert!(tables.contains(&"task_sources".to_string()));
     assert!(!tables.contains(&"_legacy_task_sources".to_string()));

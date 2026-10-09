@@ -103,7 +103,7 @@ fn classic_and_the_empty_file_do_not_import() {
 }
 
 #[test]
-fn an_import_that_cannot_read_is_retried_not_remembered() {
+fn an_import_that_cannot_read_is_an_error_and_is_retried() {
     let dir = TempDir::new().unwrap();
     let path = legacy_file(&dir);
     let fails = || -> Result<Vec<ImportDoc>> { Err(anyhow!("boom")) };
@@ -112,8 +112,10 @@ fn an_import_that_cannot_read_is_retried_not_remembered() {
         tables: TABLES,
         read: &fails,
     };
-    let opened = open(&config(None), &path, collections, &failing).unwrap();
-    assert!(opened.is_none(), "the legacy tables keep serving");
+    let error = open(&config(None), &path, collections, &failing)
+        .err()
+        .expect("a failed import is reported, not hidden behind the legacy tables");
+    assert!(format!("{error:#}").contains("boom"), "{error:#}");
     assert!(
         table_names(&path).contains(&"old_things".to_string()),
         "the old table is untouched"

@@ -69,11 +69,14 @@ fn read_rows(conn: &Connection) -> Result<Vec<ImportDoc>> {
                 if let Some(payload) = row.get::<_, Option<String>>(4)? {
                     doc.insert("payload".into(), json!(payload));
                 }
-                doc.insert(
-                    "ingested_ms".into(),
-                    json!(DateTime::parse_from_rfc3339(&ingested_at)
-                        .map_or(0, |at| at.timestamp_millis())),
-                );
+                let ingested = DateTime::parse_from_rfc3339(&ingested_at).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+                doc.insert("ingested_ms".into(), json!(ingested.timestamp_millis()));
                 doc.insert("ingested_at".into(), json!(ingested_at));
                 Ok(ImportDoc {
                     collection: INGESTED,

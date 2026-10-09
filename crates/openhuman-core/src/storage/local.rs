@@ -102,7 +102,27 @@ impl Opened {
 #[cfg(feature = "storage-sqlite")]
 struct OpenedDb {
     backend: Arc<dyn StorageBackend>,
+    /// The file the backend was opened on, so a deleted or replaced file (a
+    /// data reset in the same process) is noticed and reopened.
+    identity: Option<FileId>,
     imported: bool,
+}
+
+/// What names one file on disk, apart from its path.
+#[cfg(feature = "storage-sqlite")]
+type FileId = (u64, u64);
+
+#[cfg(all(feature = "storage-sqlite", unix))]
+fn file_id(path: &Path) -> Option<FileId> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.dev(), meta.ino()))
+}
+
+#[cfg(all(feature = "storage-sqlite", not(unix)))]
+fn file_id(path: &Path) -> Option<FileId> {
+    // No inode to compare: existence is the best available signal.
+    path.exists().then_some((0, 0))
 }
 
 /// Databases opened by this process, by path.
@@ -132,7 +152,14 @@ pub fn open(
             .with_context(|| format!("[{}] resolve the storage scope", plan.domain))?;
         return Ok(Some(Opened { backend, scope }));
     }
-    if mode(config) != StorageMode::Default {
+    let selected = mode(config);
+    if selected != StorageMode::Default {
+        // A legacy call may recreate the old tables; the next default call
+        // must open and import afresh instead of trusting an earlier import.
+        #[cfg(feature = "storage-sqlite")]
+        if selected == StorageMode::Classic {
+            forget(db_path);
+        }
         return Ok(None);
     }
     open_default(db_path, collections, plan)
@@ -176,6 +203,15 @@ fn open_default(
 ) -> Result<Option<Opened>> {
     // Held across the import so two threads never both import one file.
     let mut opened = OPENED.lock().unwrap_or_else(PoisonError::into_inner);
+    // A file deleted or replaced since it was opened (a data reset in this
+    // process) is dropped, so its handle is released and the file is created
+    // and imported afresh.
+    if opened
+        .get(db_path)
+        .is_some_and(|entry| entry.identity != file_id(db_path))
+    {
+        opened.remove(db_path);
+    }
     if !opened.contains_key(db_path) {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).with_context(|| {
@@ -186,15 +222,15 @@ fn open_default(
                 )
             })?;
         }
-        let url =
-            tinystoragedrivers::StorageConfig::parse(&format!("sqlite:{}", db_path.display()))
-                .map_err(|error| anyhow!("[{}] storage url: {error}", plan.domain))?;
-        let backend = super::block_on(async move { tinystoragedrivers::open(&url).await })
+        // Opened by path, not through a URL string, so a path that is not
+        // UTF-8 keeps naming the file the legacy tables are in.
+        let storage = tinystoragedrivers::sqlite::SqliteStorage::open(db_path)
             .map_err(|error| anyhow!("[{}] open {}: {error}", plan.domain, db_path.display()))?;
         opened.insert(
             db_path.to_path_buf(),
             OpenedDb {
-                backend,
+                backend: Arc::new(storage),
+                identity: file_id(db_path),
                 imported: false,
             },
         );
@@ -207,30 +243,22 @@ fn open_default(
     if entry.imported {
         return Ok(Some(handle));
     }
-    match import(db_path, &handle, collections, plan) {
-        Ok(count) => {
-            tracing::debug!(
-                domain = plan.domain,
-                path = %db_path.display(),
-                imported = count,
-                "[storage::local] opened the default store"
-            );
-            entry.imported = true;
-            Ok(Some(handle))
-        }
-        // The old tables are untouched (they are retired last), so the store
-        // keeps serving them rather than showing an empty document store, and
-        // the next call tries the import again.
-        Err(error) => {
-            tracing::error!(
-                domain = plan.domain,
-                path = %db_path.display(),
-                "[storage::local] importing the legacy tables failed; \
-                 serving the legacy tables, will retry: {error:#}"
-            );
-            Ok(None)
-        }
-    }
+    let count = import(db_path, &handle, collections, plan).with_context(|| {
+        format!(
+            "[{}] importing the legacy tables failed; they are untouched and the import is \
+             retried on the next call (set storage url `{}` to keep using them as they are)",
+            plan.domain,
+            super::config::CLASSIC
+        )
+    })?;
+    tracing::debug!(
+        domain = plan.domain,
+        path = %db_path.display(),
+        imported = count,
+        "[storage::local] opened the default store"
+    );
+    entry.imported = true;
+    Ok(Some(handle))
 }
 
 /// Copies `plan`'s old rows into `handle` and retires the old tables.
@@ -287,8 +315,8 @@ fn import(
 }
 
 /// Forgets that `db_path` was opened, so the next call opens (and imports)
-/// it afresh: how a test models a restart.
-#[cfg(all(test, feature = "storage-sqlite"))]
+/// it afresh; also how a test models a restart.
+#[cfg(feature = "storage-sqlite")]
 pub(crate) fn forget(db_path: &Path) {
     OPENED
         .lock()
@@ -339,8 +367,13 @@ fn retire_tables(db_path: &Path, tables: &[&str]) -> Result<()> {
     let mut conn = Connection::open(db_path)
         .with_context(|| format!("open {} to retire legacy tables", db_path.display()))?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    let tx = conn.transaction()?;
+    // Immediate, and each table is checked inside it: another process on the
+    // same workspace may have retired it already.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     for table in tables {
+        if !table_exists(&tx, table)? {
+            continue;
+        }
         let mut target = format!("_legacy_{table}");
         let mut n = 1;
         while table_exists(&tx, &target)? {
