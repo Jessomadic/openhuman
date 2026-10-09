@@ -19,7 +19,9 @@
 //! misconfigured deployment stops at boot instead of at its first write.
 
 pub mod agents;
+pub mod config;
 pub mod documents;
+pub mod local;
 pub mod secrets;
 
 use std::future::Future;
@@ -68,9 +70,10 @@ impl Slot {
 
 static BACKEND: LazyLock<Slot> = LazyLock::new(Slot::default);
 
-/// The storage URL in effect: [`STORAGE_URL_VAR`], else `config`'s
-/// `[storage] url`. Blank values count as unset. `None` keeps the classic
-/// on-disk layout.
+/// The storage URL a host opens at startup: [`STORAGE_URL_VAR`], else
+/// `config`'s `[storage] url`. Blank values count as unset. `None` — nothing
+/// configured, or the [`config::CLASSIC`] opt-out — opens nothing; see
+/// [`config::mode`] for the default's small-store behavior.
 pub fn configured_url(config: &Config) -> Option<String> {
     url_from(std::env::var(STORAGE_URL_VAR).ok(), config)
 }
@@ -78,10 +81,10 @@ pub fn configured_url(config: &Config) -> Option<String> {
 /// [`configured_url`] with the environment read made explicit, so the rule
 /// is testable without mutating process-wide state.
 pub fn url_from(env: Option<String>, config: &Config) -> Option<String> {
-    env.into_iter()
-        .chain(config.storage.url.clone())
-        .map(|url| url.trim().to_string())
-        .find(|url| !url.is_empty())
+    match config::mode_from(env, config) {
+        config::StorageMode::Url(url) => Some(url),
+        config::StorageMode::Default | config::StorageMode::Classic => None,
+    }
 }
 
 /// Parses and opens the backend `url` names.
