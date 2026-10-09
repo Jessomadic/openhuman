@@ -162,7 +162,7 @@ impl ChatModel<()> for SlowFirstByteModel {
         let (cell, provider) = if self.provider == "ollama" {
             (&LOCAL, "ollama")
         } else {
-            (&HOSTED, "openai")
+            (&HOSTED, "openrouter")
         };
         Some(cell.get_or_init(|| {
             let mut profile = ModelProfile::default();
@@ -233,7 +233,7 @@ async fn run_slow_first_byte_turn(
 async fn local_provider_survives_a_slow_first_byte_that_a_hosted_one_does_not() {
     let delay_secs = DEFAULT_MODEL_CALL_TIMEOUT_SECS + 100;
 
-    let hosted = run_slow_first_byte_turn("openai", delay_secs).await;
+    let hosted = run_slow_first_byte_turn("openrouter", delay_secs).await;
     let err = hosted.expect_err("hosted provider must hit the per-call ceiling");
     assert!(err.contains("timed out"), "unexpected error: {err}");
 
