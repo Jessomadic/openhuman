@@ -191,5 +191,8 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
     );
     let (violations, _) = scan::audit_backend(&llm.recorded());
     assert!(violations.is_empty(), "{}", violations.join("\n"));
+    let kc = std::fs::read_to_string(d.tmp.path().join("operator-1/workspace/dev-keychain.json")).unwrap_or_default();
+    let v: Value = serde_json::from_str(&kc).unwrap_or(Value::Null);
+    eprintln!("TEMPKEYS {:?}", v.as_object().map(|m| m.keys().cloned().collect::<Vec<_>>()));
     eprintln!("[isolation] probes took {:.1}s", started.elapsed().as_secs_f64());
 }
