@@ -167,7 +167,11 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
         assert_eq!(outcome.status, "error", "probe {tag} was not refused: {outcome:?}");
         if offered.iter().any(|t| t == tool) || ["file_read", "file_write", "apply_patch"].contains(tool) {
             // A tool the user has: refused by the profile's path policy.
-            assert_eq!(outcome.class, "BlockedByPolicy", "probe {tag}: {outcome:?}");
+            // (`apply_patch` reports the same path check per edit.)
+            assert!(
+                outcome.class == "BlockedByPolicy" || outcome.output.contains("path not allowed"),
+                "probe {tag} was not refused by the path policy: {outcome:?}"
+            );
         } else {
             // A tool the user does not have: it does not exist for them.
             assert!(outcome.output.contains("unknown tool"), "probe {tag}: {outcome:?}");
