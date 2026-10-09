@@ -179,7 +179,11 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
             .lines()
             .filter(|l| l.contains("approval") || l.contains("file_read") || l.contains("policy") || l.contains("gate"))
             .collect();
-        eprintln!("[isolation] core log (approval/policy):\n{}", lines[lines.len().saturating_sub(60)..].join("\n"));
+        eprintln!("[isolation] core log (approval/policy):\n{}", lines[lines.len().saturating_sub(10)..].join("\n"));
+        for m in ["openhuman.threads_messages_list", "openhuman.threads_turn_state_get", "openhuman.threads_transcript_get"] {
+            let (_, _, body) = call(&node, USERS[0], m, json!({ "thread_id": "probe-host-read" }));
+            eprintln!("[isolation] {m}: {}", body.to_string().chars().take(3000).collect::<String>());
+        }
     }
     assert!(!pwned_host.exists(), "a user wrote a host file");
     assert!(!d.root.join("users/bob/sandbox/pwned.txt").exists(), "alice wrote into bob's sandbox");
