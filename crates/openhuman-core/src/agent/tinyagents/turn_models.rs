@@ -531,7 +531,11 @@ impl TurnModelSource {
             let provider_string = cn.primary_override.clone().unwrap_or_else(|| {
                 crate::inference::provider::provider_for_role(&cn.role, &cn.config)
             });
-            let is_local = tinyinference_local::profile::is_local_provider_string(&provider_string);
+            let is_local = crate::agent::tinyagents::turn_policy::provider_is_self_hosted(
+                &provider_string,
+                crate::agent::tinyagents::turn_policy::local_openai_endpoint(&cn.config)
+                    .as_deref(),
+            );
             let provider_id = if provider_string == "openhuman"
                 || provider_string.is_empty()
                 || provider_string == "cloud"

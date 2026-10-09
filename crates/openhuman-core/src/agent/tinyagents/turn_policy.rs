@@ -70,11 +70,54 @@ pub(super) const LOCAL_AGENT_TURN_TIMEOUT_SECS: u64 = 14_400;
 /// first.
 pub(crate) const LOCAL_WEB_TURN_BACKSTOP_GRACE_SECS: u64 = 300;
 
-/// Whether `config` routes the chat workload to a local / self-hosted provider
-/// (`ollama:`, `lmstudio:`, `mlx:`, ...).
+/// Whether `provider` (a provider string such as `ollama:llama3`) with the
+/// resolved `endpoint` is a local / self-hosted runtime, which gets the longer
+/// ceilings (#6042).
+///
+/// Do not use `tinyinference_local::profile::is_local_provider_string` for this
+/// on its own: it maps the bare name `openai` onto the generic local
+/// OpenAI-compatible kind, so hosted OpenAI would be classed as local and lose
+/// its tight hang detection. Locality comes from the runtime kind and the
+/// endpoint instead:
+/// - Ollama / LM Studio / MLX / oMLX are self-hosted by definition.
+/// - The generic OpenAI-compatible kinds (`local-openai`, `llamacpp`, `vllm`,
+///   bare `openai`...) can point anywhere, so they are local only when the
+///   endpoint host is loopback or on a private network.
+/// - `openai:<model>` and every other cloud provider are never local.
+pub(crate) fn provider_is_self_hosted(provider: &str, endpoint: Option<&str>) -> bool {
+    use tinyinference_local::profile::{kind_from_provider_string, LocalProviderKind};
+    let p = provider.trim().to_ascii_lowercase();
+    let Some(kind) = kind_from_provider_string(&p) else {
+        return false;
+    };
+    match kind {
+        LocalProviderKind::LocalOpenai => endpoint
+            .and_then(|url| url::Url::parse(url).ok())
+            .is_some_and(|parsed| crate::util::url::host_is_local(&parsed)),
+        _ => true,
+    }
+}
+
+/// Whether `config` routes the chat workload to a local / self-hosted provider.
 pub(crate) fn chat_provider_is_local(config: &crate::config::Config) -> bool {
     let provider = crate::inference::provider::provider_for_role("chat", config);
-    tinyinference_local::profile::is_local_provider_string(&provider)
+    provider_is_self_hosted(&provider, local_openai_endpoint(config).as_deref())
+}
+
+/// The endpoint the generic local OpenAI-compatible runtime resolves to:
+/// `LOCAL_OPENAI_URL`, else `local_ai.base_url`, else the profile default.
+pub(crate) fn local_openai_endpoint(config: &crate::config::Config) -> Option<String> {
+    std::env::var("LOCAL_OPENAI_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| config.local_ai.base_url.clone())
+        .or_else(|| {
+            Some(
+                tinyinference_local::profile::LOCAL_OPENAI_PROFILE
+                    .default_base_url
+                    .to_string(),
+            )
+        })
 }
 
 /// Resolve the per-turn wall-clock ceiling in milliseconds for the harness
