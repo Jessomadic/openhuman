@@ -50,12 +50,32 @@ impl ApprovalGate {
         // `AgentTurnOrigin` around `run_turn`. Unlabelled callers map to
         // `Unknown`, which is denied — the gate refuses to execute an
         // external_effect tool from an unlabelled call site.
+        let origin = turn_origin::current().unwrap_or(AgentTurnOrigin::Unknown);
+        // Approval of job creation grants the scheduler permission to run the
+        // saved prompt and deliver its answer, not permission for arbitrary
+        // future external effects. Enforce this before global auto-approval,
+        // per-tool allowlists, and per-agent approval bypasses.
+        if matches!(
+            &origin,
+            AgentTurnOrigin::TrustedAutomation {
+                source: TrustedAutomationSource::Cron,
+                ..
+            }
+        ) {
+            return (
+                GateOutcome::Deny {
+                    reason: format!(
+                        "{POLICY_DENIED_MARKER} Scheduled agent turns cannot use '{tool_name}' for an external effect."
+                    ),
+                },
+                None,
+            );
+        }
         // SaaS has no per-user approval surface: never park, allow only what
         // the deployment's sandboxed tool groups open.
         if let Some(outcome) = saas_outcome_with(crate::core::runtime::is_saas(), tool_name) {
             return (outcome, None);
         }
-        let origin = turn_origin::current().unwrap_or(AgentTurnOrigin::Unknown);
         if forced
             && !matches!(
                 &origin,
@@ -303,14 +323,16 @@ impl ApprovalGate {
             }
             AgentTurnOrigin::TrustedAutomation {
                 source: TrustedAutomationSource::Cron,
-                job_id,
+                ..
             } => {
-                tracing::debug!(
-                    tool = tool_name,
-                    job_id = %job_id,
-                    "[approval::gate] trusted cron automation — allowing without prompt"
+                return (
+                    GateOutcome::Deny {
+                        reason: format!(
+                            "{POLICY_DENIED_MARKER} Scheduled agent turns cannot use '{tool_name}' for an external effect."
+                        ),
+                    },
+                    None,
                 );
-                return (GateOutcome::Allow, None);
             }
             AgentTurnOrigin::TrustedAutomation {
                 source: TrustedAutomationSource::Background,
