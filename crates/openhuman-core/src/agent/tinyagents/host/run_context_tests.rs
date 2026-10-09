@@ -381,28 +381,3 @@ fn attach_parent_keeps_the_snapshot_sink_when_the_run_has_none() {
          CLI/cron receiver that snapshot was carrying",
     );
 }
-
-/// A context kept after its turn (the session's last commit receipt) must
-/// not keep the turn's progress channel open: the progress bridge runs until
-/// every sender is gone and holds the tenant's context meanwhile, so a kept
-/// sender pinned a SaaS profile open forever.
-#[test]
-fn detach_progress_releases_every_sender_of_the_turns_channel() {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentProgress>(4);
-    let mut context = OpenHumanRunContext::new();
-    context.progress = Some(tx);
-    context.attach_parent(stale_parent_snapshot());
-    assert!(context.parent.as_ref().unwrap().on_progress.is_some());
-
-    context.detach_progress();
-
-    assert!(context.progress.is_none());
-    assert!(context.parent.as_ref().unwrap().on_progress.is_none());
-    assert!(
-        matches!(
-            rx.try_recv(),
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
-        ),
-        "no sender of the turn's channel survives in the kept context"
-    );
-}

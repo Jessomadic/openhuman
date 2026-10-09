@@ -447,22 +447,6 @@ impl OpenHumanRunContext {
         self.parent.insert(parent)
     }
 
-    /// Drops this context's progress sinks: its own and its parent
-    /// snapshot's.
-    ///
-    /// For a context kept after its turn (the session's last commit receipt).
-    /// A web-chat turn's progress bridge runs until every sender of its
-    /// channel is gone, and the bridge holds the tenant's `CoreContext` while
-    /// it runs. A retained sender therefore kept the bridge alive until the
-    /// thread's next turn, and with it the context: a SaaS profile read as in
-    /// use and could never be evicted or idle-closed.
-    pub(crate) fn detach_progress(&mut self) {
-        self.progress = None;
-        if let Some(parent) = self.parent.as_mut() {
-            parent.on_progress = None;
-        }
-    }
-
     /// Sets the same cancellation token on this context and its TinyAgents run.
     pub fn with_cancellation(
         mut self,
