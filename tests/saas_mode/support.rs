@@ -362,6 +362,25 @@ pub fn start_node(
     extra: &str,
     backend: Option<u16>,
 ) -> Node {
+    start_node_logging(
+        d,
+        name,
+        storage_url,
+        extra,
+        backend,
+        "info,openhuman::storage::lease=debug",
+    )
+}
+
+/// [`start_node`] with the child's `RUST_LOG`.
+pub fn start_node_logging(
+    d: &Deployment,
+    name: &str,
+    storage_url: Option<&str>,
+    extra: &str,
+    backend: Option<u16>,
+    rust_log: &str,
+) -> Node {
     let port = free_port();
     let base = format!("http://127.0.0.1:{port}");
     let mut config = format!(
@@ -389,7 +408,7 @@ pub fn start_node(
         .args(["--port", &port.to_string()])
         .env("HOME", d.tmp.path())
         .env("USERPROFILE", d.tmp.path())
-        .env("RUST_LOG", "info,openhuman::storage::lease=debug")
+        .env("RUST_LOG", rust_log)
         .stdout(std::fs::File::create(&log).unwrap())
         .stderr(Stdio::null());
     for var in SCRUBBED_ENV {
