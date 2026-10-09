@@ -61,9 +61,17 @@ pub(crate) struct TurnModels {
     /// Whether the source provider is vision-capable — the harness uses this to
     /// gate multimodal placeholder rehydration. Captured at build time.
     supports_vision: bool,
+    /// Whether the source provider is local / self-hosted (Ollama, LM Studio,
+    /// ...). Selects the longer wall-clock ceilings (#6042).
+    is_local: bool,
 }
 
 impl TurnModels {
+    /// Whether the primary provider is local / self-hosted.
+    pub(crate) fn is_local(&self) -> bool {
+        self.is_local
+    }
+
     /// Adds a tier route to a test bundle (the injected-model builder has none).
     #[cfg(test)]
     pub(crate) fn with_test_route(mut self, name: &str, model: TurnChatModel) -> Self {
