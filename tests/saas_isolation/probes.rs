@@ -73,7 +73,7 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
     );
     let host_secret = d.tmp.path().join("host-secret.txt");
     std::fs::write(&host_secret, "HOST-SECRET-6c1f").unwrap();
-    let operator_secret = d.root.join("operator/operator-secret.txt");
+    let operator_secret = d.tmp.path().join("operator-1/operator-secret.txt");
     std::fs::write(&operator_secret, "OPERATOR-SECRET-9a2e").unwrap();
     let alice_config = d.root.join("users/alice/config.toml");
     let config_before = std::fs::read(&alice_config).ok();
