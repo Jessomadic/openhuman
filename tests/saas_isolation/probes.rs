@@ -35,6 +35,23 @@ fn tool_result(llm: &MockLlm, tag: &str, timeout: Duration) -> Option<String> {
     None
 }
 
+/// What the backend saw for the probe tagged `tag`: each request's roles.
+fn probe_trail(llm: &MockLlm, tag: &str) -> String {
+    llm.recorded()
+        .iter()
+        .filter(|r| r.is_inference() && r.body.contains(tag))
+        .map(|r| {
+            let body: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
+            let roles: Vec<String> = body["messages"]
+                .as_array()
+                .map(|m| m.iter().map(|m| m["role"].as_str().unwrap_or("?").to_string()).collect())
+                .unwrap_or_default();
+            roles.join(",")
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
 /// Run one probe as alice on its own thread and return the tool output.
 fn probe(node: &Node, llm: &MockLlm, tag: &str, tool: &str, args: Value) -> Option<String> {
     let message = format!("probe-{tag} {PROBE} {tool} {args}");
@@ -142,7 +159,11 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
     });
     let mut report = Vec::new();
     for (tag, output) in &results {
-        let output = output.as_deref().unwrap_or("<the model never got a tool result>");
+        let missing = format!(
+            "<the model never got a tool result; requests: {}>",
+            probe_trail(&llm, &format!("probe-{tag} "))
+        );
+        let output = output.as_deref().unwrap_or(&missing);
         report.push(format!("  {tag}: {}", output.chars().take(160).collect::<String>()));
         for secret in ["HOST-SECRET", "OPERATOR-SECRET", "CANARY-bob-"] {
             assert!(!output.contains(secret), "probe {tag} read {secret}: {output}");
