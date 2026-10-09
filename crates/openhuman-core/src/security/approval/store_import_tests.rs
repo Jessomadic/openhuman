@@ -141,3 +141,55 @@ fn the_classic_opt_out_keeps_the_legacy_tables() {
     assert_eq!(live::list_pending(&classic).unwrap().len(), 1);
     assert!(table_names(&live::db_path(&classic)).contains(&"pending_approvals".to_string()));
 }
+
+#[test]
+fn an_old_schema_missing_a_table_is_imported_and_fully_retired() {
+    let (_dir, _classic, default) = workspace();
+    let db = live::db_path(&default);
+    std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+    {
+        // The first schema: no audit/agent columns, and no flow_tool_trust.
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE pending_approvals (
+                request_id TEXT PRIMARY KEY, tool_name TEXT NOT NULL,
+                action_summary TEXT NOT NULL, args_redacted TEXT NOT NULL,
+                session_id TEXT NOT NULL, created_at TEXT NOT NULL,
+                expires_at TEXT, decided_at TEXT, decision TEXT);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO pending_approvals
+                (request_id, tool_name, action_summary, args_redacted, session_id, created_at)
+             VALUES ('old', 'composio', 'old row', '{}', 'a-credential-shaped-value', ?1)",
+            [Utc::now().to_rfc3339()],
+        )
+        .unwrap();
+    }
+    let pending = live::list_pending(&default).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].request_id, "old");
+
+    // Both tables are retired, including the one the reader had to create, so
+    // a restart finds nothing to import and nothing alternates.
+    let tables = table_names(&db);
+    assert!(tables.contains(&"_legacy_pending_approvals".to_string()));
+    assert!(tables.contains(&"_legacy_flow_tool_trust".to_string()));
+    forget(&db);
+    assert_eq!(live::list_pending(&default).unwrap().len(), 1);
+    assert!(
+        !table_names(&db).iter().any(|t| t.ends_with("_2")),
+        "{:?}",
+        table_names(&db)
+    );
+    // The credential-shaped session id was scrubbed before it was read.
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let session: String = conn
+        .query_row(
+            "SELECT session_id FROM _legacy_pending_approvals",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(session, live::PRE_MIGRATION_SESSION_ID);
+}

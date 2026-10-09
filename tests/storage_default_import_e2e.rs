@@ -57,6 +57,17 @@ fn free_port() -> u16 {
 }
 
 fn start(home: &Path, workspace: &Path, url: Option<&str>) -> (Server, String) {
+    // The port is chosen, then released for the child to bind; if another
+    // process takes it in between, the child exits and a fresh port is tried.
+    for _attempt in 0..3 {
+        if let Some(started) = try_start(home, workspace, url) {
+            return started;
+        }
+    }
+    panic!("openhuman-core never started on a free port");
+}
+
+fn try_start(home: &Path, workspace: &Path, url: Option<&str>) -> Option<(Server, String)> {
     let port = free_port();
     // A debug build of the full product set needs more than the default 8 MiB
     // main-thread stack to finish booting, so raise the limit first.
@@ -87,11 +98,11 @@ fn start(home: &Path, workspace: &Path, url: Option<&str>) -> (Server, String) {
     loop {
         if let Ok(response) = client.get(format!("{base}/health")).send() {
             if response.status().is_success() {
-                return (server, base);
+                return Some((server, base));
             }
         }
-        if let Ok(Some(status)) = server.0.try_wait() {
-            panic!("openhuman-core exited before serving: {status}");
+        if let Ok(Some(_)) = server.0.try_wait() {
+            return None;
         }
         assert!(
             Instant::now() < deadline,

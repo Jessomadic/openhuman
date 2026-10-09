@@ -119,3 +119,67 @@ fn legacy_sources_and_ledger_are_imported_once_through_the_public_api() {
     forget(&db);
     assert_eq!(live::list_sources(&default).unwrap().len(), 1);
 }
+
+#[test]
+fn the_classic_opt_out_still_works_after_an_import() {
+    let (_dir, classic, default) = workspace();
+    live::add_source(
+        &classic,
+        ProviderSlug::Github,
+        None,
+        None,
+        filter(),
+        600,
+        SourceTarget::AgentTodoProactive,
+        10,
+    )
+    .unwrap();
+    assert_eq!(live::list_sources(&default).unwrap().len(), 1);
+    // The retired tables are gone from the legacy name; the legacy store
+    // starts again from a clean schema instead of trusting a stale version.
+    forget(&live::db_path(&default));
+    assert!(live::list_sources(&classic).unwrap().is_empty());
+    live::add_source(
+        &classic,
+        ProviderSlug::Github,
+        None,
+        None,
+        filter(),
+        600,
+        SourceTarget::AgentTodoProactive,
+        10,
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_undecodable_source_row_keeps_the_legacy_table_in_service() {
+    let (_dir, classic, default) = workspace();
+    live::add_source(
+        &classic,
+        ProviderSlug::Github,
+        None,
+        None,
+        filter(),
+        600,
+        SourceTarget::AgentTodoProactive,
+        10,
+    )
+    .unwrap();
+    let db = live::db_path(&classic);
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute(
+            "INSERT INTO task_sources (id, provider, enabled, filter, interval_secs, target,
+                 max_tasks_per_fetch, created_at)
+             VALUES ('bad', 'github', 1, 'not json', 600, '{}', 10, '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+    // The import fails, so nothing is retired and the store serves the
+    // legacy table (which cannot decode that row either).
+    assert!(live::list_sources(&default).is_err());
+    let tables = table_names(&db);
+    assert!(tables.contains(&"task_sources".to_string()));
+    assert!(!tables.contains(&"_legacy_task_sources".to_string()));
+}
