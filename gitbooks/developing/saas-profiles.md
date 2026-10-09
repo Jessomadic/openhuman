@@ -167,8 +167,9 @@ can host any profile.
 
 1. **One storage backend.** Set `storage_url` (or `OPENHUMAN_STORAGE_URL`) to
    a driver whose compare-and-swap is atomic across processes: MongoDB
-   (`mongodb://…/<db>`, the `storage-mongodb` build feature) or SQLite on a
-   shared filesystem (`sqlite:<path>`, `storage-sqlite`). It holds the
+   (`mongodb://…/<db>`, the `storage-mongodb` build feature) for nodes on
+   several hosts, or SQLite (`sqlite:<path>`, `storage-sqlite`) for several
+   processes on one host. Do not put SQLite on a network filesystem. It holds the
    profile registry, the leases, the session store, and each profile's
    records (secrets, auth profiles, approvals, cron, flows) under scope
    `profile:<id>`.
@@ -236,8 +237,8 @@ mitigation.
 - `root` absolute, not world-writable, on a shared RWX volume (cluster).
 - `service.token` mode `0600`, at least 32 bytes, shared with the gateway only.
 - Gateway signs `X-OpenHuman-User` and keeps clocks in sync (±60 s).
-- `storage_url` on MongoDB or shared SQLite (cluster), with the matching
-  build feature.
+- `storage_url` on MongoDB (or SQLite for processes on one host), with the
+  matching build feature (cluster).
 - `node_id`, `advertise_url` and `operator_dir` unique per node (cluster).
 - Load balancer hashes users stickily and honours `409` redirects.
 - Provision a user (`profiles.provision`) and install their credential
