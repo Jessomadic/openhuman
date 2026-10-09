@@ -218,7 +218,7 @@ async fn run_slow_first_byte_turn(
     );
     assembled
         .harness
-        .invoke_default(&(), vec![tinyagents_harness::message::Message::user("hi")])
+        .invoke_default(&(), vec![tinyinference_llm::message::Message::user("hi")])
         .await
         .map(|run| run.text().unwrap_or_default())
         .map_err(|err| err.to_string())
