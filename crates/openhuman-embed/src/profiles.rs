@@ -62,7 +62,7 @@ use crate::error::CoreError;
 
 mod handle;
 
-pub use handle::{ChatReply, ProfileEvents, ProfileHandle};
+pub use handle::{ChatReply, ProfileEvents, ProfileHandle, RelayAccepted};
 pub use openhuman_core::channels::providers::relay::RelayInboundParams as RelayMessage;
 pub use openhuman_core::core::runtime::saas::SaasSandboxConfig;
 pub use openhuman_core::core::runtime::SaasConfig;

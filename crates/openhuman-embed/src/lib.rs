@@ -114,6 +114,7 @@ pub mod memory;
 #[cfg(feature = "modules")]
 pub mod modules;
 pub mod process;
+pub mod profiles;
 mod runtime;
 mod turn;
 
@@ -148,6 +149,11 @@ pub use cron::{
     SystemJobContext,
 };
 pub use error::CoreError;
+pub use profiles::{
+    ChatReply, OpenError, ProfileError, ProfileEvents, ProfileHandle, ProfileId, ProfileIdMode,
+    ProfileRuntime, ProfileRuntimeBuilder, ProfileSummary, Provisioned, RelayAccepted,
+    RelayMessage, SaasConfig,
+};
 pub use harness::{
     Access, Harness, HarnessBuilder, HarnessCore, HarnessError, Provider, Workspace,
 };
