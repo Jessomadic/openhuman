@@ -109,7 +109,7 @@ fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>)
 
 /// Persist a new notification to the store.
 pub fn insert(config: &Config, n: &IntegrationNotification) -> Result<()> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.insert(n, false).map(|_| ());
     }
     with_connection(config, |conn| {
@@ -150,7 +150,7 @@ pub fn insert(config: &Config, n: &IntegrationNotification) -> Result<()> {
 /// event is ignored (no duplicates). Returns `true` when a new row was written,
 /// `false` when an event with the same id already existed.
 pub fn insert_core_notification(config: &Config, event: &CoreNotificationEvent) -> Result<bool> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.insert_core_notification(&config.workspace_dir.to_string_lossy(), event);
     }
     with_connection(config, |conn| {
@@ -181,7 +181,7 @@ pub fn list_core_notifications(
     only_unread: bool,
     limit: usize,
 ) -> Result<Vec<CoreNotificationEvent>> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.list_core_notifications(
             &config.workspace_dir.to_string_lossy(),
             only_unread,
@@ -223,7 +223,7 @@ pub fn list_core_notifications(
 /// Mark a persisted core notification as read so it isn't re-surfaced on the
 /// next sync-down. Returns `true` when a row was updated.
 pub fn mark_core_notification_read(config: &Config, id: &str) -> Result<bool> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.mark_core_notification_read(&config.workspace_dir.to_string_lossy(), id);
     }
     with_connection(config, |conn| {
@@ -239,7 +239,7 @@ pub fn mark_core_notification_read(config: &Config, id: &str) -> Result<bool> {
 
 /// Count unread persisted core notifications.
 pub fn unread_core_notification_count(config: &Config) -> Result<i64> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.unread_core_notification_count(&config.workspace_dir.to_string_lossy());
     }
     with_connection(config, |conn| {
@@ -258,7 +258,7 @@ pub fn unread_core_notification_count(config: &Config) -> Result<i64> {
 ///
 /// Returns `true` when inserted, `false` when skipped as duplicate.
 pub fn insert_if_not_recent(config: &Config, n: &IntegrationNotification) -> Result<bool> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.insert(n, true);
     }
     with_connection(config, |conn| {
@@ -338,7 +338,7 @@ pub fn list(
     provider_filter: Option<&str>,
     min_score: Option<f32>,
 ) -> Result<Vec<IntegrationNotification>> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.list(limit, offset, provider_filter, min_score);
     }
     with_connection(config, |conn| {
@@ -388,7 +388,7 @@ pub fn update_triage(
     action: &str,
     reason: &str,
 ) -> Result<()> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.update_triage(id, score, action, reason).map(|found| {
             if !found {
                 tracing::warn!(id = %id, action = %action, "[notifications::store] update_triage matched no rows");
@@ -428,7 +428,7 @@ pub fn update_triage(
 
 /// Transition a notification from `unread` to `read`.
 pub fn mark_read(config: &Config, id: &str) -> Result<()> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.set_status(id, NotificationStatus::Read).map(|found| {
             if !found {
                 tracing::warn!(id = %id, "[notifications::store] mark_read matched no rows");
@@ -456,7 +456,7 @@ pub fn mark_read(config: &Config, id: &str) -> Result<()> {
 
 /// Count unread notifications.
 pub fn unread_count(config: &Config) -> Result<i64> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.unread_count();
     }
     with_connection(config, |conn| {
@@ -480,7 +480,7 @@ pub fn exists_recent(
     title: &str,
     body: &str,
 ) -> Result<bool> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.exists_recent(provider, account_id, title, body);
     }
     with_connection(config, |conn| {
@@ -511,7 +511,7 @@ pub fn exists_recent(
 ///
 /// Returns `true` when at least one row matched and was updated.
 pub fn mark_dismissed(config: &Config, id: &str) -> Result<bool> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.set_status(id, NotificationStatus::Dismissed);
     }
     with_connection(config, |conn| {
@@ -535,7 +535,7 @@ pub fn mark_dismissed(config: &Config, id: &str) -> Result<bool> {
 ///
 /// Returns `true` when at least one row matched and was updated.
 pub fn mark_acted(config: &Config, id: &str) -> Result<bool> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.set_status(id, NotificationStatus::Acted);
     }
     with_connection(config, |conn| {
@@ -557,7 +557,7 @@ pub fn mark_acted(config: &Config, id: &str) -> Result<bool> {
 
 /// Return aggregate statistics for the notification intelligence pipeline.
 pub fn stats(config: &Config) -> Result<super::types::NotificationStats> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.stats();
     }
     use std::collections::HashMap;
@@ -644,7 +644,7 @@ pub fn stats(config: &Config) -> Result<super::types::NotificationStats> {
 
 /// Upsert provider-level notification settings.
 pub fn upsert_settings(config: &Config, settings: &NotificationSettings) -> Result<()> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.upsert_settings(settings);
     }
     with_connection(config, |conn| {
@@ -669,7 +669,7 @@ pub fn upsert_settings(config: &Config, settings: &NotificationSettings) -> Resu
 
 /// Read provider-level notification settings with defaults when missing.
 pub fn get_settings(config: &Config, provider: &str) -> Result<NotificationSettings> {
-    if let Some(docs) = super::store_documents::current()? {
+    if let Some(docs) = super::store_documents::current(config)? {
         return docs.get_settings(provider);
     }
     with_connection(config, |conn| {

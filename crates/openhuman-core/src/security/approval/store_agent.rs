@@ -28,7 +28,7 @@ pub fn list_pending_for_agent(
 /// The agent that parked the still-undecided `request_id`: `Ok(None)` when no
 /// such row exists, `Ok(Some(None))` for a row the process parked itself.
 pub fn pending_agent(config: &Config, request_id: &str) -> Result<Option<Option<String>>> {
-    if let Some(docs) = super::super::store_documents::current()? {
+    if let Some(docs) = super::super::store_documents::current(config)? {
         return docs.pending_agent(request_id);
     }
     super::with_connection(config, |conn| {
