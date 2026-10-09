@@ -146,7 +146,7 @@ fn seed_keep(w: &mut World, user: usize) {
 
 /// Every kind of state the user surface writes, once per user, plus the
 /// victim's live turn.
-fn seed(w: &mut World) {
+fn seed_state(w: &mut World) {
     for user in 0..USERS.len() {
         for client in ["c1", "c2", "channel-relay", LIVE_CLIENT] {
             w.listen(user, client);
@@ -276,7 +276,7 @@ fn random_cross_profile_calls_never_leak() {
     let node = start_node(&d, "1", None, "max_profiles_open = 3\nidle_evict_secs = 2\n", Some(llm.port));
     provision_users(&node);
     let mut w = World::new(node, seed);
-    seed(&mut w);
+    seed_state(&mut w);
     let booted = started.elapsed();
     drive(&mut w, steps);
     let driven = started.elapsed();
