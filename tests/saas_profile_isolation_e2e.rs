@@ -50,12 +50,12 @@ fn keep_thread(user: usize) -> String {
 
 /// Provision every user with their own credential.
 fn provision_users(node: &Node) {
-    for user in 0..USERS.len() {
-        provision(&client(), &node.base, USERS[user]);
+    for (user, name) in USERS.iter().enumerate() {
+        provision(&client(), &node.base, name);
         let body = operator(
             node,
             "openhuman.profiles_set_credential",
-            json!({ "profile_id": USERS[user], "kind": "session", "token": credential(user) }),
+            json!({ "profile_id": name, "kind": "session", "token": credential(user) }),
         );
         assert!(body.get("result").is_some(), "{body}");
         assert!(
@@ -178,14 +178,14 @@ fn seed_state(w: &mut World) {
             w.listen(user, client);
         }
     }
-    for user in 0..USERS.len() {
+    for (user, name) in USERS.iter().enumerate() {
         seed_keep(w, user);
         let message = canary(user, "hello");
         act(
             w,
             user,
             "openhuman.channel_web_chat",
-            json!({ "client_id": "c1", "thread_id": format!("chat-{}", USERS[user]), "message": message }),
+            json!({ "client_id": "c1", "thread_id": format!("chat-{name}"), "message": message }),
         );
         let params = json!({ "channel": "telegram", "chat_id": "777", "sender_id": "555",
                              "message_id": "tg-1", "text": canary(user, "relayed") });
@@ -265,7 +265,7 @@ fn settle(llm: &mock_llm::MockLlm, quiet: Duration, max: Duration) {
 }
 
 fn verify_victims(w: &mut World) {
-    for user in 0..USERS.len() {
+    for (user, name) in USERS.iter().enumerate() {
         let body = act(
             w,
             user,
@@ -274,8 +274,7 @@ fn verify_victims(w: &mut World) {
         );
         if !body.to_string().contains(&canary(user, "keep")) {
             w.fail(&format!(
-                "{}'s sentinel thread lost its message: {body}",
-                USERS[user]
+                "{name}'s sentinel thread lost its message: {body}"
             ));
         }
     }
