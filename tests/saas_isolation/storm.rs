@@ -26,7 +26,7 @@ fn an_eviction_storm_keeps_live_turns_controllable() {
         None,
         "max_profiles_open = 2\nidle_evict_secs = 0\n",
         Some(llm.port),
-        "info,openhuman::profiles=debug",
+        "info,openhuman_core::profiles=debug",
     );
     for (user, name) in USERS.iter().enumerate() {
         provision(&client(), &node.base, name);
@@ -135,7 +135,7 @@ fn zz_experiment_pin_after_turn() {
     let d = deployment(true);
     let llm = mock_llm();
     let node = start_node_logging(&d, "1", None, "max_profiles_open = 1\nidle_evict_secs = 0\n",
-        Some(llm.port), "info,openhuman::profiles=debug");
+        Some(llm.port), "info,openhuman_core::profiles=debug");
     for (user, name) in USERS.iter().enumerate() {
         provision(&client(), &node.base, name);
         operator(&node, "openhuman.profiles_set_credential",
