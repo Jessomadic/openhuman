@@ -207,6 +207,7 @@ fn build_turn_models_crate(
     provider_id: String,
     native_tools: bool,
     _supports_vision: bool,
+    is_local: bool,
     thread_id: Option<&str>,
 ) -> anyhow::Result<TurnModels> {
     use crate::inference::provider::factory;
@@ -336,6 +337,7 @@ fn build_turn_models_crate(
         context_window,
         native_tools,
         supports_vision,
+        is_local,
     })
 }
 
@@ -496,6 +498,8 @@ impl TurnModelSource {
                 .unwrap_or_else(|| "injected".to_string());
             let native_tools = profile.tool_calling;
             let supports_vision = profile.modalities.image_in;
+            let is_local =
+                tinyinference_local::profile::is_local_provider_string(&provider_id);
             let context_window = context_window.or(profile.max_input_tokens);
             let primary: TurnChatModel = Arc::new(
                 ProfileOverrideModel::new(direct.clone(), profile)
@@ -521,6 +525,7 @@ impl TurnModelSource {
                 context_window,
                 native_tools,
                 supports_vision,
+                is_local,
             });
         }
         if let Some(cn) = &self.crate_native {
@@ -550,6 +555,7 @@ impl TurnModelSource {
                 provider_id,
                 !is_local,
                 !is_local,
+                is_local,
                 thread_id,
             );
         }
