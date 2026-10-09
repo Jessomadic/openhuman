@@ -113,6 +113,12 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
     // Hostile probes, in parallel: each on its own thread.
     let pwned_host = d.tmp.path().join("pwned-host.txt");
     let shell_marker = d.tmp.path().join("shell-pwned");
+    let pwned_patch = d.tmp.path().join("patched-host.txt");
+    // A link in alice's sandbox to bob's tree: the path policy must judge
+    // where a path lands, not how it is spelled.
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(d.root.join("users/bob"), d.root.join("users/alice/sandbox/link-to-bob"))
+        .unwrap();
     let probes: Vec<(&str, &str, Value)> = vec![
         ("host-read", "file_read", json!({ "path": host_secret })),
         ("operator-read", "file_read", json!({ "path": operator_secret })),
@@ -127,6 +133,14 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
             json!({ "path": "../../bob/sandbox/pwned.txt", "content": canary(0, "pwn") })),
         ("config-write", "file_write",
             json!({ "path": "../config.toml", "content": "[autonomy]\nenabled = false\n" })),
+        ("bob-patch", "apply_patch", json!({ "edits": [{
+            "path": "../../bob/sandbox/patched.txt", "old_string": "", "new_string": canary(0, "pwn")
+        }] })),
+        ("host-patch", "apply_patch", json!({ "edits": [{
+            "path": pwned_patch, "old_string": "", "new_string": canary(0, "pwn")
+        }] })),
+        ("symlink-read", "file_read",
+            json!({ "path": "link-to-bob/workspace/memory/conversations/threads.jsonl" })),
         ("shell", "shell", json!({ "command": format!("touch {}", shell_marker.display()) })),
     ];
     let results: Vec<(&str, &str, Outcome)> = std::thread::scope(|s| {
@@ -151,7 +165,7 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
             assert!(!outcome.output.contains(secret), "probe {tag} read {secret}: {outcome:?}");
         }
         assert_eq!(outcome.status, "error", "probe {tag} was not refused: {outcome:?}");
-        if offered.iter().any(|t| t == tool) || ["file_read", "file_write"].contains(tool) {
+        if offered.iter().any(|t| t == tool) || ["file_read", "file_write", "apply_patch"].contains(tool) {
             // A tool the user has: refused by the profile's path policy.
             assert_eq!(outcome.class, "BlockedByPolicy", "probe {tag}: {outcome:?}");
         } else {
@@ -164,6 +178,8 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
     assert!(!pwned_host.exists(), "a user wrote a host file");
     assert!(!d.root.join("users/bob/sandbox/pwned.txt").exists(), "alice wrote into bob's sandbox");
     assert!(!shell_marker.exists(), "a user ran a host shell command");
+    assert!(!pwned_patch.exists(), "a user patched a host file");
+    assert!(!d.root.join("users/bob/sandbox/patched.txt").exists(), "alice patched bob's sandbox");
     assert_eq!(
         std::fs::read(&alice_config).ok(),
         config_before,
