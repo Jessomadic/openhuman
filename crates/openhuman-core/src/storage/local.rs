@@ -254,6 +254,29 @@ fn import(
     Ok(written)
 }
 
+/// Forgets that `db_path` was opened, so the next call opens (and imports)
+/// it afresh: how a test models a restart.
+#[cfg(all(test, feature = "storage-sqlite"))]
+pub(crate) fn forget(db_path: &Path) {
+    OPENED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(db_path);
+}
+
+/// The names of `db_path`'s tables, sorted (test inspection).
+#[cfg(test)]
+pub(crate) fn table_names(db_path: &Path) -> Vec<String> {
+    let conn = Connection::open(db_path).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .unwrap();
+    stmt.query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
 /// Whether `table` exists on `conn`.
 pub fn table_exists(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
     conn.query_row(

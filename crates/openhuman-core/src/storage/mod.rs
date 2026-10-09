@@ -2,9 +2,12 @@
 //!
 //! One URL picks where durable state that has moved onto the storage ports
 //! lives: `OPENHUMAN_STORAGE_URL`, else `[storage] url` in `config.toml`
-//! ([`crate::config::StorageConfig`]). With neither set — the desktop default —
-//! nothing here is opened and every domain keeps the classic on-disk layout
-//! under the workspace.
+//! ([`crate::config::StorageConfig`]), else the default
+//! ([`config::StorageMode`]). The default installs no backend: the large
+//! stores keep their SQLite files, and the small ones (approvals, devices,
+//! notifications, task sources) keep document tables inside their own `.db`
+//! files, importing their old tables on first open ([`local`]). The value
+//! `classic` opts out to the pure legacy layout.
 //!
 //! When a URL is set, the host opens it once at startup ([`open`]) and
 //! installs it ([`install`]); domains reach it through [`installed`] and bind

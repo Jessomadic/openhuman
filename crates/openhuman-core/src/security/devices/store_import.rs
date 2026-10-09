@@ -53,3 +53,7 @@ fn read_rows(conn: &Connection) -> Result<Vec<ImportDoc>> {
     rows.map(|row| row.context("[devices::import] decode a paired_devices row"))
         .collect()
 }
+
+#[cfg(all(test, feature = "storage-sqlite"))]
+#[path = "store_import_tests.rs"]
+mod tests;

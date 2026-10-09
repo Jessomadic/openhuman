@@ -106,3 +106,7 @@ fn read_rows(conn: &Connection, workspace: &str) -> Result<Vec<ImportDoc>> {
     }
     Ok(docs)
 }
+
+#[cfg(all(test, feature = "storage-sqlite"))]
+#[path = "store_import_tests.rs"]
+mod tests;
