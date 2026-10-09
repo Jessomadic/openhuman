@@ -24,9 +24,10 @@
 //!
 //! The value `classic` (alias `legacy`) opts out: no backend, the pure
 //! pre-storage layout with the legacy tables. It is the escape hatch for a
-//! build that must not touch its small-store files, and it is how a database
-//! that was imported can still be read by an older build (the imported tables
-//! are kept as `_legacy_<name>` for one release).
+//! process that must not import its small-store files. The tables of a
+//! database that was already imported are kept as `_legacy_<name>` for one
+//! release so their rows can be recovered by hand; an older build looks for
+//! the original names, so it starts from empty tables, not from those rows.
 
 use std::path::Path;
 
