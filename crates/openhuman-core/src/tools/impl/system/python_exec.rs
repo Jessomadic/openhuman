@@ -224,6 +224,15 @@ impl PythonExecTool {
         );
 
         let path_policy = super::security_for_tool_context(&self.security, context, "python_exec");
+        for input in inline_code
+            .iter()
+            .chain(script_path.iter())
+            .chain(extra_args.iter())
+        {
+            if let Err(reason) = path_policy.check_protected_path_literals(input) {
+                return Ok(ToolResult::error(reason));
+            }
+        }
 
         let command = if let Some(code) = inline_code.as_deref() {
             format!(

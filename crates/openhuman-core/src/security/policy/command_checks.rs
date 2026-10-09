@@ -1,4 +1,5 @@
 use crate::util::floor_char_boundary;
+use std::path::{Path, PathBuf};
 
 use super::types::{
     AutonomyLevel, CommandClass, CommandRiskLevel, GateDecision, SecurityPolicy,
@@ -201,6 +202,7 @@ impl SecurityPolicy {
     /// Returns the classified [`CommandClass`] on success.
     pub fn check_gated_command(&self, command: &str) -> Result<CommandClass, String> {
         let class = self.classify_command(command);
+        self.check_protected_path_literals(command)?;
         if !self.enabled {
             return Ok(class);
         }
@@ -220,6 +222,49 @@ impl SecurityPolicy {
             ));
         }
         Ok(class)
+    }
+
+    /// Refuse literal references to the protected-path floor before launching
+    /// a command, including when the autonomy policy is disabled. This is a
+    /// guard for direct path arguments and source literals; arbitrary shell or
+    /// interpreter code still needs a filesystem sandbox to enforce the floor.
+    pub fn check_protected_path_literals(&self, input: &str) -> Result<(), String> {
+        let home = dirs::home_dir();
+        let mut expanded = strip_quoted_heredoc_bodies(input).into_owned();
+        if let Some(home) = home.as_ref().and_then(|p| p.to_str()) {
+            expanded = expanded.replace("${HOME}", home).replace("$HOME", home);
+            expanded = expanded.replace("%USERPROFILE%", home);
+        }
+
+        for word in expanded.split(|c: char| {
+            c.is_whitespace() || matches!(c, '\'' | '"' | '(' | ')' | '[' | ']' | ',' | ';' | '=')
+        }) {
+            let word = word.trim_matches(|c: char| matches!(c, ':' | '<' | '>' | '&' | '|'));
+            if word.is_empty() || word.contains("://") {
+                continue;
+            }
+            let candidate = if word == "~" || word.starts_with("~/") {
+                PathBuf::from(self.expand_tilde(word))
+            } else {
+                PathBuf::from(word)
+            };
+            let candidate = if candidate.is_absolute() {
+                candidate
+            } else {
+                self.action_dir.join(candidate)
+            };
+            if Self::is_always_forbidden(&candidate)
+                || candidate
+                    .canonicalize()
+                    .ok()
+                    .is_some_and(|path| Self::is_always_forbidden(Path::new(&path)))
+            {
+                return Err(format!(
+                    "{POLICY_BLOCKED_MARKER} Command references a protected path"
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Parse an LLM-declared command category. This is an **escalate-only**
