@@ -70,15 +70,6 @@ async fn scenario() {
     let bob_h = profiles.open("bob").await.expect("open bob");
     assert_ne!(alice_h.workspace_dir(), bob_h.workspace_dir());
 
-    eprintln!(
-        "DBG after-open in_use={}",
-        alice_h.context().tenant_in_use()
-    );
-    let _ = alice_h.threads().await;
-    eprintln!(
-        "DBG after-threads in_use={}",
-        alice_h.context().tenant_in_use()
-    );
     let a = tokio::time::timeout(TURN, alice_h.chat("t1", "alice's secret plan"))
         .await
         .expect("alice's turn finishes")
@@ -127,14 +118,17 @@ async fn scenario() {
     assert!(bob_t1.contains("bob's grocery list"), "{bob_t1}");
     assert!(!bob_t1.contains("alice's secret plan"), "{bob_t1}");
 
-    for i in 0..4 {
-        eprintln!(
-            "DBG t={i} ctx_count={} in_use={}",
-            std::sync::Arc::strong_count(alice_h.context()),
-            alice_h.context().tenant_in_use()
+    // A finished turn leaves nothing running on the profile (its progress
+    // bridge and detached work end), so only the handle keeps it in use.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while alice_h.context().tenant_in_use() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "alice's finished turn still pins her profile"
         );
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     // ── a handle holds its profile ──────────────────────────────────────
     let held = profiles.release(&alice.profile_id).await;
     assert!(
