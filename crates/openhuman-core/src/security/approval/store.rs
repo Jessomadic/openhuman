@@ -366,8 +366,10 @@ pub fn get_decision(config: &Config, request_id: &str) -> Result<Option<Approval
 /// from outside this call's task scope (a `Drop`), where the acting agent is
 /// no longer installed. A scope that cannot be resolved is kept as an error,
 /// so the later decision fails instead of switching to the SQLite store.
-pub(super) fn capture_docs() -> Result<Option<super::store_documents::Docs>, String> {
-    super::store_documents::current().map_err(|error| error.to_string())
+pub(super) fn capture_docs(
+    config: &Config,
+) -> Result<Option<super::store_documents::Docs>, String> {
+    super::store_documents::current(config).map_err(|error| error.to_string())
 }
 
 /// [`decide`] against a store captured by [`capture_docs`].

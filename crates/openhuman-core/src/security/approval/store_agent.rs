@@ -9,7 +9,7 @@ use super::{Config, PendingApproval};
 /// Whether the approval store has been created for `config`'s workspace.
 /// A configured document store always exists.
 pub fn exists(config: &Config) -> bool {
-    matches!(super::super::store_documents::current(), Ok(Some(_)))
+    crate::storage::installed().is_some()
         || super::db_path(config).is_file()
 }
 
