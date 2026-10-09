@@ -58,16 +58,25 @@ fn free_port() -> u16 {
 
 fn start(home: &Path, workspace: &Path, url: Option<&str>) -> (Server, String) {
     let port = free_port();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_openhuman-core"));
-    cmd.args(["serve", "--port", &port.to_string()])
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .env("OPENHUMAN_WORKSPACE", workspace)
-        .env("OPENHUMAN_CORE_TOKEN", TOKEN)
-        .env_remove("OPENHUMAN_STORAGE_URL")
-        .env_remove("OPENHUMAN_MODE")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    // A debug build of the full product set needs more than the default 8 MiB
+    // main-thread stack to finish booting, so raise the limit first.
+    let mut cmd = Command::new("sh");
+    cmd.args([
+        "-c",
+        "ulimit -s unlimited 2>/dev/null || ulimit -s 1048576 2>/dev/null; exec \"$0\" \"$@\"",
+        env!("CARGO_BIN_EXE_openhuman-core"),
+        "serve",
+        "--port",
+        &port.to_string(),
+    ])
+    .env("HOME", home)
+    .env("USERPROFILE", home)
+    .env("OPENHUMAN_WORKSPACE", workspace)
+    .env("OPENHUMAN_CORE_TOKEN", TOKEN)
+    .env_remove("OPENHUMAN_STORAGE_URL")
+    .env_remove("OPENHUMAN_MODE")
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
     if let Some(url) = url {
         cmd.env("OPENHUMAN_STORAGE_URL", url);
     }
