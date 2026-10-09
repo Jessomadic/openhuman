@@ -129,3 +129,34 @@ fn an_eviction_storm_keeps_live_turns_controllable() {
     }
     eprintln!("[isolation] storm took {:.1}s", started.elapsed().as_secs_f64());
 }
+
+#[test]
+fn zz_experiment_pin_after_turn() {
+    let d = deployment(true);
+    let llm = mock_llm();
+    let node = start_node_logging(&d, "1", None, "max_profiles_open = 1\nidle_evict_secs = 0\n",
+        Some(llm.port), "info,openhuman::profiles=debug");
+    for (user, name) in USERS.iter().enumerate() {
+        provision(&client(), &node.base, name);
+        operator(&node, "openhuman.profiles_set_credential",
+            json!({ "profile_id": name, "kind": "session", "token": credential(user) }));
+    }
+    let t0 = Instant::now();
+    let (s, _, b) = call(&node, "bob", "openhuman.threads_upsert", json!({"id":"x","title":"x","created_at":"2026-10-10T00:00:00Z"}));
+    eprintln!("bob upsert {s} {b}");
+    let (s, _, _) = call(&node, "carol", "core.ping", json!({}));
+    eprintln!("carol after bob upsert only: {s}");
+    let (s, _, _) = call(&node, "bob", "openhuman.channel_web_chat", json!({"client_id":"c1","thread_id":"x","message":"hi"}));
+    eprintln!("bob chat {s}");
+    wait_until("bob turn", &node, Duration::from_secs(30), || !active(&node, "bob", "x"));
+    eprintln!("bob turn done at {:?}", t0.elapsed());
+    for _ in 0..120 {
+        let (s, _, _) = call(&node, "carol", "core.ping", json!({}));
+        if s == 200 { eprintln!("carol admitted at {:?}", t0.elapsed()); return; }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    eprintln!("carol never admitted; inference requests: {}", llm.recorded().iter().filter(|r| r.is_inference()).count());
+    let paths: Vec<String> = llm.recorded().iter().map(|r| r.path.clone()).collect();
+    eprintln!("backend paths: {paths:?}");
+    eprintln!("{}", node.log_tail());
+}
