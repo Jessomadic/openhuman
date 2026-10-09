@@ -337,7 +337,7 @@ pub struct Node {
 }
 
 impl Node {
-    fn log_tail(&self) -> String {
+    pub fn log_tail(&self) -> String {
         let log = std::fs::read_to_string(&self.log).unwrap_or_default();
         // The polling RPCs drown everything else out.
         let lines: Vec<&str> = log
@@ -347,7 +347,7 @@ impl Node {
         lines[lines.len().saturating_sub(80)..].join("\n")
     }
 
-    fn kill(&mut self) {
+    pub fn kill(&mut self) {
         // SIGKILL on Unix: no shutdown hook runs, no lease is released.
         self.server.0.kill().expect("kill core");
         let _ = self.server.0.wait();

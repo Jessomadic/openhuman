@@ -4,7 +4,6 @@
 //! a safe one must serve nothing but its core built-ins behind the gateway
 //! bearer until per-user isolation opens domain families.
 
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
