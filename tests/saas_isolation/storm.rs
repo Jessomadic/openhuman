@@ -153,7 +153,12 @@ fn zz_experiment_pin_after_turn() {
     let before = llm.recorded().len();
     for _ in 0..40 {
         let (s, _, _) = call(&node, "carol", "core.ping", json!({}));
-        if s == 200 { eprintln!("carol admitted at {:?}", t0.elapsed()); return; }
+        if s == 200 {
+            eprintln!("carol admitted at {:?}", t0.elapsed());
+            let log = std::fs::read_to_string(&node.log).unwrap_or_default();
+            for l in log.lines().filter(|l| l.contains("DEBUGSENDERS")) { eprintln!("{l}"); }
+            return;
+        }
         std::thread::sleep(Duration::from_millis(500));
     }
     eprintln!("carol never admitted; inference requests: {}", llm.recorded().iter().filter(|r| r.is_inference()).count());
