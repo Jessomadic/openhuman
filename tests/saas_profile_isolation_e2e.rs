@@ -78,7 +78,13 @@ fn act(w: &mut World, actor: usize, method: &str, params: Value) -> Value {
     let stat = w.stats.entry(method.to_string()).or_default();
     match (status, body.get("result").is_some()) {
         (200, true) => stat.0 += 1,
-        (200, false) => stat.1 += 1,
+        (200, false) => {
+            stat.1 += 1;
+            let message = body["error"]["message"].as_str().unwrap_or_default();
+            w.first_error
+                .entry(method.to_string())
+                .or_insert_with(|| message.chars().take(90).collect());
+        }
         _ => stat.2 += 1,
     }
     if status != 200 {
@@ -296,7 +302,10 @@ fn random_cross_profile_calls_never_leak() {
     assert!(own.iter().all(|&n| n > 0), "every user's tree holds their own data: {own:?}");
 
     let summary: Vec<String> = w.stats.iter()
-        .map(|(m, (ok, err, other))| format!("  {m}: ok {ok} err {err} other {other}"))
+        .map(|(m, (ok, err, other))| {
+            let first = w.first_error.get(m).map(String::as_str).unwrap_or("");
+            format!("  {m}: ok {ok} err {err} other {other} {first}")
+        })
         .collect();
     eprintln!(
         "[isolation] seed {seed}: {steps} steps; boot+seed {:.1}s, drive {:.1}s, total {:.1}s; \

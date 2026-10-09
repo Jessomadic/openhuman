@@ -148,6 +148,8 @@ pub struct World {
     pub trace: Vec<String>,
     /// Per method: (answered with a result, answered with an error, other status).
     pub stats: BTreeMap<String, (u32, u32, u32)>,
+    /// The first error each method answered, for the run summary.
+    pub first_error: BTreeMap<String, String>,
 }
 
 impl World {
@@ -166,6 +168,7 @@ impl World {
             streams: 0,
             trace: Vec::new(),
             stats: BTreeMap::new(),
+            first_error: BTreeMap::new(),
         }
     }
 
