@@ -48,7 +48,6 @@ mod progress;
 /// resume cache, or persistence handle. Those are exclusively `Session` state.
 #[derive(Default)]
 pub(super) struct OpenHumanSessionState {
-    last_commit: Option<CommitReceipt<OpenHumanRunContext>>,
     terminals: Vec<SessionTerminal>,
     pub(super) last_turn_hit_cap: bool,
     pub(super) last_turn_usage: Option<crate::agent::tinyagents::host::LastTurnUsage>,
@@ -1286,10 +1285,14 @@ impl OpenHumanSessionHost {
                         let _ =
                             progress::send_receipt_progress(&receipt, &input, &output, iterations)
                                 .await;
-                        state
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .last_commit = Some(receipt);
+                        // Drop the receipt here rather than retaining it on
+                        // the session: its run context carries this turn's
+                        // progress sender (`progress` and the attached
+                        // parent's `on_progress`), and a cached session that
+                        // kept it would hold the caller's progress channel
+                        // open after `set_on_progress(None)` — the web
+                        // channel's bridge task then never exits.
+                        drop(receipt);
                         {
                             let mut state = state
                                 .lock()

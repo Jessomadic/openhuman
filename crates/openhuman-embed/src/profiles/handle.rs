@@ -8,7 +8,8 @@ use openhuman_core::core::envelope::ApiEnvelope;
 use openhuman_core::core::runtime::CoreContext;
 use openhuman_core::profiles::Profile;
 use openhuman_core::threads::{
-    ConversationMessagesRequest, ConversationMessagesResponse, ConversationThreadsListResponse,
+    AppendConversationMessageRequest, ConversationMessagesRequest, ConversationMessagesResponse,
+    ConversationThreadsListResponse,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,7 @@ use crate::call::call_in;
 use crate::error::CoreError;
 
 const THREADS_UPSERT: &str = "openhuman.threads_upsert";
+const THREADS_MESSAGE_APPEND: &str = "openhuman.threads_message_append";
 const THREADS_LIST: &str = "openhuman.threads_list";
 const THREADS_MESSAGES_LIST: &str = "openhuman.threads_messages_list";
 const CHANNEL_WEB_CHAT: &str = "openhuman.channel_web_chat";
@@ -195,11 +197,16 @@ impl ProfileHandle {
     /// for the turn's final reply. A thread id is unique per profile: two
     /// users' `t1` are two threads.
     ///
+    /// Like the web app, it records the user's message on the thread itself
+    /// (`threads_message_append`) before starting the turn; the core records
+    /// the reply.
+    ///
     /// Waits for as long as the turn runs; wrap it in
     /// `tokio::time::timeout` to bound it. For live progress, read
     /// [`events`](Self::events) alongside.
     pub async fn chat(&self, thread_id: &str, text: &str) -> Result<ChatReply, ProfileError> {
         self.ensure_thread(thread_id).await?;
+        self.append_user_message(thread_id, text).await?;
         let mut events = self.events();
         let accepted: WebChatAccepted = self
             .call(
@@ -290,6 +297,27 @@ impl ProfileHandle {
             )
             .await?;
         Ok(listed.data.map(|data| data.messages).unwrap_or_default())
+    }
+
+    /// Record `text` as the user's message on `thread_id`.
+    async fn append_user_message(&self, thread_id: &str, text: &str) -> Result<(), ProfileError> {
+        let _appended: ApiEnvelope<ConversationMessageRecord> = self
+            .call(
+                THREADS_MESSAGE_APPEND,
+                AppendConversationMessageRequest {
+                    thread_id: thread_id.to_string(),
+                    message: ConversationMessageRecord {
+                        id: format!("msg_{}", uuid::Uuid::new_v4()),
+                        content: text.to_string(),
+                        message_type: "text".to_string(),
+                        extra_metadata: serde_json::json!({}),
+                        sender: "user".to_string(),
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                    },
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     /// Create `thread_id` on this profile unless it exists (`threads_upsert`

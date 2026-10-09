@@ -110,6 +110,9 @@ impl Respond for Echo {
             .and_then(|m| m.iter().rev().find(|m| m["role"] == "user"))
             .and_then(|m| m["content"].as_str())
             .unwrap_or_default();
+        // The core prefixes the turn's message with context lines (the date);
+        // the user's own text is the last line.
+        let said = said.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or_default();
         let reply = format!("echo: {said}");
         if body["stream"] == true {
             let chunk = json!({ "id": "c", "object": "chat.completion.chunk", "created": 0,
