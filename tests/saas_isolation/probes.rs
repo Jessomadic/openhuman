@@ -5,65 +5,51 @@
 //! *profile's* policy. The operator's policy is off (the default), so it
 //! would have read the host file below.
 
-use super::mock_llm::{content_text, mock_llm, MockLlm, PROBE};
+use super::mock_llm::{mock_llm, PROBE};
 use super::world::{canary, credential, USERS};
 use super::*;
 
-/// The tool output the model got back for the probe tagged `tag`, once the
-/// follow-up inference request carries it.
-fn tool_result(llm: &MockLlm, tag: &str, timeout: Duration) -> Option<String> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        for r in llm.recorded().iter().filter(|r| r.is_inference()) {
-            if !r.body.contains(tag) {
-                continue;
-            }
-            let body: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
-            // The latest tool message after the probe; the harness may add
-            // a note after it.
-            let messages = body["messages"].as_array().cloned().unwrap_or_default();
-            let after = messages
-                .iter()
-                .rposition(|m| content_text(m).contains(tag))
-                .map_or(0, |i| i + 1);
-            if let Some(tool) = messages[after..].iter().rev().find(|m| m["role"] == "tool") {
-                return Some(content_text(tool));
-            }
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    None
+/// What became of a probe's tool call, read from the turn's tool timeline.
+#[derive(Debug)]
+struct Outcome {
+    status: String,
+    class: String,
+    output: String,
 }
 
-/// What the backend saw for the probe tagged `tag`: each request's roles.
-fn probe_trail(llm: &MockLlm, tag: &str) -> String {
-    llm.recorded()
-        .iter()
-        .filter(|r| r.is_inference() && r.body.contains(tag))
-        .map(|r| {
-            let body: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
-            let roles: Vec<String> = body["messages"]
-                .as_array()
-                .map(|m| m.iter().map(|m| m["role"].as_str().unwrap_or("?").to_string()).collect())
-                .unwrap_or_default();
-            roles.join(",")
-        })
-        .collect::<Vec<_>>()
-        .join(" | ")
-}
-
-/// Run one probe as alice on its own thread and return the tool output.
-fn probe(node: &Node, llm: &MockLlm, tag: &str, tool: &str, args: Value) -> Option<String> {
-    let message = format!("probe-{tag} {PROBE} {tool} {args}");
+/// Run one probe as alice on its own thread and wait for its tool call to
+/// finish.
+fn probe(node: &Node, tag: &str, tool: &str, args: Value) -> Outcome {
+    let thread = format!("probe-{tag}");
+    let message = format!("{thread} {PROBE} {tool} {args}");
     let (status, _, body) = call(
         node,
         USERS[0],
         "openhuman.channel_web_chat",
-        json!({ "client_id": "c1", "thread_id": format!("probe-{tag}"), "message": message }),
+        json!({ "client_id": "c1", "thread_id": thread, "message": message }),
     );
     assert_eq!(status, 200, "{body}");
     assert!(body.get("result").is_some(), "probe {tag}: {body}");
-    tool_result(llm, &format!("probe-{tag} "), Duration::from_secs(60))
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let (_, _, body) = call(node, USERS[0], "openhuman.threads_turn_state_get",
+            json!({ "thread_id": thread }));
+        let state = find_key(&body, "turnState").cloned().unwrap_or(Value::Null);
+        let done = !matches!(state["lifecycle"].as_str(), None | Some("started" | "streaming"));
+        let call = state["toolTimeline"]
+            .as_array()
+            .and_then(|t| t.iter().find(|c| c["id"] == "call_probe"))
+            .filter(|c| c["status"] != "running");
+        if let (true, Some(call)) = (done, call) {
+            return Outcome {
+                status: call["status"].as_str().unwrap_or_default().to_string(),
+                class: call.pointer("/failure/class").and_then(Value::as_str).unwrap_or_default().to_string(),
+                output: call["output"].as_str().unwrap_or_default().to_string(),
+            };
+        }
+        assert!(Instant::now() < deadline, "probe {tag} never finished: {body}\n{}", node.log_tail());
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 #[test]
@@ -100,7 +86,7 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
     let config_before = std::fs::read(&alice_config).ok();
 
     // Positive control: inside her sandbox the file tools work.
-    let wrote = probe(&node, &llm, "own-write", "file_write",
+    let wrote = probe(&node, "own-write", "file_write",
         json!({ "path": "note.txt", "content": canary(0, "note") }));
     let offered: Vec<String> = llm
         .recorded()
@@ -116,17 +102,13 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
     for denied in ["install_tool", "git_operations", "delegate", "curl", "node_exec"] {
         assert!(!offered.iter().any(|t| t == denied), "{denied} is hard-denied: {offered:?}");
     }
-    eprintln!("[isolation] offered to alice: {offered:?}");
-    eprintln!("[isolation] own-write: {wrote:?}");
-    let wrote = wrote.expect("the own-write probe ran");
     let note = d.root.join("users/alice/sandbox/note.txt");
     assert!(
         std::fs::read_to_string(&note).is_ok_and(|t| t.contains("CANARY-alice-note")),
-        "file_write lands in alice's sandbox ({wrote})"
+        "file_write lands in alice's sandbox: {wrote:?}"
     );
-    let read = probe(&node, &llm, "own-read", "file_read", json!({ "path": "note.txt" }))
-        .expect("the own-read probe ran");
-    assert!(read.contains("CANARY-alice-note"), "file_read reads her sandbox: {read}");
+    let read = probe(&node, "own-read", "file_read", json!({ "path": "note.txt" }));
+    assert!(read.output.contains("CANARY-alice-note"), "file_read reads her sandbox: {read:?}");
 
     // Hostile probes, in parallel: each on its own thread.
     let pwned_host = d.tmp.path().join("pwned-host.txt");
@@ -147,44 +129,38 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
             json!({ "path": "../config.toml", "content": "[autonomy]\nenabled = false\n" })),
         ("shell", "shell", json!({ "command": format!("touch {}", shell_marker.display()) })),
     ];
-    let results: Vec<(String, Option<String>)> = std::thread::scope(|s| {
+    let results: Vec<(&str, &str, Outcome)> = std::thread::scope(|s| {
         let handles: Vec<_> = probes
             .iter()
             .map(|(tag, tool, args)| {
-                let (node, llm) = (&node, &llm);
-                s.spawn(move || (tag.to_string(), probe(node, llm, tag, tool, args.clone())))
+                let node = &node;
+                s.spawn(move || (*tag, *tool, probe(node, tag, tool, args.clone())))
             })
             .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
     let mut report = Vec::new();
-    for (tag, output) in &results {
-        let missing = format!(
-            "<the model never got a tool result; requests: {}>",
-            probe_trail(&llm, &format!("probe-{tag} "))
-        );
-        let output = output.as_deref().unwrap_or(&missing);
-        report.push(format!("  {tag}: {}", output.chars().take(160).collect::<String>()));
+    for (tag, tool, outcome) in &results {
+        report.push(format!(
+            "  {tag}: {} {} {}",
+            outcome.status,
+            outcome.class,
+            outcome.output.chars().take(110).collect::<String>()
+        ));
         for secret in ["HOST-SECRET", "OPERATOR-SECRET", "CANARY-bob-"] {
-            assert!(!output.contains(secret), "probe {tag} read {secret}: {output}");
+            assert!(!outcome.output.contains(secret), "probe {tag} read {secret}: {outcome:?}");
         }
-        if tag == "root-list" {
-            assert!(!output.contains("bob"), "probe {tag} listed other users: {output}");
-        }
-    }
-    eprintln!("[isolation] probe results:\n{}", report.join("\n"));
-    if results.iter().any(|(_, o)| o.is_none()) {
-        let log = std::fs::read_to_string(&node.log).unwrap_or_default();
-        let lines: Vec<&str> = log
-            .lines()
-            .filter(|l| l.contains("approval") || l.contains("file_read") || l.contains("policy") || l.contains("gate"))
-            .collect();
-        eprintln!("[isolation] core log (approval/policy):\n{}", lines[lines.len().saturating_sub(10)..].join("\n"));
-        for m in ["openhuman.threads_messages_list", "openhuman.threads_turn_state_get", "openhuman.threads_transcript_get"] {
-            let (_, _, body) = call(&node, USERS[0], m, json!({ "thread_id": "probe-host-read" }));
-            eprintln!("[isolation] {m}: {}", body.to_string().chars().take(3000).collect::<String>());
+        assert_eq!(outcome.status, "error", "probe {tag} was not refused: {outcome:?}");
+        if offered.iter().any(|t| t == tool) || ["file_read", "file_write"].contains(tool) {
+            // A tool the user has: refused by the profile's path policy.
+            assert_eq!(outcome.class, "BlockedByPolicy", "probe {tag}: {outcome:?}");
+        } else {
+            // A tool the user does not have: it does not exist for them.
+            assert!(outcome.output.contains("unknown tool"), "probe {tag}: {outcome:?}");
         }
     }
+    eprintln!("[isolation] offered to alice: {offered:?}");
+    eprintln!("[isolation] probe outcomes:\n{}", report.join("\n"));
     assert!(!pwned_host.exists(), "a user wrote a host file");
     assert!(!d.root.join("users/bob/sandbox/pwned.txt").exists(), "alice wrote into bob's sandbox");
     assert!(!shell_marker.exists(), "a user ran a host shell command");
