@@ -149,14 +149,15 @@ fn zz_experiment_pin_after_turn() {
     let (s, _, _) = call(&node, "bob", "openhuman.channel_web_chat", json!({"client_id":"c1","thread_id":"x","message":"hi"}));
     eprintln!("bob chat {s}");
     wait_until("bob turn", &node, Duration::from_secs(30), || !active(&node, "bob", "x"));
-    eprintln!("bob turn done at {:?}", t0.elapsed());
-    for _ in 0..120 {
+    eprintln!("bob turn done at {:?}; backend requests so far {}", t0.elapsed(), llm.recorded().len());
+    let before = llm.recorded().len();
+    for _ in 0..40 {
         let (s, _, _) = call(&node, "carol", "core.ping", json!({}));
         if s == 200 { eprintln!("carol admitted at {:?}", t0.elapsed()); return; }
         std::thread::sleep(Duration::from_millis(500));
     }
     eprintln!("carol never admitted; inference requests: {}", llm.recorded().iter().filter(|r| r.is_inference()).count());
-    let paths: Vec<String> = llm.recorded().iter().map(|r| r.path.clone()).collect();
+    let paths: Vec<String> = llm.recorded().iter().skip(before).map(|r| r.path.clone()).collect();
     eprintln!("backend paths: {paths:?}");
     eprintln!("{}", node.log_tail());
 }
