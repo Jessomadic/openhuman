@@ -13,71 +13,6 @@ use serde_json::{json, Value};
 #[path = "saas_mode/cluster.rs"]
 mod cluster;
 
-const BEARER: &str = "saas-e2e-gateway-bearer-0123456789abcdef";
-
-/// Environment a developer machine may carry that would point the child at a
-/// single user, or that the boot guard refuses outright.
-const SCRUBBED_ENV: &[&str] = &[
-    "OPENHUMAN_WORKSPACE",
-    "OPENHUMAN_DEV_CONNECT",
-    "OPENHUMAN_BACKEND_SESSION_TOKEN",
-    "OPENHUMAN_BACKEND_API_KEY",
-    "OPENHUMAN_CORE_TOKEN",
-    "OPENHUMAN_APPROVAL_GATE",
-    "OPENHUMAN_SANDBOX",
-    "OPENHUMAN_MODE",
-    "OPENHUMAN_STORAGE_URL",
-    "OPENHUMAN_NODE_ID",
-];
-
-struct Deployment {
-    tmp: tempfile::TempDir,
-    root: PathBuf,
-    config: PathBuf,
-}
-
-fn deployment(write_token: bool) -> Deployment {
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let root = tmp.path().join("saas");
-    std::fs::create_dir(&root).unwrap();
-    set_mode(&root, 0o700);
-    if write_token {
-        let token = root.join("service.token");
-        std::fs::write(&token, format!("{BEARER}\n")).unwrap();
-        set_mode(&token, 0o600);
-    }
-    let config = tmp.path().join("operator.toml");
-    std::fs::write(
-        &config,
-        format!("root = {:?}\n", root.display().to_string()),
-    )
-    .unwrap();
-    Deployment { tmp, root, config }
-}
-
-#[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-}
-
-#[cfg(not(unix))]
-fn set_mode(_: &Path, _: u32) {}
-
-fn core_command(d: &Deployment, extra: &[&str]) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_openhuman-core"));
-    cmd.args(["run", "--mode", "saas", "--saas-config"])
-        .arg(&d.config)
-        .args(extra)
-        // Keep the child away from the developer's real `~/.openhuman`.
-        .env("HOME", d.tmp.path())
-        .env("USERPROFILE", d.tmp.path());
-    for var in SCRUBBED_ENV {
-        cmd.env_remove(var);
-    }
-    cmd
-}
-
 #[test]
 fn an_unsafe_deployment_is_refused_before_it_binds() {
     let d = deployment(false);
@@ -125,84 +60,6 @@ fn saas_mode_without_an_operator_config_is_refused() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--saas-config"), "{stderr}");
-}
-
-struct Server(Child);
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
-fn rpc(
-    client: &reqwest::blocking::Client,
-    base: &str,
-    bearer: Option<&str>,
-    method: &str,
-) -> (u16, Value) {
-    rpc_with(client, base, bearer, method, json!({}))
-}
-
-fn rpc_with(
-    client: &reqwest::blocking::Client,
-    base: &str,
-    bearer: Option<&str>,
-    method: &str,
-    params: Value,
-) -> (u16, Value) {
-    let mut request = client.post(format!("{base}/rpc")).json(&json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": method,
-        "params": params
-    }));
-    if let Some(bearer) = bearer {
-        request = request.bearer_auth(bearer);
-    }
-    let response = request.send().expect("POST /rpc");
-    let status = response.status().as_u16();
-    (status, response.json().unwrap_or(Value::Null))
-}
-
-/// Start a SaaS core on deployment `d` and wait until it is healthy.
-fn start(d: &Deployment) -> (Server, String, reqwest::blocking::Client) {
-    let port = free_port();
-    let child = core_command(d, &["--port", &port.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn openhuman-core");
-    let mut server = Server(child);
-    let base = format!("http://127.0.0.1:{port}");
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .unwrap();
-
-    let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
-        if let Ok(response) = client.get(format!("{base}/health")).send() {
-            if response.status().is_success() {
-                break;
-            }
-        }
-        if let Ok(Some(status)) = server.0.try_wait() {
-            panic!("SaaS core exited before serving: {status}");
-        }
-        assert!(Instant::now() < deadline, "SaaS core never became healthy");
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    (server, base, client)
 }
 
 #[test]
@@ -313,50 +170,6 @@ fn a_safe_deployment_serves_core_and_the_operator_plane_behind_the_gateway_beare
         "a SaaS boot writes nothing under ~/.openhuman (keyring included): {leaked:?}"
     );
     drop(server);
-}
-
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-}
-
-/// POST /rpc for gateway user `user`, signed unless `sig` overrides it.
-fn user_rpc(
-    client: &reqwest::blocking::Client,
-    base: &str,
-    bearer: &str,
-    user: &str,
-    sig: Option<&str>,
-    method: &str,
-) -> (u16, Value) {
-    user_rpc_with(client, base, bearer, user, sig, method, json!({}))
-}
-
-fn user_rpc_with(
-    client: &reqwest::blocking::Client,
-    base: &str,
-    bearer: &str,
-    user: &str,
-    sig: Option<&str>,
-    method: &str,
-    params: Value,
-) -> (u16, Value) {
-    use openhuman_core::profiles::gateway::{sign, USER_HEADER, USER_SIG_HEADER};
-    let signature = sig
-        .map(str::to_owned)
-        .unwrap_or_else(|| sign(BEARER, user, now()));
-    let response = client
-        .post(format!("{base}/rpc"))
-        .bearer_auth(bearer)
-        .header(USER_HEADER, user)
-        .header(USER_SIG_HEADER, signature)
-        .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }))
-        .send()
-        .expect("POST /rpc");
-    let status = response.status().as_u16();
-    (status, response.json().unwrap_or(Value::Null))
 }
 
 #[test]
@@ -485,34 +298,6 @@ fn gateway_requests_run_under_the_named_users_profile() {
     drop(server);
 }
 
-fn provision(client: &reqwest::blocking::Client, base: &str, user: &str) -> String {
-    let (_, body) = rpc_with(
-        client,
-        base,
-        Some(BEARER),
-        "openhuman.profiles_provision",
-        json!({ "user_id": user }),
-    );
-    assert!(body.get("result").is_some(), "provision {user}: {body}");
-    openhuman_core::profiles::ProfileId::for_user(
-        user,
-        openhuman_core::profiles::ProfileIdMode::Raw,
-    )
-    .unwrap()
-    .to_string()
-}
-
-fn thread_ids(body: &Value) -> Vec<String> {
-    let text = body.to_string();
-    let mut ids = Vec::new();
-    for part in text.split("\"id\":\"").skip(1) {
-        if let Some(end) = part.find('"') {
-            ids.push(part[..end].to_string());
-        }
-    }
-    ids
-}
-
 #[test]
 fn each_user_sees_only_their_own_threads() {
     let d = deployment(true);
@@ -596,40 +381,6 @@ fn each_user_sees_only_their_own_threads() {
     let (_, body) = call("alice", "openhuman.config_get_config", json!({}));
     assert!(body.to_string().contains("unknown method"), "{body}");
     drop(server);
-}
-
-/// Open `/events?client_id=` for `user` and forward each SSE `data:` line.
-fn user_events(base: &str, user: &str, client_id: &str) -> std::sync::mpsc::Receiver<String> {
-    use openhuman_core::profiles::gateway::{sign, USER_HEADER, USER_SIG_HEADER};
-    use std::io::BufRead;
-    let (tx, rx) = std::sync::mpsc::channel();
-    let url = format!("{base}/events?client_id={client_id}");
-    let user = user.to_string();
-    std::thread::spawn(move || {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(None)
-            .build()
-            .unwrap();
-        let Ok(response) = client
-            .get(&url)
-            .bearer_auth(BEARER)
-            .header(USER_HEADER, &user)
-            .header(USER_SIG_HEADER, sign(BEARER, &user, now()))
-            .send()
-        else {
-            return;
-        };
-        let _ = tx.send(format!("status:{}", response.status().as_u16()));
-        for line in std::io::BufReader::new(response).lines() {
-            let Ok(line) = line else { break };
-            if let Some(data) = line.strip_prefix("data:") {
-                if tx.send(data.trim().to_string()).is_err() {
-                    break;
-                }
-            }
-        }
-    });
-    rx
 }
 
 #[test]
@@ -774,46 +525,6 @@ fn users_reach_their_memory_but_not_its_configuration() {
     drop(server);
 }
 
-/// A fake backend: answers every request `500` and reports each request's
-/// path and `Authorization` header.
-fn recording_backend() -> (u16, std::sync::mpsc::Receiver<(String, String)>) {
-    use std::io::{BufRead, BufReader, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let tx = tx.clone();
-            std::thread::spawn(move || {
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut line = String::new();
-                if reader.read_line(&mut line).is_err() {
-                    return;
-                }
-                let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
-                let mut auth = String::new();
-                loop {
-                    let mut header = String::new();
-                    if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
-                        break;
-                    }
-                    if let Some((name, value)) = header.split_once(':') {
-                        if name.eq_ignore_ascii_case("authorization") {
-                            auth = value.trim().to_string();
-                        }
-                    }
-                }
-                let _ = tx.send((path, auth));
-                let mut stream = stream;
-                let _ = stream.write_all(
-                    b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
-                );
-            });
-        }
-    });
-    (port, rx)
-}
-
 #[test]
 fn a_users_turn_reaches_inference_with_their_own_credential() {
     // The operator holds no credential. A process-wide "signed out" flag used
@@ -925,34 +636,6 @@ fn a_duplicate_or_unreadable_user_header_is_refused() {
         .as_u16();
     assert_eq!(status, 400);
     drop(server);
-}
-
-/// Start a SaaS core whose backend is a closed port, so every turn fails fast
-/// and its failure is itself the reply, without any real inference.
-fn start_offline(d: &Deployment) -> (Server, String, reqwest::blocking::Client) {
-    let port = free_port();
-    let child = core_command(d, &["--port", &port.to_string()])
-        .env("BACKEND_URL", "http://127.0.0.1:9")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn openhuman-core");
-    let server = Server(child);
-    let base = format!("http://127.0.0.1:{port}");
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !client
-        .get(format!("{base}/health"))
-        .send()
-        .is_ok_and(|r| r.status().is_success())
-    {
-        assert!(Instant::now() < deadline, "SaaS core never became healthy");
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    (server, base, client)
 }
 
 #[test]
