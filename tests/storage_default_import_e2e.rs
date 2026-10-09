@@ -84,7 +84,10 @@ fn start(home: &Path, workspace: &Path, url: Option<&str>) -> (Server, String) {
         if let Ok(Some(status)) = server.0.try_wait() {
             panic!("openhuman-core exited before serving: {status}");
         }
-        assert!(Instant::now() < deadline, "openhuman-core never became healthy");
+        assert!(
+            Instant::now() < deadline,
+            "openhuman-core never became healthy"
+        );
         std::thread::sleep(Duration::from_millis(250));
     }
 }

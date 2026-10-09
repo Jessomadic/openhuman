@@ -236,7 +236,12 @@ fn import(
         let mut written = 0usize;
         for row in rows {
             match docs
-                .put(row.collection, &row.id, row.doc, tinystoragedrivers::Precondition::Absent)
+                .put(
+                    row.collection,
+                    &row.id,
+                    row.doc,
+                    tinystoragedrivers::Precondition::Absent,
+                )
                 .await
             {
                 Ok(_) => written += 1,
