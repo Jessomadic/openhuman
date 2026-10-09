@@ -77,6 +77,9 @@ fn an_eviction_storm_keeps_live_turns_controllable() {
                         call(&node, user, "openhuman.channel_web_chat", json!({
                             "client_id": "c1", "thread_id": thread, "message": canary(i + 1, "storm")
                         }));
+                        wait_until("a churning user's short turn", &node, Duration::from_secs(30), || {
+                            !active(&node, user, &thread)
+                        });
                     }
                     // Aimed at alice's turn: a no-op in their own profile.
                     let (_, _, body) = call(&node, user, "openhuman.channel_web_cancel",
