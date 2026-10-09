@@ -91,6 +91,7 @@ fn act(w: &mut World, actor: usize, method: &str, params: Value) -> Value {
             USERS[actor]
         ));
     }
+    check_response(w, actor, method, &params, &body);
     w.harvest(actor, method, &params, &body);
     body
 }
@@ -158,8 +159,7 @@ fn seed(w: &mut World) {
             json!({ "client_id": "c1", "thread_id": format!("chat-{}", USERS[user]), "message": message }));
         let params = json!({ "channel": "telegram", "chat_id": "777", "sender_id": "555",
                              "message_id": "tg-1", "text": canary(user, "relayed") });
-        let body = act(w, user, "openhuman.channel_relay_inbound", params.clone());
-        check_response(w, user, "openhuman.channel_relay_inbound", &params, &body);
+        act(w, user, "openhuman.channel_relay_inbound", params);
         act(w, user, "openhuman.memory_learn", json!({ "text": canary(user, "memory") }));
     }
     let body = act(w, VICTIM, "openhuman.channel_web_chat", json!({
@@ -199,8 +199,7 @@ fn drive(w: &mut World, steps: usize) {
             w.listen(actor, &client);
         }
         let params = generate(w, actor);
-        let body = act(w, actor, method, params.clone());
-        check_response(w, actor, method, &params, &body);
+        let body = act(w, actor, method, params);
         if method == "openhuman.threads_purge" && body.get("result").is_some() {
             seed_keep(w, actor);
         }

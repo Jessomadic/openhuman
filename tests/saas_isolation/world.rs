@@ -97,6 +97,21 @@ pub struct Pools {
 
 impl Pools {
     fn push(list: &mut Vec<Owned>, owner: usize, value: &str, thread: Option<&str>) {
+        Self::push_unless(list, owner, value, thread, &HashSet::new());
+    }
+
+    /// [`Self::push`], skipping a value the caller sent itself: an id a
+    /// response only echoes back is not the caller's.
+    fn push_unless(
+        list: &mut Vec<Owned>,
+        owner: usize,
+        value: &str,
+        thread: Option<&str>,
+        sent: &HashSet<String>,
+    ) {
+        if sent.contains(value) {
+            return;
+        }
         if value.is_empty() || value.len() > 200 || value.contains("CANARY") {
             return;
         }
@@ -274,6 +289,10 @@ impl World {
         if let Some(client) = params["client_id"].as_str() {
             Pools::push(&mut self.pools.clients, actor, client, None);
         }
+        let sent: HashSet<String> = params
+            .as_object()
+            .map(|m| m.values().filter_map(Value::as_str).map(str::to_owned).collect())
+            .unwrap_or_default();
         let mut stack = vec![(body.clone(), thread)];
         while let Some((value, thread)) = stack.pop() {
             match value {
@@ -296,10 +315,16 @@ impl World {
                         let pools = &mut self.pools;
                         match key.as_str() {
                             "thread_id" | "threadId" => Pools::push(&mut pools.threads, actor, s, None),
-                            "request_id" | "requestId" => Pools::push(&mut pools.requests, actor, s, t),
+                            "request_id" | "requestId" => {
+                                Pools::push_unless(&mut pools.requests, actor, s, t, &sent)
+                            }
                             "client_id" | "clientId" => Pools::push(&mut pools.clients, actor, s, None),
-                            "item_id" | "itemId" => Pools::push(&mut pools.queue_items, actor, s, t),
-                            "message_id" | "messageId" => Pools::push(&mut pools.messages, actor, s, t),
+                            "item_id" | "itemId" => {
+                                Pools::push_unless(&mut pools.queue_items, actor, s, t, &sent)
+                            }
+                            "message_id" | "messageId" => {
+                                Pools::push_unless(&mut pools.messages, actor, s, t, &sent)
+                            }
                             "id" => match method {
                                 m if m.contains("threads_list")
                                     || m.contains("threads_create_new")
@@ -311,10 +336,10 @@ impl World {
                                     Pools::push(&mut pools.messages, actor, s, t)
                                 }
                                 m if m.contains("memory_") => {
-                                    Pools::push(&mut pools.memory_ids, actor, s, None)
+                                    Pools::push_unless(&mut pools.memory_ids, actor, s, None, &sent)
                                 }
                                 m if m.contains("queue_status") => {
-                                    Pools::push(&mut pools.queue_items, actor, s, t)
+                                    Pools::push_unless(&mut pools.queue_items, actor, s, t, &sent)
                                 }
                                 _ => {}
                             },
