@@ -76,7 +76,8 @@ pub const GENERATORS: &[(&str, Generator)] = &[
         json!({ "thread_id": w.thread_for(a, false) })
     }),
     ("openhuman.threads_turn_state_get_turn", |w, a| {
-        json!({ "thread_id": w.thread_for(a, false), "request_id": w.request_for(a) })
+        let (request, thread) = w.request_on_thread(a);
+        json!({ "thread_id": thread, "request_id": request })
     }),
     ("openhuman.threads_turn_state_clear", |w, a| {
         json!({ "thread_id": w.thread_for(a, true) })
@@ -127,11 +128,12 @@ pub const GENERATORS: &[(&str, Generator)] = &[
         params
     }),
     ("openhuman.channel_web_cancel", |w, a| {
-        let mut params = json!({ "client_id": w.client_for(a), "thread_id": w.thread_for(a, true) });
         if w.rng.chance(70) {
-            params["request_id"] = json!(w.request_for(a));
+            let (request, thread) = w.request_on_thread(a);
+            json!({ "client_id": w.client_for(a), "thread_id": thread, "request_id": request })
+        } else {
+            json!({ "client_id": w.client_for(a), "thread_id": w.thread_for(a, true) })
         }
-        params
     }),
     ("openhuman.channel_web_queue_status", |w, a| {
         json!({ "thread_id": w.thread_for(a, false) })

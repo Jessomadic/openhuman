@@ -263,6 +263,21 @@ impl World {
         }
     }
 
+    /// A request id and, when known, the thread it ran on: a cancel aimed
+    /// at exactly another user's `(thread, request)`.
+    pub fn request_on_thread(&mut self, actor: usize) -> (String, String) {
+        let request = self.request_for(actor);
+        let thread = self
+            .pools
+            .requests
+            .iter()
+            .find(|o| o.value == request)
+            .and_then(|o| o.thread.clone())
+            .filter(|t| !self.protected[actor].contains(t) && self.rng.chance(70));
+        let thread = thread.unwrap_or_else(|| self.thread_for(actor, true));
+        (request, thread)
+    }
+
     pub fn message_for(&mut self, actor: usize) -> String {
         self.foreign_first(actor, |p| &p.messages)
     }

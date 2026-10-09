@@ -68,10 +68,6 @@ pub struct MockLlm {
 }
 
 impl MockLlm {
-    pub fn url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
-    }
-
     pub fn recorded(&self) -> Vec<Recorded> {
         self.requests.lock().unwrap().clone()
     }
