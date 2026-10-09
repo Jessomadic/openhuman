@@ -54,9 +54,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use openhuman_core::agent::session_store::SessionStoreProvider;
-use openhuman_core::core::runtime::{CoreContext, CoreRuntime};
+use openhuman_core::core::runtime::CoreRuntime;
 use openhuman_core::profiles::credentials::UserCredentialKind;
-use openhuman_core::profiles::{Profile, ProfileHost};
+use openhuman_core::profiles::ProfileHost;
 
 use crate::error::CoreError;
 
@@ -351,11 +351,6 @@ fn ensure_service_token(path: &Path) -> Result<(), ProfileError> {
         path.display()
     );
     Ok(())
-}
-
-/// The profile's context, for the handle.
-pub(crate) fn context_of(profile: &Profile) -> Arc<CoreContext> {
-    Arc::clone(profile.context())
 }
 
 #[cfg(test)]
