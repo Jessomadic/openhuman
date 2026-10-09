@@ -67,6 +67,14 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
         );
         assert!(body.get("result").is_some(), "{body}");
     }
+    // Keyring secrets are namespaced by their store's directory name: a user
+    // named like this node's operator directory would share its slots.
+    let (_, body) = rpc_with(&client(), &node.base, Some(BEARER), "openhuman.profiles_provision",
+        json!({ "user_id": "operator-1" }));
+    assert!(
+        body.get("error").is_some() && !d.root.join("users/operator-1").exists(),
+        "a profile named like the operator dir is refused: {body}"
+    );
     // Bob's data, the operator's and the host's: everything alice must not read.
     let (_, _, body) = call(&node, USERS[1], "openhuman.threads_upsert", json!({
         "id": "bob-private", "title": canary(1, "title"), "created_at": "2026-10-10T00:00:00Z"
@@ -191,8 +199,5 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
     );
     let (violations, _) = scan::audit_backend(&llm.recorded());
     assert!(violations.is_empty(), "{}", violations.join("\n"));
-    let kc = std::fs::read_to_string(d.tmp.path().join("operator-1/workspace/dev-keychain.json")).unwrap_or_default();
-    let v: Value = serde_json::from_str(&kc).unwrap_or(Value::Null);
-    eprintln!("TEMPKEYS {:?}", v.as_object().map(|m| m.keys().cloned().collect::<Vec<_>>()));
     eprintln!("[isolation] probes took {:.1}s", started.elapsed().as_secs_f64());
 }

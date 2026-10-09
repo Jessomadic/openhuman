@@ -56,6 +56,14 @@ pub fn scan_files(root: &Path, home: &Path) -> (Vec<String>, [usize; 3]) {
                 continue;
             };
             let text = String::from_utf8_lossy(&bytes);
+            // The process keyring (the dev file backend in this build) is one
+            // store for the whole process: each profile's credential sits in
+            // it under `<profile id>:…`. An entry is fine only under its own
+            // owner's namespace.
+            if path.file_name().is_some_and(|n| n == "dev-keychain.json") {
+                violations.extend(keychain_violations(&path, &text));
+                continue;
+            }
             let found = owners_in(&text);
             if found.is_empty() {
                 continue;
@@ -80,6 +88,26 @@ pub fn scan_files(root: &Path, home: &Path) -> (Vec<String>, [usize; 3]) {
         }
     }
     (violations, own)
+}
+
+/// Keyring entries holding a user's canary outside that user's namespace.
+fn keychain_violations(path: &Path, text: &str) -> Vec<String> {
+    let map: std::collections::HashMap<String, String> =
+        serde_json::from_str(text).unwrap_or_default();
+    let mut out = Vec::new();
+    for (key, value) in &map {
+        let namespace = key.split(':').next().unwrap_or_default();
+        for user in owners_in(value) {
+            if namespace != USERS[user] {
+                out.push(format!(
+                    "{}: entry `{key}` holds {}'s secret",
+                    path.display(),
+                    USERS[user]
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// Requests whose content and credential disagree: any request carrying a
