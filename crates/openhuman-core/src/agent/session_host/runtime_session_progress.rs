@@ -8,6 +8,18 @@ use tinyagents_runtime::CommitReceipt;
 /// consuming events. The web bridge has its own bounded drain wait afterward.
 const COMMITTED_TURN_PROGRESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// `receipt` as the session keeps it after its turn: without the turn's
+/// progress sinks (`OpenHumanRunContext::detach_progress`). A kept sender
+/// held the turn's progress bridge, and the tenant context it runs under,
+/// alive until the thread's next turn, so a SaaS profile never read as idle.
+pub(super) fn kept_receipt(
+    mut receipt: CommitReceipt<OpenHumanRunContext>,
+) -> CommitReceipt<OpenHumanRunContext> {
+    receipt.options.context.detach_progress();
+    log::debug!("[session_host] last commit kept without its progress sinks");
+    receipt
+}
+
 /// Route the commit fence to the turn that produced the receipt. A warm
 /// session reuses its commit callback, so a sender captured when the session
 /// was created would point at a prior turn's bridge.

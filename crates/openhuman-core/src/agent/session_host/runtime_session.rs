@@ -1286,17 +1286,10 @@ impl OpenHumanSessionHost {
                         let _ =
                             progress::send_receipt_progress(&receipt, &input, &output, iterations)
                                 .await;
-                        // The kept receipt must not hold the turn's progress
-                        // channel open (see `detach_progress`).
-                        let mut receipt = receipt;
-                        receipt.options.context.detach_progress();
-                        log::debug!(
-                            "[session_host] last commit kept without its progress sinks session={session_id}"
-                        );
                         state
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .last_commit = Some(receipt);
+                            .last_commit = Some(progress::kept_receipt(receipt));
                         {
                             let mut state = state
                                 .lock()
