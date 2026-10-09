@@ -211,10 +211,10 @@ pub const GENERATORS: &[(&str, Generator)] = &[
         |w, a| json!({ "ids": [w.memory_id_for(a)] }),
     ),
     ("openhuman.memory_items_list", |_, _| json!({ "limit": 20 })),
-    (
-        "openhuman.memory_explore",
-        |w, _| json!({ "facet": ["kind", "source", "workspace", "folder"][w.rng.below(4)] }),
-    ),
+    ("openhuman.memory_explore", |w, _| {
+        let facet = ["kind", "source", "workspace", "folder"][w.rng.below(4)];
+        json!({ "facet": facet })
+    }),
 ];
 
 impl World {
