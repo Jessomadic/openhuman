@@ -8,6 +8,9 @@ use super::mock_llm::{mock_llm, HANG};
 use super::world::{canary, credential, USERS};
 use super::*;
 
+/// Rounds of the storm; each admits bob and carol once.
+const ROUNDS: usize = 12;
+
 fn queue(node: &Node, user: &str, thread: &str) -> Value {
     let (status, _, body) = call(node, user, "openhuman.channel_web_queue_status",
         json!({ "thread_id": thread }));
@@ -60,40 +63,45 @@ fn an_eviction_storm_keeps_live_turns_controllable() {
     // The storm: bob and carol share the one free slot.
     let (mut opened, mut refused) = (0, 0);
     let mut written: [Vec<String>; 2] = Default::default();
-    for round in 0..15 {
+    for round in 0..ROUNDS {
         for (i, user) in [bob, carol].into_iter().enumerate() {
             let thread = format!("storm-{round}");
-            let (status, _, body) = call(&node, user, "openhuman.threads_upsert", json!({
-                "id": thread, "title": canary(i + 1, &thread), "created_at": "2026-10-10T00:00:00Z"
-            }));
-            match status {
-                200 => {
-                    assert!(body.get("result").is_some(), "{body}");
-                    opened += 1;
-                    written[i].push(thread.clone());
-                    if round % 3 == 0 {
-                        // A short turn of their own, which also pins the
-                        // profile while it runs.
-                        call(&node, user, "openhuman.channel_web_chat", json!({
-                            "client_id": "c1", "thread_id": thread, "message": canary(i + 1, "storm")
-                        }));
-                        wait_until("a churning user's short turn", &node, Duration::from_secs(30), || {
-                            !active(&node, user, &thread)
-                        });
+            // The slot frees once the other user's work is done; a profile
+            // that stays busy past the deadline is pinned (leak d).
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let body = loop {
+                let (status, _, body) = call(&node, user, "openhuman.threads_upsert", json!({
+                    "id": thread, "title": canary(i + 1, &thread), "created_at": "2026-10-10T00:00:00Z"
+                }));
+                match status {
+                    200 => break body,
+                    503 if Instant::now() < deadline => {
+                        refused += 1;
+                        std::thread::sleep(Duration::from_millis(100));
                     }
-                    // Aimed at alice's turn: a no-op in their own profile.
-                    let (_, _, body) = call(&node, user, "openhuman.channel_web_cancel",
-                        json!({ "client_id": "c-live", "thread_id": "live", "request_id": request }));
-                    assert!(!body.to_string().contains("\"cancelled\":true"), "{user} cancelled alice: {body}");
+                    other => panic!(
+                        "{user} never got a profile slot back (HTTP {other}, round {round}): {body}\n{}",
+                        node.log_tail()
+                    ),
                 }
-                503 => {
-                    refused += 1;
-                    if refused == 1 {
-                        eprintln!("[isolation] first busy refusal ({user}, round {round}): {body}");
-                    }
-                }
-                other => panic!("{user} during the storm: HTTP {other}: {body}"),
+            };
+            assert!(body.get("result").is_some(), "{body}");
+            opened += 1;
+            written[i].push(thread.clone());
+            if round % 3 == 0 {
+                // A short turn of their own, which pins the profile while it
+                // runs and must stop pinning it once it is over.
+                call(&node, user, "openhuman.channel_web_chat", json!({
+                    "client_id": "c1", "thread_id": thread, "message": canary(i + 1, "storm")
+                }));
+                wait_until("a churning user's short turn", &node, Duration::from_secs(30), || {
+                    !active(&node, user, &thread)
+                });
             }
+            // Aimed at alice's turn: a no-op in their own profile.
+            let (_, _, body) = call(&node, user, "openhuman.channel_web_cancel",
+                json!({ "client_id": "c-live", "thread_id": "live", "request_id": request }));
+            assert!(!body.to_string().contains("\"cancelled\":true"), "{user} cancelled alice: {body}");
             let status = queue(&node, alice, "live");
             assert!(
                 status.to_string().contains("\"active\":true"),
@@ -105,7 +113,12 @@ fn an_eviction_storm_keeps_live_turns_controllable() {
     let log = std::fs::read_to_string(&node.log).unwrap_or_default();
     let evictions = log.matches("[profiles] evicted").count();
     eprintln!("[isolation] storm: {opened} opens, {refused} busy refusals, {evictions} evictions");
-    assert!(evictions >= 5, "the storm evicted profiles ({evictions})\n{}", node.log_tail());
+    // Each admission after the first evicted the other churner.
+    assert!(
+        evictions >= 2 * ROUNDS - 1,
+        "the storm evicted profiles ({evictions})\n{}",
+        node.log_tail()
+    );
     assert!(!log.contains("evicted least recently used profile=alice")
         && !log.contains("evicted idle profile=alice"), "alice was evicted mid-turn");
 
