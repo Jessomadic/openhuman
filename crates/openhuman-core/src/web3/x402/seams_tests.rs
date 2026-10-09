@@ -86,8 +86,15 @@ fn the_proxy_policy_yields_a_buildable_client() {
 #[test]
 fn the_tool_is_built_from_the_host_seams() {
     use tinytools::Tool;
-    assert_eq!(request_tool().name(), "x402_request");
-    assert_eq!(super::super::request_tool().name(), "x402_request");
+    let security = Arc::new(SecurityPolicy::default());
+    assert_eq!(
+        request_tool(security.clone(), vec![]).name(),
+        "x402_request"
+    );
+    assert_eq!(
+        super::super::request_tool(security, vec![]).name(),
+        "x402_request"
+    );
 }
 
 fn solana_challenge_headers() -> HeaderMap {

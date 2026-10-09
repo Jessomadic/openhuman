@@ -48,7 +48,7 @@ pub use schemas::all_registered_controllers as all_x402_registered_controllers;
 #[cfg(feature = "web3")]
 pub use tinywallet_x402::ledger::{PaymentRecord, PaymentStatus, SpendingBudget};
 #[cfg(feature = "web3")]
-pub use tinywallet_x402::protocol::{handle_402, X402Client, X402Error, X402PaymentResult};
+pub use tinywallet_x402::protocol::{X402Client, X402Error, X402PaymentResult, handle_402};
 #[cfg(feature = "web3")]
 pub use tinywallet_x402::wire::{
     EvmAuthorization, EvmPaymentProof, PaymentChain, PaymentPayload, PaymentProof, PaymentRequired,
@@ -82,10 +82,14 @@ pub async fn handle_402_and_pay(
 }
 
 /// The `x402_request` agent tool, wired to OpenHuman's wallet, chain
-/// transport and proxy policy.
+/// transport, proxy and network policy. `allowed_domains` is the same list
+/// passed to the other agent network tools.
 #[cfg(feature = "web3")]
-pub fn request_tool() -> tinywallet_x402::tools::X402RequestTool {
-    seams::request_tool()
+pub fn request_tool(
+    security: std::sync::Arc<crate::security::SecurityPolicy>,
+    allowed_domains: Vec<String>,
+) -> tinywallet_x402::tools::X402RequestTool {
+    seams::request_tool(security, allowed_domains)
 }
 
 // ---------------------------------------------------------------------------

@@ -23,15 +23,18 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::debug;
+use tinytools_std::network::NetGate;
+use tinytools_std::url_guard::validate_url_with_dns_check;
 use tinywallet_x402::crypto::{CryptoPayments, PaymentAccount, PaymentSigner, SignScheme};
 use tinywallet_x402::protocol::ProxyPolicy;
 use tinywallet_x402::thread::ThreadScope;
-use tinywallet_x402::tools::X402RequestTool;
+use tinywallet_x402::tools::{AuthorizedUrl, RequestGuard, X402RequestTool};
 use tinywallet_x402::wire::PaymentChain;
 
+use crate::security::SecurityPolicy;
 use crate::security::approval::APPROVAL_CHAT_CONTEXT;
-use crate::web3::wallet::transport::OpenHumanTransport;
 use crate::web3::wallet::WalletChain;
+use crate::web3::wallet::transport::OpenHumanTransport;
 
 const LOG_PREFIX: &str = "[x402::seams]";
 
@@ -42,6 +45,49 @@ pub(crate) struct WalletPaymentSigner;
 /// The runtime proxy configuration, applied to x402's outbound HTTP.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RuntimeProxyPolicy;
+
+#[derive(Debug)]
+pub(crate) struct HostRequestGuard {
+    security: Arc<SecurityPolicy>,
+    allowed_domains: Vec<String>,
+}
+
+#[async_trait]
+impl RequestGuard for HostRequestGuard {
+    fn needs_approval(&self) -> bool {
+        self.security.network_needs_approval()
+    }
+
+    async fn authorize(
+        &self,
+        url: &str,
+        has_body: bool,
+        has_headers: bool,
+    ) -> Result<AuthorizedUrl, String> {
+        if !self.security.can_act() {
+            return Err("[policy-blocked] Action blocked: autonomy is read-only".into());
+        }
+        if !self.security.record_action() {
+            return Err("Action blocked: rate limit exceeded".into());
+        }
+        let host = reqwest::Url::parse(url)
+            .ok()
+            .and_then(|parsed| parsed.host_str().map(str::to_string))
+            .unwrap_or_else(|| "unknown".to_string());
+        if let Some(reason) = self.security.local_only_block(&host) {
+            return Err(reason);
+        }
+        let target = validate_url_with_dns_check(url, &self.allowed_domains)
+            .await
+            .map_err(|error| error.to_string())?;
+        self.security.disclose(&target.host, has_body, has_headers);
+        Ok(AuthorizedUrl {
+            url: target.url,
+            host: target.host,
+            addrs: target.addrs,
+        })
+    }
+}
 
 /// The chat thread running the current tool call, read from
 /// `APPROVAL_CHAT_CONTEXT`.
@@ -198,13 +244,20 @@ pub(crate) fn payments() -> CryptoPayments {
 }
 
 /// The `x402_request` tool, over the same seams.
-pub(crate) fn request_tool() -> X402RequestTool {
+pub(crate) fn request_tool(
+    security: Arc<SecurityPolicy>,
+    allowed_domains: Vec<String>,
+) -> X402RequestTool {
     X402RequestTool::new(
         Arc::new(WalletPaymentSigner),
         Arc::new(OpenHumanTransport::new()),
         Arc::new(RuntimeProxyPolicy),
     )
     .with_thread_scope(Arc::new(TaskLocalThread))
+    .with_request_guard(Arc::new(HostRequestGuard {
+        security,
+        allowed_domains,
+    }))
 }
 
 #[cfg(test)]
