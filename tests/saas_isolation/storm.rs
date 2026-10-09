@@ -159,5 +159,7 @@ fn zz_experiment_pin_after_turn() {
     eprintln!("carol never admitted; inference requests: {}", llm.recorded().iter().filter(|r| r.is_inference()).count());
     let paths: Vec<String> = llm.recorded().iter().skip(before).map(|r| r.path.clone()).collect();
     eprintln!("backend paths: {paths:?}");
-    eprintln!("{}", node.log_tail());
+    let log = std::fs::read_to_string(&node.log).unwrap_or_default();
+    let pins: Vec<&str> = log.lines().filter(|l| l.contains("DEBUGPIN")).collect();
+    eprintln!("PINS {}", pins[pins.len().saturating_sub(5)..].join("\n"));
 }
