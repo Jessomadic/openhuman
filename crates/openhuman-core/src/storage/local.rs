@@ -47,7 +47,7 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use rusqlite::Connection;
 use serde_json::Value;
-use tinystoragedrivers::{CollectionSpec, Precondition};
+use tinystoragedrivers::CollectionSpec;
 
 use super::config::{mode, StorageMode};
 use super::documents::Repo;
@@ -236,7 +236,7 @@ fn import(
         let mut written = 0usize;
         for row in rows {
             match docs
-                .put(row.collection, &row.id, row.doc, Precondition::Absent)
+                .put(row.collection, &row.id, row.doc, tinystoragedrivers::Precondition::Absent)
                 .await
             {
                 Ok(_) => written += 1,
