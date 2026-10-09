@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::agent::tinyagents::TurnModelSource;
+use crate::agent::tinyagents::turn_policy::{DEFAULT_MODEL_CALL_TIMEOUT_SECS, LOCAL_MODEL_CALL_TIMEOUT_SECS};
 use async_trait::async_trait;
 use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse};
 use tinytools::{Tool, ToolResult};
@@ -233,7 +234,7 @@ async fn local_provider_survives_a_slow_first_byte_that_a_hosted_one_does_not() 
     let hosted = run_slow_first_byte_turn("openai", delay_secs).await;
     let err = hosted.expect_err("hosted provider must hit the per-call ceiling");
     assert!(
-        crate::web_chat::web_errors::is_turn_timeout_error(&err),
+        err.contains("timed out"),
         "unexpected error: {err}"
     );
 
@@ -248,7 +249,7 @@ async fn local_provider_is_still_bounded_by_the_local_ceiling() {
         .await
         .expect_err("a call past the local ceiling must time out");
     assert!(
-        crate::web_chat::web_errors::is_turn_timeout_error(&err),
+        err.contains("timed out"),
         "unexpected error: {err}"
     );
 }
