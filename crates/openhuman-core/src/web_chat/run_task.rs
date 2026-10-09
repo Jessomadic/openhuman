@@ -152,7 +152,6 @@ pub(crate) async fn run_chat_task(
         input: Some(message.to_string()),
         output: None,
     });
-    let progress_probe = progress_tx.downgrade();
     agent.set_on_progress(Some(progress_tx));
     agent.set_run_queue(Some(run_queue));
     agent.set_thread_id(Some(thread_id));
@@ -318,15 +317,7 @@ pub(crate) async fn run_chat_task(
         .await;
     }
 
-    log::debug!("[web-channel] DEBUGSENDERS before-clear={}", progress_probe.strong_count());
     agent.set_on_progress(None);
-    log::debug!("[web-channel] DEBUGSENDERS after-clear={}", progress_probe.strong_count());
-    if std::env::var("DEBUG_CLEAR").is_ok() {
-        agent.debug_drop_runtime_session_only();
-        log::debug!("[web-channel] DEBUGSENDERS after-drop-runtime-session={}", progress_probe.strong_count());
-        agent.clear_history();
-        log::debug!("[web-channel] DEBUGSENDERS after-clear-history={}", progress_probe.strong_count());
-    }
 
     // The caller publishes the terminal `chat_done`/`chat_error` as soon as
     // this returns. Let the bridge forward everything the turn queued first,
@@ -406,14 +397,6 @@ pub(crate) async fn run_chat_task(
         } else {
             checkin_session_agent(thread_id, agent, current_fp).await;
         }
-    }
-    log::debug!("[web-channel] DEBUGSENDERS after-checkin={}", progress_probe.strong_count());
-    {
-        let probe = progress_probe.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            log::debug!("[web-channel] DEBUGSENDERS after-5s={}", probe.strong_count());
-        });
     }
 
     result

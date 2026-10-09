@@ -528,10 +528,6 @@ impl OpenHumanSessionHost {
         ));
     }
 
-    pub fn debug_drop_runtime_session_only(&mut self) {
-        self.runtime_session = None;
-    }
-
     /// Clears the agent's conversation history.
     pub fn clear_history(&mut self) {
         // Runtime `Session` owns the only generic history and has no mutable
