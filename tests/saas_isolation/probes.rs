@@ -173,6 +173,14 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
         }
     }
     eprintln!("[isolation] probe results:\n{}", report.join("\n"));
+    if results.iter().any(|(_, o)| o.is_none()) {
+        let log = std::fs::read_to_string(&node.log).unwrap_or_default();
+        let lines: Vec<&str> = log
+            .lines()
+            .filter(|l| l.contains("approval") || l.contains("file_read") || l.contains("policy") || l.contains("gate"))
+            .collect();
+        eprintln!("[isolation] core log (approval/policy):\n{}", lines[lines.len().saturating_sub(60)..].join("\n"));
+    }
     assert!(!pwned_host.exists(), "a user wrote a host file");
     assert!(!d.root.join("users/bob/sandbox/pwned.txt").exists(), "alice wrote into bob's sandbox");
     assert!(!shell_marker.exists(), "a user ran a host shell command");
