@@ -19,11 +19,15 @@ fn tool_result(llm: &MockLlm, tag: &str, timeout: Duration) -> Option<String> {
                 continue;
             }
             let body: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
-            let Some(last) = body["messages"].as_array().and_then(|m| m.last()) else {
-                continue;
-            };
-            if last["role"] == "tool" {
-                return Some(content_text(last));
+            // The latest tool message after the probe; the harness may add
+            // a note after it.
+            let messages = body["messages"].as_array().cloned().unwrap_or_default();
+            let after = messages
+                .iter()
+                .rposition(|m| content_text(m).contains(tag))
+                .map_or(0, |i| i + 1);
+            if let Some(tool) = messages[after..].iter().rev().find(|m| m["role"] == "tool") {
+                return Some(content_text(tool));
             }
         }
         std::thread::sleep(Duration::from_millis(200));
