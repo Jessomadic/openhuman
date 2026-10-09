@@ -208,10 +208,7 @@ pub(super) fn db_path(config: &Config) -> std::path::PathBuf {
 
 /// Open (and migrate) the approval DB, then call `f` with a live
 /// connection. Mirrors `notifications/store.rs::with_connection`.
-pub(super) fn with_connection<T>(
-    config: &Config,
-    f: impl FnOnce(&Connection) -> Result<T>,
-) -> Result<T> {
+fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
     let db_path = db_path(config);
 
     tracing::trace!(
@@ -369,16 +366,14 @@ pub fn get_decision(config: &Config, request_id: &str) -> Result<Option<Approval
 /// from outside this call's task scope (a `Drop`), where the acting agent is
 /// no longer installed. A scope that cannot be resolved is kept as an error,
 /// so the later decision fails instead of switching to the SQLite store.
-pub(super) fn capture_docs(
-    config: &Config,
-) -> Result<Option<super::store_documents::Docs>, String> {
+pub(super) fn capture_docs(config: &Config) -> Result<Option<Docs>, String> {
     super::store_documents::current(config).map_err(|error| error.to_string())
 }
 
 /// [`decide`] against a store captured by [`capture_docs`].
 pub(super) fn decide_captured(
     config: &Config,
-    captured: &Result<Option<super::store_documents::Docs>, String>,
+    captured: &Result<Option<Docs>, String>,
     request_id: &str,
     decision: ApprovalDecision,
 ) -> Result<Option<PendingApproval>> {
