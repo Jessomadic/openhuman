@@ -251,16 +251,17 @@ impl NpmExecTool {
         }
         let command = parts.join(" ");
 
-        // When the agent's sandbox mode is `Sandboxed`, route execution
-        // through the sandbox backend (Docker / OS-level `cwd_jail` /
-        // documented noop) instead of the native runtime path. Mirrors
-        // the wiring in `ShellTool::run_with_security` (PR #3261) so
-        // npm_exec gets the same isolation guarantees as shell. The
-        // security/rate-limit checks above still apply.
-        if matches!(
-            crate::agent::harness::current_sandbox_mode(),
-            Some(crate::agent::harness::definition::SandboxMode::Sandboxed)
-        ) {
+        // Route sandboxed agents and explicit operator backend selections
+        // through the shared sandbox path before native execution.
+        let sandbox_required = match sandbox::command_requires_sandbox().await {
+            Ok(required) => required,
+            Err(err) => {
+                return Ok(ToolResult::error(format!(
+                    "Cannot read sandbox configuration: {err}"
+                )))
+            }
+        };
+        if sandbox_required {
             return Ok(self
                 .run_sandboxed(
                     &path_policy,

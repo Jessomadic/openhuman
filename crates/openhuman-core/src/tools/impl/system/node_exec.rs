@@ -249,16 +249,17 @@ impl NodeExecTool {
             unreachable!("guarded above")
         };
 
-        // When the agent's sandbox mode is `Sandboxed`, route execution
-        // through the sandbox backend (Docker / OS-level `cwd_jail` /
-        // documented noop) instead of the native runtime path. Mirrors
-        // the wiring in `ShellTool::run_with_security` (PR #3261) so
-        // node_exec gets the same isolation guarantees as shell. The
-        // security/rate-limit checks above still apply.
-        if matches!(
-            crate::agent::harness::current_sandbox_mode(),
-            Some(crate::agent::harness::definition::SandboxMode::Sandboxed)
-        ) {
+        // Route sandboxed agents and explicit operator backend selections
+        // through the shared sandbox path before considering the native pool.
+        let sandbox_required = match sandbox::command_requires_sandbox().await {
+            Ok(required) => required,
+            Err(err) => {
+                return Ok(ToolResult::error(format!(
+                    "Cannot read sandbox configuration: {err}"
+                )))
+            }
+        };
+        if sandbox_required {
             return Ok(self
                 .run_sandboxed(&path_policy, &command, &resolved.bin_dir, explicit_timeout)
                 .await);

@@ -247,11 +247,17 @@ impl PythonExecTool {
             unreachable!("guarded above")
         };
 
-        // Sandboxed agents route through the sandbox backend, mirroring node_exec.
-        if matches!(
-            crate::agent::harness::current_sandbox_mode(),
-            Some(crate::agent::harness::definition::SandboxMode::Sandboxed)
-        ) {
+        // Sandboxed agents and explicit operator backend selections use the
+        // sandbox path, mirroring node_exec.
+        let sandbox_required = match sandbox::command_requires_sandbox().await {
+            Ok(required) => required,
+            Err(err) => {
+                return Ok(ToolResult::error(format!(
+                    "Cannot read sandbox configuration: {err}"
+                )))
+            }
+        };
+        if sandbox_required {
             let bin_dir = resolved
                 .python_bin
                 .parent()
