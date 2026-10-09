@@ -444,6 +444,8 @@ pub fn clear_all(config: &Config) -> Result<usize> {
 
 mod store_rows;
 use store_rows::{map_source_row, SELECT_SOURCE_COLUMNS};
+#[path = "store_import.rs"]
+pub(super) mod import;
 
 /// Tracks which task_sources database files have already had their schema DDL
 /// (the `CREATE TABLE`/`CREATE INDEX` batch plus the `add_column_if_missing`
@@ -640,8 +642,15 @@ fn init_schema(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-    let db_path = config.workspace_dir.join("task_sources").join("sources.db");
+pub(super) fn db_path(config: &Config) -> PathBuf {
+    config.workspace_dir.join("task_sources").join("sources.db")
+}
+
+pub(super) fn with_connection<T>(
+    config: &Config,
+    f: impl FnOnce(&Connection) -> Result<T>,
+) -> Result<T> {
+    let db_path = db_path(config);
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| {
             format!(

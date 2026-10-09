@@ -129,8 +129,15 @@ fn map_device_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PairedDevice> {
     })
 }
 
-fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-    let db_path = config.workspace_dir.join("devices").join("devices.db");
+pub(super) fn db_path(config: &Config) -> std::path::PathBuf {
+    config.workspace_dir.join("devices").join("devices.db")
+}
+
+pub(super) fn with_connection<T>(
+    config: &Config,
+    f: impl FnOnce(&Connection) -> Result<T>,
+) -> Result<T> {
+    let db_path = db_path(config);
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create devices dir: {}", parent.display()))?;
@@ -160,6 +167,9 @@ fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>)
     );
     f(&conn)
 }
+
+#[path = "store_import.rs"]
+pub(super) mod import;
 
 // ---------------------------------------------------------------------------
 // Tests

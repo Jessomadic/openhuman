@@ -9,16 +9,16 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use super::store_documents::DEVICES;
+use super::super::store_documents::DEVICES;
 use crate::config::Config;
 use crate::storage::local::{table_exists, ImportDoc};
 
 /// The legacy tables this import retires.
-pub(super) const TABLES: &[&str] = &["paired_devices"];
+pub(crate) const TABLES: &[&str] = &["paired_devices"];
 
 /// Reads every legacy row.
-pub(super) fn read(config: &Config) -> Result<Vec<ImportDoc>> {
-    super::store::with_connection(config, read_rows)
+pub(crate) fn read(config: &Config) -> Result<Vec<ImportDoc>> {
+    super::with_connection(config, read_rows)
 }
 
 fn read_rows(conn: &Connection) -> Result<Vec<ImportDoc>> {

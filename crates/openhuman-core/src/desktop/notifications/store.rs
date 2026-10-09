@@ -69,11 +69,18 @@ CREATE INDEX IF NOT EXISTS idx_core_notifications_ts
 
 /// Open (and migrate) the notifications DB, then call `f` with the live
 /// connection. Mirrors the `with_connection` helper in `cron/store.rs`.
-fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-    let db_path = config
+pub(super) fn db_path(config: &Config) -> std::path::PathBuf {
+    config
         .workspace_dir
         .join("notifications")
-        .join("notifications.db");
+        .join("notifications.db")
+}
+
+pub(super) fn with_connection<T>(
+    config: &Config,
+    f: impl FnOnce(&Connection) -> Result<T>,
+) -> Result<T> {
+    let db_path = db_path(config);
 
     tracing::trace!(
         path = %db_path.display(),
@@ -702,6 +709,8 @@ pub fn get_settings(config: &Config, provider: &str) -> Result<NotificationSetti
 }
 
 mod store_rows;
+#[path = "store_import.rs"]
+pub(super) mod import;
 use store_rows::rows_to_notifications;
 
 #[cfg(test)]

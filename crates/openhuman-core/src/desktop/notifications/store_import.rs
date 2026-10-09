@@ -18,21 +18,21 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde_json::json;
 
-use super::store_documents::{core_id, to_doc, CORE, NOTIFICATIONS, SETTINGS};
+use super::super::store_documents::{core_id, to_doc, CORE, NOTIFICATIONS, SETTINGS};
 use crate::config::Config;
 use crate::storage::local::{table_exists, ImportDoc};
 
 /// The legacy tables this import retires.
-pub(super) const TABLES: &[&str] = &[
+pub(crate) const TABLES: &[&str] = &[
     "integration_notifications",
     "notification_settings",
     "core_notifications",
 ];
 
 /// Reads every legacy row.
-pub(super) fn read(config: &Config) -> Result<Vec<ImportDoc>> {
+pub(crate) fn read(config: &Config) -> Result<Vec<ImportDoc>> {
     let workspace = config.workspace_dir.to_string_lossy().into_owned();
-    super::store::with_connection(config, |conn| read_rows(conn, &workspace))
+    super::with_connection(config, |conn| read_rows(conn, &workspace))
 }
 
 fn read_rows(conn: &Connection, workspace: &str) -> Result<Vec<ImportDoc>> {
@@ -49,7 +49,7 @@ fn read_rows(conn: &Connection, workspace: &str) -> Result<Vec<ImportDoc>> {
         let rows = stmt
             .query(())
             .context("[notifications::import] query integration_notifications")?;
-        for notification in super::store::rows_to_notifications(rows)? {
+        for notification in super::rows_to_notifications(rows)? {
             docs.push(ImportDoc {
                 collection: NOTIFICATIONS,
                 id: notification.id.clone(),

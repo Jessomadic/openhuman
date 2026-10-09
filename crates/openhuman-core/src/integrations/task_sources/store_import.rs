@@ -12,16 +12,16 @@ use chrono::DateTime;
 use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 
-use super::store_documents::{ingested_id, to_doc, INGESTED, SOURCES};
+use super::super::store_documents::{ingested_id, to_doc, INGESTED, SOURCES};
 use crate::config::Config;
 use crate::storage::local::{table_exists, ImportDoc};
 
 /// The legacy tables this import retires.
-pub(super) const TABLES: &[&str] = &["task_sources", "ingested_tasks"];
+pub(crate) const TABLES: &[&str] = &["task_sources", "ingested_tasks"];
 
 /// Reads every legacy row, after bringing an old schema forward.
-pub(super) fn read(config: &Config) -> Result<Vec<ImportDoc>> {
-    super::store::with_connection(config, read_rows)
+pub(crate) fn read(config: &Config) -> Result<Vec<ImportDoc>> {
+    super::with_connection(config, read_rows)
 }
 
 fn read_rows(conn: &Connection) -> Result<Vec<ImportDoc>> {
@@ -30,11 +30,11 @@ fn read_rows(conn: &Connection) -> Result<Vec<ImportDoc>> {
         let mut stmt = conn
             .prepare(&format!(
                 "{} ORDER BY created_at ASC, id ASC",
-                super::store::SELECT_SOURCE_COLUMNS
+                super::SELECT_SOURCE_COLUMNS
             ))
             .context("[task_sources::import] prepare task_sources")?;
         let rows = stmt
-            .query_map([], super::store::map_source_row)
+            .query_map([], super::map_source_row)
             .context("[task_sources::import] query task_sources")?;
         for row in rows {
             match row {

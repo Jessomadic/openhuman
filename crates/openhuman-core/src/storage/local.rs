@@ -132,6 +132,23 @@ pub fn open(
     open_default(db_path, collections, plan)
 }
 
+/// [`open`] as a [`Repo`] for the stores built on one.
+///
+/// # Errors
+///
+/// As [`open`].
+pub fn repo(
+    config: &Config,
+    db_path: &Path,
+    domain: &'static str,
+    collections: fn() -> Vec<CollectionSpec>,
+    plan: &ImportPlan<'_>,
+) -> Result<Option<Repo>> {
+    open(config, db_path, collections, plan)?
+        .map(|opened| Repo::on(&opened.backend, &opened.scope, domain, collections))
+        .transpose()
+}
+
 #[cfg(not(feature = "storage-sqlite"))]
 fn open_default(
     _db_path: &Path,

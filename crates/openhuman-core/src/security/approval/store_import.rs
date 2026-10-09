@@ -19,10 +19,10 @@ use crate::config::Config;
 use crate::storage::local::{table_exists, ImportDoc};
 
 /// The legacy tables this import retires.
-pub(super) const TABLES: &[&str] = &["pending_approvals", "flow_tool_trust"];
+pub(crate) const TABLES: &[&str] = &["pending_approvals", "flow_tool_trust"];
 
 /// Reads every legacy row, after bringing an old schema forward.
-pub(super) fn read(config: &Config) -> Result<Vec<ImportDoc>> {
+pub(crate) fn read(config: &Config) -> Result<Vec<ImportDoc>> {
     super::with_connection(config, read_rows)
 }
 
