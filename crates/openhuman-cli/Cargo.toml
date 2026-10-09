@@ -192,6 +192,11 @@ name = "cli_storage_url_e2e"
 path = "../../tests/cli_storage_url_e2e.rs"
 
 [[test]]
+# Boots `openhuman-core serve` on a workspace with legacy approval rows.
+name = "storage_default_import_e2e"
+path = "../../tests/storage_default_import_e2e.rs"
+
+[[test]]
 name = "saas_mode_e2e"
 path = "../../tests/saas_mode_e2e.rs"
 
