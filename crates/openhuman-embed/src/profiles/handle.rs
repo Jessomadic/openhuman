@@ -9,7 +9,6 @@ use openhuman_core::core::runtime::CoreContext;
 use openhuman_core::profiles::Profile;
 use openhuman_core::threads::{
     ConversationMessagesRequest, ConversationMessagesResponse, ConversationThreadsListResponse,
-    UpsertConversationThreadRequest,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -114,6 +113,15 @@ struct WebChatParams<'a> {
     client_id: &'a str,
     thread_id: &'a str,
     message: &'a str,
+}
+
+/// `threads.upsert` params. The controller's schema lists only these three
+/// as required and refuses an explicit `null` for the optional ones.
+#[derive(Serialize)]
+struct UpsertThread<'a> {
+    id: &'a str,
+    title: &'a str,
+    created_at: String,
 }
 
 #[derive(Deserialize)]
@@ -290,13 +298,10 @@ impl ProfileHandle {
         let _summary: ApiEnvelope<ConversationThreadSummary> = self
             .call(
                 THREADS_UPSERT,
-                UpsertConversationThreadRequest {
-                    id: thread_id.to_string(),
-                    title: thread_id.to_string(),
+                UpsertThread {
+                    id: thread_id,
+                    title: thread_id,
                     created_at: chrono::Utc::now().to_rfc3339(),
-                    parent_thread_id: None,
-                    labels: None,
-                    personality_id: None,
                 },
             )
             .await?;
