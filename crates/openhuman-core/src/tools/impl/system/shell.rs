@@ -1,4 +1,8 @@
+use super::shell_platform::{
+    command_param_description, python_utf8_env, shell_child_env, shell_description,
+};
 use crate::agent::host_runtime::RuntimeAdapter;
+use crate::agent::platform_shell::ShellFlavor;
 use crate::runtime::javascript::NodeBootstrap;
 use crate::runtime::python::PythonBootstrap;
 use crate::security::{AuditLogger, CommandExecutionLog, GateDecision, SecurityPolicy};
@@ -12,33 +16,6 @@ use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolTimeout}
 
 /// Maximum output size in bytes (1MB).
 const MAX_OUTPUT_BYTES: usize = 1_048_576;
-/// Environment variables safe to pass to shell commands.
-/// Only functional variables are included — never API keys or secrets.
-const SAFE_ENV_VARS: &[&str] = &[
-    "PATH",
-    "HOME",
-    "TERM",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "USER",
-    "SHELL",
-    "TMPDIR",
-    // Windows process creation and child command lookup need these after env_clear().
-    "SystemRoot",
-    "WINDIR",
-    "COMSPEC",
-    "PATHEXT",
-    "TEMP",
-    "TMP",
-    "USERPROFILE",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "ProgramFiles",
-    "ProgramFiles(x86)",
-    "ProgramW6432",
-];
-
 /// Exit status coreutils `timeout` returns when its own limit expires.
 const COMMAND_TIMEOUT_EXIT_CODE: i32 = 124;
 /// Appended to an exit-124 failure: the command's own `timeout` fired, not the
@@ -192,7 +169,7 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a shell command: run code, manipulate workspace files, or launch applications (`open -a Music`, `xdg-open music://`). Only stdout/stderr comes back, so a script that computes silently or only writes a file returns nothing — print what you need, or read the file afterwards."
+        shell_description(ShellFlavor::current())
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -201,7 +178,7 @@ impl Tool for ShellTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute"
+                    "description": command_param_description(ShellFlavor::current())
                 },
                 "category": {
                     "type": "string",
@@ -420,10 +397,8 @@ impl ShellTool {
         };
         cmd.env_clear();
 
-        for var in SAFE_ENV_VARS {
-            if let Ok(val) = std::env::var(var) {
-                cmd.env(var, val);
-            }
+        for (var, val) in shell_child_env(|name| std::env::var_os(name)) {
+            cmd.env(var, val);
         }
 
         // Keep command-valued repository Git settings from executing host
@@ -557,6 +532,10 @@ impl ShellTool {
 
         // Apply the same Git config hardening to local and sandboxed shells.
         extra_env.extend(tinytools_std::filesystem::shell_git_env());
+        // And the same Python UTF-8 defaults the native path sets.
+        for (var, val) in python_utf8_env(|name| std::env::var_os(name)) {
+            extra_env.insert(var.into(), val);
+        }
 
         // Sandbox backends require a finite deadline. Without an explicit
         // `timeout_secs`, substitute the generous effective-unbounded cap so a

@@ -480,6 +480,10 @@ impl BrowserTool {
     }
 }
 
+/// The browser tool's deadline: the approval gate's ten-minute park plus two
+/// minutes for the action itself. See `BrowserTool::timeout_policy`.
+pub(crate) const BROWSER_TOOL_TIMEOUT_MS: u64 = 12 * 60 * 1000;
+
 #[async_trait]
 impl Tool for BrowserTool {
     fn exposure(&self) -> tinytools::ToolExposure {
@@ -510,6 +514,14 @@ impl Tool for BrowserTool {
     }
     fn parameters_schema(&self) -> Value {
         static_schema!(include_str!("parameters/browser.json"))
+    }
+    /// Direct consequential actions park on the approval gate *inside*
+    /// `execute` (`intercept_forced`), which waits up to the gate's TTL. The
+    /// inherited 120s per-tool deadline would cut that park long before the
+    /// user can answer, so the browser carries its own budget: the longest
+    /// park plus time for the action itself.
+    fn timeout_policy(&self, _args: &Value) -> tinytools::ToolTimeout {
+        tinytools::ToolTimeout::Millis(BROWSER_TOOL_TIMEOUT_MS)
     }
     fn external_effect_with_args(&self, args: &Value) -> bool {
         // Gate direct mutations before perform; task steps pause for approval.

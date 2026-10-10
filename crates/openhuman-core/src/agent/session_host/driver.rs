@@ -396,6 +396,7 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
                     .map(|usage| usage.charged_amount_usd)
                     .unwrap_or_default();
             observed.duration = Some(started.elapsed());
+            observed.driver_finished_at = Some(std::time::Instant::now());
             observed.tool_outcomes = outcome.tool_outcomes.clone();
             observed.hit_cap = outcome.hit_cap;
             observed.wrap_up_injected = outcome.wrap_up_injected;
