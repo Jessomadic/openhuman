@@ -214,10 +214,6 @@ fn is_unknown_cost_source(source: &crate::agent::cost::CostSource) -> bool {
     *source == crate::agent::cost::CostSource::Unknown
 }
 
-#[cfg(test)]
-#[path = "types_tests.rs"]
-mod tests;
-
 impl SubagentUsage {
     /// The run's cost as a tally, for folding into a parent's.
     pub fn cost(&self) -> crate::agent::cost::CostTally {
@@ -377,3 +373,7 @@ pub enum SubagentRunError {
         observed_samples: u64,
     },
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;
