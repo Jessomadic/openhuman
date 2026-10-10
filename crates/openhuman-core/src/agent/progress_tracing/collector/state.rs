@@ -13,6 +13,10 @@ pub(super) struct FirstDeltas {
     pub(super) any_unix_ms: Option<u64>,
     /// First visible text delta.
     pub(super) text_unix_ms: Option<u64>,
+    /// Most recent delta of any kind. A call whose every delta lands in the
+    /// last instant before completion was not streamed (see
+    /// [`super::model_call`]'s unstreamed-call guard).
+    pub(super) last_unix_ms: Option<u64>,
 }
 
 impl FirstDeltas {
@@ -20,6 +24,7 @@ impl FirstDeltas {
     /// unless an earlier one is already recorded.
     pub(super) fn observe(&mut self, now_unix_ms: u64, is_text: bool) {
         self.any_unix_ms.get_or_insert(now_unix_ms);
+        self.last_unix_ms = Some(now_unix_ms);
         if is_text {
             self.text_unix_ms.get_or_insert(now_unix_ms);
         }
@@ -109,6 +114,39 @@ impl SpanCollector {
     /// All spans recorded so far (finished and in-flight).
     pub fn spans(&self) -> &[TraceSpan] {
         &self.spans
+    }
+
+    /// Record that the next model call in `subagent_task_id`'s scope (`None`
+    /// = the parent turn) was dispatched at `start_unix_ms`. Consumed by that
+    /// call's generation span. Used by the journal projection, whose
+    /// `ModelCompleted` carries the real request start.
+    pub(crate) fn set_next_call_start(&mut self, subagent_task_id: Option<&str>, start_unix_ms: u64) {
+        let clock = match subagent_task_id {
+            None => Some(&mut self.call_clock),
+            Some(id) => self
+                .subagents
+                .get_mut(id)
+                .or_else(|| self.finished_subagents.get_mut(id))
+                .map(|state| &mut state.call_clock),
+        };
+        if let Some(clock) = clock {
+            clock.explicit_start_unix_ms = Some(start_unix_ms);
+        }
+    }
+
+    /// Live or finished subagent state for `task_id`.
+    pub(super) fn subagent_state(&self, task_id: &str) -> Option<&SubagentState> {
+        self.subagents
+            .get(task_id)
+            .or_else(|| self.finished_subagents.get(task_id))
+    }
+
+    /// Mutable live or finished subagent state for `task_id`.
+    pub(super) fn subagent_state_mut(&mut self, task_id: &str) -> Option<&mut SubagentState> {
+        match self.subagents.get_mut(task_id) {
+            Some(state) => Some(state),
+            None => self.finished_subagents.get_mut(task_id),
+        }
     }
 
     /// Index of the span with `span_id`, if any.
