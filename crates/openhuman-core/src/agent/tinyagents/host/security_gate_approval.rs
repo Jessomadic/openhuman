@@ -6,7 +6,7 @@ use super::{GateDecision, GateOutcome};
 /// unanswered. Like the refusal text it carries no `[policy-denied]` marker
 /// (see [`decision_for_outcome`]), so the model keeps the turn to tell the
 /// user.
-fn unanswered_approval_text(tool_name: &str) -> String {
+pub(crate) fn unanswered_approval_text(tool_name: &str) -> String {
     format!(
         "The approval request for '{tool_name}' was not answered in time, so it was not run. \
          Tell the user the approval window expired and that they must ask again to retry. \

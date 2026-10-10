@@ -379,6 +379,7 @@ impl OpenHumanSecurityGate {
 
 #[path = "security_gate_approval.rs"]
 mod approval;
+pub(crate) use approval::unanswered_approval_text;
 use approval::decision_for_outcome;
 
 #[async_trait]

@@ -250,36 +250,67 @@ export async function waitForAppReady(page: Page): Promise<void> {
   // Harness setup can install runtimes on a cold core. It deliberately blocks
   // user input behind a full-screen dialog until the user chooses to continue
   // in the background, so settle that product flow before a spec drives UI.
-  const init = await callCoreRpc<{ snapshot?: { overall?: string; started_at?: string | null } }>(
-    'openhuman.harness_init_status'
-  );
-  if (init.snapshot?.overall === 'running' || init.snapshot?.overall === 'failed') {
+  const readInitStatus = async (): Promise<{
+    overall?: string;
+    started_at?: string | null;
+  } | null> => {
+    try {
+      const result = await callCoreRpc<{
+        snapshot?: { overall?: string; started_at?: string | null };
+      }>('openhuman.harness_init_status');
+      return result.snapshot ?? null;
+    } catch (error) {
+      // Some slim or older cores do not expose this optional status method.
+      if (error instanceof Error && /(?:unknown method|method not found)/i.test(error.message)) {
+        return null;
+      }
+      throw error;
+    }
+  };
+  const init = await readInitStatus();
+  if (init?.overall === 'done' || init?.overall === 'idle') return;
+  if (init?.overall === 'running' || init?.overall === 'failed') {
     const alreadyDismissed = await page.evaluate(
       startedAt =>
-        window.sessionStorage.getItem('harness-init-dismissed-run') === (startedAt ?? 'unkeyed'),
-      init.snapshot.started_at
+        window.sessionStorage.getItem('harness-init-dismissed-run') === (startedAt ?? 'pending'),
+      init.started_at
     );
     if (alreadyDismissed) return;
+  }
 
-    const continueButton = page.getByRole('button', { name: /Run in background|Continue anyway/ });
-    await expect
-      .poll(
-        async () => {
-          if (await continueButton.isVisible().catch(() => false)) return true;
-          const current = await callCoreRpc<{ snapshot?: { overall?: string } }>(
-            'openhuman.harness_init_status'
-          );
-          return current.snapshot?.overall === 'done' || current.snapshot?.overall === 'idle';
-        },
-        { timeout: 10_000 }
-      )
-      .toBe(true);
-    if (await continueButton.isVisible().catch(() => false)) {
-      await continueButton.click();
-      await expect(page.getByRole('dialog', { name: 'Setting things up' })).toBeHidden({
-        timeout: 5_000,
-      });
-    }
+  const dialog = page.getByTestId('harness-init-dialog');
+  const backgroundButton = page.getByTestId('harness-init-background');
+  const continueButton = page.getByTestId('harness-init-continue-anyway');
+  const action: { value: 'background' | 'continue' | 'terminal' } = { value: 'terminal' };
+  await expect
+    .poll(
+      async () => {
+        if (await continueButton.isVisible().catch(() => false)) {
+          action.value = 'continue';
+          return true;
+        }
+        if (await backgroundButton.isVisible().catch(() => false)) {
+          action.value = 'background';
+          return true;
+        }
+        const current = await readInitStatus();
+        if (current?.overall === 'done' || current?.overall === 'idle') {
+          action.value = 'terminal';
+          return true;
+        }
+        if (current === null && !(await dialog.isVisible().catch(() => false))) {
+          action.value = 'terminal';
+          return true;
+        }
+        return false;
+      },
+      { timeout: 10_000 }
+    )
+    .toBe(true);
+  if (action.value === 'background' || action.value === 'continue') {
+    const button = action.value === 'background' ? backgroundButton : continueButton;
+    await button.click();
+    await expect(dialog).toBeHidden({ timeout: 5_000 });
   }
 }
 
