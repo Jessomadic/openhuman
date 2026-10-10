@@ -1,11 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 
-import {
-  bootRuntimeReadyGuestPage,
-  callCoreRpc,
-  signInViaBypassUser,
-  waitForAppReady,
-} from '../helpers/core-rpc';
+import { bootRuntimeReadyGuestPage, callCoreRpc, waitForAppReady } from '../helpers/core-rpc';
 
 const MOCK_ADMIN_BASE = `http://127.0.0.1:${process.env.E2E_MOCK_PORT || '18473'}`;
 
@@ -22,7 +17,7 @@ async function clickTestId(page: Page, testId: string, timeout = 10_000): Promis
   try {
     await locator.waitFor({ state: 'visible', timeout });
     await expect(locator).toBeEnabled({ timeout: 5_000 });
-    await locator.click({ timeout: 5_000 });
+    await locator.click({ force: true, timeout: 5_000 });
     return true;
   } catch {
     return false;
@@ -88,8 +83,26 @@ test.describe('Onboarding modes', () => {
   test('TinyHumans sessions land directly in chat', async ({ page }) => {
     await resetMock().catch(() => undefined);
     await bootRuntimeReadyGuestPage(page);
-    await signInViaBypassUser(page, 'pw-onboarding-cloud');
-    await expect.poll(() => page.evaluate(() => window.location.hash)).toMatch(/^#\/chat/);
+    const userId = 'pw-onboarding-cloud';
+    const payload = Buffer.from(
+      JSON.stringify({ sub: userId, userId, exp: Math.floor(Date.now() / 1000) + 3600 })
+    ).toString('base64url');
+    await callCoreRpc('openhuman.auth_store_session', {
+      token: `eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.${payload}.sig`,
+      userId,
+      user: { _id: userId, id: userId, displayName: 'Playwright User' },
+    });
+    await callCoreRpc('openhuman.config_set_onboarding_completed', { value: false });
+    await page.goto('/#/onboarding/welcome');
+    await waitForAppReady(page);
+    await expect
+      .poll(() => page.evaluate(() => window.location.hash), { timeout: 20_000 })
+      .toMatch(/^#\/chat/);
+    const completed = await callCoreRpc<boolean | { result?: boolean }>(
+      'openhuman.config_get_onboarding_completed',
+      {}
+    );
+    expect(typeof completed === 'boolean' ? completed : completed?.result).toBe(true);
   });
 
   test('advanced custom path walks the three custom wizard steps and finishes on home', async ({

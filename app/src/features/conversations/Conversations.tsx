@@ -747,7 +747,15 @@ const Conversations = ({
     const selectionIntentAtCreate = store.getState().thread.selectionIntentVersion ?? 0;
     try {
       const thread = await dispatch(createNewThread()).unwrap();
-      if ((store.getState().thread.selectionIntentVersion ?? 0) !== selectionIntentAtCreate) return;
+      const currentSelectionIntent = store.getState().thread.selectionIntentVersion ?? 0;
+      if (currentSelectionIntent !== selectionIntentAtCreate) {
+        debug(
+          '[chat] create thread selection superseded; dropping result intent_at_create=%d current_intent=%d',
+          selectionIntentAtCreate,
+          currentSelectionIntent
+        );
+        return;
+      }
       dispatch(setSelectedThread(thread.id));
       void dispatch(loadThreadMessages(thread.id));
       if (shouldSyncChatRoute) {
@@ -851,11 +859,16 @@ const Conversations = ({
     void dispatch(loadThreads())
       .unwrap()
       .then(data => {
-        if (
-          cancelled ||
-          (store.getState().thread.selectionIntentVersion ?? 0) !== selectionIntentAtLoad
-        )
+        const currentSelectionIntent = store.getState().thread.selectionIntentVersion ?? 0;
+        if (cancelled || currentSelectionIntent !== selectionIntentAtLoad) {
+          debug(
+            '[chat] initial thread load selection superseded; dropping result cancelled=%s intent_at_load=%d current_intent=%d',
+            cancelled,
+            selectionIntentAtLoad,
+            currentSelectionIntent
+          );
           return;
+        }
         // Match the sidebar's default General filter here so initial/resume
         // selection can't auto-pick a thread hidden by the selected tab.
         const visibleThreads = data.threads.filter(t => isThreadVisibleInTab(t, GENERAL_TAB_VALUE));

@@ -37,18 +37,23 @@ const LEGACY_LIMIT_ENTRIES = [
   // `spawn_subagent_tool_impl.rs` had its entry DELETED, not lowered: the
   // parameter schema moved to `spawn_subagent_parameters.rs` and the file is
   // under the general 750 limit, so it needs no exception at all.
-  // The session-todo integration added transcript metadata construction to
-  // this already-exempt composition seam. Keep its allowance exact.
-  ["crates/openhuman-core/src/agent/session_host/runtime_session.rs", 1406],
+  // The latest upstream session-todo integration added transcript metadata
+  // construction to this already-exempt composition seam. Keep its allowance
+  // exact until the follow-up split.
+  ["crates/openhuman-core/src/agent/session_host/runtime_session.rs", 1412],
   // Session-host factory still assembles the product's deliberately coupled
   // provider, security, memory, tool and prompt policy.  Generic session
   // state moved to tinyagents-runtime; this remaining composition is split in
   // a follow-up without reintroducing an old harness/session exception.
   ["crates/openhuman-core/src/agent/session_host/builder/factory.rs", 977],
-  ["crates/openhuman-core/src/agent/subagent_host/lifecycle.rs", 1306],
-  ["crates/openhuman-core/src/agent/subagent_host/ops/runner.rs", 1145],
-  ["crates/openhuman-core/src/tools/ops.rs", 1206],
-  ["crates/openhuman-core/src/web_chat/progress_bridge.rs", 1304],
+  ["crates/openhuman-core/src/agent/subagent_host/lifecycle.rs", 1323],
+  ["crates/openhuman-core/src/agent/subagent_host/ops/runner.rs", 1152],
+  ["crates/openhuman-core/src/tools/ops.rs", 1209],
+  ["crates/openhuman-core/src/web_chat/progress_bridge.rs", 1309],
+  // These composition and policy files grew in the upstream runtime changes;
+  // retain exact pins while their semantic splits are followed up.
+  ["crates/openhuman-core/src/agent/tinyagents/harness_assembly.rs", 760],
+  ["crates/openhuman-core/src/agent/tinyagents/host/security_gate.rs", 772],
   // These established external test modules grew with upstream coverage. Pin
   // their current sizes while follow-up work separates their test concerns.
   // `core/` was pruned from the line limit by name until these pins; its

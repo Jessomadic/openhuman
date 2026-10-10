@@ -8,7 +8,7 @@
 mod common;
 
 use common::{
-    eventually, offline_config, route, runtime, scripted_provider, stub_backend,
+    chat_requests, eventually, offline_config, route, runtime, scripted_provider, stub_backend,
     tool_call_completion,
 };
 use openhuman_core::security::AutonomyLevel;
@@ -73,10 +73,27 @@ fn every_agent_answers_policy_from_its_own_tier() {
             assert_eq!(a.config().autonomy.level, AutonomyLevel::ReadOnly);
             let a_out = a.run("write the marker").await.expect("a's turn returns");
             assert!(!a_file.exists(), "a read-only agent must not write");
+            let requests = chat_requests(&a_provider).await;
+            assert_eq!(
+                requests.len(),
+                2,
+                "the denied tool result returns to the model"
+            );
+            let followup: serde_json::Value = serde_json::from_slice(&requests[1].body).unwrap();
+            let denial = followup["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|message| message["role"] == "tool")
+                .and_then(|message| message["content"].as_str())
+                .expect("the model receives the shell policy denial");
             assert!(
-                a_out.reply.contains("read-only mode"),
-                "a's shell call is refused by its own tier: {}",
-                a_out.reply
+                denial.contains("read-only mode"),
+                "the shell tool result explains the read-only refusal: {denial}"
+            );
+            assert_eq!(
+                a_out.reply, "a-done",
+                "the final reply comes from the provider"
             );
 
             // ── B: supervised, shell on its own allowlist; runs without parking ──

@@ -23,28 +23,35 @@
   {
     "rule": "openhuman-runtime-bridge",
     "path": "crates/openhuman-core/src/agent/subagent_host/ops/graph/dispatch.rs",
-    "line": 198,
+    "line": 199,
     "text": "let run_result = Box::pin(run_turn_via_tinyagents_shared(",
     "occurrence": 1
   },
   {
     "rule": "openhuman-runtime-bridge",
     "path": "crates/openhuman-core/src/agent/tinyagents/harness_assembly_tests.rs",
-    "line": 74,
+    "line": 77,
     "text": "assemble_turn_harness(",
     "occurrence": 1
   },
   {
     "rule": "openhuman-runtime-bridge",
+    "path": "crates/openhuman-core/src/agent/tinyagents/harness_assembly_tests.rs",
+    "line": 195,
+    "text": "let assembled = assemble_turn_harness(",
+    "occurrence": 1
+  },
+  {
+    "rule": "openhuman-runtime-bridge",
     "path": "crates/openhuman-core/src/agent/tinyagents/harness_assembly.rs",
-    "line": 110,
+    "line": 112,
     "text": "pub(super) fn assemble_turn_harness(",
     "occurrence": 1
   },
   {
     "rule": "openhuman-runtime-bridge",
     "path": "crates/openhuman-core/src/agent/tinyagents/mod.rs",
-    "line": 95,
+    "line": 98,
     "text": "pub(crate) use turn_runner::{run_root_turn_via_hosted_agent, run_turn_via_tinyagents_shared};",
     "occurrence": 1
   },
@@ -332,7 +339,7 @@
     "rule": "openhuman-task-local",
     "path": "crates/openhuman-core/src/agent/orchestration/tools/spawn_async_subagent_execute.rs",
     "line": 424,
-    "text": "let join = tokio::spawn(crate::agent::turn_origin::propagate(",
+    "text": "let join = crate::core::runtime::spawn_scoped(crate::agent::turn_origin::propagate(",
     "occurrence": 1
   },
   {
@@ -429,7 +436,7 @@
   {
     "rule": "openhuman-task-local",
     "path": "crates/openhuman-core/src/agent/session_host/runtime_session.rs",
-    "line": 665,
+    "line": 669,
     "text": "workspace_descriptor: crate::agent::harness::current_parent()",
     "occurrence": 1
   },
@@ -487,6 +494,13 @@
     "path": "crates/openhuman-core/src/agent/subagent_host/ops/runner.rs",
     "line": 362,
     "text": "with_current_sandbox_mode(definition.sandbox_mode, async {",
+    "occurrence": 1
+  },
+  {
+    "rule": "openhuman-task-local",
+    "path": "crates/openhuman-core/src/agent/tinyagents/host/security_gate.rs",
+    "line": 582,
+    "text": "crate::agent::turn_origin::current(),",
     "occurrence": 1
   },
   {
@@ -590,7 +604,7 @@
   {
     "rule": "openhuman-task-local",
     "path": "crates/openhuman-core/src/channels/proactive.rs",
-    "line": 305,
+    "line": 306,
     "text": "let (outcome, request_id) = crate::agent::turn_origin::with_origin(",
     "occurrence": 1
   },
@@ -772,7 +786,7 @@
   {
     "rule": "openhuman-task-local",
     "path": "crates/openhuman-core/src/inference/provider/openhuman_backend_model_calls.rs",
-    "line": 81,
+    "line": 78,
     "text": "with_thread_id(apply_reasoning_hint(request), self.thread_id.as_deref()),",
     "occurrence": 2
   },
@@ -883,15 +897,22 @@
   },
   {
     "rule": "openhuman-task-local",
+    "path": "crates/openhuman-core/src/sandbox/ops.rs",
+    "line": 68,
+    "text": "crate::agent::harness::current_sandbox_mode(),",
+    "occurrence": 1
+  },
+  {
+    "rule": "openhuman-task-local",
     "path": "crates/openhuman-core/src/security/approval/gate_intercept.rs",
-    "line": 58,
+    "line": 53,
     "text": "let origin = turn_origin::current().unwrap_or(AgentTurnOrigin::Unknown);",
     "occurrence": 1
   },
   {
     "rule": "openhuman-task-local",
     "path": "crates/openhuman-core/src/security/approval/gate_intercept.rs",
-    "line": 275,
+    "line": 298,
     "text": "&& (detached || crate::agent::harness::spawn_depth_context::current_spawn_depth() > 0);",
     "occurrence": 1
   },
@@ -918,6 +939,34 @@
   },
   {
     "rule": "openhuman-task-local",
+    "path": "crates/openhuman-core/src/skills/runtime/schemas.rs",
+    "line": 270,
+    "text": "let origin = crate::agent::turn_origin::current()",
+    "occurrence": 1
+  },
+  {
+    "rule": "openhuman-task-local",
+    "path": "crates/openhuman-core/src/skills/runtime/schemas.rs",
+    "line": 272,
+    "text": "let started = crate::agent::turn_origin::with_origin(",
+    "occurrence": 1
+  },
+  {
+    "rule": "openhuman-task-local",
+    "path": "crates/openhuman-core/src/skills/schemas/handlers.rs",
+    "line": 155,
+    "text": "let origin = crate::agent::turn_origin::current()",
+    "occurrence": 1
+  },
+  {
+    "rule": "openhuman-task-local",
+    "path": "crates/openhuman-core/src/skills/schemas/handlers.rs",
+    "line": 157,
+    "text": "let started = match crate::agent::turn_origin::with_origin(",
+    "occurrence": 1
+  },
+  {
+    "rule": "openhuman-task-local",
     "path": "crates/openhuman-core/src/skills/webhooks/bus.rs",
     "line": 317,
     "text": "crate::agent::turn_origin::with_origin(",
@@ -928,34 +977,6 @@
     "path": "crates/openhuman-core/src/skills/webhooks/ops.rs",
     "line": 171,
     "text": "crate::agent::turn_origin::with_origin(",
-    "occurrence": 1
-  },
-  {
-    "rule": "openhuman-task-local",
-    "path": "crates/openhuman-core/src/tools/impl/system/node_exec.rs",
-    "line": 259,
-    "text": "crate::agent::harness::current_sandbox_mode(),",
-    "occurrence": 1
-  },
-  {
-    "rule": "openhuman-task-local",
-    "path": "crates/openhuman-core/src/tools/impl/system/npm_exec.rs",
-    "line": 261,
-    "text": "crate::agent::harness::current_sandbox_mode(),",
-    "occurrence": 1
-  },
-  {
-    "rule": "openhuman-task-local",
-    "path": "crates/openhuman-core/src/tools/impl/system/python_exec.rs",
-    "line": 252,
-    "text": "crate::agent::harness::current_sandbox_mode(),",
-    "occurrence": 1
-  },
-  {
-    "rule": "openhuman-task-local",
-    "path": "crates/openhuman-core/src/tools/impl/system/shell.rs",
-    "line": 371,
-    "text": "crate::agent::harness::current_sandbox_mode(),",
     "occurrence": 1
   },
   {
@@ -1003,7 +1024,7 @@
   {
     "rule": "openhuman-task-local",
     "path": "crates/openhuman-core/src/web_chat/ops/turn_guards.rs",
-    "line": 111,
+    "line": 135,
     "text": "crate::agent::turn_origin::with_origin(",
     "occurrence": 1
   },
@@ -1150,35 +1171,35 @@
   {
     "rule": "openhuman-upstream-reexport",
     "path": "crates/openhuman-embed/src/lib.rs",
-    "line": 187,
+    "line": 195,
     "text": "pub use tinyagents_session::port::{",
     "occurrence": 1
   },
   {
     "rule": "openhuman-upstream-reexport",
     "path": "crates/openhuman-embed/src/lib.rs",
-    "line": 191,
+    "line": 199,
     "text": "pub use tinyagents_session::testkit::conformance::{",
     "occurrence": 1
   },
   {
     "rule": "openhuman-upstream-reexport",
     "path": "crates/openhuman-embed/src/lib.rs",
-    "line": 195,
+    "line": 203,
     "text": "pub use tinyagents_session::transcript::{",
     "occurrence": 1
   },
   {
     "rule": "openhuman-upstream-reexport",
     "path": "crates/openhuman-embed/src/lib.rs",
-    "line": 200,
+    "line": 208,
     "text": "pub use tinyagents_session::turn_state::{TurnLifecycle, TurnState};",
     "occurrence": 1
   },
   {
     "rule": "openhuman-upstream-reexport",
     "path": "crates/openhuman-embed/src/lib.rs",
-    "line": 202,
+    "line": 210,
     "text": "pub use tinyagents_session::{Result as StoreResult, TinyAgentsError as StoreError};",
     "occurrence": 1
   },
@@ -1205,15 +1226,43 @@
   },
   {
     "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
+    "line": 46,
+    "text": "let messages = vec![ChatMessage::user(\"hi\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
+    "line": 457,
+    "text": "let messages = [ChatMessage::user(\"hello\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
+    "line": 628,
+    "text": "let messages = vec![ChatMessage::user(\"hi\")];",
+    "occurrence": 2
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/driver_tests.rs",
+    "line": 696,
+    "text": "let messages = [ChatMessage::user(\"UNIQUE-PENDING-TURN\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/driver.rs",
-    "line": 71,
+    "line": 145,
     "text": "use super::bridge::{ChatMessage, ChatResponse, ProviderDelta};",
     "occurrence": 1
   },
   {
     "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/driver.rs",
-    "line": 237,
+    "line": 314,
     "text": "pub messages: &'a [ChatMessage],",
     "occurrence": 1
   },
@@ -1338,6 +1387,174 @@
   },
   {
     "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 268,
+    "text": "let history = [ChatMessage::user(\"ship it\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 278,
+    "text": "let first = [ChatMessage::user(\"first\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 280,
+    "text": "let queued = [ChatMessage::user(\"first\"), ChatMessage::user(\"second\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 289,
+    "text": "let first = [ChatMessage::user(\"continue\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 292,
+    "text": "ChatMessage::user(\"continue\"),",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 293,
+    "text": "ChatMessage::assistant(\"step one done\"),",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 294,
+    "text": "ChatMessage::user(\"continue\"),",
+    "occurrence": 2
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 305,
+    "text": "ChatMessage::user(\"continue\"),",
+    "occurrence": 3
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 306,
+    "text": "ChatMessage::assistant(\"Done\"),",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 307,
+    "text": "ChatMessage::user(\"continue\"),",
+    "occurrence": 4
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 310,
+    "text": "ChatMessage::user(\"continue\"),",
+    "occurrence": 5
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 311,
+    "text": "ChatMessage::assistant(\"Done\"),",
+    "occurrence": 2
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 312,
+    "text": "ChatMessage::user(\"continue\"),",
+    "occurrence": 6
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 313,
+    "text": "ChatMessage::assistant(\"Done\"),",
+    "occurrence": 3
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 314,
+    "text": "ChatMessage::user(\"continue\"),",
+    "occurrence": 7
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 324,
+    "text": "let both = [ChatMessage::user(\"one\"), ChatMessage::user(\"two\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 325,
+    "text": "let only_second = [ChatMessage::user(\"two\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 334,
+    "text": "let fps = pending_fingerprints(&[ChatMessage::user(\"go\"), ChatMessage::user(\"go\")]);",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 340,
+    "text": "let short = [ChatMessage::assistant(\"ok\"), ChatMessage::user(\"go\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 342,
+    "text": "ChatMessage::user(\"older\"),",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 343,
+    "text": "ChatMessage::assistant(\"ok\"),",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 344,
+    "text": "ChatMessage::user(\"go\"),",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 351,
+    "text": "let history = [ChatMessage::user(\"hello\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
+    "line": 359,
+    "text": "let history = [ChatMessage::user(\"hi\"), ChatMessage::assistant(\"hello\")];",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
     "line": 15,
     "text": "use super::bridge::ChatMessage;",
@@ -1346,49 +1563,70 @@
   {
     "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-    "line": 25,
+    "line": 32,
     "text": "pub fn build_stdin(messages: &[ChatMessage], is_new_session: bool) -> Vec<u8> {",
     "occurrence": 1
   },
   {
     "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-    "line": 35,
+    "line": 40,
+    "text": "messages: &[ChatMessage],",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
+    "line": 53,
     "text": "let non_system: Vec<&ChatMessage> = messages.iter().filter(|m| m.role != \"system\").collect();",
     "occurrence": 1
   },
   {
     "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-    "line": 93,
-    "text": "fn pending_user_content(non_system: &[&ChatMessage]) -> Option<String> {",
+    "line": 134,
+    "text": "fn pending_user_turns<'a>(non_system: &[&'a ChatMessage]) -> Vec<(String, &'a str)> {",
     "occurrence": 1
   },
   {
     "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-    "line": 116,
+    "line": 181,
+    "text": "pub fn pending_fingerprints(messages: &[ChatMessage]) -> Vec<String> {",
+    "occurrence": 1
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
+    "line": 182,
+    "text": "let non_system: Vec<&ChatMessage> = messages.iter().filter(|m| m.role != \"system\").collect();",
+    "occurrence": 2
+  },
+  {
+    "rule": "tinyagents-openhuman-domain-name",
+    "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
+    "line": 202,
     "text": "fn prior_conversation_preamble(non_system: &[&ChatMessage], end: usize) -> Option<String> {",
     "occurrence": 1
   },
   {
     "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-    "line": 52,
+    "line": 75,
     "text": "ChatMessage::system(\"base\"),",
     "occurrence": 1
   },
   {
     "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-    "line": 53,
+    "line": 76,
     "text": "ChatMessage::user(\"question\"),",
     "occurrence": 1
   },
   {
     "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-    "line": 54,
+    "line": 77,
     "text": "ChatMessage::system(\"middleware addition\"),",
     "occurrence": 1
   },
@@ -1409,21 +1647,21 @@
   {
     "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-    "line": 291,
+    "line": 293,
     "text": "fn coalesce_system_prompt(messages: &[ChatMessage]) -> Option<String> {",
     "occurrence": 1
   },
   {
     "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-    "line": 340,
+    "line": 360,
     "text": "fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {",
     "occurrence": 1
   },
   {
     "rule": "tinyagents-openhuman-domain-name",
     "path": "vendor/tinyagents/crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-    "line": 374,
+    "line": 394,
     "text": "ChatMessage::new(role, content)",
     "occurrence": 1
   },

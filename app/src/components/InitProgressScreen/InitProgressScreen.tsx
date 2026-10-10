@@ -102,7 +102,7 @@ export default function InitProgressScreen({
             <p className="text-xs text-content-muted">{t('harnessInit.backgroundHint')}</p>
             <button
               type="button"
-              data-testid="harness-init-continue"
+              data-testid="harness-init-background"
               onClick={onContinue}
               className="shrink-0 rounded-lg border border-stone-700 px-3 py-1.5 text-sm text-content-faint hover:bg-stone-800 hover:text-white">
               {t('harnessInit.runInBackground')}
@@ -123,7 +123,7 @@ export default function InitProgressScreen({
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
-                data-testid="harness-init-continue"
+                data-testid="harness-init-continue-anyway"
                 onClick={onContinue}
                 className="rounded-lg px-3 py-1.5 text-sm text-content-faint hover:text-white">
                 {t('harnessInit.continueAnyway')}

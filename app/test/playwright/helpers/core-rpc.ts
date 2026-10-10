@@ -279,7 +279,9 @@ export async function waitForAppReady(page: Page): Promise<void> {
     );
     if (alreadyDismissed) return;
 
-    const continueButton = page.getByTestId('harness-init-continue');
+    const continueButton = page.getByTestId(
+      init.overall === 'failed' ? 'harness-init-continue-anyway' : 'harness-init-background'
+    );
     await expect
       .poll(
         async () => {

@@ -230,6 +230,21 @@ describe('threadSlice loadThreads thunk', () => {
     expect(result.type).toBe('thread/loadThreads/rejected');
     expect(store.getState().thread.isLoadingThreads).toBe(false);
   });
+
+  it('preserves a newer selection when an older thread-list response omits it', async () => {
+    const store = createStore();
+    let resolveThreads: ((value: { threads: Thread[]; count: number }) => void) | undefined;
+    mockedThreadApi.getThreads.mockImplementationOnce(
+      () => new Promise(resolve => (resolveThreads = resolve))
+    );
+
+    const request = store.dispatch(loadThreads());
+    store.dispatch(setSelectedThread('worker-created-after-request'));
+    resolveThreads?.({ threads: [makeThread({ id: 'existing-thread' })], count: 1 });
+    await request;
+
+    expect(store.getState().thread.selectedThreadId).toBe('worker-created-after-request');
+  });
 });
 
 describe('threadSlice loadThreadMessages thunk', () => {

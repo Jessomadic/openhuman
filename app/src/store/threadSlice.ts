@@ -108,16 +108,19 @@ function appendMessageToCache(
 
 // ── Async thunks (thin RPC wrappers) ──────────────────────────────
 
-export const loadThreads = createAsyncThunk(
-  'thread/loadThreads',
-  async (_, { rejectWithValue }) => {
-    try {
-      return await threadApi.getThreads();
-    } catch (error) {
-      return rejectWithValue(error instanceof Error ? error.message : 'Failed to load threads');
-    }
+export const loadThreads = createAsyncThunk<
+  Awaited<ReturnType<typeof threadApi.getThreads>> & { selectionIntentVersionAtRequest?: number },
+  void
+>('thread/loadThreads', async (_, { getState, rejectWithValue }) => {
+  const selectionIntentVersionAtRequest =
+    (getState() as { thread?: Pick<ThreadState, 'selectionIntentVersion'> }).thread
+      ?.selectionIntentVersion ?? 0;
+  try {
+    return { ...(await threadApi.getThreads()), selectionIntentVersionAtRequest };
+  } catch (error) {
+    return rejectWithValue(error instanceof Error ? error.message : 'Failed to load threads');
   }
-);
+});
 
 /**
  * Normalise whatever `dispatch(createNewThread()).unwrap()` throws into a
@@ -610,7 +613,14 @@ const threadSlice = createSlice({
         state.isLoadingThreads = false;
         state.threads = action.payload.threads;
         const liveThreadIds = new Set(action.payload.threads.map(thread => thread.id));
-        if (state.selectedThreadId && !liveThreadIds.has(state.selectedThreadId)) {
+        const selectionWasSuperseded =
+          state.selectionIntentVersion !==
+          (action.payload.selectionIntentVersionAtRequest ?? state.selectionIntentVersion);
+        if (
+          !selectionWasSuperseded &&
+          state.selectedThreadId &&
+          !liveThreadIds.has(state.selectedThreadId)
+        ) {
           state.selectedThreadId = null;
           state.messages = [];
           state.messagesError = null;
