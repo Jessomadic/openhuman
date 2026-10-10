@@ -29,11 +29,25 @@ pub struct MemoryRequest {
     pub method: String,
     /// The path, without the query.
     pub path: String,
-    /// The bearer token (`Authorization: Bearer <token>`), or empty.
+    /// A non-reversible identifier of the bearer token
+    /// (`Authorization: Bearer <token>`), or empty; see [`credential_id`].
+    /// The token itself is never kept.
     pub bearer: String,
     /// Every scope the request named: its body's `scope`, its query's
     /// `scope` or `prefix`.
     pub scopes: Vec<String>,
+}
+
+/// The identifier a request log keeps in place of a bearer token: a one-way
+/// hash, so a test can tell credentials apart without holding any of them.
+pub fn credential_id(token: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    if token.is_empty() {
+        return String::new();
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    token.hash(&mut hasher);
+    format!("cred-{:016x}", hasher.finish())
 }
 
 #[derive(Debug, Clone)]
@@ -51,8 +65,8 @@ struct Store {
     events: Vec<Event>,
     /// Body `idempotency_key` → (fingerprint of what it wrote, event id).
     idempotency: HashMap<String, (String, String)>,
-    /// `Idempotency-Key` header claims.
-    claims: HashSet<String>,
+    /// `Idempotency-Key` header claims → the body key that made them.
+    claims: HashMap<String, String>,
     packs: HashMap<String, Vec<Value>>,
     next_offset: u64,
     next_id: u64,
@@ -239,7 +253,7 @@ fn serve(stream: TcpStream, store: &Mutex<Store>) {
     store.log.push(MemoryRequest {
         method: request.method.clone(),
         path: request.path.clone(),
-        bearer: request.bearer.clone(),
+        bearer: credential_id(&request.bearer),
         scopes,
     });
     let (status, body) = if request.bearer.is_empty() {
@@ -464,14 +478,26 @@ fn experience(store: &mut Store, request: &Request) -> (u16, Value) {
         return fail(400, "MISSING_IDEMPOTENCY_KEY");
     }
     if let Some(claim) = &request.claim {
-        if !store.claims.insert(claim.clone()) {
+        // A retry of the same write reuses its header claim and must reach the
+        // body-key replay; only a claim made for a different key conflicts.
+        if store
+            .claims
+            .entry(claim.clone())
+            .or_insert_with(|| key.to_string())
+            != key
+        {
             return fail(409, "CONFLICT");
         }
     }
     let scope = body["scope"].as_str().unwrap_or("").to_string();
     let modality = body["modality"].as_str().unwrap_or("").to_string();
     let content = body.get("content").cloned().unwrap_or_else(|| json!({}));
-    let fingerprint = format!("{scope}\u{0}{modality}\u{0}{content}");
+    let mut context = body
+        .get("context")
+        .filter(|c| c.is_object())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let fingerprint = format!("{scope}\u{0}{modality}\u{0}{content}\u{0}{context}");
     if let Some((seen, id)) = store.idempotency.get(key) {
         if *seen != fingerprint {
             return fail(409, "IDEMPOTENCY_CONFLICT");
@@ -484,11 +510,6 @@ fn experience(store: &mut Store, request: &Request) -> (u16, Value) {
     store
         .idempotency
         .insert(key.to_string(), (fingerprint, id.clone()));
-    let mut context = body
-        .get("context")
-        .filter(|c| c.is_object())
-        .cloned()
-        .unwrap_or_else(|| json!({}));
     context["recorded_at"] = json!("2026-01-01T00:00:00Z");
     let event = Event {
         id: id.clone(),
@@ -530,9 +551,20 @@ fn forget(store: &mut Store, body: &Value) -> (u16, Value) {
         _ => return fail(400, "INVALID_CASCADE"),
     }
     let before = store.events.len();
-    store
+    let removed: HashSet<String> = store
         .events
-        .retain(|e| e.scope != scope || (selective && !ids.contains(&e.id)));
+        .iter()
+        .filter(|e| e.scope == scope && (!selective || ids.contains(&e.id)))
+        .map(|e| e.id.clone())
+        .collect();
+    store.events.retain(|e| !removed.contains(&e.id));
+    // A recall pack is derived data holding copies of events: drop every pack
+    // that carries a forgotten one so `answer` cannot serve it afterwards.
+    store.packs.retain(|_, pack| {
+        !pack
+            .iter()
+            .any(|e| e["id"].as_str().is_some_and(|id| removed.contains(id)))
+    });
     let deleted = before - store.events.len();
     ok(json!({ "deleted": { "events": deleted }, "requested": ids.len(), "matched": deleted }))
 }

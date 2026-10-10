@@ -347,7 +347,7 @@ fn profiles_round_trip_their_own_memory_and_never_anothers() {
     assert!(!requests.is_empty());
     let owners: std::collections::HashMap<String, String> = profiles
         .iter()
-        .map(|(user, profile)| (token(user), root_path(profile)))
+        .map(|(user, profile)| (credential_id(&token(user)), root_path(profile)))
         .collect();
     let mut seen = std::collections::HashSet::new();
     for (index, request) in requests.iter().enumerate() {
@@ -361,7 +361,10 @@ fn profiles_round_trip_their_own_memory_and_never_anothers() {
             panic!("request {index}, {method} {path}, carried no profile's credential")
         });
         seen.insert(bearer.clone());
-        let sweeping = sweep.contains(&index) && method == "GET" && bearer == &token(attacker);
+        let sweeping = sweep.contains(&index)
+            && method == "GET"
+            && matches!(path.as_str(), "/memory/scopes" | "/memory/events")
+            && bearer == &credential_id(&token(attacker));
         for scope in scopes {
             assert!(
                 inside(scope, root) || (sweeping && inside(scope, "app:tinymemory")),
