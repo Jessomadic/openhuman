@@ -125,6 +125,13 @@ pub(crate) struct SessionTurnSidecar {
     /// subtracts it from its own start to log how long the durable commit
     /// took (`[session-runtime] post-commit`).
     pub driver_finished_at: Option<std::time::Instant>,
+    /// Set by the deadline wind-down middleware when it paused this turn
+    /// (`tinyagents::deadline_wind_down`).
+    pub wind_down: bool,
+    /// How the turn was stopped early, if it was (breaker, wind-down,
+    /// iteration cap). The driver classifies it; `after_commit` carries it on
+    /// `TurnCompleted` so the trace shows a stopped turn at `WARNING`.
+    pub stop: Option<crate::agent::turn_stop::TurnStop>,
 }
 
 /// Immutable inputs to the host's pre-dispatch policy.

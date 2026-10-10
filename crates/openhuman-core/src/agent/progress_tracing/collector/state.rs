@@ -106,6 +106,11 @@ pub enum TurnOutcome {
     Cancelled { reason: Option<String> },
     /// The stream closed before the turn reported an outcome.
     Incomplete,
+    /// The harness stopped the turn early (failure breaker, deadline
+    /// wind-down, iteration cap) and it reached the completion path anyway.
+    Stopped {
+        stop: crate::agent::turn_stop::TurnStop,
+    },
 }
 
 /// Pure state machine that folds an [`crate::agent::progress::AgentProgress`]
