@@ -32,7 +32,7 @@ impl ApprovalState {
             .decisions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.claimed.load(Ordering::SeqCst) {
+        if self.scope.is_closed() || self.claimed.load(Ordering::SeqCst) {
             None
         } else {
             Some(decide())
@@ -40,13 +40,15 @@ impl ApprovalState {
     }
 
     fn claim_removal(&self, reason: &str) -> bool {
+        // Publish closing before either mutex can block. Admission and all
+        // approval surfaces share that irreversible, nonblocking observation.
+        // Accepted core work finishes before the denial snapshot; accepted
+        // facade work finishes before this caller can claim that snapshot.
+        self.scope.close(reason);
         let _decision = self
             .decisions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // The shared gate closes before this claim becomes observable, so
-        // RPC/chat decisions cannot approve during the later denial snapshot.
-        self.scope.close(reason);
         !self.claimed.swap(true, Ordering::SeqCst)
     }
 }
@@ -109,7 +111,7 @@ impl Lifecycle {
         let mut watcher = self.removed.subscribe();
         // Claiming removal closes admission immediately; waking existing turns
         // waits until their approvals have been settled with the removal reason.
-        if self.approvals.claimed.load(Ordering::SeqCst) || *watcher.borrow_and_update() {
+        if self.approvals.scope.is_closed() || *watcher.borrow_and_update() {
             log::debug!("[embed][agent] turn refused: agent removed id={agent_id}");
             return Err(removed());
         }

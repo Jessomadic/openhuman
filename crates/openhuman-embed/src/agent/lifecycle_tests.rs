@@ -6,6 +6,54 @@ fn removed(outcome: Result<(), CoreError>) -> bool {
 }
 
 #[tokio::test]
+async fn removal_refuses_turns_while_an_accepted_facade_decision_is_still_running() {
+    let lifecycle = Arc::new(Lifecycle::new());
+    let approvals = lifecycle.approval_state();
+    let deciding = approvals.clone();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let decision = std::thread::spawn(move || {
+        deciding.with_live(|| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            7
+        })
+    });
+    entered_rx.recv().unwrap();
+    let removing = lifecycle.clone();
+    let removal = std::thread::spawn(move || removing.mark_removed("agent_removed"));
+    // Closing is observable while the facade decision still owns its mutex;
+    // the watch notification must wait for that accepted decision to finish.
+    let closing = tokio::time::timeout(Duration::from_secs(2), async {
+        while !lifecycle.approval_scope().is_closed() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    let ran = AtomicBool::new(false);
+    let outcome = lifecycle
+        .admit("a", "test", async {
+            ran.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+    let notified = *lifecycle.removed().borrow();
+    release_tx.send(()).unwrap();
+    assert_eq!(decision.join().unwrap(), Some(7));
+    assert!(removal.join().unwrap());
+    assert!(
+        closing.is_ok(),
+        "closing waited for the facade decision mutex"
+    );
+    assert!(
+        !notified,
+        "accepted decision was not allowed to finish before notification"
+    );
+    assert!(removed(outcome));
+    assert!(!ran.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
 async fn a_live_agent_runs_its_turns() {
     let lifecycle = Lifecycle::new();
     let outcome = lifecycle.admit("a", "test", async { Ok(7) }).await;

@@ -503,7 +503,7 @@ impl ApprovalGate {
         let (tx, rx) = oneshot::channel::<ApprovalDecision>();
         let scope = crate::core::runtime::CoreContext::current_host_overrides()
             .and_then(|overrides| overrides.approval_scope());
-        let register = || -> anyhow::Result<()> {
+        let register = |workspace| -> anyhow::Result<()> {
             {
                 let mut waiters = self.waiters.lock();
                 waiters.insert(request_id.clone(), tx);
@@ -554,12 +554,55 @@ impl ApprovalGate {
                 expires_at: expires_at.map(|t| t.to_rfc3339()),
                 agent_id: agent_id.clone(),
             });
+            // Publish every surface inside the same registration barrier.
+            // Workspace lookup completed before creating a row, so neither
+            // removal nor a fast human decision can precede these surfaces.
+            if let Some(ApprovalSourceContext::Flow {
+                flow_id, run_id, ..
+            }) = &source_context
+            {
+                tracing::info!(request_id = %request_id, flow_id = %flow_id,
+                    run_id = %run_id, tool = tool_name,
+                    "[approval::gate] flow-origin park — surfacing flow_approval_request + notification");
+                BUS.publish(DomainEvent::FlowApprovalRequested {
+                    request_id: request_id.clone(),
+                    flow_id: flow_id.clone(),
+                    run_id: run_id.clone(),
+                    tool_name: tool_name.to_string(),
+                    summary: action_summary.to_string(),
+                    agent_id: agent_id.clone(),
+                });
+                publish_flow_gate_notification(
+                    &request_id,
+                    flow_id,
+                    run_id,
+                    tool_name,
+                    action_summary,
+                    workspace,
+                );
+            }
             Ok(())
         };
-        let registered = match scope.as_ref() {
-            Some(scope) => scope.with_open(register),
-            None => Ok(register()),
-        };
+        let registered = super::flow_surface::register_after_workspace(
+            scope.as_deref(),
+            async {
+                if !matches!(&source_context, Some(ApprovalSourceContext::Flow { .. })) {
+                    return None;
+                }
+                // Resolve before registration; never hold the barrier across
+                // asynchronous workspace I/O. An unbound live notification
+                // still surfaces the request when workspace lookup fails.
+                match crate::config::active_workspace_snapshot().await {
+                    Ok((dir, revision)) => Some((crate::config::workspace_handle(&dir), revision)),
+                    Err(error) => {
+                        tracing::warn!(request_id = %request_id,
+                            "[approval::gate] could not resolve the active workspace for the flow approval notification ({error}); publishing it unbound");
+                        None
+                    }
+                }
+            },
+            register,
+        ).await;
         match registered {
             Err(resolution) => {
                 return (
@@ -582,61 +625,6 @@ impl ApprovalGate {
                 );
             }
             Ok(Ok(())) => {}
-        }
-
-        // Flow-origin surface bridge (flow-approval-surface, PR3): a flow run
-        // has no chat thread/client to route the generic `ApprovalRequested`
-        // through (both are `None` above, so the web-channel bridge silently
-        // drops it — see `web_chat::event_bus`'s
-        // `ApprovalSurfaceSubscriber`), which is exactly the silent-deadlock
-        // bug this correlation fixes. Broadcast a dedicated
-        // `flow_approval_request` socket event (no thread/client required,
-        // unlike the chat path) plus a `CoreNotification` with the three
-        // flow-scoped decision actions, so the Workflows UI can surface and
-        // resolve the park without polling.
-        if let Some(ApprovalSourceContext::Flow {
-            flow_id, run_id, ..
-        }) = &source_context
-        {
-            tracing::info!(
-                request_id = %request_id,
-                flow_id = %flow_id,
-                run_id = %run_id,
-                tool = tool_name,
-                "[approval::gate] flow-origin park — surfacing flow_approval_request + notification"
-            );
-            BUS.publish(DomainEvent::FlowApprovalRequested {
-                request_id: request_id.clone(),
-                flow_id: flow_id.clone(),
-                run_id: run_id.clone(),
-                tool_name: tool_name.to_string(),
-                summary: action_summary.to_string(),
-                agent_id: agent_id.clone(),
-            });
-            // The workspace the flow parked in, so the approval banner is
-            // dropped by a client that has since switched away rather than
-            // approving this workspace's call from another one. Fails open on
-            // a resolve failure: an unbound notification still reaches the
-            // user, whereas not publishing recreates the silent deadlock this
-            // bridge exists to fix.
-            let workspace = match crate::config::active_workspace_snapshot().await {
-                Ok((dir, revision)) => Some((crate::config::workspace_handle(&dir), revision)),
-                Err(error) => {
-                    tracing::warn!(
-                        request_id = %request_id,
-                        "[approval::gate] could not resolve the active workspace for the flow approval notification ({error}); publishing it unbound"
-                    );
-                    None
-                }
-            };
-            publish_flow_gate_notification(
-                &request_id,
-                flow_id,
-                run_id,
-                tool_name,
-                action_summary,
-                workspace,
-            );
         }
 
         tracing::info!(
