@@ -9,6 +9,8 @@ OpenCompany and other embedding products use it directly, and
 narrative walkthrough is
 [`gitbooks/developing/embedding.md`](../../gitbooks/developing/embedding.md).
 
+Standalone source pins, generated Cargo patches, feature boundaries and shared server runtimes: [consumer setup](CONSUMERS.md).
+
 ## How it works
 
 The crate has two entry points, and they sit at different heights over the
@@ -79,16 +81,21 @@ for a typed method here.
 
 ## Using it
 
-Add the dependency with the default contributor features, or pick a narrow
-host build:
+Use the [pinned consumer bootstrap](CONSUMERS.md) to prepare source,
+recursive submodules and the consumer-root Cargo patches together. It generates:
 
 ```toml
-[dependencies]
-openhuman-embed = { git = "https://github.com/tinyhumansai/openhuman", package = "openhuman-embed" }
+[features]
+default = []
+embed = ["dep:openhuman-embed"]
 
-# or
-openhuman-embed = { git = "https://github.com/tinyhumansai/openhuman", package = "openhuman-embed", default-features = false, features = ["inference", "mcp"] }
+[dependencies]
+openhuman-embed = { path = "vendor/openhuman/crates/openhuman-embed", optional = true, default-features = false }
 ```
+
+The dependency and generated patch sections belong in the host's workspace
+root. Enabling `embed` still includes the core and its HTTP libraries; the
+host's default build can leave that optional dependency disabled.
 
 ### A runtime and several agents
 
