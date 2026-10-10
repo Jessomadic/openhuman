@@ -65,6 +65,7 @@ export function AgentStatus({
       <span className="sr-only">{state}</span>
       <span
         key={label}
+        data-slot="agent-status-label"
         className="fade-in blur-in-[2px] animate-in max-w-44 truncate text-xs duration-300 motion-reduce:animate-none">
         {label}
       </span>

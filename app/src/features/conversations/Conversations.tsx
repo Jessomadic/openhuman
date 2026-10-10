@@ -2023,7 +2023,7 @@ const Conversations = ({
                 : formatTokens(threadGoal.tokens_used)}
             </span>
           }
-          className="mb-2 w-full [&>span:nth-of-type(3)]:max-w-none [&>span:nth-of-type(3)]:flex-1"
+          className="mb-2 w-full [&_[data-slot=agent-status-label]]:max-w-none [&_[data-slot=agent-status-label]]:flex-1"
         />
       )}
       {selectedThreadId && liveTodos && liveTodos.length > 0 && (
