@@ -143,17 +143,38 @@ export const ALLOW = new Map(
       "if let Err(e) = std::fs::write(path, json) {",
       "one process-global savings counter snapshot, cheap to lose; not per-user data a scope would mean anything for",
     ],
-  ].map(([path, rule, site, reason]) => [
-    `${SRC}${path}`,
-    { rule, site, reason },
-  ]),
+    [
+      "agent/artifacts/store.rs",
+      "json-write",
+      "tokio::fs::write(&tmp_path, json).await.map_err(|e| {",
+      FALLBACK,
+    ],
+    [
+      "agent/artifacts/store.rs",
+      "json-write",
+      "tokio::fs::write(&args_path, json)",
+      FALLBACK,
+    ],
+    [
+      "agent/artifacts/files.rs",
+      "json-write",
+      "match tokio::fs::OpenOptions::new()",
+      "reserves the artifact's content file in the user-visible files folder; the bytes stay a file on every backend (the port has no blob store), only the records moved",
+    ],
+  ].reduce((map, [path, rule, site, reason]) => {
+    const key = `${SRC}${path}`;
+    map.set(key, [...(map.get(key) ?? []), { rule, site, reason }]);
+    return map;
+  }, new Map()),
 );
 
 /** Whether `finding` is the allowlisted site of its file (its first occurrence). */
 export function allowed(rel, finding) {
-  const entry = ALLOW.get(rel);
-  return (
-    entry?.rule === finding.rule && entry.site === finding.text && finding.occurrence === 1
+  return (ALLOW.get(rel) ?? []).some(
+    (entry) =>
+      entry.rule === finding.rule &&
+      entry.site === finding.text &&
+      finding.occurrence === 1,
   );
 }
 

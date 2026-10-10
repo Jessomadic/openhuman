@@ -1,27 +1,6 @@
 [
   {
     "rule": "json-write",
-    "path": "crates/openhuman-core/src/agent/artifacts/files.rs",
-    "line": 141,
-    "text": "match tokio::fs::OpenOptions::new()",
-    "occurrence": 1
-  },
-  {
-    "rule": "json-write",
-    "path": "crates/openhuman-core/src/agent/artifacts/store.rs",
-    "line": 167,
-    "text": "tokio::fs::write(&tmp_path, json).await.map_err(|e| {",
-    "occurrence": 1
-  },
-  {
-    "rule": "json-write",
-    "path": "crates/openhuman-core/src/agent/artifacts/store.rs",
-    "line": 364,
-    "text": "tokio::fs::write(&args_path, json)",
-    "occurrence": 1
-  },
-  {
-    "rule": "json-write",
     "path": "crates/openhuman-core/src/agent/attachments/legacy.rs",
     "line": 143,
     "text": "let mut file = tokio::fs::OpenOptions::new()",
