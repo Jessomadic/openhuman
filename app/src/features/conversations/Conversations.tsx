@@ -1768,8 +1768,7 @@ const Conversations = ({
   // and its goal — driven by the dedicated `thread_todos_changed` /
   // `thread_goal_updated` core events (`aui/useThreadTodos.ts` /
   // `aui/useThreadGoal.ts`), primed on thread open by the RPC pair below.
-  // Rendered above the composer next to the gate cards so a five-step task
-  // shows as a checklist ticking off while the agent works through it.
+  // Progress cards are presented in the transcript by TurnTaskProvider.
   useLoadThreadTodos(selectedThreadId ?? null);
   useLoadThreadGoal(selectedThreadId ?? null);
   // A plan the orchestrator parked for interactive review (request_plan_review

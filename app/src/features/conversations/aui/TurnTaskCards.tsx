@@ -36,7 +36,6 @@ export function TurnTaskProvider({ children }: PropsWithChildren) {
   }>({ threadId: null, ready: false, cards: [] });
   useEffect(() => {
     let cancelled = false;
-    setSaved({ threadId, ready: false, cards: [] });
     if (!threadId) return;
     void userScopedStorage.getItem(`chat-task-cards:${threadId}`).then(value => {
       if (cancelled) return;
@@ -56,13 +55,17 @@ export function TurnTaskProvider({ children }: PropsWithChildren) {
       cancelled = true;
     };
   }, [threadId]);
+  const cards = saved.ready && saved.threadId === threadId
+    ? updateTaskHistory(saved.cards, {anchor, todos: todos ?? [], goal})
+    : [];
+  if (saved.ready && saved.threadId === threadId && cards !== saved.cards) {
+    setSaved({...saved, cards});
+  }
   useEffect(() => {
-    if (!saved.ready || saved.threadId !== threadId || !threadId) return;
-    const cards = updateTaskHistory(saved.cards, { anchor, todos: todos ?? [], goal });
-    if (cards === saved.cards) return;
-    setSaved({ ...saved, cards });
-    void userScopedStorage.setItem(`chat-task-cards:${threadId}`, JSON.stringify(cards));
-  }, [anchor, todos, goal, saved, threadId]);
+    if (saved.ready && saved.threadId === threadId && threadId) {
+      void userScopedStorage.setItem(`chat-task-cards:${threadId}`, JSON.stringify(saved.cards));
+    }
+  }, [saved, threadId]);
   return (
     <TaskCardDockProvider>
       <Tasks.Provider value={saved.threadId === threadId ? saved.cards : []}>
@@ -87,7 +90,7 @@ function TurnTaskCard({ task }: { task: TurnTask }) {
       open={open}
       onOpenChange={setOpen}
       className="max-w-none">
-      <TodoItems items={toAuiTodoItems(task.todos)} compact />
+      <TodoItems items={toAuiTodoItems(task.todos)} />
     </TaskCard>
   );
 }
