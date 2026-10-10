@@ -58,6 +58,11 @@ on:
       - "tests/support/storage_drivers.rs"
       - ".gitmodules"
       - "vendor/**"
+      # The helpers this workflow invokes, and the root build script the
+      # test targets compile through.
+      - "scripts/ci/checkout-submodules.sh"
+      - "scripts/ci-cancel-aware.sh"
+      - "build.rs"
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch: {}

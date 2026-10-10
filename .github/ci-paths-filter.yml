@@ -167,6 +167,13 @@ scripts:
   - 'app/scripts/e2e-web-build.sh'
   - 'app/scripts/e2e-web-session.sh'
   - 'app/vite.config.*'
+  # The storage-target parity test in self-hosted-lanes.test.mjs checks that
+  # every registered `tests/storage_*_e2e.rs` target is in the storage lane
+  # and the MongoDB workflow; adding a target must run it.
+  - 'tests/storage_*.rs'
+  - 'tests/cli_storage_url_e2e.rs'
+  - 'crates/openhuman-cli/Cargo.toml'
+  - '.github/workflows/storage-mongodb.yml'
 # Test-wiring surface: a change here can orphan a test or add an
 # untested controller domain → run the inventory guard.
 inventory:
