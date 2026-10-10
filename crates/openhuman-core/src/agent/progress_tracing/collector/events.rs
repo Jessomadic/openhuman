@@ -468,7 +468,7 @@ impl SpanCollector {
                 }
             }
 
-            AgentProgress::TurnCompleted { iterations } => {
+            AgentProgress::TurnCompleted { iterations, .. } => {
                 self.close_current_iteration(now_unix_ms);
                 if let Some(index) = self.turn_span_index {
                     let mut extra = BTreeMap::new();

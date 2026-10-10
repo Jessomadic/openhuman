@@ -64,7 +64,7 @@ fn full_turn_builds_correlated_span_tree() {
             },
             1_030,
         ),
-        (AgentProgress::TurnCompleted { iterations: 1 }, 1_040),
+        (AgentProgress::TurnCompleted { iterations: 1, stop: None }, 1_040),
     ]);
     c.finish(2_000);
     let spans = c.spans();

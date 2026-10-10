@@ -447,7 +447,7 @@ fn turn_completed_keeps_snapshot_as_completed_and_finish_is_noop() {
     let dir = tempdir().expect("tempdir");
     let store = TurnStateStore::new(dir.path().to_path_buf());
     let mut mirror = TurnStateMirror::new(store.clone(), "t", "req-1");
-    mirror.observe(&AgentProgress::TurnCompleted { iterations: 3 });
+    mirror.observe(&AgentProgress::TurnCompleted { iterations: 3, stop: None });
     // The snapshot is kept (not deleted) so a reloaded client can replay the
     // finished turn's processing transcript, marked terminal `Completed` with
     // the live fields quiesced.

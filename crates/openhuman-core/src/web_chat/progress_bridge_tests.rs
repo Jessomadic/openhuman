@@ -275,7 +275,7 @@ async fn stops_heartbeat_after_turn_completed() {
     }
 
     // Complete the turn, then drop the sender so the bridge loop breaks.
-    tx.send(AgentProgress::TurnCompleted { iterations: 1 })
+    tx.send(AgentProgress::TurnCompleted { iterations: 1, stop: None })
         .await
         .unwrap();
     drop(tx);
@@ -439,7 +439,7 @@ async fn wait_drained_returns_after_queued_events_are_forwarded() {
     })
     .await
     .unwrap();
-    tx.send(AgentProgress::TurnCompleted { iterations: 1 })
+    tx.send(AgentProgress::TurnCompleted { iterations: 1, stop: None })
         .await
         .unwrap();
 

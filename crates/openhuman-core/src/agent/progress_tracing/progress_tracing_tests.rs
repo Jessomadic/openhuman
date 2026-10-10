@@ -84,7 +84,7 @@ fn spawn(task: &str, display: &str) -> AgentProgress {
 fn one_turn_spans() -> Vec<TraceSpan> {
     let mut c = collect(&[
         (AgentProgress::TurnStarted, 0),
-        (AgentProgress::TurnCompleted { iterations: 1 }, 10),
+        (AgentProgress::TurnCompleted { iterations: 1, stop: None }, 10),
     ]);
     c.finish(10);
     c.into_spans()

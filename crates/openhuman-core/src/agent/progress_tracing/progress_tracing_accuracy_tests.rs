@@ -223,7 +223,7 @@ fn late_child_tool_completion_after_subagent_completed_closes_the_span() {
             child_tool_completed("t1", "c1", "get_node_kind_contract", 4),
             2_050,
         ),
-        (AgentProgress::TurnCompleted { iterations: 1 }, 400_000),
+        (AgentProgress::TurnCompleted { iterations: 1, stop: None }, 400_000),
     ]);
     c.finish(400_000);
     let tool = find(c.spans(), "tool.get_node_kind_contract");
@@ -261,7 +261,7 @@ fn tool_without_completion_is_force_closed_at_its_parent_end() {
         (tool_started("c1", "composio_list_toolkits", 1), 1_500),
         (iteration(2), 2_000),
         (simple_call("chat-v1"), 3_000),
-        (AgentProgress::TurnCompleted { iterations: 2 }, 440_000),
+        (AgentProgress::TurnCompleted { iterations: 2, stop: None }, 440_000),
     ]);
     c.finish(440_000);
     let tool = find(c.spans(), "tool.composio_list_toolkits");
@@ -345,7 +345,7 @@ fn cancelled_turn_is_a_warning_not_an_error() {
 fn completed_turn_is_not_reclassified_by_finish() {
     let mut c = collect(&[
         (AgentProgress::TurnStarted, 1_000),
-        (AgentProgress::TurnCompleted { iterations: 1 }, 2_000),
+        (AgentProgress::TurnCompleted { iterations: 1, stop: None }, 2_000),
     ]);
     c.finish_with_outcome(
         3_000,

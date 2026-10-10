@@ -43,7 +43,7 @@ async fn committed_progress_uses_each_turns_receipt_sender() {
     ));
     assert!(matches!(
         second_rx.recv().await,
-        Some(AgentProgress::TurnCompleted { iterations: 2 })
+        Some(AgentProgress::TurnCompleted { iterations: 2, stop: None })
     ));
     assert!(matches!(
         first_rx.try_recv(),
@@ -97,7 +97,7 @@ async fn committed_turn_completion_waits_for_a_full_progress_channel() {
         tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
             .await
             .expect("terminal progress event"),
-        Some(AgentProgress::TurnCompleted { iterations: 2 })
+        Some(AgentProgress::TurnCompleted { iterations: 2, stop: None })
     ));
     assert!(matches!(
         tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())

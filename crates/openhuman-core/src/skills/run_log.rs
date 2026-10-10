@@ -221,7 +221,7 @@ pub fn format_event(ev: &AgentProgress) -> Option<String> {
             "  ⮑ subagent {agent_id} awaiting user: {}",
             truncate(question, 200)
         ),
-        AgentProgress::TurnCompleted { iterations } => {
+        AgentProgress::TurnCompleted { iterations, .. } => {
             format!("turn completed ({iterations} iterations)")
         }
         // Noisy / non-step events — skipped (the final text is in the footer).
