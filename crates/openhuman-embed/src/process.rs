@@ -102,3 +102,24 @@ pub fn init_master_key() -> anyhow::Result<()> {
 #[cfg(test)]
 #[path = "process_tests.rs"]
 mod tests;
+
+/// Run a host command with stdin and a deadline, owning its process group.
+/// Normal completion, timeout, and cancellation all reap the command. When
+/// called inside a cancellable turn, its cleanup is also tracked by that turn.
+/// Explicit command environment settings are preserved over `Turn::tool_env`.
+pub async fn command_output(
+    command: &mut tokio::process::Command,
+    input: Vec<u8>,
+    deadline: std::time::Duration,
+) -> std::io::Result<std::process::Output> {
+    let cleanup = openhuman_core::tools::timeout::ProcessCleanup::default();
+    let result = cleanup
+        .scope(tokio::time::timeout(
+            deadline,
+            openhuman_core::tools::timeout::output_with_input(command, Some(input)),
+        ))
+        .await;
+    cleanup.wait().await;
+    result
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "host command timed out"))?
+}

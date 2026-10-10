@@ -240,19 +240,41 @@ pub async fn output_or_kill(
 pub async fn output_unbounded(
     cmd: &mut tokio::process::Command,
 ) -> std::io::Result<std::process::Output> {
+    output_with_input(cmd, None).await
+}
+
+/// Capture a command, optionally supplying stdin, in the current cleanup scope.
+pub async fn output_with_input(
+    cmd: &mut tokio::process::Command,
+    input: Option<Vec<u8>>,
+) -> std::io::Result<std::process::Output> {
     use std::process::Stdio;
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+    cmd.stdin(if input.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .kill_on_drop(true);
     CommandEnvironment::apply(cmd);
     own_process_group(cmd.as_std_mut());
-    let child = cmd.spawn()?;
+    let mut child = cmd.spawn()?;
+    let stdin = child.stdin.take();
     let reaped = process_cleanup::Reaped::register();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
     let waiter = tokio::spawn(async move {
         let _reaped = reaped;
-        collect_command_output(child, cancellation).await
+        let write_input = async move {
+            if let (Some(mut stdin), Some(input)) = (stdin, input) {
+                use tokio::io::AsyncWriteExt;
+                // An early child exit closes stdin. Its exit status/output is
+                // authoritative; a broken pipe must not hide it.
+                let _ = stdin.write_all(&input).await;
+            }
+        };
+        let (_, output) = tokio::join!(write_input, collect_command_output(child, cancellation));
+        output
     });
     let _cancel_on_drop = CancelOnDrop(cancel);
     waiter.await.map_err(std::io::Error::other)?

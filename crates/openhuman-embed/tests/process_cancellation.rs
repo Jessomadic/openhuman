@@ -185,3 +185,34 @@ async fn cancellable_turns_route_interpreters_away_from_unacknowledged_pools() {
         .await;
     assert!(openhuman_core::runtime::pool::node::enabled(&config));
 }
+
+#[tokio::test]
+async fn host_commands_receive_stdin_and_timeout_after_reaping() {
+    let mut cmd = tokio::process::Command::new("/bin/sh");
+    cmd.args(["-c", "cat; printf stderr >&2"]);
+    let output = openhuman_embed::process::command_output(
+        &mut cmd,
+        b"payload".to_vec(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output.stdout, b"payload");
+    assert_eq!(output.stderr, b"stderr");
+    let scratch = tempfile::tempdir().unwrap();
+    let pidfile = scratch.path().join("host.pid");
+    let mut cmd = tokio::process::Command::new("/bin/sh");
+    cmd.args(["-c", &format!("echo $$ > {}; sleep 30", pidfile.display())]);
+    let outer = ProcessCleanup::default();
+    let result = outer
+        .scope(openhuman_embed::process::command_output(
+            &mut cmd,
+            Vec::new(),
+            Duration::from_millis(100),
+        ))
+        .await;
+    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    outer.wait().await;
+    let pid = std::fs::read_to_string(pidfile).unwrap();
+    assert!(!std::path::Path::new(&format!("/proc/{}", pid.trim())).exists());
+}
