@@ -372,12 +372,17 @@ pub(super) fn assemble_turn_harness(
     // error `REPEATED_TOOL_FAILURE_THRESHOLD` times in a row, so a deterministic
     // security/approval denial or terminal tool error surfaces its root cause
     // instead of burning the whole iteration budget (legacy ProgressGuard parity).
+    // It reads each call's side effect from the registered tools' own
+    // declarations, so a timed-out read is retried instead of ending the turn.
     let repeated_failure = handle.as_ref().map(|handle| {
-        Arc::new(middleware::RepeatedToolFailureMiddleware::new(
-            handle.clone(),
-            REPEATED_TOOL_FAILURE_THRESHOLD,
-            halt_summary.clone(),
-        ))
+        Arc::new(
+            middleware::RepeatedToolFailureMiddleware::new(
+                handle.clone(),
+                REPEATED_TOOL_FAILURE_THRESHOLD,
+                halt_summary.clone(),
+            )
+            .with_tool_facts(middleware::tool_sets_lookup(tool_sets.clone())),
+        )
     });
     if let Some(mw) = &repeated_failure {
         harness.push_middleware(mw.clone());
