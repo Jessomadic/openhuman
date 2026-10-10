@@ -65,7 +65,8 @@ impl tinybus::service::Interface for SlowSearch {
     }
 }
 
-async fn slow_search_proxy(delay: std::time::Duration) -> tinybus::Proxy {
+/// The service connection is returned too: dropping it would unserve the mock.
+async fn slow_search_proxy(delay: std::time::Duration) -> (tinybus::Connection, tinybus::Proxy) {
     use tinybus::transport::memory::MemoryBus;
     let bus = MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
@@ -83,11 +84,10 @@ async fn slow_search_proxy(delay: std::time::Duration) -> tinybus::Proxy {
     let client = tinybus::Connection::connect(bus.connect().await.expect("client transport"))
         .await
         .expect("client");
-    // Keep the service connection alive for the test's duration.
-    std::mem::forget(service);
-    client
+    let proxy = client
         .proxy(names::INTERFACE, names::OBJECT_PATH, names::INTERFACE)
-        .expect("proxy")
+        .expect("proxy");
+    (service, proxy)
 }
 
 fn web_answer_request() -> ExecuteToolRequest {
@@ -105,7 +105,7 @@ async fn execute_tool_outlives_the_bus_default_timeout() {
     assert!(delay < EXECUTE_TOOL_TIMEOUT);
 
     // Control: the bus default really does cut this call off.
-    let proxy = slow_search_proxy(delay).await;
+    let (_service, proxy) = slow_search_proxy(delay).await;
     let cut_off = proxy
         .clone()
         .call::<serde_json::Value>(names::methods::EXECUTE_TOOL, (web_answer_request(),))
