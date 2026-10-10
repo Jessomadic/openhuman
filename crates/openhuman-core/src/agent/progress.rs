@@ -437,3 +437,14 @@ pub enum AgentProgress {
         output: Option<String>,
     },
 }
+
+impl AgentProgress {
+    /// A [`Self::TurnCompleted`] for a turn that finished on its own (no
+    /// early stop).
+    pub fn turn_completed(iterations: u32) -> Self {
+        Self::TurnCompleted {
+            iterations,
+            stop: None,
+        }
+    }
+}

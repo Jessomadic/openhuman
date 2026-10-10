@@ -275,12 +275,7 @@ async fn stops_heartbeat_after_turn_completed() {
     }
 
     // Complete the turn, then drop the sender so the bridge loop breaks.
-    tx.send(AgentProgress::TurnCompleted {
-        iterations: 1,
-        stop: None,
-    })
-    .await
-    .unwrap();
+    tx.send(AgentProgress::turn_completed(1)).await.unwrap();
     drop(tx);
 
     // Let the bridge process TurnCompleted + observe the closed channel.
@@ -442,12 +437,7 @@ async fn wait_drained_returns_after_queued_events_are_forwarded() {
     })
     .await
     .unwrap();
-    tx.send(AgentProgress::TurnCompleted {
-        iterations: 1,
-        stop: None,
-    })
-    .await
-    .unwrap();
+    tx.send(AgentProgress::turn_completed(1)).await.unwrap();
 
     // The sender stays alive (as a detached sub-agent's clone would), so the
     // drain must come from `TurnCompleted`, not from the channel closing.
