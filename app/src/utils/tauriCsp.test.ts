@@ -33,7 +33,10 @@ describe('Tauri content security policy', () => {
     );
   });
 
-  it('allows WebSocket connections to configured remote cores over plain HTTP', () => {
-    expect(connectSourceTokens).toContain('ws:');
+  it('limits plain WebSockets to loopback and keeps secure remote WebSockets', () => {
+    expect(connectSourceTokens).toEqual(
+      expect.arrayContaining(['ws://127.0.0.1:*', 'ws://localhost:*', 'wss:'])
+    );
+    expect(connectSourceTokens).not.toContain('ws:');
   });
 });
