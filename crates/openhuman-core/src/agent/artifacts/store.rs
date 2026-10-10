@@ -44,8 +44,23 @@ async fn documents(workspace_dir: &Path) -> Result<Option<Docs>, String> {
     else {
         return Ok(None);
     };
-    let legacy = workspace_dir.join(ARTIFACTS_SUBDIR);
-    on_docs(docs.clone(), move |docs| docs.import_legacy(&legacy).map(|_| ())).await?;
+    // Once per scope and workspace: the import only matters the first time.
+    static IMPORTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let scope = crate::storage::current_scope().map_err(|e| format!("[artifacts] storage: {e}"))?;
+    let key = format!("{scope}|{}", workspace_dir.display());
+    let first = {
+        let mut seen = IMPORTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if seen.contains(&key) {
+            false
+        } else {
+            seen.push(key);
+            true
+        }
+    };
+    if first {
+        let legacy = workspace_dir.join(ARTIFACTS_SUBDIR);
+        on_docs(docs.clone(), move |docs| docs.import_legacy(&legacy).map(|_| ())).await?;
+    }
     Ok(Some(docs))
 }
 
