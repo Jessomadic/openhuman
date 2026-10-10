@@ -145,7 +145,7 @@ async fn history_section(thread_id: &str) -> Option<ContextSection> {
     // Tokens, not bytes, is what `token_usage` actually recorded — reverse
     // the module's own byte-per-token estimate so `bytes` stays a consistent
     // (if approximate) unit across every section in the response.
-    let est = usage.last_turn_input_tokens as usize;
+    let est = usage.last_turn_context_tokens as usize;
     let bytes = est.saturating_mul(crate::agent::debug::prompt_size::EST_BYTES_PER_TOKEN);
     Some(ContextSection {
         label: "history".to_string(),
