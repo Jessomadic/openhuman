@@ -160,4 +160,56 @@ describe('useProviderConnect', () => {
     expect(api.setCloudProviderKey).not.toHaveBeenCalled();
     expect(persist).not.toHaveBeenCalled();
   });
+
+  it('serializes overlapping connection updates for the same provider', async () => {
+    let finishFirst!: () => void;
+    let finishSecond!: () => void;
+    api.setCloudProviderKey
+      .mockImplementationOnce(() => new Promise<void>(resolve => (finishFirst = resolve)))
+      .mockImplementationOnce(() => new Promise<void>(resolve => (finishSecond = resolve)));
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useProviderConnect({
+        draft: EMPTY_SETTINGS,
+        saved: EMPTY_SETTINGS,
+        persist,
+        t: key => key,
+        onConnected: vi.fn(),
+      })
+    );
+
+    let first!: Promise<void>;
+    act(() => {
+      first = result.current.connectProvider({
+        slug: 'openai',
+        value: 'first-key',
+        credentialMode: 'api_key',
+      });
+    });
+    await waitFor(() => expect(finishFirst).toBeTypeOf('function'));
+
+    let second!: Promise<void>;
+    act(() => {
+      second = result.current.connectProvider({
+        slug: 'openai',
+        value: 'second-key',
+        credentialMode: 'api_key',
+      });
+    });
+    expect(api.setCloudProviderKey).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishFirst();
+      await first;
+      await waitFor(() => expect(finishSecond).toBeTypeOf('function'));
+      finishSecond();
+      await second;
+    });
+
+    expect(api.setCloudProviderKey.mock.calls.map(([, key]) => key)).toEqual([
+      'first-key',
+      'second-key',
+    ]);
+    expect(persist).toHaveBeenCalledTimes(2);
+  });
 });

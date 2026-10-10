@@ -54,6 +54,7 @@ export function useProviderConnect({
   onConnected: () => void;
 }) {
   const latestSettings = useRef({ draft, saved });
+  const providerConnectQueues = useRef(new Map<string, Promise<void>>());
   useEffect(() => {
     latestSettings.current = { draft, saved };
   }, [draft, saved]);
@@ -98,6 +99,14 @@ export function useProviderConnect({
       endpoint?: string | null;
       credentialMode: ConnectCredentialMode;
     }) => {
+      const previousOperation = providerConnectQueues.current.get(slug);
+      let finishOperation!: () => void;
+      const currentOperation = new Promise<void>(resolve => {
+        finishOperation = resolve;
+      });
+      providerConnectQueues.current.set(slug, currentOperation);
+      if (previousOperation) await previousOperation;
+
       const isLocalRuntime = credentialMode === 'endpoint' || credentialMode === 'endpoint_key';
       const isEndpointKey = credentialMode === 'endpoint_key';
       const isCodexOAuth = credentialMode === 'codex_oauth';
@@ -295,6 +304,10 @@ export function useProviderConnect({
         onConnected();
       } finally {
         setBusyAction(null);
+        if (providerConnectQueues.current.get(slug) === currentOperation) {
+          providerConnectQueues.current.delete(slug);
+        }
+        finishOperation();
       }
     },
     [draft, persist, saved.cloudProviders, t, onConnected]
