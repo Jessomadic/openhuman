@@ -957,3 +957,15 @@ describe('feedback round-trip (Defect A)', () => {
     expect(converted.metadata?.submittedFeedback).toBeUndefined();
   });
 });
+
+
+describe('next-turn history stability', () => {
+  it('keeps a merged assistant reply unchanged when a new user turn streams', () => {
+    const history = [msg({id: 'user-1'}), msg({id: 'segment-1', sender: 'agent', content: 'First step', extraMetadata: {requestId: 'r1'}}), msg({id: 'segment-2', sender: 'agent', content: 'Final answer', extraMetadata: {requestId: 'r1'}})];
+    const before = buildRuntimeMessages(history, null, {isRunning: false});
+    const after = buildRuntimeMessages([...history, msg({id: 'user-2', content: 'try now'})], {requestId: 'r2', content: 'New response', thinking: ''}, {isRunning: true, liveRequestId: 'r2'});
+    expect(after.map(message => message.id)).toEqual([before[0]!.id, before[1]!.id, 'user-2', STREAMING_TAIL_ID]);
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
+  });
+});
