@@ -19,7 +19,7 @@
 //! chat UI; see the module README.
 
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tinyagents_harness::tinyinference_video::{ProgressFn, VideoJobStatus};
 use tinytools::{ToolProgress, ToolRunContext};
@@ -79,7 +79,7 @@ pub(crate) async fn with_progress_heartbeat<F: std::future::Future>(
         return fut.await;
     };
     let state: Arc<Mutex<Option<String>>> = Arc::default();
-    let started = Instant::now();
+    let started = tokio::time::Instant::now();
     let work = JOB_STATE.scope(state.clone(), fut);
     tokio::pin!(work);
     let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
