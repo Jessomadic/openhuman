@@ -36,8 +36,8 @@ use std::future::Future;
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 
 pub use tinystoragedrivers::{
-    Blocking, DocumentStore, DocumentStoreExt, MemoryStorage, Scope, ScopedStorage, StorageBackend,
-    StorageConfig as StorageUrl, StorageError,
+    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, MemoryStorage, Precondition, Scope,
+    ScopedStorage, StorageBackend, StorageConfig as StorageUrl, StorageError,
 };
 
 use crate::config::schema::storage::redact_url;

@@ -417,6 +417,22 @@ export function buildPlan({ profile, areas, env = {}, isPullRequest = true }) {
           run: "cargo check -p openhuman-embed --no-default-features",
         },
         {
+          name: "embed-doctests",
+          when: core,
+          run: "bash scripts/ci-cancel-aware.sh cargo test -p openhuman-embed --doc",
+        },
+        {
+          name: "embed-rustdoc",
+          when: core,
+          env: { RUSTDOCFLAGS: "-D warnings" },
+          run: "bash scripts/ci-cancel-aware.sh cargo doc -p openhuman-embed --no-deps",
+        },
+        {
+          name: "embed-offline-examples",
+          when: core,
+          run: "node scripts/run-embed-examples.mjs",
+        },
+        {
           name: "tinyhumans-clippy",
           when: core,
           run: "cargo clippy -p openhuman-tinyhumans --all-targets -- -D warnings",

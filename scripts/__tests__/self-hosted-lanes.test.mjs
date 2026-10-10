@@ -155,7 +155,7 @@ test("a core-only change still installs the node deps rust-core-coverage's mock 
   assert.deepEqual(orderProblems(sub), []);
 });
 
-test("doctests and module-gated tests are outside the PR lane, tui tests run on PRs", () => {
+test("core doctests remain outside PR coverage; embed doctests and tui tests run on PRs", () => {
   for (const plan of plans()) {
     const cov = plan.lanes
       .find((l) => l.name === "rust-cov")
@@ -164,7 +164,12 @@ test("doctests and module-gated tests are outside the PR lane, tui tests run on 
     assert.equal(cov.env.OH_COV_TUI, "1");
     const runs = allRuns(plan).join("\n");
     assert.doesNotMatch(runs, /cargo test -p openhuman --doc/);
-    assert.doesNotMatch(runs, /cargo test -p openhuman-(embed|tinyhumans)\b/);
+    assert.doesNotMatch(runs, /cargo test -p openhuman-(embed|tinyhumans)\b(?! --doc)/);
+    assert.match(runs, /cargo test -p openhuman-embed --doc/);
+    const doc = plan.lanes.find(l => l.name === "rust-lint").checks.find(c => c.name === "embed-rustdoc");
+    assert.equal(doc.env.RUSTDOCFLAGS, "-D warnings");
+    assert.match(doc.run, /cargo doc -p openhuman-embed --no-deps/);
+    assert.match(runs, /node scripts\/run-embed-examples.mjs/);
     assert.doesNotMatch(runs, /-p openhuman --no-default-features$/m);
     assert.doesNotMatch(runs, /tool_output_tabulates_a_large_graph/);
   }

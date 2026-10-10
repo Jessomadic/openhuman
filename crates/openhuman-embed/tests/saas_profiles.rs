@@ -10,7 +10,10 @@ mod common;
 
 use std::time::Duration;
 
-use common::{chat_requests, echo_inference, last_user_message, runtime, PointedTransport};
+use common::{
+    chat_requests, echo_inference, last_user_message, runtime_without_master_key as runtime,
+    PointedTransport,
+};
 use openhuman_embed::profiles::ProfileCredentialKind;
 use openhuman_embed::{
     OpenError, ProfileError, ProfileRuntime, RelayMessage, Runtime, SaasConfig, Workspace,

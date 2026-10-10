@@ -30,6 +30,8 @@ pub struct ResponseShape {
     pub response_format: Option<ResponseFormat>,
     /// Replaces the turn's per-call output cap.
     pub max_output_tokens: Option<u32>,
+    /// Nucleus sampling probability applied to every call of this turn.
+    pub top_p: Option<f64>,
 }
 
 /// What the turn's final model call reported.
@@ -118,6 +120,9 @@ impl Middleware<(), OpenHumanRunContext> for ResponseShapeMiddleware {
         }
         if let Some(cap) = shape.max_output_tokens {
             request.max_tokens = Some(cap);
+        }
+        if let Some(top_p) = shape.top_p {
+            request.top_p = Some(top_p);
         }
         Ok(())
     }

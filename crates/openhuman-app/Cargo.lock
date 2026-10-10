@@ -4588,6 +4588,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "futures-core",
  "log",
  "openhuman",
  "sentry",
@@ -4603,6 +4604,7 @@ dependencies = [
  "tinymemory-tools",
  "tinytools",
  "tokio",
+ "tokio-stream",
  "url",
  "uuid",
 ]
