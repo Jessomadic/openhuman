@@ -233,6 +233,12 @@ pub struct WebChannelEvent {
     /// requeue), when applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<String>,
+    /// `Some(true)` on an `approval_request` whose park can outlive the chat
+    /// turn it is shown on (an async-delegated sub-agent). The client keeps
+    /// such a card across that turn's `chat_done` and clears it on
+    /// `approval_decided` instead. Absent for an ordinary in-turn park.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detached: Option<bool>,
 }
 
 impl WebChannelEvent {
