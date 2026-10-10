@@ -137,13 +137,13 @@ export function ContextUsage({
         ? usage.contextWindow
         : DEFAULT_CONTEXT_WINDOW;
 
+  // The ring measures one request against the window. The turn's input and
+  // output totals sum every model call of the turn, so on a long tool loop
+  // they run to many times the window; they belong with the spend figures
+  // below, not under the gauge.
   const ringUsage = useMemo<TokenUsage>(
-    () => ({
-      totalTokens: usage.lastTurnContextUsed,
-      inputTokens: usage.lastTurnInputTokens,
-      outputTokens: usage.lastTurnOutputTokens,
-    }),
-    [usage.lastTurnContextUsed, usage.lastTurnInputTokens, usage.lastTurnOutputTokens]
+    () => ({ totalTokens: usage.lastTurnContextUsed }),
+    [usage.lastTurnContextUsed]
   );
 
   const labels = useMemo<ContextDisplayLabels>(
