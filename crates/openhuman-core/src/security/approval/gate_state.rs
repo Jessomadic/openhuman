@@ -132,11 +132,8 @@ impl ApprovalGate {
                 let _ = tx.send(ApprovalDecision::Deny);
             }
             let route = self.take_request_route(&decided.request_id);
-            if let Some(thread_id) = route.as_ref().and_then(|r| r.thread_id.as_deref()) {
-                self.clear_thread_route_if_owned(
-                    &thread_route_key(Some(agent), thread_id),
-                    &decided.request_id,
-                );
+            if let Some(thread_key) = route.as_ref().and_then(|r| r.thread_key.as_deref()) {
+                self.clear_thread_route_if_owned(thread_key, &decided.request_id);
             }
             BUS.publish(DomainEvent::ApprovalDecided {
                 request_id: decided.request_id.clone(),
@@ -304,19 +301,31 @@ impl ApprovalGate {
     }
 
     /// The request_id of the approval currently parked on `thread_id` by the
-    /// ambient context's agent, if any. Used by the web channel to route an
-    /// inbound yes/no reply to a decision.
+    /// ambient tenant (SaaS profile and/or embedded agent), if any. Used by
+    /// the web channel to route an inbound yes/no reply to a decision.
     pub fn pending_for_thread(&self, thread_id: &str) -> Option<String> {
-        let agent = crate::core::runtime::agent_scope::current_agent_id();
-        self.pending_for_agent_thread(agent.as_deref(), thread_id)
+        self.pending_for_tenant_thread(&super::gate::current_route_tenant(), thread_id)
     }
 
     /// The request_id `agent` (`None`: the process) has parked on
-    /// `thread_id`, if any.
+    /// `thread_id` outside any SaaS profile, if any.
     pub fn pending_for_agent_thread(&self, agent: Option<&str>, thread_id: &str) -> Option<String> {
+        let tenant = crate::core::runtime::Tenant {
+            profile: None,
+            agent: agent.map(str::to_owned),
+        };
+        self.pending_for_tenant_thread(&tenant, thread_id)
+    }
+
+    /// The request_id `tenant` has parked on `thread_id`, if any.
+    pub fn pending_for_tenant_thread(
+        &self,
+        tenant: &crate::core::runtime::Tenant,
+        thread_id: &str,
+    ) -> Option<String> {
         self.thread_to_request
             .lock()
-            .get(&thread_route_key(agent, thread_id))
+            .get(&thread_route_key(tenant, thread_id))
             .cloned()
     }
 
