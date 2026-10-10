@@ -224,10 +224,7 @@ pub fn format_event(ev: &AgentProgress) -> Option<String> {
         AgentProgress::TurnCompleted {
             iterations,
             stop: Some(stop),
-        } => format!(
-            "turn {} ({iterations} iterations)",
-            stop.status_message()
-        ),
+        } => format!("turn {} ({iterations} iterations)", stop.status_message()),
         AgentProgress::TurnCompleted { iterations, .. } => {
             format!("turn completed ({iterations} iterations)")
         }

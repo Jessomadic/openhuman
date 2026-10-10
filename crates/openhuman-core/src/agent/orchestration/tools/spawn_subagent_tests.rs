@@ -51,11 +51,13 @@ fn parameters_schema_advertises_dedicated_thread_flag() {
     assert_eq!(flag.get("type").and_then(|v| v.as_str()), Some("boolean"));
     // Must be off by default — workers are an opt-in escape hatch, not
     // a free upgrade for every spawn.
-    assert!(schema
-        .get("required")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().all(|s| s.as_str() != Some("dedicated_thread")))
-        .unwrap_or(true));
+    assert!(
+        schema
+            .get("required")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().all(|s| s.as_str() != Some("dedicated_thread")))
+            .unwrap_or(true)
+    );
 }
 
 #[test]
@@ -65,11 +67,13 @@ fn parameters_schema_advertises_optional_model_override() {
     let props = schema.get("properties").expect("schema has properties");
     let model = props.get("model").expect("model override advertised");
     assert_eq!(model.get("type").and_then(|v| v.as_str()), Some("string"));
-    assert!(schema
-        .get("required")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().all(|s| s.as_str() != Some("model")))
-        .unwrap_or(true));
+    assert!(
+        schema
+            .get("required")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().all(|s| s.as_str() != Some("model")))
+            .unwrap_or(true)
+    );
 }
 
 #[test]
@@ -223,9 +227,11 @@ async fn legacy_archetype_alias_is_accepted_for_lookup() {
         .await
         .unwrap();
     assert!(result.is_error);
-    assert!(result
-        .output()
-        .contains("unknown agent_id 'totally_made_up'"));
+    assert!(
+        result
+            .output()
+            .contains("unknown agent_id 'totally_made_up'")
+    );
 }
 
 #[tokio::test]

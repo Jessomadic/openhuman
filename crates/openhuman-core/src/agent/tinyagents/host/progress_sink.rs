@@ -99,13 +99,13 @@
 //!   forwarded.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use async_trait::async_trait;
-use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::error::TrySendError;
 
 use tinyagents_harness::host::{ProgressEvent, ProgressSink};
 
@@ -569,7 +569,7 @@ impl ProgressSink for OpenHumanProgressSink {
                     iterations,
                     stop: None,
                 })
-                    .await;
+                .await;
             }
 
             ProgressEvent::Error { run, message } => {

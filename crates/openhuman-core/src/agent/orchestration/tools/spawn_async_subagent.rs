@@ -8,14 +8,14 @@ use super::subagent_abort_report::AbortReport;
 use crate::agent::harness::definition::AgentDefinitionRegistry;
 use crate::agent::orchestration::fleet_tools::FleetToolSet;
 use crate::agent::orchestration::running_subagents;
-use crate::agent::orchestration::tools::dispatch::incomplete_stop;
 use crate::agent::orchestration::subagent_sessions::{
     self, DurableSubagentStatus, SubagentSessionSelector, SubagentSessionStore,
     SubagentSessionUpsert,
 };
+use crate::agent::orchestration::tools::dispatch::incomplete_stop;
 use crate::agent::progress::AgentProgress;
 use crate::agent::subagent_host::{
-    run_subagent_with_parent, SubagentRunOptions, SubagentRunStatus,
+    SubagentRunOptions, SubagentRunStatus, run_subagent_with_parent,
 };
 use crate::threads::store::{self as conversations, ConversationMessage};
 use async_trait::async_trait;

@@ -69,10 +69,7 @@ fn an_incomplete_reason_maps_to_cap_or_breaker() {
             .as_deref(),
         Some("web_answer_tool")
     );
-    assert_eq!(
-        TurnStop::wind_down().status_message(),
-        "stopped: wind_down"
-    );
+    assert_eq!(TurnStop::wind_down().status_message(), "stopped: wind_down");
     assert_eq!(
         TurnStop::iteration_cap().status_message(),
         "stopped: iteration_cap"

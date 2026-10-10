@@ -6,8 +6,8 @@
 use super::*;
 
 use crate::agent::turn_stop::TurnStop;
-use tinyagents_harness::observability::trace_export::otlp::otlp_requests;
 use tinyagents_harness::observability::trace_export::SpanStatus;
+use tinyagents_harness::observability::trace_export::otlp::otlp_requests;
 
 const BREAKER_NOTE: &str = "Stopping after 2 attempt(s): failure class \
     `uncertain_side_effect` still blocks operation `web_answer_tool` on \
@@ -65,8 +65,16 @@ fn a_breaker_stopped_turn_closes_at_warning_with_stop_attributes() {
     c.finish(50);
     let spans = c.into_spans();
     let turn = root(&spans);
-    assert_ne!(turn.status, SpanStatus::Error, "a stop is not a harness error");
-    assert_ne!(turn.status, SpanStatus::Ok, "a stop is not a clean completion");
+    assert_ne!(
+        turn.status,
+        SpanStatus::Error,
+        "a stop is not a harness error"
+    );
+    assert_ne!(
+        turn.status,
+        SpanStatus::Ok,
+        "a stop is not a clean completion"
+    );
     assert_eq!(attr(turn, "observation.level"), Some("WARNING"));
     assert_eq!(attr(turn, "turn.outcome"), Some("stopped"));
     assert_eq!(attr(turn, "turn.stop_kind"), Some("breaker"));
@@ -166,7 +174,11 @@ fn a_stopped_subagent_span_closes_at_warning_with_stop_attributes() {
     c.finish(50);
     let spans = c.into_spans();
     let sub = find(&spans, "subagent.Research");
-    assert_ne!(sub.status, SpanStatus::Ok, "a stopped child is not a clean finish");
+    assert_ne!(
+        sub.status,
+        SpanStatus::Ok,
+        "a stopped child is not a clean finish"
+    );
     assert_eq!(attr(sub, "observation.level"), Some("WARNING"));
     assert_eq!(attr(sub, "turn.outcome"), Some("stopped"));
     assert_eq!(attr(sub, "turn.stop_kind"), Some("breaker"));

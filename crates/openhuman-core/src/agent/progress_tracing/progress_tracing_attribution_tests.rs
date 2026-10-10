@@ -96,12 +96,14 @@ fn tool_io_is_captured_when_capture_content_is_on() {
         4,
     );
     let child_tool = find(c.spans(), "tool.read_file");
-    assert!(child_tool
-        .input
-        .as_ref()
-        .and_then(|v| v.as_str())
-        .unwrap()
-        .contains("notes.md"));
+    assert!(
+        child_tool
+            .input
+            .as_ref()
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .contains("notes.md")
+    );
     assert_eq!(
         child_tool.output.as_ref().and_then(|v| v.as_str()),
         Some("file contents")
@@ -335,12 +337,16 @@ fn zero_reasoning_turn_leaves_root_without_reasoning_attr() {
     ]);
     c.finish(20);
     let turn = find(c.spans(), "agent.turn");
-    assert!(!turn
-        .attributes
-        .contains_key("gen_ai.usage.reasoning_tokens"));
-    assert!(!turn
-        .attributes
-        .contains_key("gen_ai.usage.cache_creation_tokens"));
+    assert!(
+        !turn
+            .attributes
+            .contains_key("gen_ai.usage.reasoning_tokens")
+    );
+    assert!(
+        !turn
+            .attributes
+            .contains_key("gen_ai.usage.cache_creation_tokens")
+    );
 }
 
 // ── run-type classification ─────────────────────────────────────────────────
@@ -498,12 +504,14 @@ fn generation_records_request_messages_and_completion_when_capture_on() {
         input.to_string().contains("You are OpenHuman."),
         "system prompt must land in the generation input: {input}"
     );
-    assert!(generation
-        .output
-        .as_ref()
-        .expect("generation output")
-        .to_string()
-        .contains("hello"));
+    assert!(
+        generation
+            .output
+            .as_ref()
+            .expect("generation output")
+            .to_string()
+            .contains("hello")
+    );
 }
 
 #[test]

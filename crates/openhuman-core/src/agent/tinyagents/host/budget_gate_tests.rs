@@ -245,9 +245,10 @@ fn a_refusing_budget_refuses_the_agent_over_it() {
 fn a_warning_budget_never_refuses() {
     let (_tmp, tracker) = ledger_with(2.0, "planner");
     let gate = budgeted_gate(crate::config::BudgetAction::Warn);
-    assert!(gate
-        .check_budgets_against(&estimate_for("planner"), &gate.live_budgets(), &tracker)
-        .is_none());
+    assert!(
+        gate.check_budgets_against(&estimate_for("planner"), &gate.live_budgets(), &tracker)
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -312,9 +313,10 @@ fn a_call_is_checked_against_its_own_model() {
     // Another call left a different model in the shared attribution.
     *gate.last_model.write() = "other".into();
     let policies = gate.live_budgets();
-    assert!(gate
-        .check_budgets_against(&estimate_for("planner"), &policies, &tracker)
-        .is_some());
+    assert!(
+        gate.check_budgets_against(&estimate_for("planner"), &policies, &tracker)
+            .is_some()
+    );
 }
 
 #[tokio::test]

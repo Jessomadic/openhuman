@@ -52,7 +52,10 @@ async fn completion_is_published_before_slow_post_commit_work_finishes() {
     };
     let publish = async {
         progress_tx
-            .send(AgentProgress::TurnCompleted { iterations: 1, stop: None })
+            .send(AgentProgress::TurnCompleted {
+                iterations: 1,
+                stop: None,
+            })
             .await
             .is_ok()
     };
@@ -67,7 +70,10 @@ async fn completion_is_published_before_slow_post_commit_work_finishes() {
     assert!(delivered);
     assert!(matches!(
         progress_rx.try_recv(),
-        Ok(AgentProgress::TurnCompleted { iterations: 1, stop: None })
+        Ok(AgentProgress::TurnCompleted {
+            iterations: 1,
+            stop: None
+        })
     ));
     assert!(
         !tail_done.load(std::sync::atomic::Ordering::SeqCst),

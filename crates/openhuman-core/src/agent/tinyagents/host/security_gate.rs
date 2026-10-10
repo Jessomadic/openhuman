@@ -85,10 +85,10 @@ use tinyagents_harness::host::security_gate::{
 };
 
 use crate::agent::tinyagents::policy_denial::PolicyDenial;
-use crate::security::approval::{redact_args, summarize_action, ApprovalGate, GateOutcome};
+use crate::security::approval::{ApprovalGate, GateOutcome, redact_args, summarize_action};
 use crate::security::policy::{CommandClass, GateDecision as PolicyGateDecision, SecurityPolicy};
 use crate::security::prompt_injection::{
-    enforce_prompt_input, PromptEnforcementAction, PromptEnforcementContext,
+    PromptEnforcementAction, PromptEnforcementContext, enforce_prompt_input,
 };
 use crate::tools::agent_policy::{ToolPolicyAction, ToolPolicySession};
 use tinytools::{PermissionLevel, Tool};

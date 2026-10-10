@@ -261,7 +261,10 @@ pub async fn spawn_workflow_run_background(
                     // The harness stopped the run's turn early (breaker,
                     // wind-down, iteration cap): it did not finish, so it is
                     // not `DONE`. `run_workflow` reports `STOPPED` as a failure.
-                    let summary = stop.as_ref().map(|s| s.status_message()).unwrap_or_default();
+                    let summary = stop
+                        .as_ref()
+                        .map(|s| s.status_message())
+                        .unwrap_or_default();
                     let _ = run_log::write_footer(&log_path, "STOPPED", ms, &out).await;
                     tracing::warn!(
                         run_id = %run_id,

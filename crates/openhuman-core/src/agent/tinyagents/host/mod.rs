@@ -50,11 +50,11 @@ pub use definition_registry::OpenHumanDefinitionRegistry;
 pub use learning_sink::OpenHumanLearningSink;
 pub use model_resolver::OpenHumanModelResolver;
 pub use progress_sink::OpenHumanProgressSink;
-pub(crate) use run_context::{direct_subagent_child, SessionTurnSidecar};
 pub use run_context::{
-    decide_dispatch, DispatchDecision, DispatchInputs, LastTurnUsage, OpenHumanRunContext,
-    SubagentUsageEntry, TurnDispatchState,
+    DispatchDecision, DispatchInputs, LastTurnUsage, OpenHumanRunContext, SubagentUsageEntry,
+    TurnDispatchState, decide_dispatch,
 };
-pub(crate) use security_gate::with_untrusted_input_turn;
+pub(crate) use run_context::{SessionTurnSidecar, direct_subagent_child};
 pub use security_gate::OpenHumanSecurityGate;
+pub(crate) use security_gate::with_untrusted_input_turn;
 pub use tool_outcome_classifier::OpenHumanToolOutcomeClassifier;

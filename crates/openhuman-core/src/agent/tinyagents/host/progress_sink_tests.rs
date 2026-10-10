@@ -406,7 +406,10 @@ async fn finished_without_usage_still_completes_the_turn() {
     .await;
     assert!(matches!(
         rx.try_recv().expect("event forwarded"),
-        AgentProgress::TurnCompleted { iterations: 1, stop: None }
+        AgentProgress::TurnCompleted {
+            iterations: 1,
+            stop: None
+        }
     ));
 }
 

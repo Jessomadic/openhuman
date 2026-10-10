@@ -183,12 +183,14 @@ fn single_synthetic_delta_at_completion_records_no_ttft() {
         (simple_call("gpt-6.1-sol"), 9_000),
     ]);
     let g = generations(c.spans())[0];
-    assert!(!g
-        .attributes
-        .contains_key("gen_ai.response.first_token_unix_ms"));
-    assert!(!g
-        .attributes
-        .contains_key("gen_ai.response.time_to_first_token_ms"));
+    assert!(
+        !g.attributes
+            .contains_key("gen_ai.response.first_token_unix_ms")
+    );
+    assert!(
+        !g.attributes
+            .contains_key("gen_ai.response.time_to_first_token_ms")
+    );
     assert_eq!(
         g.attributes["gen_ai.response.streamed"],
         serde_json::json!(false)
@@ -224,7 +226,13 @@ fn late_child_tool_completion_after_subagent_completed_closes_the_span() {
             child_tool_completed("t1", "c1", "get_node_kind_contract", 4),
             2_050,
         ),
-        (AgentProgress::TurnCompleted { iterations: 1, stop: None }, 400_000),
+        (
+            AgentProgress::TurnCompleted {
+                iterations: 1,
+                stop: None,
+            },
+            400_000,
+        ),
     ]);
     c.finish(400_000);
     let tool = find(c.spans(), "tool.get_node_kind_contract");
@@ -262,7 +270,13 @@ fn tool_without_completion_is_force_closed_at_its_parent_end() {
         (tool_started("c1", "composio_list_toolkits", 1), 1_500),
         (iteration(2), 2_000),
         (simple_call("chat-v1"), 3_000),
-        (AgentProgress::TurnCompleted { iterations: 2, stop: None }, 440_000),
+        (
+            AgentProgress::TurnCompleted {
+                iterations: 2,
+                stop: None,
+            },
+            440_000,
+        ),
     ]);
     c.finish(440_000);
     let tool = find(c.spans(), "tool.composio_list_toolkits");
@@ -295,12 +309,14 @@ fn turn_without_completion_is_an_error() {
         exported_attr(c.spans(), "agent.turn", "langfuse.observation.level").as_deref(),
         Some("ERROR")
     );
-    assert!(exported_attr(
-        c.spans(),
-        "agent.turn",
-        "langfuse.observation.status_message"
-    )
-    .is_some());
+    assert!(
+        exported_attr(
+            c.spans(),
+            "agent.turn",
+            "langfuse.observation.status_message"
+        )
+        .is_some()
+    );
 }
 
 #[test]
@@ -320,10 +336,12 @@ fn failed_turn_message_is_content_gated() {
     let mut captured = collect_with_capture(&[(AgentProgress::TurnStarted, 1_000)]);
     captured.finish_with_outcome(2_000, Some(failed()));
     let turn = find(captured.spans(), "agent.turn");
-    assert!(turn.attributes["error.message"]
-        .as_str()
-        .unwrap()
-        .contains("provider rejected"));
+    assert!(
+        turn.attributes["error.message"]
+            .as_str()
+            .unwrap()
+            .contains("provider rejected")
+    );
 }
 
 #[test]
@@ -346,7 +364,13 @@ fn cancelled_turn_is_a_warning_not_an_error() {
 fn completed_turn_is_not_reclassified_by_finish() {
     let mut c = collect(&[
         (AgentProgress::TurnStarted, 1_000),
-        (AgentProgress::TurnCompleted { iterations: 1, stop: None }, 2_000),
+        (
+            AgentProgress::TurnCompleted {
+                iterations: 1,
+                stop: None,
+            },
+            2_000,
+        ),
     ]);
     c.finish_with_outcome(
         3_000,
@@ -450,9 +474,10 @@ fn unpriced_model_placeholder_cost_is_not_recorded() {
         g.attributes["gen_ai.cost.source"],
         serde_json::json!("unpriced")
     );
-    assert!(!g
-        .attributes
-        .contains_key("gen_ai.pricing.input_per_mtok_usd"));
+    assert!(
+        !g.attributes
+            .contains_key("gen_ai.pricing.input_per_mtok_usd")
+    );
     assert_eq!(
         exported_attr(
             c.spans(),

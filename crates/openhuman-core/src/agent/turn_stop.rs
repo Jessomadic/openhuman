@@ -89,10 +89,9 @@ impl TurnStop {
         let failure_class = backticked_after(lead, "failure class `")
             .and_then(ident)
             .or_else(|| {
-                let key = crate::agent::session_host::stop_summary::StopReasonKind::from_stop_note(
-                    note,
-                )
-                .key();
+                let key =
+                    crate::agent::session_host::stop_summary::StopReasonKind::from_stop_note(note)
+                        .key();
                 ident(key.strip_prefix("turn_stop.").unwrap_or(key))
             });
         let operation = backticked_after(lead, "still blocks operation `").and_then(ident);
