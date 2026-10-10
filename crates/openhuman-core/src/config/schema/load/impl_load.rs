@@ -9,7 +9,9 @@ use super::migrate::{
     migrate_cloud_provider_slugs, migrate_legacy_inference_url, migrate_legacy_memory_backend,
     migrate_search_settings,
 };
-use super::secrets::{decrypt_config_secrets, encrypt_config_secrets};
+use super::secrets::{
+    decrypt_config_secrets, decrypt_config_secrets_strict, encrypt_config_secrets,
+};
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -146,12 +148,15 @@ pub(super) async fn read_config_with_recovery_or_default(
 /// node-local bootstrap `config.toml.bak`, rename the bootstrap file, and save
 /// stale defaults over the shared document.
 pub(super) async fn parse_source_contents(
-    source: &dyn super::source::ConfigSource,
+    read: &super::source::ConfigRead,
     config_path: &Path,
-    contents: &str,
-    read_was_recovered: bool,
 ) -> Result<(Box<Config>, bool)> {
-    if source.encrypts_body() {
+    let contents = read.contents.as_str();
+    let read_was_recovered = read.recovered;
+    // By the text's origin, not the source's kind: a document source that
+    // fell back to the file (no document for the scope yet) returns file text,
+    // which keeps the file's `.bak` recovery.
+    if read.from_document {
         let config = parse_toml_off_worker(contents.to_string())
             .await
             .map_err(|error| {
@@ -338,7 +343,15 @@ impl Config {
 
         let config_path = openhuman_dir.join("config.toml");
 
-        if resolution_source == ConfigResolutionSource::DefaultConfigDir && !config_path.exists() {
+        // With a shared backend the scope's document is the config even when
+        // this node has no local file: returning pre-login defaults here would
+        // let the next settings save overwrite that document.
+        let source = super::source::for_config(&config_path)?;
+        let document_exists = source.label() == "document" && source.exists().await?;
+        if resolution_source == ConfigResolutionSource::DefaultConfigDir
+            && !config_path.exists()
+            && !document_exists
+        {
             let config = pre_login_config_boxed(config_path.clone(), workspace_dir.clone(), env);
 
             tracing::debug!(
@@ -367,7 +380,7 @@ impl Config {
         // shared backend and a scope are installed. A process boots before its
         // backend is installed, so its first load normally reads the file (the
         // bootstrap config); nothing here enforces that ordering.
-        if super::source::for_config(&config_path)?.exists().await? {
+        if document_exists || source.exists().await? {
             Box::pin(Self::load_existing_config(
                 openhuman_dir,
                 workspace_dir,
@@ -470,12 +483,13 @@ impl Config {
             );
         }
 
+        let read = Box::pin(source.read()).await?;
+        let (config, config_was_corrupted) = parse_source_contents(&read, &config_path).await?;
         let super::source::ConfigRead {
             contents: raw,
             recovered: read_was_recovered,
-        } = Box::pin(source.read()).await?;
-        let (config, config_was_corrupted) =
-            parse_source_contents(source.as_ref(), &config_path, &raw, read_was_recovered).await?;
+            ..
+        } = read;
         let mut config = *config;
         let config_was_corrupted = config_was_corrupted || read_was_recovered;
         config.config_path = config_path.clone();
@@ -513,11 +527,28 @@ impl Config {
         // Where the text lives is the source's business: the file (atomic
         // replace with a `.bak`) or, on a shared backend, the config document.
         let source = super::source::for_config(&self.config_path)?;
+        self.save_to(source.as_ref()).await
+    }
+
+    /// Save into `source`. The loader also uses it to rewrite the local
+    /// bootstrap file when a document-backed load recovered it.
+    pub(super) async fn save_to(&self, source: &dyn super::source::ConfigSource) -> Result<()> {
         let mut config_to_save = self.clone();
         super::super::cli_overrides::restore_persisted_inference_fields(&mut config_to_save);
         // A document source seals the whole body under the scope's data key;
         // the process-local field key would make it unreadable on another node.
-        if !source.encrypts_body() {
+        // A config seeded from the local file (or saved by a migration before
+        // the load decrypted it) can still hold process-key `enc2:` fields, so
+        // they are opened first: the document must never nest node-local
+        // ciphertext.
+        if source.encrypts_body() {
+            let openhuman_dir = config_to_save
+                .config_path
+                .parent()
+                .context("Config path must have a parent directory")?
+                .to_path_buf();
+            decrypt_config_secrets_strict(&mut config_to_save, &openhuman_dir)?;
+        } else {
             encrypt_config_secrets(&mut config_to_save)?;
         }
 

@@ -140,9 +140,8 @@ struct OpenHumanTurnToolSurface {
     agent_definition_name: String,
 }
 
-/// Per-session product observations that were formerly scattered across the
-/// legacy `core_turn` loop. Generic history, raw transcript data and prefix
-/// state intentionally do not appear here.
+/// Per-session product observations formerly scattered across the legacy
+/// `core_turn` loop. Generic history, raw transcript and prefix state are not here.
 #[derive(Default)]
 struct OpenHumanTurnPreludeMutable {
     last_memory_context: Option<String>,
@@ -164,10 +163,11 @@ struct OpenHumanTurnPreludeMutable {
     connected_integrations: Vec<crate::agent::prompts::ConnectedIntegration>,
     connected_integrations_initialized: bool,
     connected_integrations_authoritative: bool,
-    /// Integration action declarations this thread was already sent,
-    /// restored by the tinyagents session on resume. Rebuilt into deferred
-    /// executors whenever the live integrations list does not supply them
-    /// (see `recorded_tools`).
+    /// A cold hydration seeded the announced sets; later ones diff instead.
+    integration_announcements_seeded: bool,
+    /// Integration action declarations this thread was already sent, restored by
+    /// the tinyagents session on resume. Rebuilt into deferred executors whenever
+    /// the live integrations list does not supply them (see `recorded_tools`).
     recorded_integration_actions: Vec<tinytools::ToolSpec>,
     workflows: Vec<crate::skills::Workflow>,
     composio_events: Option<tinybus::events::EventReceiver<crate::core::events::DomainEvent>>,
@@ -1052,9 +1052,9 @@ impl OpenHumanSessionHost {
                     pending_skill_retraction: self.pending_skill_retraction.clone(),
                     connected_integrations: self.connected_integrations.clone(),
                     connected_integrations_initialized: self.connected_integrations_initialized,
-                    // Builder-provided integrations have not been verified by
-                    // this session's current authorization refresh.
+                    // Builder-provided integrations are not yet verified this session.
                     connected_integrations_authoritative: false,
+                    integration_announcements_seeded: false,
                     recorded_integration_actions: Vec::new(),
                     workflows: self.workflows.clone(),
                     composio_events: None,
