@@ -3115,11 +3115,7 @@ describe('ChatRuntimeProvider — detached sub-agent approvals', () => {
     });
     expect(runtime().pendingApprovalByThread['t-sub']?.requestId).toBe('appr-b');
     act(() => {
-      listeners.onApprovalDecided?.({
-        thread_id: 't-sub',
-        request_id: 'appr-b',
-        message: 'deny',
-      });
+      listeners.onApprovalDecided?.({ thread_id: 't-sub', request_id: 'appr-b', message: 'deny' });
     });
     expect(runtime().pendingApprovalByThread['t-sub']).toBeUndefined();
   });
