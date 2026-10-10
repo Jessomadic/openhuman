@@ -9,6 +9,7 @@ use tinyagents_runtime::{RuntimeError, TranscriptCodec, TranscriptTurnOptions};
 use tinyagents_session::transcript::view::TOOL_RESULT_FAILURES_METADATA_KEY;
 use tinyagents_session::transcript::{
     MessageUsage, SessionTranscript, ToolFailure, TranscriptMessage, TranscriptToolCall, TurnUsage,
+    UsageCostSource,
 };
 use tinyinference_llm::message::Message;
 use tinytools_agent::dialect::parse_replayed_results;
