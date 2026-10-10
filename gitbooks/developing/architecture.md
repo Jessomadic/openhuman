@@ -228,6 +228,10 @@ Conversation state is separate from memory: each thread's transcript is a JSONL 
 
 ---
 
+## Storage
+
+Durable state sits on the ports of `tinystoragedrivers` (documents, streams, blobs, search, secrets), vendored through `vendor/tinyagents/vendor/tinystoragedrivers`. One URL picks the backend for the process: `OPENHUMAN_STORAGE_URL`, else `[storage] url`, else nothing, which keeps the classic per-domain files on desktop. The drivers are Cargo features (`storage-sqlite`, `storage-file`, `storage-mongodb`; `memory` is always there), and a URL for a driver the build lacks fails at boot. Records live in a scope, and the scope is the agent id: `local` for the operator in single-user mode, an error in SaaS mode when no agent acts. The host side is `crates/openhuman-core/src/storage/`. See [Storage](architecture/storage.md).
+
 ## Security architecture
 
 ```text
