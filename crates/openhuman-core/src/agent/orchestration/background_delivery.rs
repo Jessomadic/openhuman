@@ -317,7 +317,13 @@ pub(crate) fn recover_on_boot(workspace_dir: &Path) -> usize {
 /// lease-claimed.
 pub(crate) fn recover_on_open(workspace_dir: &Path) -> usize {
     background_completions::forget_recovery(workspace_dir);
-    recover_on_boot(workspace_dir)
+    let scheduled = recover_on_boot(workspace_dir);
+    if scheduled == 0 {
+        // Nothing pending: do not keep this profile's log handle cached for a
+        // workspace that may never complete anything on this node.
+        background_completions::forget_recovery(workspace_dir);
+    }
+    scheduled
 }
 
 /// Claim everything ready for a thread **right now** (sync, testable): `None`

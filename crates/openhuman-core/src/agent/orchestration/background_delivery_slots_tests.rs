@@ -181,7 +181,9 @@ async fn desktop_keys_are_the_bare_ids() {
     let ws = TestWorkspace::new();
     let thread = unique("t-desk");
     let session = unique("desk-session");
-    background_completions::note_session_thread(&session, &thread);
+    in_scope(&desktop, || {
+        background_completions::note_session_thread(&session, &thread)
+    });
 
     let turn = in_scope(&desktop, || TurnBusy::start(&session));
     assert_eq!(turn.key, session);
