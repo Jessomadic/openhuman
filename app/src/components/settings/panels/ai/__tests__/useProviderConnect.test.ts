@@ -157,6 +157,11 @@ describe('useProviderConnect', () => {
     });
 
     expect(api.flushCloudProviders).toHaveBeenCalledTimes(2);
+    expect(api.flushCloudProviders).toHaveBeenNthCalledWith(
+      1,
+      expect.arrayContaining([expect.objectContaining({ slug: 'openai' })])
+    );
+    expect(api.flushCloudProviders).toHaveBeenNthCalledWith(2, []);
     expect(api.setCloudProviderKey).not.toHaveBeenCalled();
     expect(persist).not.toHaveBeenCalled();
   });
