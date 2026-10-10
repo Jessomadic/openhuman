@@ -110,6 +110,12 @@ async fn scenario() {
             .any(|l| l.contains("alice-key") && l.contains("bob's grocery list")),
         "{auths:?}"
     );
+    assert!(
+        auths
+            .iter()
+            .any(|l| l.contains("bob-key") && l.contains("bob's grocery list")),
+        "{auths:?}"
+    );
 
     let alice_t1 = joined(alice_h.messages("t1").await.unwrap());
     let bob_t1 = joined(bob_h.messages("t1").await.unwrap());
