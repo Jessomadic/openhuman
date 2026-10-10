@@ -225,10 +225,17 @@ impl ProfileHost {
                     "[profiles] {what} profile={id}: lease held by node={}; refused",
                     record.owner
                 );
-                Err(format!(
-                    "profile {id} is held by node {}; release it there or try again shortly",
-                    record.owner
-                ))
+                Err(if what == "deprovision" {
+                    format!(
+                        "profile {id} is hosted by node {}; release it there first",
+                        record.owner
+                    )
+                } else {
+                    format!(
+                        "profile {id} is being changed by node {}; try again shortly",
+                        record.owner
+                    )
+                })
             }
             Err(error) => Err(format!("profile {id}: {error}")),
         }
