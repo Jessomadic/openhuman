@@ -89,9 +89,14 @@ impl UsageScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CostSource {
+    /// Priced from the vendor catalog's published list rates.
     #[default]
     Estimated,
+    /// The provider reported what it billed.
     ProviderCharged,
+    /// No charge was reported and the model has no catalogued price; the
+    /// record's `cost_usd` is `0.0` and must not be read as free.
+    Unknown,
 }
 
 impl TokenUsage {
