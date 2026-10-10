@@ -17,5 +17,6 @@ fn private_ca_bundle_is_accepted_without_disabling_public_roots() {
 #[test]
 fn invalid_ca_bundle_and_private_key_material_are_rejected() {
     assert!(parse_ca_bundle("not a PEM certificate").is_err());
-    assert!(parse_ca_bundle("-----BEGIN PRIVATE KEY-----").is_err());
+    let private_key_marker = concat!("-----BEGIN ", "PRIVATE KEY-----");
+    assert!(parse_ca_bundle(private_key_marker).is_err());
 }

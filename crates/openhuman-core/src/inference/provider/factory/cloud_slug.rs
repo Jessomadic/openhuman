@@ -326,17 +326,41 @@ pub(super) fn try_create_cloud_slug_chat_model_from_string_with_native_tools(
                         true,
                     ),
                 );
-                let chat = build_anthropic_model(AnthropicConfig {
-                    endpoint: endpoint.as_str(),
-                    api_key: key.as_str(),
-                    model: effective_model.as_str(),
-                    temperature_override,
-                    temperature_unsupported_models: config
-                        .temperature_unsupported_models
-                        .as_slice(),
-                    extra_headers: &[],
-                });
-                return Some(Ok((chat, effective_model)));
+                let model = if let Some(pem) = config
+                    .cloud_provider_ca_certs
+                    .get(&slug)
+                    .filter(|pem| !pem.is_empty())
+                {
+                    let http =
+                        match crate::util::tls::client_with_ca_bundle(pem, "provider.anthropic") {
+                            Ok(http) => http,
+                            Err(error) => return Some(Err(anyhow::anyhow!(error))),
+                        };
+                    Arc::new(
+                        tinyinference_llm::providers::anthropic::AnthropicModel::with_base_url(
+                            key.as_str(),
+                            endpoint.as_str(),
+                        )
+                        .with_model(effective_model.as_str())
+                        .with_temperature_override(temperature_override)
+                        .with_temperature_unsupported_models(
+                            config.temperature_unsupported_models.iter().cloned(),
+                        )
+                        .with_client(http),
+                    )
+                } else {
+                    build_anthropic_model(AnthropicConfig {
+                        endpoint: endpoint.as_str(),
+                        api_key: key.as_str(),
+                        model: effective_model.as_str(),
+                        temperature_override,
+                        temperature_unsupported_models: config
+                            .temperature_unsupported_models
+                            .as_slice(),
+                        extra_headers: &[],
+                    })
+                };
+                return Some(Ok((model, effective_model)));
             }
             log::debug!(
                 "[providers][chat-factory] slug={slug} auth_style=anthropic native_tools=false → OpenAI-compatible text-mode path (no prompt caching)"
@@ -423,7 +447,11 @@ pub(super) fn try_create_cloud_slug_chat_model_from_string_with_native_tools(
         // flag is keyed on the relay, not on by default.
         explicit_cache_control: endpoint_is_openrouter(&endpoint),
     };
-    let chat = if let Some(pem) = config.cloud_provider_ca_certs.get(&slug) {
+    let chat = if let Some(pem) = config
+        .cloud_provider_ca_certs
+        .get(&slug)
+        .filter(|pem| !pem.is_empty())
+    {
         let http = match crate::util::tls::client_with_ca_bundle(pem, "provider.compatible") {
             Ok(http) => http,
             Err(error) => return Some(Err(anyhow::anyhow!(error))),

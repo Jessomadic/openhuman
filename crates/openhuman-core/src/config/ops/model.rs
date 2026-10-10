@@ -340,12 +340,6 @@ pub async fn apply_model_settings(
             preserved.len()
         );
         config.cloud_providers = providers;
-        config.cloud_provider_ca_certs.retain(|slug, _| {
-            config
-                .cloud_providers
-                .iter()
-                .any(|entry| entry.slug == *slug)
-        });
         let before_reinject = config.cloud_providers.len();
         for entry in preserved {
             let preserved_slug = entry.slug.trim();
@@ -361,6 +355,14 @@ pub async fn apply_model_settings(
             "[config] apply_model_settings: reinjected {} reserved cloud provider(s)",
             config.cloud_providers.len() - before_reinject
         );
+        // Filter only after restoring built-ins so their configured CA roots
+        // survive a full custom-provider-list replacement.
+        config.cloud_provider_ca_certs.retain(|slug, _| {
+            config
+                .cloud_providers
+                .iter()
+                .any(|entry| entry.slug.trim() == slug)
+        });
     }
     if let Some(certs) = update.cloud_provider_ca_certs {
         for (slug, pem) in certs {
@@ -369,7 +371,7 @@ pub async fn apply_model_settings(
             } else if config
                 .cloud_providers
                 .iter()
-                .any(|entry| entry.slug == slug)
+                .any(|entry| entry.slug.trim() == slug)
             {
                 config.cloud_provider_ca_certs.insert(slug, pem);
             }

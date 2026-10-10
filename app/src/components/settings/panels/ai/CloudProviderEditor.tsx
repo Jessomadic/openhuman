@@ -2,7 +2,7 @@
  * Cloud provider editor modal — the advanced "add custom provider" / "edit
  * provider" flow (name, OpenAI-compatible URL, API key).
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { useT } from '../../../../lib/i18n/I18nContext';
 import Button from '../../../ui/Button';
@@ -46,6 +46,7 @@ export const CloudProviderEditor = ({
   const [certError, setCertError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const certReadSequence = useRef(0);
   // Set once the live `/models` verification has rejected, which unlocks the
   // "add without verifying" path. Only a probe failure earns it — a bad slug or
   // a failed key write must still block (#5213).
@@ -233,7 +234,9 @@ export const CloudProviderEditor = ({
           onChange={event => {
             const file = event.target.files?.[0];
             if (!file) return;
+            const sequence = ++certReadSequence.current;
             if (file.size > 256 * 1024) {
+              setReadingCert(false);
               setCertError(t('settings.ai.caCertificateTooLarge'));
               return;
             }
@@ -241,9 +244,17 @@ export const CloudProviderEditor = ({
             setReadingCert(true);
             void file
               .text()
-              .then(setCaCertPem)
-              .catch(() => setCertError(t('settings.ai.caCertificateReadError')))
-              .finally(() => setReadingCert(false));
+              .then(pem => {
+                if (sequence === certReadSequence.current) setCaCertPem(pem);
+              })
+              .catch(() => {
+                if (sequence === certReadSequence.current) {
+                  setCertError(t('settings.ai.caCertificateReadError'));
+                }
+              })
+              .finally(() => {
+                if (sequence === certReadSequence.current) setReadingCert(false);
+              });
           }}
         />
         {certError ? <div className="mt-1 text-xs text-coral-600">{certError}</div> : null}
@@ -253,6 +264,8 @@ export const CloudProviderEditor = ({
             size="xs"
             analyticsId="ai-provider-remove-ca-certificate"
             onClick={() => {
+              certReadSequence.current += 1;
+              setReadingCert(false);
               setCaCertPem('');
               setCertError(null);
             }}>

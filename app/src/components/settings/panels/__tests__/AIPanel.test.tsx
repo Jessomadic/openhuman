@@ -1843,6 +1843,39 @@ describe('AIPanel', () => {
     );
   });
 
+  it('keeps the most recently selected CA when an older file read finishes later', async () => {
+    vi.mocked(loadAISettings).mockResolvedValue({ ...baseSettings, cloudProviders: [] });
+    renderWithProviders(<AIPanel />);
+    await openCustomProviderEditor();
+
+    fireEvent.change(screen.getByLabelText(/^Name$/i), { target: { value: 'Team Gateway' } });
+    fireEvent.change(screen.getByLabelText(/OpenAI URL/i), {
+      target: { value: 'https://gateway.example.com/v1' },
+    });
+
+    let resolveFirst!: (pem: string) => void;
+    const first = new File(['first'], 'first-ca.pem', { type: 'application/x-pem-file' });
+    Object.defineProperty(first, 'text', {
+      value: () => new Promise<string>(resolve => (resolveFirst = resolve)),
+    });
+    const secondPem = '-----BEGIN CERTIFICATE-----\nsecond\n-----END CERTIFICATE-----';
+    const second = new File([secondPem], 'second-ca.pem', { type: 'application/x-pem-file' });
+    fireEvent.change(screen.getByLabelText(/CA certificate/i), { target: { files: [first] } });
+    fireEvent.change(screen.getByLabelText(/CA certificate/i), { target: { files: [second] } });
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Remove CA certificate' })).toBeInTheDocument()
+    );
+    resolveFirst('-----BEGIN CERTIFICATE-----\nfirst\n-----END CERTIFICATE-----');
+    fireEvent.click(screen.getByRole('button', { name: /Add provider/i }));
+
+    await waitFor(() =>
+      expect(vi.mocked(flushCloudProviders)).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.objectContaining({ ca_cert_pem: secondPem })])
+      )
+    );
+  });
+
   // ─── local runtime: Ollama endpoint URL dialog ──────────────────────────────
 
   it('toggling Ollama ON shows an Endpoint URL field with localhost default', async () => {

@@ -171,21 +171,26 @@ fn default_fetcher(_config: &Config, _provider: &str) -> Box<dyn ModelListingFet
             .split_once(':')
             .map_or(_provider, |(slug, _)| slug)
             .trim();
+        let service_key = match _config
+            .cloud_providers
+            .iter()
+            .find(|entry| entry.slug.trim() == provider_slug)
+            .map(|entry| entry.auth_style)
+        {
+            Some(crate::config::schema::cloud_providers::AuthStyle::Anthropic) => {
+                "provider.anthropic"
+            }
+            _ => "provider.compatible",
+        };
         let client = _config
             .cloud_provider_ca_certs
             .get(provider_slug)
             .filter(|pem| !pem.is_empty())
             .and_then(|pem| {
-                crate::util::tls::client_with_ca_bundle_with_timeouts(
-                    pem,
-                    "provider.compatible",
-                    5,
-                    3,
-                )
-                .ok()
+                crate::util::tls::client_with_ca_bundle_with_timeouts(pem, service_key, 5, 3).ok()
             })
             .unwrap_or_else(|| {
-                crate::config::build_runtime_proxy_client_with_timeouts("provider.compatible", 5, 3)
+                crate::config::build_runtime_proxy_client_with_timeouts(service_key, 5, 3)
             });
         Box::new(tinyinference_llm::model::discover::ReqwestListingFetcher::new(client))
     }

@@ -4,7 +4,7 @@
  * the built-in cloud provider chips, the local-runtime chips, and the Codex
  * connect button.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   classifyProviderVerificationFailure,
@@ -53,6 +53,11 @@ export function useProviderConnect({
    *  dialog-open state the caller is tracking. */
   onConnected: () => void;
 }) {
+  const latestSettings = useRef({ draft, saved });
+  useEffect(() => {
+    latestSettings.current = { draft, saved };
+  }, [draft, saved]);
+
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [codexAuthError, setCodexAuthError] = useState<string | null>(null);
   const [providerAuthErrors, setProviderAuthErrors] = useState<ProviderAuthError[]>([]);
@@ -118,25 +123,23 @@ export function useProviderConnect({
             })()
           : defaultEndpointFor(slug);
 
+        const initialSettings = latestSettings.current;
+        const initialProvider = initialSettings.draft.cloudProviders.find(
+          provider => provider.slug === slug
+        );
+        const initialSavedProvider = initialSettings.saved.cloudProviders.find(
+          provider => provider.slug === slug
+        );
         const upserted: CloudProvider = {
           id: `p_${slug}_${Math.random().toString(36).slice(2, 7)}`,
           slug,
           label: localLabel ?? BUILTIN_PROVIDER_META[slug]?.label ?? slug,
           endpoint,
-          caCertPem: saved.cloudProviders.find(provider => provider.slug === slug)?.caCertPem,
+          caCertPem: initialProvider?.caCertPem ?? initialSavedProvider?.caCertPem,
           authStyle: authStyleForSlug(slug),
           // CLI-login providers hold no API key — reflect that honestly.
           maskedKey: maskKeyLabel(!isCliLogin),
         };
-
-        const priorWireProviders = saved.cloudProviders.map(p => ({
-          id: p.id,
-          slug: p.slug,
-          label: p.label,
-          endpoint: p.endpoint,
-          ca_cert_pem: p.caCertPem ?? '',
-          auth_style: p.authStyle,
-        }));
 
         if (!isLocalRuntime && !isCodexOAuth && !isCliLogin && slug !== 'openhuman') {
           await setCloudProviderKey(slug, trimmed);
@@ -169,15 +172,34 @@ export function useProviderConnect({
         }
 
         if (slug !== 'openhuman') {
+          const currentSettings = latestSettings.current;
+          const currentProvider = currentSettings.draft.cloudProviders.find(
+            provider => provider.slug === slug
+          );
+          const currentSavedProvider = currentSettings.saved.cloudProviders.find(
+            provider => provider.slug === slug
+          );
+          const currentUpserted = {
+            ...upserted,
+            caCertPem: currentProvider?.caCertPem ?? currentSavedProvider?.caCertPem,
+          };
+          const priorWireProviders = currentSettings.saved.cloudProviders.map(provider => ({
+            id: provider.id,
+            slug: provider.slug,
+            label: provider.label,
+            endpoint: provider.endpoint,
+            ca_cert_pem: provider.caCertPem ?? '',
+            auth_style: provider.authStyle,
+          }));
           const nextWireProviders = [
-            ...priorWireProviders.filter(p => p.slug !== slug),
+            ...priorWireProviders.filter(provider => provider.slug !== slug),
             {
-              id: upserted.id,
-              slug: upserted.slug,
-              label: upserted.label,
-              endpoint: upserted.endpoint,
-              ca_cert_pem: upserted.caCertPem ?? '',
-              auth_style: upserted.authStyle,
+              id: currentUpserted.id,
+              slug: currentUpserted.slug,
+              label: currentUpserted.label,
+              endpoint: currentUpserted.endpoint,
+              ca_cert_pem: currentUpserted.caCertPem ?? '',
+              auth_style: currentUpserted.authStyle,
             },
           ];
           await flushCloudProviders(nextWireProviders);
@@ -218,9 +240,23 @@ export function useProviderConnect({
           }
         }
 
+        const currentSettings = latestSettings.current;
+        const currentProvider = currentSettings.draft.cloudProviders.find(
+          provider => provider.slug === slug
+        );
+        const currentSavedProvider = currentSettings.saved.cloudProviders.find(
+          provider => provider.slug === slug
+        );
+        const finalUpserted = {
+          ...upserted,
+          caCertPem: currentProvider?.caCertPem ?? currentSavedProvider?.caCertPem,
+        };
         const nextDraft = {
-          ...draft,
-          cloudProviders: [...draft.cloudProviders.filter(p => p.slug !== slug), upserted],
+          ...currentSettings.draft,
+          cloudProviders: [
+            ...currentSettings.draft.cloudProviders.filter(provider => provider.slug !== slug),
+            finalUpserted,
+          ],
         };
         await persist(nextDraft);
         if (isCodexOAuth && slug === 'openai') {

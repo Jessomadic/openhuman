@@ -68,4 +68,65 @@ describe('useProviderConnect', () => {
       })
     );
   });
+
+  it('uses the latest provider CA when a connection update is in flight', async () => {
+    let finishKeyWrite!: () => void;
+    api.setCloudProviderKey.mockImplementation(
+      () => new Promise<void>(resolve => (finishKeyWrite = resolve))
+    );
+    const provider = {
+      id: 'provider-1',
+      slug: 'openai',
+      label: 'OpenAI',
+      endpoint: 'https://api.openai.com/v1',
+      authStyle: 'bearer' as const,
+      maskedKey: '••••old',
+      caCertPem: 'old CA PEM',
+    };
+    const saved: AISettings = { ...EMPTY_SETTINGS, cloudProviders: [provider] };
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const { result, rerender } = renderHook(
+      ({ settings }) =>
+        useProviderConnect({
+          draft: settings,
+          saved: settings,
+          persist,
+          t: key => key,
+          onConnected: vi.fn(),
+        }),
+      { initialProps: { settings: saved } }
+    );
+
+    let connect!: Promise<void>;
+    act(() => {
+      connect = result.current.connectProvider({
+        slug: 'openai',
+        value: 'replacement-key',
+        credentialMode: 'api_key',
+      });
+    });
+
+    const latest: AISettings = {
+      ...saved,
+      cloudProviders: [{ ...provider, caCertPem: 'new CA PEM' }],
+    };
+    rerender({ settings: latest });
+    await act(async () => {
+      finishKeyWrite();
+      await connect;
+    });
+
+    expect(api.flushCloudProviders).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ slug: 'openai', ca_cert_pem: 'new CA PEM' }),
+      ])
+    );
+    expect(persist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cloudProviders: expect.arrayContaining([
+          expect.objectContaining({ caCertPem: 'new CA PEM' }),
+        ]),
+      })
+    );
+  });
 });

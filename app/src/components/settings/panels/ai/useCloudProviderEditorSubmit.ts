@@ -79,7 +79,17 @@ export function useCloudProviderEditorSubmit({
         // The provider must be configured before probing, and its CA has now
         // passed Rust-side validation. Let key-write failures surface inline.
         if (apiKey) {
-          await setCloudProviderKey(upserted.slug, apiKey);
+          try {
+            await setCloudProviderKey(upserted.slug, apiKey);
+          } catch (keyError) {
+            await flushCloudProviders(priorWireProviders).catch(rollbackErr =>
+              console.warn(
+                `[ai-settings] rollback flush after key-write failure slug=${upserted.slug}`,
+                rollbackErr
+              )
+            );
+            throw keyError;
+          }
         }
         // `skipProbe` is the user's explicit "add it anyway" after a failed
         // verification. A provider whose `/models` listing is absent or
