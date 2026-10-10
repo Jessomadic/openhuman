@@ -73,7 +73,10 @@ pub(super) fn composio_connect_tool_timeout(
 ) -> tinytools::ToolTimeout {
     match park_bound {
         Some(bound) => tinytools::ToolTimeout::Millis(
-            u64::try_from((bound + COMPOSIO_CONNECT_TIMEOUT_SLACK).as_millis()).unwrap_or(u64::MAX),
+            bound
+                .checked_add(COMPOSIO_CONNECT_TIMEOUT_SLACK)
+                .and_then(|total| u64::try_from(total.as_millis()).ok())
+                .unwrap_or(u64::MAX),
         ),
         None => tinytools::ToolTimeout::Unbounded,
     }

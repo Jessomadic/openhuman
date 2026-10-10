@@ -93,15 +93,21 @@ pub(super) async fn await_pending(handle: Option<tokio::task::JoinHandle<()>>) {
         return;
     };
     let started = Instant::now();
-    match tokio::time::timeout(PENDING_POST_COMMIT_WAIT, handle).await {
+    let mut handle = handle;
+    match tokio::time::timeout(PENDING_POST_COMMIT_WAIT, &mut handle).await {
         Ok(_) => tracing::debug!(
             waited_ms = elapsed_ms(started),
             "[session-runtime] post-commit: previous turn's deferred work settled before this turn"
         ),
-        Err(_) => tracing::warn!(
-            waited_ms = elapsed_ms(started),
-            "[session-runtime] post-commit: previous turn's deferred work still running; proceeding"
-        ),
+        Err(_) => {
+            // Abort so the wedged accounting cannot overlap this turn's own
+            // goal load/accounting and reorder goal budgets.
+            handle.abort();
+            tracing::warn!(
+                waited_ms = elapsed_ms(started),
+                "[session-runtime] post-commit: previous turn's deferred work still running; aborted and proceeding"
+            );
+        }
     }
 }
 
