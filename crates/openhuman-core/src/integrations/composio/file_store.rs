@@ -88,7 +88,7 @@ pub(crate) async fn update<T, R>(
     change: impl Fn(&mut T) -> (R, bool) + Send + 'static,
 ) -> Result<R, String>
 where
-    T: DeserializeOwned + Serialize + Default + 'static,
+    T: DeserializeOwned + Serialize + Default + Send + 'static,
     R: Send + 'static,
 {
     if let Some(docs) =

@@ -101,7 +101,7 @@ async fn the_store_dispatches_to_documents_when_a_backend_is_pinned() {
     let docs = docs_in(&storage, "local");
     let workspace = tempfile::tempdir().unwrap();
     let ws = workspace.path();
-    store_documents::TEST_OVERRIDE.with(|slot| *slot.borrow_mut() = Some(docs.clone()));
+    super::TEST_OVERRIDE.with(|slot| *slot.borrow_mut() = Some(docs.clone()));
 
     save_artifact_meta(ws, &meta("a", 1, Some("t1")))
         .await
@@ -125,7 +125,7 @@ async fn the_store_dispatches_to_documents_when_a_backend_is_pinned() {
     delete_artifact(ws, FileRoots::from(ws.to_path_buf()), "a")
         .await
         .unwrap();
-    store_documents::TEST_OVERRIDE.with(|slot| *slot.borrow_mut() = None);
+    super::TEST_OVERRIDE.with(|slot| *slot.borrow_mut() = None);
 
     assert!(docs.get_meta("a").unwrap().is_none());
     assert!(docs.get_meta("b").unwrap().is_some());

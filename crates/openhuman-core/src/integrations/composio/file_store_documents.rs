@@ -83,7 +83,7 @@ impl Docs {
         change: impl Fn(&mut T) -> (R, bool) + Send + 'static,
     ) -> Result<R>
     where
-        T: DeserializeOwned + Serialize + Default,
+        T: DeserializeOwned + Serialize + Default + Send + 'static,
         R: Send + 'static,
     {
         let id = id_of(path)?;
