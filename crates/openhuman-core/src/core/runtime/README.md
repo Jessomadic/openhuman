@@ -150,8 +150,8 @@ through `runtime/saas.rs`:
 
 - `SaasConfig` is the **operator's** file. It sets `root`,
   `service_token_file` (defaults to `<root>/service.token`), `tool_allowlist`
-  (host tool groups, see `user_agents/README.md`), `[sandbox]` (the shell
-  container), `rpc_allowlist_extra`, `max_agents_open`, `idle_evict_secs`,
+  (host tool groups, see `profiles/README.md`), `[sandbox]` (the shell
+  container), `rpc_allowlist_extra`, `max_profiles_open`, `profile_ids`, `idle_evict_secs`,
   `shared_backend_api_key`, `custom_definitions` and `require_user_signature`
   (default `true`). Unknown keys are refused.
 - `runtime/boot_guard.rs` refuses the boot, listing every problem at once,
@@ -172,16 +172,17 @@ through `runtime/saas.rs`:
   bearer is the RPC token.
 
 The SaaS presets are closed. `DomainSet::saas()` registers the operator plane
-(`DomainGroup::Operator`, the `user_agents.*` controllers) and the user
+(`DomainGroup::Operator`, the `profiles.*` controllers) and the user
 families whose per-user isolation has landed (threads, channels for web chat,
-memory). `user_agents::surface`
+memory). `profiles::surface`
 keeps the two planes apart: the operator scope reaches only the operator
 plane, and a user's scope only the reviewed `USER_METHODS`.
-`saas::build` installs the process's `user_agents::AgentHost`. Each open user
-agent runs under a context derived from the operator's, with its own forced
-config and `session_agent` (see `user_agents/README.md`).
+`saas::build` installs the process's `profiles::ProfileHost`. Each open
+profile (`<root>/users/<profile-id>/`, the desktop's user layout) runs under a
+context derived from the operator's, with its own forced config and
+`session_agent` (see `profiles/README.md`).
 
-Two guards keep SaaS work from falling back to process-wide state:
+Three guards keep SaaS work from falling back to process-wide state:
 
 - **Config redirect.** In SaaS, `Config::load_or_init()` returns the config the
   current context carries and fails outside any context
@@ -192,6 +193,21 @@ Two guards keep SaaS work from falling back to process-wide state:
   into the spawned task. `scripts/ci/check-saas-ambient.mjs` (`pnpm
   saas:ambient`) ratchets the bare spawns, direct `load_or_init` calls,
   environment writes and `home_dir()` lookups that remain.
+  `CoreContext::propagate` follows the same rule in SaaS.
+- **The tenant key.** `runtime/tenant.rs`: a context derived with
+  `ContextOverlay::profile(id)` serves that SaaS profile, and
+  `current_tenant()` reads `Tenant { profile, agent }` from the task's own
+  scope only (`CoreContext::scoped`), failing closed with `NoTenant`
+  rather than falling back to the operator. Per-tenant state keys on it:
+  `tenant_key(&tenant, id)` (injective; the bare id on the desktop) for
+  in-process tables keyed by caller-chosen thread or session ids,
+  `session_key(&tenant)` for the host session store, and
+  `storage::scope_for_profile` for the storage backend. A profile gets
+  fresh state slots, `current_slot` hands an unscoped SaaS task a throwaway
+  slot, and `CoreContext::tenant_in_use()` reports whether turns still run
+  on a profile, so a host never evicts it mid-turn. The ratchet's
+  `ambient-context` rule baselines the `CoreContext::current()` and
+  `.session_agent()` reads that remain outside `core/runtime/`.
 
 `DomainSet` lives in `runtime/domain_set.rs` and `DomainGroup` in
 `core/domain_group.rs`. Both are re-exported from their old paths.
