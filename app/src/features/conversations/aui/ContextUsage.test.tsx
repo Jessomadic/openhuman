@@ -233,4 +233,29 @@ describe('contextBreakdownSegments', () => {
       ['Your input', 0],
     ]);
   });
+
+  it('partitions the final-call context, not the turn’s summed input', () => {
+    const segments = contextBreakdownSegments(
+      {
+        sections: [
+          { label: '## Rules', bytes: 40_000, est_tokens: 10_000 },
+          { label: 'tools', bytes: 80_000, est_tokens: 20_000 },
+        ],
+        total_est_tokens: 30_000,
+        context_window: 1_000_000,
+      },
+      t,
+      { lastTurnContextUsed: 100_000, lastTurnOutputTokens: 30_000 }
+    );
+
+    // 100k context = 10k prompt + 20k schemas + 30k of this turn's replies +
+    // 40k of conversation. The summed 5.7M input never enters the partition.
+    expect(segments.map(s => [s.label, s.tokens])).toEqual([
+      ['System prompt', 10_000],
+      ['Tool schemas', 20_000],
+      ['Output', 30_000],
+      ['Your input', 40_000],
+    ]);
+    expect(segments.reduce((sum, s) => sum + s.tokens, 0)).toBe(100_000);
+  });
 });
