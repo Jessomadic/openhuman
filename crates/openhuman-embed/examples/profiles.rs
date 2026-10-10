@@ -86,9 +86,14 @@ async fn run() -> anyhow::Result<()> {
 
     // ── each sees only their own t1 ──────────────────────────────────────
     for (user, handle) in &handles {
-        println!("\n{user}'s t1 ({}):", handle.workspace_dir().display());
-        for message in handle.messages("t1").await? {
-            println!("  {:<9} {}", message.sender, message.content);
+        let messages = handle.messages("t1").await?;
+        println!(
+            "\n{user}'s t1 ({}) has {} messages",
+            handle.workspace_dir().display(),
+            messages.len()
+        );
+        for (i, message) in messages.iter().enumerate() {
+            println!("  [{i}] {}", message.sender);
         }
     }
     println!("\nprofiles: {:?}", profiles.list().await?);
