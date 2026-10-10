@@ -57,8 +57,11 @@ pub fn sandbox_off_value(value: Option<&str>) -> bool {
 /// agent definition uses the usual `SandboxMode::None` default.
 pub async fn command_requires_sandbox() -> Result<bool, String> {
     if crate::core::runtime::is_saas() {
-        // SaaS has its own container routing. This host config does not
-        // select that tenant's execution backend.
+        // Every SaaS command must enter the per-user container path, including
+        // language tools whose agent definition does not request a sandbox.
+        return Ok(true);
+    }
+    if sandbox_disabled_by_host() {
         return Ok(false);
     }
     if matches!(
@@ -68,6 +71,9 @@ pub async fn command_requires_sandbox() -> Result<bool, String> {
         return Ok(true);
     }
     let config = crate::config::ops::load_config_with_timeout().await?;
+    if config.sandbox.enabled == Some(false) {
+        return Ok(false);
+    }
     Ok(matches!(
         config.sandbox.backend,
         SandboxBackend::Landlock
@@ -75,6 +81,37 @@ pub async fn command_requires_sandbox() -> Result<bool, String> {
             | SandboxBackend::Bubblewrap
             | SandboxBackend::Docker
     ))
+}
+
+/// Resolve the policy for a command tool before building its command line.
+/// SaaS always uses the user's container; other hosts apply the operator's
+/// backend selection while retaining an agent-level sandbox requirement.
+pub(crate) async fn resolve_command_policy(
+    action_dir: &Path,
+    state_dir: &Path,
+) -> Result<SandboxPolicy, String> {
+    if crate::core::runtime::is_saas() {
+        return crate::profiles::tools::sandbox_policy(action_dir, state_dir);
+    }
+    let config = match crate::config::ops::load_config_with_timeout().await {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::warn!(%error, "[sandbox] using default configuration for command policy");
+            crate::config::Config::default()
+        }
+    };
+    let mut policy = resolve_sandbox_policy(
+        SandboxMode::Sandboxed,
+        action_dir,
+        state_dir,
+        &config.runtime,
+        false,
+    );
+    if config.sandbox.enabled != Some(false) && !sandbox_disabled_by_host() {
+        apply_requested_backend(&mut policy, &config.sandbox, &config.runtime)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(policy)
 }
 
 fn sandbox_disabled_by_host() -> bool {
@@ -255,13 +292,20 @@ pub async fn execute_in_sandbox(
     // must be checked at the spawn boundary, including callers that resolved
     // their policy from an older or default RuntimeConfig.
     let mut effective_policy = policy.clone();
-    let explicitly_requested = if crate::core::runtime::is_saas() {
+    if !crate::core::runtime::is_saas() && sandbox_disabled_by_host() {
+        effective_policy.backend = SandboxBackendKind::None;
+    }
+    let explicitly_requested = if crate::core::runtime::is_saas() || sandbox_disabled_by_host() {
         false
     } else {
         let config = crate::config::ops::load_config_with_timeout()
             .await
             .map_err(|e| anyhow::anyhow!("Cannot read sandbox configuration: {e}"))?;
-        apply_requested_backend(&mut effective_policy, &config.sandbox, &config.runtime)?
+        if config.sandbox.enabled == Some(false) {
+            false
+        } else {
+            apply_requested_backend(&mut effective_policy, &config.sandbox, &config.runtime)?
+        }
     };
     let policy = &effective_policy;
     // Validate the working directory up front so a missing/bad action_dir
@@ -305,7 +349,7 @@ pub async fn execute_in_sandbox(
 }
 
 /// Apply an operator-selected backend. Auto retains the caller's existing
-/// policy, and None is the operator's deliberate opt-out.
+/// policy. None opts out only when no agent-level sandbox is required.
 pub(crate) fn apply_requested_backend(
     policy: &mut SandboxPolicy,
     sandbox: &SandboxConfig,
@@ -313,10 +357,7 @@ pub(crate) fn apply_requested_backend(
 ) -> anyhow::Result<bool> {
     match &sandbox.backend {
         SandboxBackend::Auto => Ok(false),
-        SandboxBackend::None => {
-            policy.backend = SandboxBackendKind::None;
-            Ok(false)
-        }
+        SandboxBackend::None => Ok(false),
         SandboxBackend::Docker => {
             if policy.backend == SandboxBackendKind::Local {
                 policy.read_only_mounts.clear();

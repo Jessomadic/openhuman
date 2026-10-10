@@ -18,6 +18,7 @@
 
 use crate::agent::host_runtime::RuntimeAdapter;
 use crate::runtime::python::PythonBootstrap;
+use crate::sandbox;
 use crate::security::{CommandClass, GateDecision, SecurityPolicy};
 use async_trait::async_trait;
 use serde_json::json;
@@ -424,23 +425,21 @@ impl PythonExecTool {
             Duration::from_secs(crate::tools::timeout::SANDBOX_UNBOUNDED_CAP_SECS)
         });
 
-        let runtime_cfg = match crate::config::ops::load_config_with_timeout().await {
-            Ok(cfg) => cfg.runtime,
-            Err(err) => {
-                tracing::warn!(
-                    error = %err,
-                    "[python_exec] failed to load live RuntimeConfig — falling back to defaults"
-                );
-                crate::config::RuntimeConfig::default()
-            }
-        };
-        let policy = sandbox::resolve_sandbox_policy(
-            crate::agent::harness::definition::SandboxMode::Sandboxed,
+        let policy = match sandbox::ops::resolve_command_policy(
             &security.action_dir,
             &security.workspace_dir,
-            &runtime_cfg,
-            false,
-        );
+        )
+        .await
+        {
+            Ok(policy) => policy,
+            Err(why) => return ToolResult::error(format!("Sandbox unavailable: {why}")),
+        };
+
+        if policy.backend == sandbox::SandboxBackendKind::Docker {
+            return ToolResult::error(
+                "python_exec cannot use the Docker sandbox: its host Python binary and script paths are not mounted in the container",
+            );
+        }
 
         let mut extra_env = std::collections::HashMap::new();
         let host_path = std::env::var("PATH").unwrap_or_default();
