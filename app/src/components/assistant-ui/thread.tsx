@@ -96,6 +96,7 @@ export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
  * `ToolFallback`.
  */
 export type ThreadComponents = {
+  MessageTasks?: ComponentType | undefined;
   AssistantMessage?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
@@ -1124,6 +1125,7 @@ const AssistantMessage: FC = () => {
     ToolFallback: ToolFallbackComponent = ToolFallback,
     ActivityGroup = DefaultActivityGroup,
     SourceGroup,
+    MessageTasks,
   } = useContext(ThreadComponentsContext);
   const stopped = useAuiState(isStoppedRun);
 
@@ -1170,6 +1172,7 @@ const AssistantMessage: FC = () => {
       <div
         data-slot="aui_assistant-message-content"
         className="text-foreground px-2 leading-relaxed wrap-break-word">
+        {MessageTasks && <MessageTasks />}
         <MessagePrimitive.GroupedParts
           groupBy={groupPartByType({
             reasoning: ['group-activity'],

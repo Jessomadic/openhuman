@@ -1,3 +1,4 @@
+import { TurnTaskProvider, TurnTaskCards } from '../aui/TurnTaskCards';
 import { ConversationMapAui } from '@/components/assistant-ui/elements/conversation-map.aui';
 import { Thread, type ThreadComponents } from '@/components/assistant-ui/thread';
 import { type AssistantState, useAui, useAuiState } from '@assistant-ui/react';
@@ -311,6 +312,7 @@ export function AssistantUiChat({
   const components: ThreadComponents = useMemo(
     () => ({
       ToolFallback: ChatToolFallback,
+      MessageTasks: TurnTaskCards,
       // `/` commands (builtins + core `commands_list` + registry actions) and
       // `@` mentions (memory recall, thread files); see `aui/ComposerTriggers`.
       ComposerTriggers,
@@ -370,6 +372,7 @@ export function AssistantUiChat({
   return (
     <AssistantUiRuntimeProvider>
       <ComposerTextBridge value={inputValue} onChange={onInputValueChange} />
+      <TurnTaskProvider>
       <ChatConversationMap>
         <Thread
           components={components}
@@ -381,6 +384,7 @@ export function AssistantUiChat({
           composerPlaceholder={composerPlaceholder}
         />
       </ChatConversationMap>
+      </TurnTaskProvider>
     </AssistantUiRuntimeProvider>
   );
 }
