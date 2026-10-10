@@ -526,6 +526,9 @@ const messages: TranslationMap = {
   'chat.welcomeSuggestion.dailySummaryFlow':
     "Crée un flux qui m'envoie un résumé quotidien par e-mail.",
   'chat.typeMessage': 'Envoie un message...',
+  'chat.regenerate.unavailable':
+    'Cette réponse ne peut pas être régénérée. Essaie plutôt de régénérer la réponse la plus récente.',
+  'chat.regenerate.failed': 'Impossible de régénérer la réponse. Réessaie.',
   'chat.send': 'Envoyer le message',
   'chat.stopGeneration': 'Arrêter la génération',
   'chat.followupHint':
@@ -1753,6 +1756,8 @@ const messages: TranslationMap = {
   'bootCheck.connectedOk': 'Connecté. Tu es prêt.',
   'bootCheck.authFailed': "Ce token n'a pas fonctionné. Vérifie-le et réessaie.",
   'bootCheck.unreachablePrefix': "Impossible de l'atteindre :",
+  'bootCheck.socketDisabled':
+    'Connecté, mais le temps réel est désactivé sur ce cœur. Il a été lancé avec --jsonrpc-only ; relance-le sans cette option pour que le chat et les mises à jour en direct fonctionnent.',
   'bootCheck.checkingCore': "Démarrage d'OpenHuman…",
   'bootCheck.cannotReach': 'Connexion impossible',
   'bootCheck.cannotReachDesc': "Nous n'avons pas pu nous connecter. Voulez-vous essayer ailleurs ?",
@@ -5273,7 +5278,7 @@ const messages: TranslationMap = {
   'memoryPage.engine.badgeDown': 'Injoignable',
   'memoryPage.engine.connecting': 'Connexion…',
   'memoryPage.engine.save': 'Enregistrer',
-  'memoryPage.engine.builtin.title': 'CortexDB via TinyHumans',
+  'memoryPage.engine.builtin.title': 'CortexDB intégré à TinyHumans',
   'memoryPage.engine.builtin.signInHint':
     'Connectez-vous à votre compte TinyHumans pour utiliser CortexDB intégré.',
   'memoryPage.engine.apiKeyOption.title': 'CortexDB avec votre propre clé',

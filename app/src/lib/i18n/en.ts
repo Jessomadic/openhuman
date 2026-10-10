@@ -391,6 +391,9 @@ const en: TranslationMap = {
   'chat.welcomeSuggestion.connectIntegration': 'Connect a new integration.',
   'chat.welcomeSuggestion.dailySummaryFlow': 'Build a flow that emails me a daily summary.',
   'chat.typeMessage': 'Send a message...',
+  'chat.regenerate.unavailable':
+    "This reply can't be regenerated. Try regenerating the latest reply instead.",
+  'chat.regenerate.failed': "Couldn't regenerate the reply. Please try again.",
   'chat.send': 'Send message',
   'chat.stopGeneration': 'Stop generating',
   'chat.followupHint':
@@ -1964,6 +1967,8 @@ const en: TranslationMap = {
   'bootCheck.connectedOk': "Connected. You're good to go.",
   'bootCheck.authFailed': "That token didn't work. Double-check it and try again.",
   'bootCheck.unreachablePrefix': "Couldn't reach it:",
+  'bootCheck.socketDisabled':
+    'Connected, but realtime is off on this core. It was started with --jsonrpc-only; restart it without that flag so chat and live updates work.',
   'bootCheck.checkingCore': 'Starting OpenHuman…',
   'bootCheck.cannotReach': "Can't reach it",
   'bootCheck.cannotReachDesc': "We couldn't connect. Want to try somewhere else?",

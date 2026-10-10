@@ -494,6 +494,9 @@ const messages: TranslationMap = {
   'chat.welcomeSuggestion.connectIntegration': 'اربط تكاملًا جديدًا.',
   'chat.welcomeSuggestion.dailySummaryFlow': 'أنشئ تدفقًا يرسل لي ملخصًا يوميًا بالبريد.',
   'chat.typeMessage': 'أرسل رسالة...',
+  'chat.regenerate.unavailable':
+    'لا يمكن إعادة إنشاء هذا الرد. جرّب إعادة إنشاء أحدث رد بدلًا من ذلك.',
+  'chat.regenerate.failed': 'تعذّرت إعادة إنشاء الرد. يُرجى المحاولة مرة أخرى.',
   'chat.send': 'إرسال الرسالة',
   'chat.stopGeneration': 'إيقاف التوليد',
   'chat.followupHint': 'أضِف متابعة إلى القائمة: تُرسَل بعد هذا الرد · ⌘/Ctrl+Enter لفرع متوازٍ',
@@ -1674,6 +1677,8 @@ const messages: TranslationMap = {
   'bootCheck.connectedOk': 'متصل. أنت جاهز للانطلاق.',
   'bootCheck.authFailed': 'الرمز لم ينجح. تحقق منه وحاول مرة أخرى.',
   'bootCheck.unreachablePrefix': 'تعذّر الوصول إليه:',
+  'bootCheck.socketDisabled':
+    'تم الاتصال، لكن الوقت الفعلي معطّل في هذا النواة. بدأ تشغيلها بالخيار --jsonrpc-only؛ أعد تشغيلها بدونه لتعمل المحادثة والتحديثات الفورية.',
   'bootCheck.checkingCore': 'جارٍ تشغيل OpenHuman…',
   'bootCheck.cannotReach': 'تعذّر الوصول إليه',
   'bootCheck.cannotReachDesc': 'تعذّر الاتصال. هل تريد المحاولة في مكان آخر؟',

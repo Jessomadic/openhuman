@@ -522,6 +522,9 @@ const messages: TranslationMap = {
   'chat.welcomeSuggestion.dailySummaryFlow':
     'Crea un flusso che mi invii un riepilogo giornaliero via email.',
   'chat.typeMessage': 'Invia un messaggio...',
+  'chat.regenerate.unavailable':
+    'Questa risposta non può essere rigenerata. Prova a rigenerare la risposta più recente.',
+  'chat.regenerate.failed': 'Impossibile rigenerare la risposta. Riprova.',
   'chat.send': 'Invia messaggio',
   'chat.stopGeneration': 'Interrompi generazione',
   'chat.followupHint':
@@ -1741,6 +1744,8 @@ const messages: TranslationMap = {
   'bootCheck.connectedOk': 'Connesso. Tutto a posto.',
   'bootCheck.authFailed': 'Token non valido. Controllalo e riprova.',
   'bootCheck.unreachablePrefix': 'Impossibile raggiungerlo:',
+  'bootCheck.socketDisabled':
+    'Connesso, ma il tempo reale è disattivato su questo core. È stato avviato con --jsonrpc-only; riavvialo senza quel flag perché chat e aggiornamenti in tempo reale funzionino.',
   'bootCheck.checkingCore': 'Avvio di OpenHuman…',
   'bootCheck.cannotReach': 'Impossibile raggiungerlo',
   'bootCheck.cannotReachDesc': 'Non siamo riusciti a connetterci. Vuoi provare altrove?',

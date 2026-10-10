@@ -502,6 +502,9 @@ const messages: TranslationMap = {
   'chat.welcomeSuggestion.connectIntegration': '새 통합을 연결해 줘.',
   'chat.welcomeSuggestion.dailySummaryFlow': '매일 요약을 이메일로 보내주는 플로우를 만들어 줘.',
   'chat.typeMessage': '메시지를 보내세요...',
+  'chat.regenerate.unavailable':
+    '이 답변은 다시 생성할 수 없습니다. 대신 최신 답변을 다시 생성해 보세요.',
+  'chat.regenerate.failed': '답변을 다시 생성하지 못했습니다. 다시 시도해 주세요.',
   'chat.send': '메시지 보내기',
   'chat.stopGeneration': '생성 중지',
   'chat.followupHint': '후속 메시지를 대기열에 추가: 이 응답 후 전송 · 병렬 분기는 ⌘/Ctrl+Enter',
@@ -1694,6 +1697,8 @@ const messages: TranslationMap = {
   'bootCheck.connectedOk': '연결되었습니다. 사용할 준비가 되었습니다.',
   'bootCheck.authFailed': '해당 토큰이 작동하지 않았습니다. 다시 확인하고 시도하세요.',
   'bootCheck.unreachablePrefix': '연결할 수 없습니다:',
+  'bootCheck.socketDisabled':
+    '연결되었지만 이 코어에서는 실시간 기능이 꺼져 있습니다. --jsonrpc-only로 시작되었습니다. 채팅과 실시간 업데이트를 쓰려면 이 플래그 없이 다시 시작하세요.',
   'bootCheck.checkingCore': 'OpenHuman을 시작하는 중…',
   'bootCheck.cannotReach': '연결할 수 없습니다',
   'bootCheck.cannotReachDesc': '연결하지 못했습니다. 다른 곳에서 시도해 볼까요?',

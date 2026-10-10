@@ -463,6 +463,8 @@ const messages: TranslationMap = {
   'chat.welcomeSuggestion.connectIntegration': '连接一个新的集成。',
   'chat.welcomeSuggestion.dailySummaryFlow': '创建一个每天给我发送摘要邮件的流程。',
   'chat.typeMessage': '发送消息...',
+  'chat.regenerate.unavailable': '无法重新生成此回复。请改为重新生成最新的回复。',
+  'chat.regenerate.failed': '无法重新生成回复，请重试。',
   'chat.send': '发送',
   'chat.stopGeneration': '停止生成',
   'chat.followupHint': '将后续消息加入队列：将在本次回复后发送 · ⌘/Ctrl+Enter 开启并行分支',
@@ -1588,6 +1590,8 @@ const messages: TranslationMap = {
   'bootCheck.connectedOk': '已连接 ✓',
   'bootCheck.authFailed': '认证失败：请检查令牌（收到 401/403）。',
   'bootCheck.unreachablePrefix': '无法连接：',
+  'bootCheck.socketDisabled':
+    '已连接，但此核心已关闭实时功能。它是用 --jsonrpc-only 启动的；请去掉该参数重新启动，聊天和实时更新才能使用。',
   'bootCheck.checkingCore': '正在启动 OpenHuman…',
   'bootCheck.cannotReach': '无法连接',
   'bootCheck.cannotReachDesc': '我们无法连接。要换个地方试试吗？',

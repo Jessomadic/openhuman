@@ -507,6 +507,9 @@ const messages: TranslationMap = {
   'chat.welcomeSuggestion.dailySummaryFlow':
     'এমন একটি ফ্লো তৈরি করো যা আমাকে প্রতিদিন সারসংক্ষেপ ইমেল করে।',
   'chat.typeMessage': 'একটি বার্তা পাঠান...',
+  'chat.regenerate.unavailable':
+    'এই উত্তরটি পুনরায় তৈরি করা যাবে না। এর পরিবর্তে সর্বশেষ উত্তরটি পুনরায় তৈরি করে দেখুন।',
+  'chat.regenerate.failed': 'উত্তরটি পুনরায় তৈরি করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।',
   'chat.send': 'বার্তা পাঠান',
   'chat.stopGeneration': 'জেনারেশন বন্ধ করুন',
   'chat.followupHint':
@@ -1705,6 +1708,8 @@ const messages: TranslationMap = {
   'bootCheck.connectedOk': 'সংযুক্ত। সব ঠিকঠাক।',
   'bootCheck.authFailed': 'টোকেনটি কাজ করেনি। আবার পরীক্ষা করুন।',
   'bootCheck.unreachablePrefix': 'পৌঁছানো যায়নি:',
+  'bootCheck.socketDisabled':
+    'সংযুক্ত হয়েছে, কিন্তু এই কোরে রিয়েলটাইম বন্ধ আছে। এটি --jsonrpc-only দিয়ে চালু হয়েছে; চ্যাট ও লাইভ আপডেট কাজ করাতে ওই ফ্ল্যাগ ছাড়া আবার চালু করুন।',
   'bootCheck.checkingCore': 'OpenHuman চালু হচ্ছে…',
   'bootCheck.cannotReach': 'পৌঁছানো যাচ্ছে না',
   'bootCheck.cannotReachDesc': 'আমরা সংযোগ করতে পারিনি। অন্য কোথাও চেষ্টা করতে চান?',

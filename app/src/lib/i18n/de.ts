@@ -531,6 +531,10 @@ const messages: TranslationMap = {
   'chat.welcomeSuggestion.dailySummaryFlow':
     'Erstelle einen Flow, der mir täglich eine Zusammenfassung per E-Mail schickt.',
   'chat.typeMessage': 'Nachricht senden...',
+  'chat.regenerate.unavailable':
+    'Diese Antwort kann nicht neu generiert werden. Generiere stattdessen die neueste Antwort neu.',
+  'chat.regenerate.failed':
+    'Die Antwort konnte nicht neu generiert werden. Bitte versuche es erneut.',
   'chat.send': 'Nachricht senden',
   'chat.stopGeneration': 'Generierung stoppen',
   'chat.followupHint':
@@ -1760,6 +1764,8 @@ const messages: TranslationMap = {
   'bootCheck.authFailed':
     'Dieser Token hat nicht funktioniert. Prüfe ihn noch einmal und versuche es erneut.',
   'bootCheck.unreachablePrefix': 'Konnte es nicht erreichen:',
+  'bootCheck.socketDisabled':
+    'Verbunden, aber Echtzeit ist auf diesem Core deaktiviert. Er wurde mit --jsonrpc-only gestartet; starte ihn ohne dieses Flag neu, damit Chat und Live-Updates funktionieren.',
   'bootCheck.checkingCore': 'OpenHuman wird gestartet…',
   'bootCheck.cannotReach': 'Keine Verbindung möglich',
   'bootCheck.cannotReachDesc':

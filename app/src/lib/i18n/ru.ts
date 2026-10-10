@@ -516,6 +516,9 @@ const messages: TranslationMap = {
   'chat.welcomeSuggestion.dailySummaryFlow':
     'Создай поток, который будет присылать мне ежедневную сводку на почту.',
   'chat.typeMessage': 'Отправьте сообщение...',
+  'chat.regenerate.unavailable':
+    'Этот ответ нельзя сгенерировать заново. Попробуйте заново сгенерировать последний ответ.',
+  'chat.regenerate.failed': 'Не удалось заново сгенерировать ответ. Попробуйте ещё раз.',
   'chat.send': 'Отправить сообщение',
   'chat.stopGeneration': 'Остановить генерацию',
   'chat.followupHint':
@@ -1722,6 +1725,8 @@ const messages: TranslationMap = {
   'bootCheck.connectedOk': 'Подключено. Всё готово.',
   'bootCheck.authFailed': 'Токен не подошёл. Проверь его и попробуй снова.',
   'bootCheck.unreachablePrefix': 'Не удалось достучаться:',
+  'bootCheck.socketDisabled':
+    'Подключено, но реальное время на этом ядре отключено. Оно запущено с --jsonrpc-only; перезапусти его без этого флага, чтобы работали чат и живые обновления.',
   'bootCheck.checkingCore': 'Запускаем OpenHuman…',
   'bootCheck.cannotReach': 'Не удаётся подключиться',
   'bootCheck.cannotReachDesc': 'Нам не удалось подключиться. Попробовать другой вариант?',
