@@ -105,14 +105,23 @@ async fn a_delivery_in_flight_for_one_profile_does_not_take_anothers_slot() {
         router_for_workspace(p.ws_b.path()),
     );
 
-    let held = in_scope(&p.alice, || DeliverySlot::claim(&p.thread, router_a.clone()))
-        .expect("alice claims her slot");
+    let held = in_scope(&p.alice, || {
+        DeliverySlot::claim(&p.thread, router_a.clone())
+    })
+    .expect("alice claims her slot");
     assert!(
-        in_scope(&p.alice, || DeliverySlot::claim(&p.thread, router_a.clone())).is_none(),
+        in_scope(&p.alice, || DeliverySlot::claim(
+            &p.thread,
+            router_a.clone()
+        ))
+        .is_none(),
         "one delivery per thread within a profile"
     );
     let bob_slot = in_scope(&p.bob, || DeliverySlot::claim(&p.thread, router_b.clone()));
-    assert!(bob_slot.is_some(), "alice's delivery does not hold bob's slot");
+    assert!(
+        bob_slot.is_some(),
+        "alice's delivery does not hold bob's slot"
+    );
     drop((held, bob_slot));
 
     // End to end: while Alice's delivery turn is in flight, Bob's runs and
@@ -133,7 +142,7 @@ async fn a_delivery_in_flight_for_one_profile_does_not_take_anothers_slot() {
     let alice_deliver = move |thread_a: String, notice: String| {
         let bob = Arc::clone(&bob);
         let (thread, router_bob, bob_log) = (thread.clone(), router_bob.clone(), bob_log.clone());
-        let mut alice_log = log("alice");
+        let alice_log = log("alice");
         async move {
             let retry = CoreContext::scope(
                 bob,
