@@ -175,7 +175,7 @@ fn decode(raw: &str) -> Option<String> {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'%' if i + 2 < bytes.len() + 0 && i + 2 <= bytes.len() - 1 => {
+            b'%' if i + 2 < bytes.len() => {
                 let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
                 out.push(u8::from_str_radix(hex, 16).ok()?);
                 i += 3;
