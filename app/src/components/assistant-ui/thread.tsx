@@ -1144,16 +1144,15 @@ const AssistantMessage: FC = () => {
   // asserted in `thread.actionBarSpacing.test.tsx`.
   const ACTION_BAR_HEIGHT = `-mb-6 min-h-7.5 ${ACTION_BAR_PT}`;
   // The root's own `-mb-7.5 pb-7.5` pair below is PAINT-ONLY and unrelated to
-  // the above: `content-visibility:auto` implies `contain: paint`, so `pb`
-  // widens the paint box to cover the bar that `-mb` pulls past the content
-  // box, and the root's `-mb` cancels that padding again in flow.
+  // the above: the padding reserves paint space for the action bar, and the
+  // negative margin compensates for that padding in normal flow.
 
   return (
     <MessagePrimitive.Root
       data-slot="aui_assistant-message-root"
       data-role="assistant"
       data-testid="agent-message"
-      className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 pb-7.5 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto]">
+      className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 pb-7.5 duration-150">
       {/*
        * One vertical rhythm for the whole message, rather than each part
        * bringing its own margin. Measured before this change the gaps ran
@@ -1417,7 +1416,7 @@ const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
-      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
+      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [&:where(>*)]:col-start-2"
       data-role="user">
       <UserMessageAttachments />
 
@@ -1507,7 +1506,7 @@ const EditComposer: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_edit-composer-wrapper"
-      className="flex flex-col px-2 [contain-intrinsic-size:auto_200px] [content-visibility:auto]">
+      className="flex flex-col px-2">
       <ComposerPrimitive.Root
         data-slot="edit-message"
         className="bg-background border-border/60 ms-auto flex w-full flex-col gap-3 rounded-2xl border p-3.5">
