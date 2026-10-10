@@ -37,6 +37,7 @@ use tinyagents_tasks::{
 use super::completion_notice::BackgroundCompletionFormatter;
 pub(crate) use super::completion_notice::{BackgroundAgentOutcome, AWAITING_INPUT_LABEL};
 pub(crate) use super::completion_target::CompletionTarget;
+pub(crate) use super::completion_target::{claim_recovery, forget_recovery};
 #[cfg(test)]
 pub(crate) use super::completion_target::{
     forget_workspace_for_test, install_store_for_test, TestWorkspace,
@@ -205,15 +206,6 @@ pub(crate) fn router_for_thread(thread_id: &str) -> Option<Arc<CompletionRouter>
 /// The workspace holding `thread_id`'s completions, if known to this process.
 pub(crate) fn workspace_for_thread(thread_id: &str) -> Option<PathBuf> {
     state().thread_workspaces.get(&key(thread_id)).cloned()
-}
-
-/// Claim `workspace_dir`'s boot recovery for this process. `true` exactly once
-/// per workspace, so the host can scan every workspace it opens (the bootstrap
-/// one, then any other a spawn later opens) without rescanning.
-pub(crate) fn claim_recovery(workspace_dir: &Path) -> bool {
-    state()
-        .recovered_workspaces
-        .insert(workspace_dir.to_path_buf())
 }
 
 /// Remember that `session_id` is a turn on `thread_id`.

@@ -84,7 +84,13 @@ fn spawn(task: &str, display: &str) -> AgentProgress {
 fn one_turn_spans() -> Vec<TraceSpan> {
     let mut c = collect(&[
         (AgentProgress::TurnStarted, 0),
-        (AgentProgress::TurnCompleted { iterations: 1 }, 10),
+        (
+            AgentProgress::TurnCompleted {
+                iterations: 1,
+                stop: None,
+            },
+            10,
+        ),
     ]);
     c.finish(10);
     c.into_spans()
@@ -151,6 +157,8 @@ mod attribution_tests;
 mod content_gate_tests;
 #[path = "progress_tracing_span_tree_tests.rs"]
 mod span_tree_tests;
+#[path = "progress_tracing_stop_tests.rs"]
+mod stop_tests;
 #[path = "progress_tracing_tool_span_tests.rs"]
 mod tool_span_tests;
 #[path = "progress_tracing_ttft_tests.rs"]

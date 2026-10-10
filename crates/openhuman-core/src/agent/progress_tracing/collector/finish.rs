@@ -74,7 +74,10 @@ impl SpanCollector {
     ///   (Langfuse statusMessage). The raw failure text can quote user data,
     ///   so it is attached only with content capture on; otherwise a fixed,
     ///   content-free message is used;
-    /// * cancelled → status left unset, `observation.level = WARNING`.
+    /// * cancelled → status left unset, `observation.level = WARNING`;
+    /// * stopped (breaker / wind-down / iteration cap) → status left unset,
+    ///   `observation.level = WARNING` plus the content-free stop attributes
+    ///   ([`Self::insert_stop_attrs`]).
     pub(crate) fn apply_turn_outcome(&mut self, outcome: TurnOutcome, now_unix_ms: u64) {
         let Some(index) = self.turn_span_index else {
             return;
@@ -116,6 +119,15 @@ impl SpanCollector {
                 );
                 (SpanStatus::Unset, "cancelled")
             }
+            TurnOutcome::Stopped { stop } => {
+                Self::insert_stop_attrs(stop, &mut extra);
+                log::debug!(
+                    "[agent-tracing] turn stopped early trace_id={} {}",
+                    self.ctx.session_id,
+                    stop.status_message()
+                );
+                (SpanStatus::Unset, "stopped")
+            }
         };
         if status == SpanStatus::Error {
             extra.insert("error".to_string(), serde_json::Value::Bool(true));
@@ -126,6 +138,30 @@ impl SpanCollector {
             self.ctx.session_id
         );
         self.close_span(index, now_unix_ms, status, extra);
+    }
+
+    /// Mark a span (turn or subagent) as stopped early: `WARNING` level, the
+    /// content-free `stopped: …` summary as its status message, and the
+    /// `turn.stop_*` attributes. The summary is also written as
+    /// `error.message`, which is what the OTLP converter exports as the
+    /// Langfuse statusMessage; it is safe ungated because it holds only the
+    /// stop kind, a failure class and a tool name.
+    pub(super) fn insert_stop_attrs(
+        stop: &crate::agent::turn_stop::TurnStop,
+        extra: &mut BTreeMap<String, serde_json::Value>,
+    ) {
+        let message = stop.status_message();
+        extra.insert(LEVEL_ATTR.to_string(), json_str("WARNING"));
+        extra.insert("observation.status_message".to_string(), json_str(&message));
+        extra.insert("error.message".to_string(), json_str(&message));
+        extra.insert("turn.outcome".to_string(), json_str("stopped"));
+        extra.insert("turn.stop_kind".to_string(), json_str(stop.kind.as_str()));
+        if let Some(class) = &stop.failure_class {
+            extra.insert("turn.stop_class".to_string(), json_str(class));
+        }
+        if let Some(operation) = &stop.operation {
+            extra.insert("turn.stop_operation".to_string(), json_str(operation));
+        }
     }
 
     /// Move a completed/failed subagent to `finished_subagents`, closing its
