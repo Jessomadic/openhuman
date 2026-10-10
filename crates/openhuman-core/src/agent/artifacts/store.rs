@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::files::{self, FileRoots};
+use super::store_documents::{self, Docs};
 use super::types::{ArtifactMeta, ArtifactStatus};
 
 const ARTIFACTS_SUBDIR: &str = "artifacts";
@@ -21,6 +22,31 @@ tokio::task_local! {
     /// appending a second card (#3162). Unset for all normal
     /// generation paths, in which case a fresh UUID is minted.
     pub static REGENERATE_TARGET_ID: String;
+}
+
+/// Runs a document-store call off the async worker (the port is reached
+/// through a blocking bridge).
+async fn on_docs<T: Send + 'static>(
+    docs: Docs,
+    f: impl FnOnce(Docs) -> anyhow::Result<T> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(move || f(docs))
+        .await
+        .map_err(|e| format!("[artifacts] storage task failed: {e}"))?
+        .map_err(|e| format!("[artifacts] storage: {e:#}"))
+}
+
+/// The document store for this call, when a storage backend is configured.
+/// The first call that finds it empty imports the workspace's legacy
+/// `meta.json` / `args.json` files.
+async fn documents(workspace_dir: &Path) -> Result<Option<Docs>, String> {
+    let Some(docs) = store_documents::current().map_err(|e| format!("[artifacts] storage: {e:#}"))?
+    else {
+        return Ok(None);
+    };
+    let legacy = workspace_dir.join(ARTIFACTS_SUBDIR);
+    on_docs(docs.clone(), move |docs| docs.import_legacy(&legacy).map(|_| ())).await?;
+    Ok(Some(docs))
 }
 
 /// Returns the artifacts root directory, creating it if it doesn't exist.
@@ -96,6 +122,10 @@ pub(crate) async fn save_artifact_meta(
 ) -> Result<(), String> {
     log::debug!("[artifacts] save_artifact_meta: id={}", meta.id);
     validate_artifact_id(&meta.id)?;
+    if let Some(docs) = documents(workspace_dir).await? {
+        let owned = meta.clone();
+        return on_docs(docs, move |docs| docs.put_meta(&owned)).await;
+    }
     let root = artifacts_root(workspace_dir).await?;
     let artifact_dir = root.join(&meta.id);
     // Verify sandboxing before writing
@@ -160,6 +190,10 @@ pub(crate) async fn list_artifacts(
         thread_id,
         workspace_dir
     );
+    if let Some(docs) = documents(workspace_dir).await? {
+        let all = on_docs(docs, |docs| docs.list_meta()).await?;
+        return Ok(page_of(all, offset, limit, thread_id));
+    }
     let root = artifacts_root(workspace_dir).await?;
 
     let mut read_dir = match tokio::fs::read_dir(&root).await {
@@ -221,6 +255,16 @@ pub(crate) async fn list_artifacts(
         }
     }
 
+    Ok(page_of(all, offset, limit, thread_id))
+}
+
+/// Sorts newest first, applies the thread filter and then the page.
+fn page_of(
+    mut all: Vec<ArtifactMeta>,
+    offset: usize,
+    limit: usize,
+    thread_id: Option<&str>,
+) -> (Vec<ArtifactMeta>, usize) {
     // Sort descending by created_at (newest first)
     all.sort_by_key(|item| std::cmp::Reverse(item.created_at));
 
@@ -238,7 +282,7 @@ pub(crate) async fn list_artifacts(
         "[artifacts] list_artifacts: total={total} returning {} items",
         page.len()
     );
-    Ok((page, total))
+    (page, total)
 }
 
 /// Retrieve a single artifact by ID.
@@ -248,6 +292,12 @@ pub(crate) async fn get_artifact(
 ) -> Result<ArtifactMeta, String> {
     log::debug!("[artifacts] get_artifact: id={artifact_id}");
     validate_artifact_id(artifact_id)?;
+    if let Some(docs) = documents(workspace_dir).await? {
+        let id = artifact_id.to_string();
+        return on_docs(docs, move |docs| docs.get_meta(&id))
+            .await?
+            .ok_or_else(|| format!("[artifacts] artifact not found id={artifact_id}"));
+    }
     let root = artifacts_root(workspace_dir).await?;
     let artifact_dir = root.join(artifact_id);
     assert_within_root(&root, &artifact_dir)?;
@@ -278,6 +328,10 @@ pub(crate) async fn save_artifact_args(
 ) -> Result<(), String> {
     log::debug!("[artifacts] save_artifact_args: id={artifact_id}");
     validate_artifact_id(artifact_id)?;
+    if let Some(docs) = documents(workspace_dir).await? {
+        let (id, owned) = (artifact_id.to_string(), args.clone());
+        return on_docs(docs, move |docs| docs.put_args(&id, &owned)).await;
+    }
     let root = artifacts_root(workspace_dir).await?;
     let artifact_dir = root.join(artifact_id);
     assert_within_root(&root, &artifact_dir)?;
@@ -311,6 +365,14 @@ pub(crate) async fn read_artifact_args(
 ) -> Result<serde_json::Value, String> {
     log::debug!("[artifacts] read_artifact_args: id={artifact_id}");
     validate_artifact_id(artifact_id)?;
+    if let Some(docs) = documents(workspace_dir).await? {
+        let id = artifact_id.to_string();
+        return on_docs(docs, move |docs| docs.get_args(&id))
+            .await?
+            .ok_or_else(|| {
+                format!("[artifacts] no persisted args for id={artifact_id} (not regenerable)")
+            });
+    }
     let root = artifacts_root(workspace_dir).await?;
     let artifact_dir = root.join(artifact_id);
     assert_within_root(&root, &artifact_dir)?;
@@ -378,6 +440,12 @@ pub(crate) async fn delete_artifact(
                 Err(e) => log::warn!("[artifacts] delete_artifact: leaving file in place: {e}"),
             }
         }
+    }
+    if let Some(docs) = documents(workspace_dir).await? {
+        let id = artifact_id.to_string();
+        on_docs(docs, move |docs| docs.delete(&id).map(|_| ())).await?;
+        log::debug!("[artifacts] delete_artifact: deleted record id={artifact_id}");
+        return Ok(());
     }
     tokio::fs::remove_dir_all(&artifact_dir)
         .await
@@ -511,14 +579,21 @@ pub async fn create_artifact_for_call(
     let root = artifacts_root(workspace_dir).await?;
     let artifact_dir = root.join(&id);
     assert_within_root(&root, &artifact_dir)?;
-    tokio::fs::create_dir_all(&artifact_dir)
-        .await
-        .map_err(|e| {
-            format!(
-                "[artifacts] create_artifact: failed to mkdir {:?}: {e}",
-                artifact_dir
-            )
-        })?;
+    // With a storage backend the record is a document, so there is no
+    // per-artifact directory to make.
+    if store_documents::current()
+        .map_err(|e| format!("[artifacts] storage: {e:#}"))?
+        .is_none()
+    {
+        tokio::fs::create_dir_all(&artifact_dir)
+            .await
+            .map_err(|e| {
+                format!(
+                    "[artifacts] create_artifact: failed to mkdir {:?}: {e}",
+                    artifact_dir
+                )
+            })?;
+    }
 
     // Capture the originating chat thread (if any) at create-time so the
     // panel can repopulate from disk after a redux-persist purge — see
