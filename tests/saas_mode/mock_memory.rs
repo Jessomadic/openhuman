@@ -135,7 +135,11 @@ fn read_request(stream: &TcpStream) -> Option<Request> {
         match name.trim().to_ascii_lowercase().as_str() {
             "content-length" => length = value.parse().unwrap_or(0),
             "authorization" => {
-                bearer = value.strip_prefix("Bearer ").unwrap_or("").trim().to_string();
+                bearer = value
+                    .strip_prefix("Bearer ")
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
             }
             "idempotency-key" => claim = Some(value.to_string()),
             _ => {}
