@@ -144,3 +144,17 @@ fn the_channel_message_carries_the_relayed_facts() {
     assert_eq!(msg.sender_name.as_deref(), Some("Ada"));
     assert!(msg.thread_ts.is_none());
 }
+
+#[test]
+fn a_constructed_message_round_trips_through_the_wire_shape() {
+    let built = RelayInboundParams::new("telegram", "-100123", "42", "m-1", "hello");
+    assert_eq!(built.client_id(), DEFAULT_RELAY_CLIENT_ID);
+    assert!(built.validate().is_ok());
+    let wire = serde_json::to_value(&built).expect("serialize");
+    // Unset optional fields stay off the wire rather than arriving as `null`.
+    assert!(wire.get("sender_name").is_none(), "{wire}");
+    assert!(wire.get("attachments").is_none(), "{wire}");
+    let back: RelayInboundParams = serde_json::from_value(wire).expect("deserialize");
+    assert_eq!(back, built);
+    assert_eq!(back.thread_id(), params().thread_id());
+}

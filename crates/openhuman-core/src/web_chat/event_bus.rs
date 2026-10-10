@@ -549,6 +549,7 @@ pub fn approval_request_event(
     client_id: &str,
     tool_call_id: Option<&str>,
     expires_at: Option<&str>,
+    detached: bool,
 ) -> WebChannelEvent {
     WebChannelEvent {
         event: "approval_request".to_string(),
@@ -560,6 +561,7 @@ pub fn approval_request_event(
         args: Some(args_redacted.clone()),
         tool_call_id: tool_call_id.map(str::to_string),
         expires_at: expires_at.map(str::to_string),
+        detached: detached.then_some(true),
         ..Default::default()
     }
 }
@@ -630,6 +632,7 @@ impl EventHandler<DomainEvent> for ApprovalSurfaceSubscriber {
                         client_id,
                         tool_call_id.as_deref(),
                         expires_at.as_deref(),
+                        crate::security::approval::is_detached_request(request_id),
                     ));
                 }
                 _ => {

@@ -148,8 +148,8 @@
   },
   {
     "rule": "json-write",
-    "path": "crates/openhuman-core/src/config/schema/load/impl_load.rs",
-    "line": 505,
+    "path": "crates/openhuman-core/src/config/schema/load/source/file.rs",
+    "line": 82,
     "text": "let mut temp_file = OpenOptions::new()",
     "occurrence": 1
   },
