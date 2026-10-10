@@ -84,7 +84,37 @@ impl EventHandler<DomainEvent> for DeviceTunnelSubscriber {
                 channel_id,
                 payload_b64,
             } => {
-                handle_tunnel_frame(channel_id, payload_b64).await;
+                // Handle the frame as the agent the device belongs to, so its
+                // pairing record and the RPCs it sends land in that agent's
+                // scope (`super::owner`).
+                let pending = PENDING_SESSIONS
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(channel_id.as_str())
+                    .cloned();
+                match super::owner::owner_of(channel_id, pending.as_ref()).await {
+                    Ok(owner) => {
+                        let handled = crate::storage::agents::within_agent(
+                            owner.as_deref(),
+                            handle_tunnel_frame(channel_id, payload_b64),
+                        )
+                        .await;
+                        // Fail closed: no context can act for the owner.
+                        if handled.is_none() {
+                            log::warn!(
+                                "[devices/bus] dropping tunnel frame channel_id={channel_id}: \
+                                 its owner has no context to act under"
+                            );
+                        }
+                    }
+                    // Fail closed: an unknown owner must not become `local`.
+                    Err(failed) => log::warn!(
+                        "[devices/bus] dropping tunnel frame channel_id={channel_id}: owner \
+                         lookup failed in scope={} ({})",
+                        failed.agent.as_deref().unwrap_or("local"),
+                        failed.error
+                    ),
+                }
             }
             _ => {}
         }
@@ -361,6 +391,11 @@ async fn handle_tunnel_frame(channel_id: &str, payload_b64: &str) {
             &session_token_hash,
         ) {
             Ok(device) => {
+                super::owner::remember(
+                    channel_id,
+                    crate::core::runtime::CoreContext::current()
+                        .and_then(|context| context.session_agent().map(str::to_string)),
+                );
                 log::info!(
                     "[devices/bus] device persisted channel_id={} label={}",
                     device.channel_id,
@@ -377,6 +412,7 @@ async fn handle_tunnel_frame(channel_id: &str, payload_b64: &str) {
                     "[devices/bus] failed to persist device channel_id={}: {e}",
                     channel_id
                 );
+                abandon_unpersisted_pairing(channel_id);
             }
         }
     } else {
@@ -384,7 +420,18 @@ async fn handle_tunnel_frame(channel_id: &str, payload_b64: &str) {
             "[devices/bus] could not load config to persist device channel_id={}",
             channel_id
         );
+        abandon_unpersisted_pairing(channel_id);
     }
+}
+
+/// Drops the pairing session and session cipher of a handshake whose device
+/// could not be persisted: with no row in the store, later frames would
+/// otherwise keep being accepted for a device nothing records
+/// (`super::owner` treats a missing row as the handshake persistence window).
+pub(super) fn abandon_unpersisted_pairing(channel_id: &str) {
+    PENDING_SESSIONS.lock().unwrap().remove(channel_id);
+    ACTIVE_CIPHERS.lock().unwrap().remove(channel_id);
+    log::warn!("[devices/bus] pairing abandoned channel_id={channel_id}: device not persisted");
 }
 
 fn parse_handshake_payload(raw: &str) -> HandshakePayload {
