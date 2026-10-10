@@ -2,9 +2,9 @@
 
 mod common;
 
-use openhuman_embed::Route;
 use openhuman_embed::complete::{ChatMessage, Completer, CompletionRequest, ResponseFormat};
-use serde_json::{Value, json};
+use openhuman_embed::Route;
+use serde_json::{json, Value};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
