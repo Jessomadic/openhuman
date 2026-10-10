@@ -63,6 +63,10 @@ function ThreadRow() {
         {
           'data-testid': `thread-row-${id}`,
           'data-analytics-id': 'chat-sidebar-thread-row',
+        // Re-selecting the active thread still synchronizes OpenHuman's route.
+        onClick: () => {
+          if (host.selectedThreadId === id) host.onSelectThread(id);
+        },
           title: thread.actionDir
             ? t('chat.sidebar.workingFolder').replace('{folder}', folderBasename(thread.actionDir))
             : undefined,
