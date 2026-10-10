@@ -369,17 +369,12 @@ pub(super) fn assemble_turn_harness(
         harness.push_middleware(mw.clone());
     }
 
-    // Repeated-failure circuit breaker: pause the run when tool calls keep failing,
-    // so a denial or terminal tool error surfaces its root cause instead of burning
-    // the iteration budget. Side effects come from the tools' declarations.
+    // Repeated-failure breaker: surface a root cause instead of burning the budget
+    // on failing calls; side effects come from the tools' own declarations.
     let repeated_failure = handle.as_ref().map(|handle| {
-        let (threshold, facts) = (REPEATED_TOOL_FAILURE_THRESHOLD, tool_sets.clone());
-        let mw = middleware::RepeatedToolFailureMiddleware::new(
-            handle.clone(),
-            threshold,
-            halt_summary.clone(),
-        );
-        Arc::new(mw.with_tool_facts(middleware::tool_sets_lookup(facts)))
+        let (t, halt) = (REPEATED_TOOL_FAILURE_THRESHOLD, halt_summary.clone());
+        let mw = middleware::RepeatedToolFailureMiddleware::new(handle.clone(), t, halt);
+        Arc::new(mw.with_tool_facts(middleware::tool_sets_lookup(tool_sets.clone())))
     });
     if let Some(mw) = &repeated_failure {
         harness.push_middleware(mw.clone());
