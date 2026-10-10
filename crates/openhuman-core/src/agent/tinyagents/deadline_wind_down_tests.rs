@@ -2,8 +2,8 @@ use super::*;
 use std::time::Duration;
 
 fn handle() -> SteeringHandle {
-    crate::agent::tinyagents::steering::openhuman_steering_handle(
-        crate::agent::tinyagents::steering::SteeringRunClass::Interactive,
+    crate::agent::tinyagents::host::steering::openhuman_steering_handle(
+        crate::agent::tinyagents::host::steering::SteeringRunClass::Interactive,
     )
 }
 

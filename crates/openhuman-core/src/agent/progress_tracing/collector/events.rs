@@ -17,6 +17,7 @@ impl SpanCollector {
     /// Fold a single progress event into the span tree, stamped at
     /// `now_unix_ms` (the consumer's wall clock when it observed the event).
     pub fn record(&mut self, event: &AgentProgress, now_unix_ms: u64) {
+        self.last_activity_unix_ms = self.last_activity_unix_ms.max(now_unix_ms);
         match event {
             AgentProgress::TurnStarted => {
                 self.ensure_turn_span(now_unix_ms);
@@ -28,6 +29,7 @@ impl SpanCollector {
             } => {
                 self.close_current_iteration(now_unix_ms);
                 self.first_deltas = Default::default();
+                self.call_clock = Default::default();
                 let parent = self.ensure_turn_span(now_unix_ms);
                 let mut attrs = BTreeMap::new();
                 attrs.insert("agent.iteration".to_string(), json_u32(*iteration));
@@ -180,16 +182,9 @@ impl SpanCollector {
                         )));
                     }
                 }
-                self.subagents.insert(
-                    task_id.clone(),
-                    SubagentState {
-                        span_index: index,
-                        current_iteration_span_id: None,
-                        open_tools: BTreeMap::new(),
-                        first_deltas: Default::default(),
-                        last_model: None,
-                    },
-                );
+                self.finished_subagents.remove(task_id);
+                self.subagents
+                    .insert(task_id.clone(), SubagentState::new(index));
             }
 
             AgentProgress::SubagentIterationStarted {
@@ -201,7 +196,7 @@ impl SpanCollector {
             } => {
                 // Resolve parent + prior child iteration up front so we don't
                 // hold a borrow across the mutating open_span call.
-                let (parent_id, prior_iteration_id) = match self.subagents.get(task_id) {
+                let (parent_id, prior_iteration_id) = match self.subagent_state(task_id) {
                     Some(state) => (
                         self.spans[state.span_index].span_id.clone(),
                         state.current_iteration_span_id.clone(),
@@ -230,9 +225,11 @@ impl SpanCollector {
                     now_unix_ms,
                     attrs,
                 );
-                if let Some(state) = self.subagents.get_mut(task_id) {
-                    state.current_iteration_span_id = Some(id);
+                if let Some(state) = self.subagent_state_mut(task_id) {
+                    state.current_iteration_span_id = Some(id.clone());
+                    state.last_iteration_span_id = Some(id);
                     state.first_deltas = Default::default();
+                    state.call_clock = Default::default();
                 }
             }
 
@@ -244,15 +241,25 @@ impl SpanCollector {
                 iteration,
                 ..
             } => {
-                let (parent_id, model) = match self.subagents.get(task_id) {
+                let (parent_id, model) = match self.subagent_state(task_id) {
                     Some(state) => (
-                        match &state.current_iteration_span_id {
+                        match state
+                            .current_iteration_span_id
+                            .as_ref()
+                            .or(state.last_iteration_span_id.as_ref())
+                        {
                             Some(id) => id.clone(),
                             None => self.spans[state.span_index].span_id.clone(),
                         },
                         state.last_model.clone(),
                     ),
-                    None => return,
+                    None => {
+                        log::debug!(
+                            "[agent-tracing] tool start for unknown subagent task_id={task_id} \
+                             call_id={call_id}; dropped"
+                        );
+                        return;
+                    }
                 };
                 let mut attrs = BTreeMap::new();
                 attrs.insert("tool.name".to_string(), json_str(tool_name));
@@ -269,7 +276,7 @@ impl SpanCollector {
                     attrs,
                 );
                 self.capture_tool_arguments(index, arguments);
-                if let Some(state) = self.subagents.get_mut(task_id) {
+                if let Some(state) = self.subagent_state_mut(task_id) {
                     state.open_tools.insert(call_id.clone(), index);
                 }
             }
@@ -285,11 +292,18 @@ impl SpanCollector {
                 failure,
                 ..
             } => {
+                // Finished subagents are searched too: under channel backpressure
+                // a child's completion events can reach the collector after the
+                // orchestrator's `SubagentCompleted`, and dropping them left the
+                // tool span open until the turn ended.
                 let Some(index) = self
-                    .subagents
-                    .get_mut(task_id)
+                    .subagent_state_mut(task_id)
                     .and_then(|state| state.open_tools.remove(call_id))
                 else {
+                    log::debug!(
+                        "[agent-tracing] tool completion without an open span \
+                         task_id={task_id} call_id={call_id}; dropped"
+                    );
                     return;
                 };
                 if self.spans[index].input.is_none() {
@@ -318,14 +332,11 @@ impl SpanCollector {
                 output,
                 ..
             } => {
-                let Some(state) = self.subagents.remove(task_id) else {
+                let Some(span_index) = self.retire_subagent(task_id, now_unix_ms, SpanStatus::Ok)
+                else {
                     return;
                 };
-                if let Some(id) = state.current_iteration_span_id.clone() {
-                    if let Some(idx) = self.span_index_by_id(&id) {
-                        self.close_span(idx, now_unix_ms, SpanStatus::Ok, BTreeMap::new());
-                    }
-                }
+                let state = SubagentSpanRef { span_index };
                 // The subagent's final assistant text is the span's output
                 // (same gate + cap as its prompt input).
                 if self.ctx.capture_content && !output.is_empty() {
@@ -348,14 +359,12 @@ impl SpanCollector {
             }
 
             AgentProgress::SubagentFailed { task_id, error, .. } => {
-                let Some(state) = self.subagents.remove(task_id) else {
+                let Some(span_index) =
+                    self.retire_subagent(task_id, now_unix_ms, SpanStatus::Error)
+                else {
                     return;
                 };
-                if let Some(id) = state.current_iteration_span_id.clone() {
-                    if let Some(idx) = self.span_index_by_id(&id) {
-                        self.close_span(idx, now_unix_ms, SpanStatus::Error, BTreeMap::new());
-                    }
-                }
+                let state = SubagentSpanRef { span_index };
                 let mut extra = BTreeMap::new();
                 // Always record that an error occurred and its length. The raw
                 // error text (may embed paths / payloads) is recorded — truncated
@@ -430,8 +439,17 @@ impl SpanCollector {
                         self.turn_span_index.expect("turn span just created")
                     }
                 };
+                // The first input is the originating user message (the web
+                // channel records it before the run starts); a later one — the
+                // commit path's last user-role message, which can be tool
+                // results or a harness nudge — must not replace it.
+                let record_input = !self.turn_input_recorded
+                    && input.as_deref().is_some_and(|text| !text.trim().is_empty());
+                if record_input {
+                    self.turn_input_recorded = true;
+                }
                 if let Some(span) = self.spans.get_mut(index) {
-                    if let Some(text) = input {
+                    if let (true, Some(text)) = (record_input, input) {
                         span.input = Some(serde_json::Value::String(truncate_chars(
                             text,
                             MAX_MODEL_CONTENT_CHARS,
@@ -455,6 +473,7 @@ impl SpanCollector {
                 if let Some(index) = self.turn_span_index {
                     let mut extra = BTreeMap::new();
                     extra.insert("agent.iterations".to_string(), json_u32(*iterations));
+                    extra.insert("turn.outcome".to_string(), json_str("completed"));
                     self.close_span(index, now_unix_ms, SpanStatus::Ok, extra);
                 }
             }
@@ -468,36 +487,24 @@ impl SpanCollector {
                 self.first_deltas.observe(now_unix_ms, false)
             }
             AgentProgress::SubagentTextDelta { task_id, .. } => {
-                if let Some(state) = self.subagents.get_mut(task_id) {
+                if let Some(state) = self.subagent_state_mut(task_id) {
                     state.first_deltas.observe(now_unix_ms, true);
                 }
             }
             AgentProgress::SubagentThinkingDelta { task_id, .. } => {
-                if let Some(state) = self.subagents.get_mut(task_id) {
+                if let Some(state) = self.subagent_state_mut(task_id) {
                     state.first_deltas.observe(now_unix_ms, false);
                 }
             }
             AgentProgress::SubagentAwaitingUser { .. } => {}
         }
     }
+}
 
-    /// Seal every span still open after the stream closes. Idempotent.
-    pub fn finish(&mut self, now_unix_ms: u64) {
-        let open: Vec<usize> = self
-            .spans
-            .iter()
-            .enumerate()
-            .filter(|(_, span)| span.end_unix_ms.is_none())
-            .map(|(idx, _)| idx)
-            .collect();
-        for idx in open {
-            self.close_span(idx, now_unix_ms, SpanStatus::Unset, BTreeMap::new());
-        }
-        self.current_iteration_span_id = None;
-        self.current_iteration_index = None;
-        self.open_tools.clear();
-        self.subagents.clear();
-    }
+/// Span index of a subagent that just completed or failed (its full state has
+/// moved to `finished_subagents`).
+struct SubagentSpanRef {
+    span_index: usize,
 }
 
 impl SpanCollector {
