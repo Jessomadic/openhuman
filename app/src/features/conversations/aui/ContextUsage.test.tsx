@@ -140,7 +140,15 @@ describe('ContextUsage', () => {
 
   it('uses compact counts for the context window', async () => {
     mockCall.mockResolvedValue({ ...BREAKDOWN, context_window: 1_048_576 });
-    renderUsage({}, { lastTurnInputTokens: 8_511, lastTurnOutputTokens: 0, lastTurnContextTokens: 8_511, contextWindow: 1_048_576 });
+    renderUsage(
+      {},
+      {
+        lastTurnInputTokens: 8_511,
+        lastTurnOutputTokens: 0,
+        lastTurnContextTokens: 8_511,
+        contextWindow: 1_048_576,
+      }
+    );
     await userEvent.hover(screen.getByTestId('composer-context-usage'));
     const breakdown = await screen.findByTestId('composer-token-breakdown');
     await waitFor(() => expect(breakdown).toHaveTextContent('8.5k / 1.0mn'));

@@ -17,8 +17,8 @@ import { cn } from '@/components/assistant-ui/lib/utils';
 import type { ComponentProps } from 'react';
 
 import { announced, pct } from '../utils/range';
-import { mono, paper } from './surfaces';
 import { formatTokenCount } from './context-display';
+import { mono, paper } from './surfaces';
 
 const fmt = (n: number) => n.toLocaleString('en-US');
 

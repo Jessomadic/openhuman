@@ -43,7 +43,9 @@ export function AgentPlan({
   stepTestId?: string;
 }) {
   const total = steps.length;
-  const completed = statuses ? statuses.filter(status => status === 'done').length : progressOf(activeIndex, total);
+  const completed = statuses
+    ? statuses.filter(status => status === 'done').length
+    : progressOf(activeIndex, total);
   const allDone = completed >= total;
   const progress = pct(completed, total);
 
@@ -52,12 +54,14 @@ export function AgentPlan({
       data-slot="agent-plan"
       className={cn('flex w-full max-w-sm flex-col', compact ? 'gap-1.5' : 'gap-3', className)}
       {...props}>
-      {showHeader && <div className="flex items-center justify-between">
-        <span className="text-[13.5px] font-medium">{title}</span>
-        <span className={cn(mono, 'text-foreground/35 tabular-nums')}>
-          {countLabel ?? `${completed} of ${total}`}
-        </span>
-      </div>}
+      {showHeader && (
+        <div className="flex items-center justify-between">
+          <span className="text-[13.5px] font-medium">{title}</span>
+          <span className={cn(mono, 'text-foreground/35 tabular-nums')}>
+            {countLabel ?? `${completed} of ${total}`}
+          </span>
+        </div>
+      )}
       <div className="bg-foreground/[0.06] h-[3px] w-full overflow-hidden rounded-full">
         <span
           className="bg-foreground/80 block h-full rounded-full transition-[width] duration-500"
@@ -66,12 +70,21 @@ export function AgentPlan({
       </div>
       <ul className={cn('flex flex-col', compact ? 'gap-1' : 'gap-2.5')}>
         {steps.map((step, i) => {
-          const status = statuses?.[i] ?? (allDone || i < completed ? 'done' : i === completed ? 'active' : 'pending');
+          const status =
+            statuses?.[i] ??
+            (allDone || i < completed ? 'done' : i === completed ? 'active' : 'pending');
           const done = status === 'done';
           const active = status === 'active';
           const failed = status === 'failed';
           return (
-            <li key={`${i}:${step}`} data-testid={stepTestId} data-status={status} className={cn('flex items-start gap-2.5', compact ? 'text-xs leading-4' : 'text-[13.5px]')}>
+            <li
+              key={`${i}:${step}`}
+              data-testid={stepTestId}
+              data-status={status}
+              className={cn(
+                'flex items-start gap-2.5',
+                compact ? 'text-xs leading-4' : 'text-[13.5px]'
+              )}>
               <span className="flex size-4 shrink-0 items-center justify-center">
                 {done ? (
                   <CheckIcon className="text-foreground/35 size-3.5" />

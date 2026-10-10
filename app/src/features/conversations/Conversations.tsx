@@ -459,7 +459,6 @@ const Conversations = ({
   // Inline thread-title rename in the sidebar thread list — keyed by the
   // thread id being edited (null = none) so any row can rename in place.
 
-
   const {
     isAtLimit,
     // #3767: gate on the tier for the selected chat mode — Quick runs on the

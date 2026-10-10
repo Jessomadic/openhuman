@@ -190,8 +190,21 @@ function ContextDisplayRoot({
     </ContextDisplayContext.Provider>
   );
 }
-function ContextDisplayTrigger({ className, children, showTooltip = true, ...props }: React.ComponentProps<'button'> & { showTooltip?: boolean }) {
-  const trigger = <button type="button" data-slot="context-display-trigger" className={cn('inline-flex items-center rounded-md transition-colors', className)} {...props}>{children}</button>;
+function ContextDisplayTrigger({
+  className,
+  children,
+  showTooltip = true,
+  ...props
+}: React.ComponentProps<'button'> & { showTooltip?: boolean }) {
+  const trigger = (
+    <button
+      type="button"
+      data-slot="context-display-trigger"
+      className={cn('inline-flex items-center rounded-md transition-colors', className)}
+      {...props}>
+      {children}
+    </button>
+  );
   return showTooltip ? <TooltipTrigger render={trigger} /> : trigger;
 }
 

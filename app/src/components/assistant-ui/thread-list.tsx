@@ -28,9 +28,9 @@ import {
 import {
   type ComponentPropsWithoutRef,
   type FC,
-  type ReactNode,
   forwardRef,
   Fragment,
+  type ReactNode,
   useEffect,
   useMemo,
   useRef,
@@ -276,7 +276,10 @@ export const ThreadListItem: FC<{
   return (
     <ThreadListItemPrimitive.Root
       data-slot="aui_thread-list-item"
-      className={cn('group hover:bg-muted focus-visible:bg-muted data-active:bg-muted has-focus-visible:bg-muted has-data-[state=open]:bg-muted relative flex h-8 items-center rounded-md transition-colors focus-visible:outline-none', className)}>
+      className={cn(
+        'group hover:bg-muted focus-visible:bg-muted data-active:bg-muted has-focus-visible:bg-muted has-data-[state=open]:bg-muted relative flex h-8 items-center rounded-md transition-colors focus-visible:outline-none',
+        className
+      )}>
       {isRenaming ? (
         <ThreadListItemRename
           onDone={restoreFocus => {
@@ -297,7 +300,11 @@ export const ThreadListItem: FC<{
               className="text-muted-foreground me-1.5 size-3.5 shrink-0 animate-spin"
             />
           )}
-          <span data-slot="aui_thread-list-item-title" data-running={isRunning ? 'true' : undefined} aria-busy={isRunning || undefined} className="min-w-0 flex-1 truncate">
+          <span
+            data-slot="aui_thread-list-item-title"
+            data-running={isRunning ? 'true' : undefined}
+            aria-busy={isRunning || undefined}
+            className="min-w-0 flex-1 truncate">
             <ThreadListItemPrimitive.Title fallback={t('chat.untitledThread')} />
           </span>
           {trailing}
@@ -308,7 +315,11 @@ export const ThreadListItem: FC<{
           )}
         </ThreadListItemPrimitive.Trigger>
       )}
-      <ThreadListItemMore onRename={() => setIsRenaming(true)} showArchive={showArchive} extras={menuExtras} />
+      <ThreadListItemMore
+        onRename={() => setIsRenaming(true)}
+        showArchive={showArchive}
+        extras={menuExtras}
+      />
     </ThreadListItemPrimitive.Root>
   );
 };
@@ -378,7 +389,11 @@ const ThreadListItemRename: FC<{ onDone: (restoreFocus: boolean) => void }> = ({
   );
 };
 
-const ThreadListItemMore: FC<{ onRename: () => void; showArchive: boolean; extras?: ReactNode }> = ({ onRename, showArchive, extras }) => {
+const ThreadListItemMore: FC<{
+  onRename: () => void;
+  showArchive: boolean;
+  extras?: ReactNode;
+}> = ({ onRename, showArchive, extras }) => {
   const { t } = useT();
   return (
     <ThreadListItemMorePrimitive.Root sharedFocusGroup>
@@ -408,16 +423,18 @@ const ThreadListItemMore: FC<{ onRename: () => void; showArchive: boolean; extra
           {t('assistantUi.threadList.rename', 'Rename')}
         </ThreadListItemMorePrimitive.Item>
         {extras}
-        {showArchive && <ThreadListItemPrimitive.Archive
-          render={
-            <ThreadListItemMorePrimitive.Item
-              data-slot="aui_thread-list-item-more-item"
-              className="hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none"
-            />
-          }>
-          <ArchiveIcon className="size-4" />
-          {t('assistantUi.threadList.archive', 'Archive')}
-        </ThreadListItemPrimitive.Archive>}
+        {showArchive && (
+          <ThreadListItemPrimitive.Archive
+            render={
+              <ThreadListItemMorePrimitive.Item
+                data-slot="aui_thread-list-item-more-item"
+                className="hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none"
+              />
+            }>
+            <ArchiveIcon className="size-4" />
+            {t('assistantUi.threadList.archive', 'Archive')}
+          </ThreadListItemPrimitive.Archive>
+        )}
         <ThreadListItemPrimitive.Delete
           render={
             <ThreadListItemMorePrimitive.Item

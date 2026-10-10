@@ -6,9 +6,9 @@ import {
 } from '@/components/assistant-ui/thread-list';
 import {
   AssistantRuntimeProvider,
-  type ThreadMessageLike,
   ThreadListItemMorePrimitive,
   ThreadListPrimitive,
+  type ThreadMessageLike,
   useAuiState,
   useExternalStoreRuntime,
 } from '@assistant-ui/react';
@@ -58,25 +58,36 @@ function ThreadRow() {
       className="flex-none"
       running={running}
       showArchive={false}
-      triggerProps={{
-        'data-testid': `thread-row-${id}`,
-        'data-analytics-id': 'chat-sidebar-thread-row',
-        title: thread.actionDir
-          ? t('chat.sidebar.workingFolder').replace('{folder}', folderBasename(thread.actionDir))
-          : undefined,
-      } as React.ComponentPropsWithoutRef<'button'>}
-      trailing={!running && host.unreadThreadIds?.has(id) ? (
-        <span data-testid={`thread-unread-${id}`} role="img" aria-label={t('chat.sidebar.unread')} className="bg-primary size-1.5 shrink-0 rounded-full" />
-      ) : null}
-      menuExtras={host.onTogglePin ? (
-        <ThreadListItemMorePrimitive.Item
-          data-testid={`thread-pin-${id}`}
-          onSelect={() => host.onTogglePin?.(thread, !pinned)}
-          className="hover:bg-accent focus:bg-accent flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none">
-          <PinIcon aria-hidden className="size-4" />
-          {t(pinned ? 'chat.sidebar.unpinThread' : 'chat.sidebar.pinThread')}
-        </ThreadListItemMorePrimitive.Item>
-      ) : null}
+      triggerProps={
+        {
+          'data-testid': `thread-row-${id}`,
+          'data-analytics-id': 'chat-sidebar-thread-row',
+          title: thread.actionDir
+            ? t('chat.sidebar.workingFolder').replace('{folder}', folderBasename(thread.actionDir))
+            : undefined,
+        } as React.ComponentPropsWithoutRef<'button'>
+      }
+      trailing={
+        !running && host.unreadThreadIds?.has(id) ? (
+          <span
+            data-testid={`thread-unread-${id}`}
+            role="img"
+            aria-label={t('chat.sidebar.unread')}
+            className="bg-primary size-1.5 shrink-0 rounded-full"
+          />
+        ) : null
+      }
+      menuExtras={
+        host.onTogglePin ? (
+          <ThreadListItemMorePrimitive.Item
+            data-testid={`thread-pin-${id}`}
+            onSelect={() => host.onTogglePin?.(thread, !pinned)}
+            className="hover:bg-accent focus:bg-accent flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none">
+            <PinIcon aria-hidden className="size-4" />
+            {t(pinned ? 'chat.sidebar.unpinThread' : 'chat.sidebar.pinThread')}
+          </ThreadListItemMorePrimitive.Item>
+        ) : null
+      }
     />
   );
 }
@@ -85,48 +96,82 @@ function ThreadRow() {
 export function ThreadList(props: ThreadListProps) {
   const { t } = useT();
   const [search, setSearch] = useState('');
-  const adapterThreads = useMemo(() => props.threads.map(thread => ({
-    id: thread.id,
-    remoteId: thread.id,
-    status: 'regular' as const,
-    title: props.resolveTitle(thread.id),
-  })), [props.threads, props.resolveTitle]);
+  const adapterThreads = useMemo(
+    () =>
+      props.threads.map(thread => ({
+        id: thread.id,
+        remoteId: thread.id,
+        status: 'regular' as const,
+        title: props.resolveTitle(thread.id),
+      })),
+    [props.threads, props.resolveTitle]
+  );
   const runtime = useExternalStoreRuntime({
     messages: EMPTY_MESSAGES,
     isRunning: false,
     onNew: async () => {},
-    adapters: { threadList: {
-      threads: adapterThreads,
-      threadId: props.selectedThreadId ?? undefined,
-      onSwitchToNewThread: props.onCreateThread,
-      onSwitchToThread: props.onSelectThread,
-      onRename: props.onRenameThread,
-      onDelete: id => {
-        const thread = props.threads.find(item => item.id === id);
-        if (thread) props.onRequestDelete(thread);
+    adapters: {
+      threadList: {
+        threads: adapterThreads,
+        threadId: props.selectedThreadId ?? undefined,
+        onSwitchToNewThread: props.onCreateThread,
+        onSwitchToThread: props.onSelectThread,
+        onRename: props.onRenameThread,
+        onDelete: id => {
+          const thread = props.threads.find(item => item.id === id);
+          if (thread) props.onRequestDelete(thread);
+        },
       },
-    } },
+    },
   });
-  const filtered = props.threads.filter(thread => props.resolveTitle(thread.id).toLowerCase().includes(search.trim().toLowerCase()));
+  const filtered = props.threads.filter(thread =>
+    props.resolveTitle(thread.id).toLowerCase().includes(search.trim().toLowerCase())
+  );
   const groups = groupThreads(filtered, new Date(), props.isPinned ?? isThreadPinned);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ThreadListHostContext.Provider value={props}>
         <ThreadListRoot className="h-full min-h-0">
           <div className="flex-none px-2 pb-2">
-            <ThreadListNew data-testid="new-thread-button" data-analytics-id="chat-sidebar-new-thread" className="w-full" title={t('chat.newThreadShortcut')}>
+            <ThreadListNew
+              data-testid="new-thread-button"
+              data-analytics-id="chat-sidebar-new-thread"
+              className="w-full"
+              title={t('chat.newThreadShortcut')}>
               {t('chat.newConversation')}
             </ThreadListNew>
-            {props.threads.length > 0 && <ThreadListSearch value={search} onValueChange={setSearch} />}
+            {props.threads.length > 0 && (
+              <ThreadListSearch value={search} onValueChange={setSearch} />
+            )}
           </div>
-          <div data-slot="aui_thread-list-items" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3 [scrollbar-gutter:stable_both-edges] [scrollbar-width:thin]">
+          <div
+            data-slot="aui_thread-list-items"
+            className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3 [scrollbar-gutter:stable_both-edges] [scrollbar-width:thin]">
             {groups.map(group => (
-              <section key={group.key} data-testid={`thread-group-${group.key}`} aria-label={t(GROUP_LABEL_KEYS[group.key])} className="flex flex-col gap-0.5">
-                <h3 data-slot="aui_thread-list-group-label" className="text-muted-foreground px-2.5 pt-3 pb-1 text-xs font-medium">{t(GROUP_LABEL_KEYS[group.key])}</h3>
-                {group.threads.map(thread => <ThreadListPrimitive.ItemByIndex key={thread.id} index={props.threads.indexOf(thread)} components={{ ThreadListItem: ThreadRow }} />)}
+              <section
+                key={group.key}
+                data-testid={`thread-group-${group.key}`}
+                aria-label={t(GROUP_LABEL_KEYS[group.key])}
+                className="flex flex-col gap-0.5">
+                <h3
+                  data-slot="aui_thread-list-group-label"
+                  className="text-muted-foreground px-2.5 pt-3 pb-1 text-xs font-medium">
+                  {t(GROUP_LABEL_KEYS[group.key])}
+                </h3>
+                {group.threads.map(thread => (
+                  <ThreadListPrimitive.ItemByIndex
+                    key={thread.id}
+                    index={props.threads.indexOf(thread)}
+                    components={{ ThreadListItem: ThreadRow }}
+                  />
+                ))}
               </section>
             ))}
-            {groups.length === 0 && <p className="text-muted-foreground px-2.5 py-4 text-center text-xs">{t(search ? 'assistantUi.threadList.noThreadsFound' : 'chat.noThreads')}</p>}
+            {groups.length === 0 && (
+              <p className="text-muted-foreground px-2.5 py-4 text-center text-xs">
+                {t(search ? 'assistantUi.threadList.noThreadsFound' : 'chat.noThreads')}
+              </p>
+            )}
           </div>
         </ThreadListRoot>
       </ThreadListHostContext.Provider>
