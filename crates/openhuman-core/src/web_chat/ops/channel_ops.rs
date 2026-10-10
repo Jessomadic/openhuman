@@ -36,13 +36,13 @@ pub async fn cancel_chat_scoped(
     thread_id: &str,
     request_id: Option<&str>,
 ) -> Result<Option<String>, String> {
-    Ok(cancel_chat_inner(client_id, thread_id, request_id)
+    Ok(cancel_chat_inner(client_id, thread_id, request_id, false)
         .await?
         .request_id)
 }
 
-/// The `client_id` a lease-loss teardown cancels under. No client asked for
-/// it, so each turn's cancelled events go to the client that started it.
+/// The placeholder `client_id` a lease-loss teardown logs under. It carries no
+/// meaning: fence state is the explicit `fenced` flag of `cancel_chat_inner`.
 const FENCE_CLIENT_ID: &str = "profile-fence";
 
 /// Stop every turn running in the calling context — what a profile whose
@@ -53,7 +53,7 @@ pub async fn cancel_all_turns() -> usize {
     let threads = super::state::live_thread_ids().await;
     let mut stopped = 0;
     for thread_id in &threads {
-        match cancel_chat_inner(FENCE_CLIENT_ID, thread_id, None).await {
+        match cancel_chat_inner(FENCE_CLIENT_ID, thread_id, None, true).await {
             Ok(outcome) if outcome.request_id.is_some() => stopped += 1,
             Ok(_) => {}
             Err(error) => {
@@ -80,6 +80,9 @@ async fn cancel_chat_inner(
     client_id: &str,
     thread_id: &str,
     request_id: Option<&str>,
+    // True for a lease-loss teardown no client asked for: each turn's events
+    // then go to the client that started it instead of `client_id`.
+    fenced: bool,
 ) -> Result<CancelOutcome, String> {
     let client_id = client_id.trim();
     let thread_id = thread_id.trim();
@@ -190,7 +193,6 @@ async fn cancel_chat_inner(
     // resolves the turn.
     // A fence cancel names no real client, so each turn's events go to the
     // client that started it; a user's cancel keeps the caller's id.
-    let fenced = client_id == FENCE_CLIENT_ID;
     let cancelled_turns = removed_request_id
         .into_iter()
         .map(|request_id| (request_id, removed_client_id.take()))
@@ -441,7 +443,7 @@ pub async fn channel_web_cancel(
     thread_id: &str,
     request_id: Option<&str>,
 ) -> Result<Outcome<Value>, String> {
-    let outcome = cancel_chat_inner(client_id, thread_id, request_id).await?;
+    let outcome = cancel_chat_inner(client_id, thread_id, request_id, false).await?;
 
     // `request_id` is set only when a turn was torn down, and only then does a
     // `cancelled` chat_error follow. A client that sees `request_id: null` knows

@@ -87,7 +87,10 @@ pub struct HeldBy {
     pub owner: String,
     /// Where the holder can be reached, when it advertises an endpoint.
     pub endpoint: Option<String>,
-    /// Milliseconds until its lease lapses unless renewed.
+    /// A polling hint in milliseconds: the time until its lease lapses unless
+    /// renewed, capped at 60 seconds (a lease that never expires, such as a
+    /// file lock, reports the cap). Retry after this, not necessarily after
+    /// expiry.
     pub retry_after_ms: u64,
 }
 
