@@ -12,10 +12,10 @@ belong to `DomainGroup::Operator`, which only `DomainSet::saas()` enables.
 ```text
 <root>/users/<profile-id>/          the desktop's users/<id> shape (config::schema::ProfileLayout)
   profile.toml                      ProfileMeta (only without a storage backend)
-  .lease, .lease.json               the file-lock lease (only without a storage backend)
   config.toml                       the profile's config_path
   workspace/                        sessions, memory, threads, cron, cost
   sandbox/                          action_dir: the only place it may act
+<root>/users/<sha256(id)>/.lease    the file-lock lease and its record (only without a storage backend)
 <root>/deprovisioned/<id>-<secs>-<uuid>/   an archived profile
 <root>/operator/                    the operator plane's own state (operator_dir overrides it)
 ```
@@ -54,6 +54,7 @@ Changing the mode may re-map users onto different profiles.
 | `types.rs` | `ProfileId` and `ProfileIdMode`, `ProfileMeta`, and the operator-plane result types |
 | `layout.rs` | The SaaS side of the shared `ProfileLayout`, archived profiles, and `profile_config`: the forced paths, memory binding (pinned to the legacy layout) and autonomy policy |
 | `host.rs` | `ProfileHost`: provisioning, lazy open behind the profile lease, LRU and idle eviction (never of a profile in use), release, fencing, each profile's derived `CoreContext`, `current()`, `ensure_hosted()` |
+| `lifecycle.rs` | Provisioning, deprovisioning and credential changes, and `ProfileLocks`: the per-profile lock that keeps one profile's lifecycle operations from interleaving (see [Lifecycle](#lifecycle)) |
 | `lease.rs` | The profile lease as the host uses it: `OpenError`, the lease store choice (`DocumentLeases` over a backend, else `LocalLeases`), and the heartbeat that renews every open profile's lease and fences the ones lost |
 | `registry.rs` | `ProfileRegistry`: which profiles are provisioned, in the backend's `cluster` scope or as `profile.toml` files |
 | `gateway.rs` | Which context a gateway request runs under: the operator plane, or the profile of the user named in `X-OpenHuman-User`, after the signature check |
@@ -210,8 +211,9 @@ profile's lease (`storage::lease`) before opening it:
   whose CAS holds across processes (`storage::driver_has_cross_process_cas`:
   SQLite, MongoDB); the boot guard refuses anything else.
 - **Without one** it uses `LocalLeases`: an exclusive `flock` on
-  `<root>/users/<id>/.lease`, which keeps two processes on one root apart and
-  drops when its holder dies.
+  `<root>/users/<sha256(id)>/.lease` (outside the profile's own directory,
+  so archiving it leaves the lease in place), which keeps two processes on
+  one root apart and drops when its holder dies.
 
 The lease drives the rest:
 
@@ -242,6 +244,29 @@ The lease drives the rest:
 - **Node ids** (`node_id`, else `OPENHUMAN_NODE_ID`, else random per process)
   must be unique among live nodes. A stable one lets a restarted node take
   its own profiles back at once instead of waiting out their leases.
+
+## Lifecycle
+
+Provisioning, opening, credential changes (`profiles.set_credential` /
+`clear_credential`) and deprovisioning of one profile never interleave
+(`lifecycle.rs`):
+
+- **In one process**, each takes the profile's own lock (`ProfileLocks`, one
+  async mutex per profile id, forgotten once nobody holds or waits for it),
+  then the host's gate where it touches open profiles or leases. Different
+  profiles do not wait for each other's lock; lookups of an open profile take
+  neither. A credential change waits for an archive in flight and then finds
+  the profile gone, so a late credential never lands in the keyring slot a
+  re-provisioned profile would inherit.
+- **Deprovisioning** closes the profile in the same step that finds it idle,
+  so no request picks it up in between, and holds its lease from before the
+  credential is cleared until the directory is archived and the record
+  removed. It gives the lease back on every failure.
+- **Provisioning a new profile** lays it out under its lease and refuses
+  while another node holds it.
+- **Opening** reads the registry again once it holds the lease: an open that
+  raced a deprovision on another node answers `NotProvisioned` instead of
+  recreating the archived directory.
 
 Known limits: storage writes carry no epoch fence, so a node that is
 partitioned but still running could write after its lease expired; the TTL
