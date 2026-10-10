@@ -62,21 +62,21 @@ pub(crate) type ToolFactsLookup =
 pub(crate) fn facts_for_tool(tool: &dyn Tool, args: &Value) -> ToolEffectFacts {
     let policy = tool.policy();
     let effects = &policy.side_effects;
-    let classified = policy.classified.then(|| {
-        if effects.read_only {
-            Some(CallEffect::ReadOnly)
-        } else if effects.writes_files
-            || effects.installs_dependencies
-            || effects.destructive
-            || effects.payment
-        {
-            Some(CallEffect::SideEffecting)
-        } else {
-            None
-        }
-    });
+    let classified = if !policy.classified {
+        None
+    } else if effects.read_only {
+        Some(CallEffect::ReadOnly)
+    } else if effects.writes_files
+        || effects.installs_dependencies
+        || effects.destructive
+        || effects.payment
+    {
+        Some(CallEffect::SideEffecting)
+    } else {
+        None
+    };
     ToolEffectFacts {
-        classified: classified.flatten(),
+        classified,
         external: tool.external_effect_with_args(args),
         elevated: tool.permission_level_with_args(args) > PermissionLevel::ReadOnly,
     }

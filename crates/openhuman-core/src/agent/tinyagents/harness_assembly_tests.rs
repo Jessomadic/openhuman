@@ -71,7 +71,7 @@ fn assembled_with(
     let mut tools = crate::agent::goals::goal_tools(workspace.path());
     tools.push(Box::new(PlainTool));
 
-    let assembled = assemble_turn_harness(
+    assemble_turn_harness(
         models,
         "assembly-test-model",
         vec![Arc::new(tools)],
@@ -95,8 +95,7 @@ fn assembled_with(
         has_thread,
         None,
         tool_rules,
-    );
-    assembled
+    )
 }
 
 #[test]
