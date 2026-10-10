@@ -140,9 +140,8 @@ struct OpenHumanTurnToolSurface {
     agent_definition_name: String,
 }
 
-/// Per-session product observations that were formerly scattered across the
-/// legacy `core_turn` loop. Generic history, raw transcript data and prefix
-/// state intentionally do not appear here.
+/// Per-session product observations formerly scattered across the legacy
+/// `core_turn` loop. Generic history, raw transcript and prefix state are not here.
 #[derive(Default)]
 struct OpenHumanTurnPreludeMutable {
     last_memory_context: Option<String>,
@@ -166,10 +165,9 @@ struct OpenHumanTurnPreludeMutable {
     connected_integrations_authoritative: bool,
     /// A cold hydration seeded the announced sets; later ones diff instead.
     integration_announcements_seeded: bool,
-    /// Integration action declarations this thread was already sent,
-    /// restored by the tinyagents session on resume. Rebuilt into deferred
-    /// executors whenever the live integrations list does not supply them
-    /// (see `recorded_tools`).
+    /// Integration action declarations this thread was already sent, restored by
+    /// the tinyagents session on resume. Rebuilt into deferred executors whenever
+    /// the live integrations list does not supply them (see `recorded_tools`).
     recorded_integration_actions: Vec<tinytools::ToolSpec>,
     workflows: Vec<crate::skills::Workflow>,
     composio_events: Option<tinybus::events::EventReceiver<crate::core::events::DomainEvent>>,
