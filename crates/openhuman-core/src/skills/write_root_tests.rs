@@ -143,7 +143,7 @@ async fn two_profiles_default_agents_keep_their_skills_apart_from_each_other_and
 
     let (alice_ws, home_for_create) = (one.path().to_path_buf(), home_path.clone());
     CoreContext::scope(profile_on(one.path(), "alice"), async move {
-        create_workflow_inner(user_workflow("alice-only"), Some(&home_for_create), &alice_ws)
+        create_workflow_inner(Some(&home_for_create), &alice_ws, user_workflow("alice-only"))
             .expect("alice creates a workflow");
     })
     .await;
