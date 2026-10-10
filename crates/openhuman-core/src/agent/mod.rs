@@ -85,6 +85,7 @@ pub mod triage;
 /// background jobs, CLI). Read by the approval gate to make
 /// origin-aware decisions rather than inferring trust from the absence of
 /// `APPROVAL_CHAT_CONTEXT`.
+pub mod turn_deadline;
 pub mod turn_origin;
 /// Turn-workspace task-local — the per-turn filesystem root an embedder binds
 /// a single agent turn to. Read by the session builder (as the turn's default
