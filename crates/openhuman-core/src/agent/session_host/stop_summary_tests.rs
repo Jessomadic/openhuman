@@ -187,7 +187,7 @@ fn a_capped_summary_keeps_the_most_recent_groups() {
         .map(|i| result(&format!("early_tool_{i}"), true, "ok"))
         .collect();
     results.push(result("final_blocker", false, "boom happened"));
-    let out = build_deterministic_final_summary(&results, StopReasonKind::RepeatedFailure);
+    let out = build_deterministic_final_summary(&results, Some(TRANSIENT_HALT));
     assert!(out.contains("final_blocker"), "{out}");
     assert!(!out.contains("early_tool_0`"), "{out}");
     assert!(out.contains("more tool call(s)"), "{out}");
