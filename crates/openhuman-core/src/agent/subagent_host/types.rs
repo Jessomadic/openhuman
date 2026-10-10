@@ -199,9 +199,24 @@ pub struct SubagentUsage {
     pub charged_amount_usd: f64,
     /// How certain `charged_amount_usd` is. `Unknown` means some call had no
     /// charge and no catalogued price, so the sum is incomplete.
-    #[serde(default)]
+    #[serde(
+        default = "unknown_cost_source",
+        skip_serializing_if = "is_unknown_cost_source"
+    )]
     pub cost_source: crate::agent::cost::CostSource,
 }
+
+fn unknown_cost_source() -> crate::agent::cost::CostSource {
+    crate::agent::cost::CostSource::Unknown
+}
+
+fn is_unknown_cost_source(source: &crate::agent::cost::CostSource) -> bool {
+    *source == crate::agent::cost::CostSource::Unknown
+}
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;
 
 impl SubagentUsage {
     /// The run's cost as a tally, for folding into a parent's.
