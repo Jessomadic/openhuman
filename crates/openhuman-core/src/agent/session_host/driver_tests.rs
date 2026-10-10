@@ -131,6 +131,14 @@ fn graph_failure_copies_snapshot_usage_and_failed_tool_outcome_to_sidecar() {
         ),
         (2, 21, 8, 3)
     );
+    // The final call's own size, not the two calls' sum, reaches the gauge.
+    assert_eq!(
+        (
+            observed.last_call_input_tokens,
+            observed.last_call_output_tokens
+        ),
+        (13, 5)
+    );
     assert!((observed.cost_usd - 0.004).abs() < f64::EPSILON);
     let route = observed
         .resolved_route
