@@ -28,6 +28,7 @@ import { SidebarSlotOutlet, SidebarSlotProvider } from '../../components/layout/
 // Type-only: erased at runtime, so it does not defeat `vi.hoisted`.
 import type { FlowApprovalRequest } from '../../hooks/useFlowApprovalRequests';
 import { chatSend } from '../../services/chatService';
+import { addMessageLocal } from '../../store/threadSlice';
 import { callCoreRpc } from '../../services/coreRpcClient';
 import chatRuntimeReducer, {
   type ArtifactSnapshot,
@@ -204,6 +205,8 @@ function threadState(extra: Record<string, unknown> = {}) {
   };
 }
 
+vi.mock('../../store/userScopedStorage', () => ({ userScopedStorage: {getItem: vi.fn().mockResolvedValue(null), setItem: vi.fn().mockResolvedValue(undefined)} }));
+
 const connectedSocket = { byUser: { __pending__: { status: 'connected', socketId: 'socket-1' } } };
 
 /**
@@ -295,6 +298,11 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
 
   it('attaches live task cards to an assistant message instead of the composer', async () => {
     const store = await renderChat();
+    await act(async () => {
+      for (const [id, sender] of [['user-first', 'user'], ['agent-first', 'agent']] as const) {
+        store.dispatch({type: addMessageLocal.fulfilled.type, payload: {threadId: THREAD_ID, message: {id, sender, content: 'Task turn', type: 'text', extraMetadata: {}, createdAt: '2026-01-01T00:00:00Z'}}});
+      }
+    });
     await act(async () =>
       store.dispatch(
         setThreadTodos({
