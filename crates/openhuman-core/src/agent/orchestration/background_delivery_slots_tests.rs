@@ -46,7 +46,7 @@ async fn pair() -> Pair {
     let bob = profile(&unique("u-bob"), ws_b.path());
     let thread = unique("t");
     let session = web_session(&thread);
-    for (ctx, ws, task) in [(&alice, &ws_a, "sub-a"), (&bob, &ws_b, "sub-b")] {
+    for (ctx, ws, task) in [(&alice, &ws_a, "task-alice"), (&bob, &ws_b, "task-bob")] {
         CoreContext::scope(
             Arc::clone(ctx),
             record_completion(
@@ -85,8 +85,8 @@ async fn one_profiles_busy_turn_does_not_block_anothers_thread() {
     let router_b = router_for_workspace(p.ws_b.path());
     let batch = in_scope(&p.bob, || claim_ready(&router_b, &p.thread))
         .expect("bob's thread is idle while alice's turn runs");
-    assert_eq!(batch[0].task_id, "sub-b");
-    router_b.release(&["sub-b".to_string()]);
+    assert_eq!(batch[0].task_id, "task-bob");
+    router_b.release(&["task-bob".to_string()]);
 
     // Bob's Stop clears only Bob's turns; Alice stays busy.
     assert_eq!(in_scope(&p.bob, || clear_busy_for_thread(&p.thread)), 0);
@@ -167,9 +167,9 @@ async fn a_delivery_in_flight_for_one_profile_does_not_take_anothers_slot() {
     let delivered = delivered.lock().unwrap().clone();
     assert_eq!(delivered.len(), 2, "both profiles got their result");
     assert_eq!(delivered[0].0, format!("bob:{}", p.thread));
-    assert!(delivered[0].1.contains("sub-b") && !delivered[0].1.contains("sub-a"));
+    assert!(delivered[0].1.contains("task-bob") && !delivered[0].1.contains("task-alice"));
     assert_eq!(delivered[1].0, format!("alice:{}", p.thread));
-    assert!(delivered[1].1.contains("sub-a") && !delivered[1].1.contains("sub-b"));
+    assert!(delivered[1].1.contains("task-alice") && !delivered[1].1.contains("task-bob"));
     assert!(pending_for(p.ws_a.path(), &p.thread).is_empty());
     assert!(pending_for(p.ws_b.path(), &p.thread).is_empty());
 }
