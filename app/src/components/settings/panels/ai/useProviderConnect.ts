@@ -303,6 +303,10 @@ export function useProviderConnect({
           ],
         };
         await persist(nextDraft);
+        // `persist` updates React state asynchronously. The next queued
+        // provider submission must still build its replacement list from
+        // this successfully published snapshot, even before React rerenders.
+        latestSettings.current = { draft: nextDraft, saved: nextDraft };
         if (revision !== providerConnectRevisions.current.get(slug)) return;
         if (isCodexOAuth && slug === 'openai') {
           await clearCloudProviderKey(slug);

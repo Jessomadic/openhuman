@@ -312,5 +312,15 @@ describe('useProviderConnect', () => {
       'second-key',
     ]);
     expect(persist).toHaveBeenCalledTimes(2);
+    expect(
+      persist.mock.calls[1][0].cloudProviders.map((provider: { slug: string }) => provider.slug)
+    ).toEqual(['openai', 'anthropic']);
+    expect(api.flushCloudProviders).toHaveBeenNthCalledWith(
+      2,
+      expect.arrayContaining([
+        expect.objectContaining({ slug: 'openai' }),
+        expect.objectContaining({ slug: 'anthropic' }),
+      ])
+    );
   });
 });
