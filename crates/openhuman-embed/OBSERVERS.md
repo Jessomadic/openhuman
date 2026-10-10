@@ -51,13 +51,21 @@ API and await its cleanup when completion telemetry is required.
 
 ## Existing Langfuse exporter
 
-The optional `langfuse` feature forwards TinyAgents' existing exporter through
-`observe::langfuse`, including `LangfuseClient`, `LangfuseAuth`,
-`LangfuseTraceConfig`, and its durable `AgentObservation` contract. It adds no
-second HTTP transport. The host supplies export credentials and batches durable
-observations with `LangfuseClient::build_ingestion_batch` /
-`send_observations`; do that work outside synchronous callbacks. This is a
-separate durable-journal contract, not an implicit export of captured turn data.
+The optional `langfuse` feature forwards the existing transport through
+`observe::langfuse`: `LangfuseClient`, `LangfuseAuth`, score types and trace
+configuration. Hosts build their own batches from curated `TurnObservation`
+events and queue `send_batch` outside synchronous callbacks. The adapter adds
+no second HTTP transport. Harness events, journal records, runtime identifiers
+and native inference usage types are not part of this public facade.
+
+The architecture gate inventories two exact SDK forwarding statements in
+`scripts/lib/agent-sdk-contracts.mjs`: this telemetry transport contract and the
+native atomic budget ledger primitives. Reusing the ledger preserves one
+admission owner below physical retries; wrapping it with a second host ledger
+would split reservations. These inventories are permanent public contracts,
+not temporary violation baseline entries. Each matches its full statement and
+owning file; adding a runtime symbol, alias, wildcard or moving the forwarding
+requires explicit review and fails the anti-leak regressions.
 See [CONSUMERS.md](CONSUMERS.md) for the current dependency footprint: gating the
 public exporter does not make enabled Embed an HTTP-free build.
 

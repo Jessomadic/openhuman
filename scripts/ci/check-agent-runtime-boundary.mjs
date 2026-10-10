@@ -4,6 +4,7 @@ import { readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isClaudeCodeBridgeMessage } from "../lib/runtime-boundary-types.mjs";
+import { sanctionedSdkReexportLines } from "../lib/agent-sdk-contracts.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const baselinePath = resolve(
@@ -361,6 +362,14 @@ function isBehaviorFreeForwarder(source) {
 }
 
 function assertSelfTests() {
+  const sdkPath = "crates/openhuman-core/src/agent/tinyagents/budget.rs";
+  const sdkStatement = "pub use tinyinference_llm::model::budget::{Budget, BudgetExceeded, BudgetSnapshot, CallBudget, Spend, SpendLimits};";
+  if (
+    sanctionedSdkReexportLines(sdkPath, sdkStatement).size !== 1 ||
+    sanctionedSdkReexportLines(sdkPath, sdkStatement.replace("SpendLimits", "SpendLimits, BudgetedModel")).size !== 0 ||
+    sanctionedSdkReexportLines(sdkPath, "pub use tinyagents_harness::runtime::AgentHarness;").size !== 0
+  )
+    throw new Error("agent-runtime boundary self-test: host SDK inventory leaked runtime contracts");
   const fixture = [
     "[dependencies.openhuman]",
     'version = "1"',
@@ -468,7 +477,9 @@ for (const path of await filesUnder(
   (path) => path.endsWith(".rs") && /\/src\//.test(path),
 )) {
   const rel = relative(repoRoot, path);
-  for (const { line, text, raw } of codeLines(await readFile(path, "utf8"))) {
+  const source = await readFile(path, "utf8");
+  const sdkContractLines = sanctionedSdkReexportLines(rel, rustCode(source));
+  for (const { line, text, raw } of codeLines(source)) {
     if (!text.trim()) continue;
     const compact = compactRustPath(text);
     if (/\btinyagents_harness::tool_calling\b/.test(compact))
@@ -517,7 +528,7 @@ for (const path of await filesUnder(
     if (
       /\bpub(?:\s*\([^)]*\))?\s+use\s+(?:tinyagents(?:_[a-z_]+)?|tinytools(?:_[a-z_]+)?|tinyinference(?:_[a-z_]+)?)\s*::/i.test(
         text,
-      )
+      ) && !sdkContractLines.has(line)
     )
       add("openhuman-upstream-reexport", path, line, raw);
   }

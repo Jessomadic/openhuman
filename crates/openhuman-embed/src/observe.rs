@@ -109,7 +109,7 @@ where
     });
     result
 }
-/// Existing TinyAgents Langfuse client and durable observation contract.
+/// Existing Langfuse transport, authentication, score and configuration types.
 /// Enable the `langfuse` feature. Export requires explicit host credentials.
 #[cfg(feature = "langfuse")]
 pub mod langfuse {

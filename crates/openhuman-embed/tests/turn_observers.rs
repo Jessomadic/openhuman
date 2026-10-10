@@ -62,28 +62,10 @@ fn terminal_errors_and_inputs_are_private_unless_content_is_requested() {
 #[cfg(feature = "langfuse")]
 #[test]
 fn existing_langfuse_exporter_builds_a_host_owned_batch_without_network() {
-    use openhuman_embed::observe::langfuse::{
-        AgentEvent, AgentObservation, EventId, LangfuseClient, LangfuseTraceConfig, RunId,
-    };
+    use openhuman_embed::observe::langfuse::{LangfuseClient, LangfuseScore};
     let client = LangfuseClient::proxy("http://127.0.0.1:1", "fixture-token").unwrap();
-    let batch = client
-        .build_ingestion_batch(
-            LangfuseTraceConfig::default(),
-            &[AgentObservation {
-                event_id: EventId::new("event"),
-                run_id: RunId::new("run"),
-                root_run_id: RunId::new("run"),
-                parent_run_id: None,
-                offset: 0,
-                ts_ms: 1_704_067_200_000,
-                event: AgentEvent::RunStarted {
-                    run_id: RunId::new("run"),
-                    thread_id: None,
-                },
-            }],
-        )
-        .unwrap();
-    assert_eq!(batch["batch"][0]["type"], "trace-create");
-    assert_eq!(batch["batch"][0]["body"]["id"], "run");
+    let batch = client.build_score_batch(LangfuseScore::numeric("run", "review", 1.0));
+    assert_eq!(batch["batch"][0]["type"], "score-create");
+    assert_eq!(batch["batch"][0]["body"]["traceId"], "run");
     assert!(!batch.to_string().contains("fixture-token"));
 }

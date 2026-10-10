@@ -285,11 +285,7 @@ impl ModelMiddleware<(), OpenHumanRunContext> for ObserverScope {
 /// Existing TinyAgents exporter; this module adds no transport implementation.
 #[cfg(feature = "langfuse")]
 pub mod langfuse {
-    pub use tinyagents_harness::events::AgentEvent;
-    pub use tinyagents_harness::ids::{CallId, EventId, RunId};
-    pub use tinyagents_harness::observability::AgentObservation;
     pub use tinyagents_harness::observability::{
         LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
     };
-    pub use tinyinference_llm::usage::Usage;
 }
