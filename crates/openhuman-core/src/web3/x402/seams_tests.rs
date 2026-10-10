@@ -133,6 +133,7 @@ fn proposed_request(url: &str) -> ProposedRequest {
 
 #[tokio::test]
 async fn x402_guard_authorizes_the_complete_request_and_pins_destination() {
+    let _env_lock = crate::config::TEST_ENV_LOCK.lock().await;
     let guard = HostRequestGuard {
         security: Arc::new(SecurityPolicy::default()),
         allowed_domains: vec![],
@@ -151,6 +152,7 @@ async fn x402_guard_authorizes_the_complete_request_and_pins_destination() {
 
 #[tokio::test]
 async fn x402_guard_rejects_readonly_and_private_destinations() {
+    let _env_lock = crate::config::TEST_ENV_LOCK.lock().await;
     let readonly = HostRequestGuard {
         security: Arc::new(SecurityPolicy {
             autonomy: crate::security::AutonomyLevel::ReadOnly,
@@ -179,6 +181,7 @@ async fn x402_guard_rejects_readonly_and_private_destinations() {
 
 #[tokio::test]
 async fn x402_rejected_destinations_do_not_exhaust_the_action_budget() {
+    let _env_lock = crate::config::TEST_ENV_LOCK.lock().await;
     let guard = HostRequestGuard {
         security: Arc::new(SecurityPolicy {
             max_actions_per_hour: 1,
@@ -207,6 +210,8 @@ async fn x402_rejected_destinations_do_not_exhaust_the_action_budget() {
 async fn x402_tool_runs_the_host_guard_before_network_or_payment() {
     use tinytools::Tool;
 
+    let _env_lock = crate::config::TEST_ENV_LOCK.lock().await;
+
     let security = Arc::new(SecurityPolicy::default());
     let blocked_private = request_tool(security.clone(), vec![])
         .execute(serde_json::json!({"url": "http://127.0.0.1:1/"}))
@@ -225,6 +230,7 @@ async fn x402_tool_runs_the_host_guard_before_network_or_payment() {
 
 #[tokio::test]
 async fn x402_host_guard_normalizes_the_network_allowlist() {
+    let _env_lock = crate::config::TEST_ENV_LOCK.lock().await;
     let security = Arc::new(SecurityPolicy::default());
     let allowed = host_request_guard(security.clone(), vec!["HTTPS://8.8.8.8/path".into()]);
     assert!(allowed
