@@ -10,6 +10,7 @@
 
 use crate::agent::harness::definition::AgentDefinitionRegistry;
 use crate::agent::progress::AgentProgress;
+use crate::agent::orchestration::tools::dispatch::{incomplete_stop, stopped_subagent_result};
 use crate::agent::subagent_host::{
     continue_subagent, continue_subagent_with_parent, load_subagent_checkpoint, SubagentRunOptions,
     SubagentRunStatus,
@@ -598,7 +599,7 @@ impl ContinueSubagentTool {
                                         worktree_path: None,
                                         changed_files: Vec::new(),
                                         dirty_status: None,
-                                        stop: crate::agent::orchestration::tools::dispatch::incomplete_stop(&reason),
+                                        stop: incomplete_stop(&reason),
                                     })
                                     .await;
                             }
@@ -615,7 +616,7 @@ impl ContinueSubagentTool {
                              user, or take a different approach.",
                             outcome.task_id, outcome.agent_id, outcome.output,
                         );
-                        Ok(crate::agent::orchestration::tools::dispatch::stopped_subagent_result(
+                        Ok(stopped_subagent_result(
                             "continue_subagent",
                             &outcome.agent_id,
                             &outcome.task_id,
