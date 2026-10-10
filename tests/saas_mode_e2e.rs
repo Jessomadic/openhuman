@@ -174,34 +174,90 @@ fn rpc_with(
     (status, response.json().unwrap_or(Value::Null))
 }
 
-/// Start a SaaS core on deployment `d` and wait until it is healthy.
-fn start(d: &Deployment) -> (Server, String, reqwest::blocking::Client) {
-    let port = free_port();
-    let child = core_command(d, &["--port", &port.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn openhuman-core");
-    let mut server = Server(child);
-    let base = format!("http://127.0.0.1:{port}");
+/// What answered `/health` on the port a core was told to listen on.
+#[derive(Debug, PartialEq, Eq)]
+enum Serving {
+    /// The core this harness spawned.
+    Ours,
+    /// Another process (pid) holds the port. `--port` is only a preference:
+    /// a core that finds it taken moves to a fallback port
+    /// (`OccupiedByCore::Fallback`), so talking to `base` would drive a
+    /// different deployment's core.
+    Taken(Option<u64>),
+}
+
+/// Wait until `base` answers `/health`, and say whether the answer came from
+/// `server` (by the pid the health snapshot reports).
+fn wait_until_serving(
+    client: &reqwest::blocking::Client,
+    base: &str,
+    server: &mut Server,
+    deadline: Instant,
+) -> Result<Serving, String> {
+    let own = u64::from(server.0.id());
+    loop {
+        if let Ok(response) = client.get(format!("{base}/health")).send() {
+            if response.status().is_success() {
+                let body: Value = response.json().unwrap_or(Value::Null);
+                let pid = body.get("pid").and_then(Value::as_u64);
+                return Ok(if pid == Some(own) {
+                    Serving::Ours
+                } else {
+                    Serving::Taken(pid)
+                });
+            }
+        }
+        if let Ok(Some(status)) = server.0.try_wait() {
+            return Err(format!("SaaS core exited before serving: {status}"));
+        }
+        if Instant::now() >= deadline {
+            return Err("SaaS core never became healthy".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Spawn a core with the command `command(port)` builds and wait until it
+/// serves on that port. [`free_port`] only finds a port that was free a moment
+/// ago: a parallel test's core (or any socket) can take it before this core
+/// binds, and the core then silently listens elsewhere. When another process
+/// answers, this core is killed and started again on a fresh port.
+fn spawn_core(mut command: impl FnMut(u16) -> Command) -> (Server, String) {
+    const ATTEMPTS: usize = 5;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap();
-
-    let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
-        if let Ok(response) = client.get(format!("{base}/health")).send() {
-            if response.status().is_success() {
-                break;
+    for attempt in 1..=ATTEMPTS {
+        let port = free_port();
+        let child = command(port).spawn().expect("spawn openhuman-core");
+        let mut server = Server(child);
+        let base = format!("http://127.0.0.1:{port}");
+        let deadline = Instant::now() + Duration::from_secs(120);
+        match wait_until_serving(&client, &base, &mut server, deadline) {
+            Ok(Serving::Ours) => return (server, base),
+            Ok(Serving::Taken(pid)) => {
+                eprintln!(
+                    "[saas-e2e] port {port} is held by pid {pid:?}, not our core; retrying ({attempt}/{ATTEMPTS})"
+                );
             }
+            Err(error) => panic!("{error}"),
         }
-        if let Ok(Some(status)) = server.0.try_wait() {
-            panic!("SaaS core exited before serving: {status}");
-        }
-        assert!(Instant::now() < deadline, "SaaS core never became healthy");
-        std::thread::sleep(Duration::from_millis(250));
     }
+    panic!("no free port held for a SaaS core after {ATTEMPTS} attempts");
+}
+
+/// Start a SaaS core on deployment `d` and wait until it is healthy.
+fn start(d: &Deployment) -> (Server, String, reqwest::blocking::Client) {
+    let (server, base) = spawn_core(|port| {
+        let mut cmd = core_command(d, &["--port", &port.to_string()]);
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        cmd
+    });
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
     (server, base, client)
 }
 
@@ -637,28 +693,17 @@ fn chat_events_reach_only_the_user_whose_turn_produced_them() {
     let d = deployment(true);
     // Point the backend at a closed port so the turn fails fast — the failure
     // is itself an event on the owner's stream, without any real inference.
-    let port = free_port();
-    let child = core_command(&d, &["--port", &port.to_string()])
-        .env("BACKEND_URL", "http://127.0.0.1:9")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn openhuman-core");
-    let server = Server(child);
-    let base = format!("http://127.0.0.1:{port}");
+    let (server, base) = spawn_core(|port| {
+        let mut cmd = core_command(&d, &["--port", &port.to_string()]);
+        cmd.env("BACKEND_URL", "http://127.0.0.1:9")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        cmd
+    });
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !client
-        .get(format!("{base}/health"))
-        .send()
-        .is_ok_and(|r| r.status().is_success())
-    {
-        assert!(Instant::now() < deadline, "SaaS core never became healthy");
-        std::thread::sleep(Duration::from_millis(250));
-    }
     provision(&client, &base, "alice");
     provision(&client, &base, "bob");
 
@@ -821,29 +866,18 @@ fn a_users_turn_reaches_inference_with_their_own_credential() {
     // what counts.
     let d = deployment(true);
     let (backend, requests) = recording_backend();
-    let port = free_port();
-    let child = core_command(&d, &["--port", &port.to_string()])
-        .env("BACKEND_URL", format!("http://127.0.0.1:{backend}"))
-        .env("RUST_LOG", "debug")
-        .stdout(std::fs::File::create(d.tmp.path().join("core.log")).unwrap())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn openhuman-core");
-    let server = Server(child);
-    let base = format!("http://127.0.0.1:{port}");
+    let (server, base) = spawn_core(|port| {
+        let mut cmd = core_command(&d, &["--port", &port.to_string()]);
+        cmd.env("BACKEND_URL", format!("http://127.0.0.1:{backend}"))
+            .env("RUST_LOG", "debug")
+            .stdout(std::fs::File::create(d.tmp.path().join("core.log")).unwrap())
+            .stderr(Stdio::null());
+        cmd
+    });
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !client
-        .get(format!("{base}/health"))
-        .send()
-        .is_ok_and(|r| r.status().is_success())
-    {
-        assert!(Instant::now() < deadline, "SaaS core never became healthy");
-        std::thread::sleep(Duration::from_millis(250));
-    }
     let alice = provision(&client, &base, "alice");
     let (_, body) = rpc_with(
         &client,
@@ -930,28 +964,17 @@ fn a_duplicate_or_unreadable_user_header_is_refused() {
 /// Start a SaaS core whose backend is a closed port, so every turn fails fast
 /// and its failure is itself the reply, without any real inference.
 fn start_offline(d: &Deployment) -> (Server, String, reqwest::blocking::Client) {
-    let port = free_port();
-    let child = core_command(d, &["--port", &port.to_string()])
-        .env("BACKEND_URL", "http://127.0.0.1:9")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn openhuman-core");
-    let server = Server(child);
-    let base = format!("http://127.0.0.1:{port}");
+    let (server, base) = spawn_core(|port| {
+        let mut cmd = core_command(d, &["--port", &port.to_string()]);
+        cmd.env("BACKEND_URL", "http://127.0.0.1:9")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        cmd
+    });
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !client
-        .get(format!("{base}/health"))
-        .send()
-        .is_ok_and(|r| r.status().is_success())
-    {
-        assert!(Instant::now() < deadline, "SaaS core never became healthy");
-        std::thread::sleep(Duration::from_millis(250));
-    }
     (server, base, client)
 }
 
