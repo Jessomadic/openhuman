@@ -14,8 +14,8 @@ let ladder = CompletionLadder::new(CompletionRung::new(completer.clone(), "opena
     .fallback(CompletionRung::new(completer, "minimax/minimax-m3").unpinned())
     .truncation_retry(TruncationRetry::new(2, 4096));
 let outcome = ladder.complete(
-    CompletionRequest::new("overridden-by-rung", vec![ChatMessage::user("Review the attached image.")
-        .with_image("https://example.org/review.png")])
+    CompletionRequest::new("overridden-by-rung", vec![ChatMessage::user("Describe the attached image.")
+        .with_image("https://example.org/image.png")])
         .max_tokens(1024)
         .provider_options(serde_json::json!({"provider": {"only": ["preferred"]}, "usage": {"include": true}})),
 ).await?;

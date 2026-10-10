@@ -1,8 +1,8 @@
 //! Stateless structured completions on an explicit route.
 //!
-//! [`Completer`] is for hosts that need *one model call*, not an agent: a code
-//! reviewer asking for a JSON verdict, a classifier, an extractor. It needs no
-//! [`Runtime`](crate::Runtime), so it has none of the runtime's constraints —
+//! [`Completer`] is for hosts that need *one model call*, not an agent: a document
+//! classifier or a structured extractor. It needs no [`Runtime`](crate::Runtime),
+//! so it has none of the runtime's constraints —
 //! no process-wide singleton, no 20 MiB worker stacks — and any number of
 //! completers can run concurrently in one process.
 //!
@@ -11,7 +11,7 @@
 //!
 //! - **No prompt guard.** The guard protects an agent that holds tools from a
 //!   user steering it. A completion holds none, and its callers routinely pass
-//!   adversarial text (pull request diffs, issue bodies) as data. A guard would
+//!   adversarial text (documents, messages) as data. A guard would
 //!   reject exactly the inputs they exist to read.
 //! - **No tools, session, memory or orchestrator prompt.** The request that
 //!   reaches the wire is the one the host built.

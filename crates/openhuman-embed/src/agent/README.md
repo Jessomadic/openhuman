@@ -101,7 +101,10 @@ directories; transcripts and memory persist with the workspace.
 ## Tool factories
 
 `AgentSpec::tools` supplies a host's own in-process tools when an agent is
-created. Each tool is a real tool with its own schema on the wire, unlike a
+created. Import `Tool`, `ToolResult` and `ToolPolicy` from `openhuman_embed`;
+`Tool::policy` declares execution requirements using the same vendored contract
+as the core. Application-specific executors belong to the embedding host.
+Each tool is a real tool with its own schema on the wire, unlike a
 tool reached through an MCP server's `mcp_call_tool` envelope. The factory
 runs once per session build, which in practice is once per turn: an `Agent`
 is `Clone` and `Box<dyn Tool>` is not, so a stored belt could not survive the

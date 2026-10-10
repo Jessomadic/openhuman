@@ -21,31 +21,31 @@ async fn run() -> anyhow::Result<()> {
         .build()
         .await?;
     // ANCHOR: two_agents
-    let reviewer_dir = tempfile::tempdir()?;
-    let fixer_dir = tempfile::tempdir()?;
-    let reviewer = runtime.agent(
-        AgentSpec::new("reviewer")
-            .system_prompt("REVIEWER_PROMPT: review code")
-            .action_dir(reviewer_dir.path())
+    let analyst_dir = tempfile::tempdir()?;
+    let writer_dir = tempfile::tempdir()?;
+    let analyst = runtime.agent(
+        AgentSpec::new("analyst")
+            .system_prompt("ANALYST_PROMPT: summarize documents")
+            .action_dir(analyst_dir.path())
             .access(openhuman_embed::Access::readonly()),
     )?;
-    let fixer = runtime.agent(
-        AgentSpec::new("fixer")
-            .system_prompt("FIXER_PROMPT: explain fixes")
-            .action_dir(fixer_dir.path())
+    let writer = runtime.agent(
+        AgentSpec::new("writer")
+            .system_prompt("WRITER_PROMPT: compose explanations")
+            .action_dir(writer_dir.path())
             .access(openhuman_embed::Access::full()),
     )?;
-    assert_ne!(reviewer.action_dir(), fixer.action_dir());
-    assert_ne!(reviewer.home_dir(), fixer.home_dir());
-    assert_ne!(reviewer.workspace_dir(), reviewer.action_dir());
-    assert!(!reviewer.run("Review").await?.reply.is_empty());
-    assert!(!fixer.run("Explain").await?.reply.is_empty());
+    assert_ne!(analyst.action_dir(), writer.action_dir());
+    assert_ne!(analyst.home_dir(), writer.home_dir());
+    assert_ne!(analyst.workspace_dir(), analyst.action_dir());
+    assert!(!analyst.run("Analyze").await?.reply.is_empty());
+    assert!(!writer.run("Explain").await?.reply.is_empty());
     if support::offline() {
         let requests = support::chat_requests(&provider).await;
         assert_eq!(requests.len(), 2);
-        assert!(String::from_utf8_lossy(&requests[0].body).contains("REVIEWER_PROMPT"));
-        assert!(!String::from_utf8_lossy(&requests[0].body).contains("FIXER_PROMPT"));
-        assert!(String::from_utf8_lossy(&requests[1].body).contains("FIXER_PROMPT"));
+        assert!(String::from_utf8_lossy(&requests[0].body).contains("ANALYST_PROMPT"));
+        assert!(!String::from_utf8_lossy(&requests[0].body).contains("WRITER_PROMPT"));
+        assert!(String::from_utf8_lossy(&requests[1].body).contains("WRITER_PROMPT"));
     }
     println!("two distinct prompts and action workspaces verified");
     // ANCHOR_END: two_agents

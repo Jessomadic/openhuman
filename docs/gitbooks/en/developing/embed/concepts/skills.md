@@ -20,16 +20,16 @@ Enable the named Embed `skills` feature for skill setters and registry access. L
 
 ```rust
     let skills = tempfile::tempdir()?;
-    std::fs::create_dir(skills.path().join("review"))?;
-    std::fs::write(skills.path().join("review/SKILL.md"),
-        "---\nname: review\ndescription: Review Rust functions carefully.\n---\nCheck error paths.\n")?;
+    std::fs::create_dir(skills.path().join("summarize"))?;
+    std::fs::write(skills.path().join("summarize/SKILL.md"),
+        "---\nname: summarize\ndescription: Summarize documents clearly.\n---\nInclude the main points.\n")?;
     let agent = runtime.agent(AgentSpec::new("skilled").skills_dir(skills.path()))?;
     let copied = agent
         .workspace_dir()
-        .join("agents/skilled/skills/review/SKILL.md");
+        .join("agents/skilled/skills/summarize/SKILL.md");
     assert_eq!(
         std::fs::read_to_string(&copied)?,
-        std::fs::read_to_string(skills.path().join("review/SKILL.md"))?
+        std::fs::read_to_string(skills.path().join("summarize/SKILL.md"))?
     );
     assert!(!std::fs::symlink_metadata(copied)?.file_type().is_symlink());
     assert!(!agent.run("Hello").await?.reply.is_empty());

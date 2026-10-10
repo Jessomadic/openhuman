@@ -6,7 +6,9 @@ description: "Tool catalogs expose only the allowed execution surface; host tool
 
 An agent's `ToolScopeSpec` chooses built-ins, named tools or `HostOnly`. Host-only mode starts with the host's advertised tools, requires an explicit bare prompt, and does not inherit an orchestrator tool catalog. This is useful when your application already owns read-only data access or tightly scoped actions.
 
-`AgentSpec::tools` is a per-turn factory returning `HostTurnTools`. Factories can attach the turn's context to their executors without sharing mutable tool state across unrelated sessions. Import `Tool` and `ToolResult` from `openhuman_embed` so their types match the vendored implementation used by the core.
+`AgentSpec::tools` is a per-turn factory returning `HostTurnTools`. Factories can attach the turn's context to their executors without sharing mutable tool state across unrelated sessions. Import `Tool`, `ToolResult` and `ToolPolicy` from `openhuman_embed` so their types match the vendored implementation used by the core.
+
+Declare a host executor's requirements with `Tool::policy`, for example `ToolPolicy::read_only()`. The host implements application-specific tools and owns their authorization, data boundaries and output handling; Embed supplies the generic execution contract.
 
 ## Runtime and agent scope
 

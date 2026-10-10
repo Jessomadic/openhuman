@@ -65,6 +65,9 @@ impl openhuman_embed::Tool for Ping {
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({"type":"object","properties":{}})
     }
+    fn policy(&self) -> openhuman_embed::ToolPolicy {
+        openhuman_embed::ToolPolicy::read_only()
+    }
     async fn execute(&self, _: serde_json::Value) -> anyhow::Result<openhuman_embed::ToolResult> {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(openhuman_embed::ToolResult::success("pong"))

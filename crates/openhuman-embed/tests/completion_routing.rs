@@ -41,7 +41,7 @@ async fn truncation_doubles_the_cap_before_ordered_unpinned_fallback() {
     let outcome = CompletionLadder::new(rung(&first,"first"))
         .fallback(rung(&last,"last").unpinned())
         .truncation_retry(TruncationRetry::new(2,4096))
-        .complete(CompletionRequest::new("ignored",vec![ChatMessage::user("review").with_image("https://example.org/image.png")])
+        .complete(CompletionRequest::new("ignored",vec![ChatMessage::user("analysis").with_image("https://example.org/image.png")])
             .max_tokens(1024).provider_options(json!({"provider":{"only":["pinned"]},"reasoning":{"effort":"low"},"usage":{"include":true}})))
         .await.expect("fallback answers");
     assert_eq!(
@@ -80,7 +80,7 @@ async fn transport_failure_advances_but_invalid_routes_do_not() {
         .mount(&failing)
         .await;
     let last = scripted(vec![answer("actual", "stop", 0.02)]).await;
-    let request = CompletionRequest::new("ignored", vec![ChatMessage::user("review")]);
+    let request = CompletionRequest::new("ignored", vec![ChatMessage::user("analysis")]);
     let outcome = CompletionLadder::new(rung(&failing, "first"))
         .fallback(rung(&last, "last"))
         .complete(request.clone())
@@ -134,7 +134,7 @@ async fn retries_stop_at_the_ceiling_and_missing_caps_never_expand() {
     let server = scripted(vec![answer("actual", "length", 0.01)]).await;
     let ladder = CompletionLadder::new(rung(&server, "requested"))
         .truncation_retry(TruncationRetry::new(255, 1500));
-    let request = CompletionRequest::new("ignored", vec![ChatMessage::user("review")]);
+    let request = CompletionRequest::new("ignored", vec![ChatMessage::user("analysis")]);
     let error = ladder
         .complete(request.clone().max_tokens(1024))
         .await
@@ -151,7 +151,7 @@ async fn retries_stop_at_the_ceiling_and_missing_caps_never_expand() {
 #[tokio::test]
 async fn unpinned_rungs_are_terminal_and_success_never_tries_fallback() {
     let server = scripted(vec![answer("actual", "stop", 0.01)]).await;
-    let request = CompletionRequest::new("ignored", vec![ChatMessage::user("review")]);
+    let request = CompletionRequest::new("ignored", vec![ChatMessage::user("analysis")]);
     let error = CompletionLadder::new(rung(&server, "first").unpinned())
         .fallback(rung(&server, "next"))
         .complete(request.clone())
@@ -199,7 +199,7 @@ async fn fallback_uses_its_own_provider_pin_and_retries_from_its_own_cap() {
     )
     .truncation_retry(TruncationRetry::new(1, 128))
     .complete(
-        CompletionRequest::new("ignored", vec![ChatMessage::user("review")])
+        CompletionRequest::new("ignored", vec![ChatMessage::user("analysis")])
             .max_tokens(8)
             .provider_options(json!({"provider":{"only":["request-pin"]}})),
     )
@@ -237,7 +237,7 @@ async fn unpinned_rung_removes_its_own_pin_and_can_explicitly_clear_the_cap() {
     let error = CompletionLadder::new(choice)
         .truncation_retry(TruncationRetry::new(2, 128))
         .complete(
-            CompletionRequest::new("ignored", vec![ChatMessage::user("review")]).max_tokens(8),
+            CompletionRequest::new("ignored", vec![ChatMessage::user("analysis")]).max_tokens(8),
         )
         .await
         .unwrap_err();
@@ -262,7 +262,7 @@ async fn uppercase_max_tokens_retries_the_same_rung_and_counts_buyer_charges() {
         .fallback(rung(&fallback, "fallback"))
         .truncation_retry(TruncationRetry::new(1, 64))
         .complete(
-            CompletionRequest::new("ignored", vec![ChatMessage::user("review")]).max_tokens(16),
+            CompletionRequest::new("ignored", vec![ChatMessage::user("analysis")]).max_tokens(16),
         )
         .await
         .unwrap();
