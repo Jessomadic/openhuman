@@ -8,7 +8,6 @@ import {
 } from '@/components/assistant-ui/attachment';
 import { ComposerTriggerPopover } from '@/components/assistant-ui/composer-trigger-popover';
 import { DirectiveText } from '@/components/assistant-ui/directive-text';
-import { EditMessage } from '@/components/assistant-ui/elements/edit-message';
 import { ErrorState } from '@/components/assistant-ui/elements/error-state';
 import { Image } from '@/components/assistant-ui/elements/image';
 import { MessageTiming } from '@/components/assistant-ui/elements/message-timing.aui';
@@ -57,6 +56,7 @@ import {
 import { LexicalComposerInput } from '@assistant-ui/react-lexical';
 import debugFactory from 'debug';
 import {
+  AlertTriangleIcon,
   ArrowUpIcon,
   CheckIcon,
   ChevronLeftIcon,
@@ -1575,31 +1575,43 @@ const selectDiscardedReplies = (s: AssistantState): number =>
   Math.max(0, s.thread.messages.length - 1 - s.message.index);
 
 const EditComposer: FC = () => {
-  const aui = useAui();
   const { t } = useT();
-  const value = useAuiState(s => s.composer.text);
   const discardedReplies = useAuiState(selectDiscardedReplies);
   return (
     <MessagePrimitive.Root data-slot="aui_edit-composer-wrapper" className="flex flex-col px-2">
-      <EditMessage
-        className="ms-auto"
-        value={value}
-        discardedReplies={discardedReplies}
-        editing
-        onValueChange={text => aui.message.composer().setText(text)}
-        onSave={() => aui.message.composer().send()}
-        onCancel={() => aui.message.composer().cancel()}
-        cancelLabel={t('common.cancel')}
-        sendLabel={t('chat.elicitation.send')}
-        editAriaLabel={t('conversations.assistantUi.edit.ariaLabel')}
-        discardedRepliesText={count =>
-          t(
-            count === 1
-              ? 'conversations.assistantUi.edit.discardedRepliesOne'
-              : 'conversations.assistantUi.edit.discardedRepliesOther'
-          ).replace('{count}', String(count))
-        }
-      />
+      <ComposerPrimitive.Root
+        data-slot="edit-message"
+        className="bg-background border-border/60 ms-auto flex w-full flex-col gap-3 rounded-2xl border p-3.5">
+        <ComposerPrimitive.Input
+          rows={2}
+          autoFocus
+          aria-label={t('conversations.assistantUi.edit.ariaLabel')}
+          className="bg-foreground/[0.04] text-foreground/90 min-h-16 resize-none rounded-xl px-3 py-2.5 text-sm leading-relaxed outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
+        {discardedReplies > 0 && (
+          <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+            <AlertTriangleIcon aria-hidden className="size-3.5 shrink-0" />
+            <span className="font-mono text-[11px] tabular-nums">
+              {t(discardedReplies === 1
+                ? 'conversations.assistantUi.edit.discardedRepliesOne'
+                : 'conversations.assistantUi.edit.discardedRepliesOther'
+              ).replace('{count}', String(discardedReplies))}
+            </span>
+          </div>
+        )}
+        <div className="flex items-center justify-end gap-2">
+          <ComposerPrimitive.Cancel asChild>
+            <Button variant="ghost" size="sm" className="rounded-full">
+              {t('common.cancel')}
+            </Button>
+          </ComposerPrimitive.Cancel>
+          <ComposerPrimitive.Send asChild>
+            <Button size="sm" className="rounded-full">
+              {t('chat.elicitation.send')}
+            </Button>
+          </ComposerPrimitive.Send>
+        </div>
+      </ComposerPrimitive.Root>
     </MessagePrimitive.Root>
   );
 };
