@@ -4,8 +4,7 @@
 //! keyed by an app-scoped master key loaded once by [`init_master_key`].
 //! Headless deployments supply [`MASTER_KEY_ENV`] or [`MASTER_KEY_FILE_ENV`];
 //! otherwise initialization uses the OS keychain and caches the result.
-//! The backend never touches the OS keychain, avoiding repeated prompts
-//! for each individual keychain entry in dev-signed macOS builds.
+//! The backend avoids repeated OS-keychain prompts in dev-signed macOS builds.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
