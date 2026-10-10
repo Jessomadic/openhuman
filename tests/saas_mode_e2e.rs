@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 #[path = "saas_mode/cluster.rs"]
 mod cluster;
@@ -356,13 +356,12 @@ fn a_safe_deployment_serves_core_and_the_operator_plane_behind_the_gateway_beare
         "a user id outside the raw charset maps to its deterministic hash"
     );
     assert!(!body.to_string().contains("alice"), "{body}");
-    assert!(
-        d.root
-            .join("users")
-            .join(&profile_id)
-            .join("workspace")
-            .is_dir()
-    );
+    assert!(d
+        .root
+        .join("users")
+        .join(&profile_id)
+        .join("workspace")
+        .is_dir());
 
     let (_, body) = rpc(&client, &base, Some(BEARER), "openhuman.profiles_list");
     assert!(body.to_string().contains(&profile_id), "{body}");
@@ -439,7 +438,7 @@ fn user_rpc_with(
     method: &str,
     params: Value,
 ) -> (u16, Value) {
-    use openhuman_core::profiles::gateway::{USER_HEADER, USER_SIG_HEADER, sign};
+    use openhuman_core::profiles::gateway::{sign, USER_HEADER, USER_SIG_HEADER};
     let signature = sig
         .map(str::to_owned)
         .unwrap_or_else(|| sign(BEARER, user, now()));
@@ -538,7 +537,7 @@ fn gateway_requests_run_under_the_named_users_profile() {
     assert_eq!(status, 403, "bob is not provisioned: {body}");
     // A repeated signature header is refused, not resolved to the first value.
     {
-        use openhuman_core::profiles::gateway::{USER_HEADER, USER_SIG_HEADER, sign};
+        use openhuman_core::profiles::gateway::{sign, USER_HEADER, USER_SIG_HEADER};
         let response = client
             .post(format!("{base}/rpc"))
             .bearer_auth(BEARER)
@@ -696,7 +695,7 @@ fn each_user_sees_only_their_own_threads() {
 
 /// Open `/events?client_id=` for `user` and forward each SSE `data:` line.
 fn user_events(base: &str, user: &str, client_id: &str) -> std::sync::mpsc::Receiver<String> {
-    use openhuman_core::profiles::gateway::{USER_HEADER, USER_SIG_HEADER, sign};
+    use openhuman_core::profiles::gateway::{sign, USER_HEADER, USER_SIG_HEADER};
     use std::io::BufRead;
     let (tx, rx) = std::sync::mpsc::channel();
     let url = format!("{base}/events?client_id={client_id}");
