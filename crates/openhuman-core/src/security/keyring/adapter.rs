@@ -82,9 +82,16 @@ pub(super) fn recover_corrupt_file(
 ) -> Result<(), KeyringError> {
     let _guard = file_store::lock_for_write(path)?;
     let store = EncryptedFileSecrets::at_path(path, Zeroizing::new(*key));
-    if crate::storage::block_on(async move { store.list("").await }).is_ok() {
-        log::info!("[keyring:encrypted_file] secrets file readable again; not quarantining");
-        return Ok(());
+    match crate::storage::block_on(async move { store.list("").await }) {
+        Ok(_) => {
+            log::info!("[keyring:encrypted_file] secrets file readable again; not quarantining");
+            return Ok(());
+        }
+        // Still corrupt: fall through to quarantine.
+        Err(error) if is_corruption(&error) => {}
+        // Anything else (a transient read or permission error) says nothing
+        // about the file's contents: never move a possibly healthy file aside.
+        Err(error) => return Err(backend_error(error)),
     }
     log::error!(
         "[keyring:encrypted_file] secrets file unreadable ({}): master key may have changed \
