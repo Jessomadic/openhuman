@@ -71,6 +71,10 @@ fn collections() -> Vec<CollectionSpec> {
     ]
 }
 
+fn workspace_key(path: &std::path::Path) -> String {
+    format!("path:{}", hex::encode(path.as_os_str().as_encoded_bytes()))
+}
+
 /// The document store for this call: the host's configured backend or, by
 /// default, the document tables in `notifications.db` (the legacy tables
 /// imported on first open). `None` keeps the legacy tables.
@@ -80,7 +84,7 @@ pub(super) fn current(config: &Config) -> Result<Option<Docs>> {
     // the workspace and moves with it, so it uses a fixed key: a renamed or
     // restored workspace still finds its notifications.
     let workspace = if crate::storage::installed().is_some() {
-        config.workspace_dir.to_string_lossy().into_owned()
+        workspace_key(&config.workspace_dir)
     } else {
         LOCAL_WORKSPACE.to_string()
     };
@@ -95,6 +99,7 @@ pub(super) fn current(config: &Config) -> Result<Option<Docs>> {
             .map(|repo| Docs(repo, workspace)),
     )
 }
+
 
 fn status_of(raw: Option<&str>) -> NotificationStatus {
     match raw {
