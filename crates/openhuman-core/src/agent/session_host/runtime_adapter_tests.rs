@@ -114,6 +114,8 @@ fn codec_attaches_only_this_agents_own_sidecar_usage_to_atomic_append() {
         sidecar.cached_input_tokens = 3;
         sidecar.cost_usd = 0.004;
         sidecar.context_window = 128_000;
+        sidecar.last_call_input_tokens = 9;
+        sidecar.last_call_output_tokens = 2;
         sidecar
             .tool_outcomes
             .push(crate::agent::tinyagents::ToolCallOutcome {
