@@ -14,7 +14,21 @@ describe('turn task attachment', () => {
     ).toBe('waiting');
     expect(taskState(task('turn'))).toBe('working');
     expect(taskState(task('turn'), false)).toBe('waiting');
-    expect(taskState({...task('turn'), goal: {goal_id: 'g', objective: 'Plan', status: 'paused', tokens_used: 0, time_used_seconds: 0}}, true)).toBe('waiting');
+    expect(
+      taskState(
+        {
+          ...task('turn'),
+          goal: {
+            goal_id: 'g',
+            objective: 'Plan',
+            status: 'paused',
+            tokens_used: 0,
+            time_used_seconds: 0,
+          },
+        },
+        true
+      )
+    ).toBe('waiting');
     expect(taskState(task('turn', true))).toBe('done');
   });
   it('keeps completion attached to its original turn as new messages arrive', () => {

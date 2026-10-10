@@ -1,4 +1,3 @@
-import { useAppSelector } from '../../../store/hooks';
 import { useAuiState } from '@assistant-ui/react';
 import { createContext, type PropsWithChildren, useContext, useEffect, useState } from 'react';
 
@@ -11,6 +10,7 @@ import {
 import { useDisclosure } from '../../../components/assistant-ui/lib/useDisclosure';
 import { useT } from '../../../lib/i18n/I18nContext';
 import { useAuiThreadId } from '../../../providers/AssistantUiRuntimeProvider';
+import { useAppSelector } from '../../../store/hooks';
 import { userScopedStorage } from '../../../store/userScopedStorage';
 import { taskFinished, taskState, type TurnTask, updateTaskHistory } from './taskCardHistory';
 import { toAuiTodoItems } from './TodoListPart';
@@ -82,11 +82,15 @@ function TurnTaskCard({ task }: { task: TurnTask }) {
   const threadId = useAuiThreadId();
   const done = taskFinished(task);
   const [open, setOpen] = useDisclosure(`task:${threadId}:${task.anchor}`, !done);
-  const running = useAppSelector(s => Boolean(threadId && (
-    s.thread.activeThreadIds[threadId] || s.chatRuntime.pendingSendThreadIds[threadId] ||
-    s.chatRuntime.inferenceTurnLifecycleByThread[threadId] === 'started' ||
-    s.chatRuntime.inferenceTurnLifecycleByThread[threadId] === 'streaming'
-  )));
+  const running = useAppSelector(s =>
+    Boolean(
+      threadId &&
+      (s.thread.activeThreadIds[threadId] ||
+        s.chatRuntime.pendingSendThreadIds[threadId] ||
+        s.chatRuntime.inferenceTurnLifecycleByThread[threadId] === 'started' ||
+        s.chatRuntime.inferenceTurnLifecycleByThread[threadId] === 'streaming')
+    )
+  );
   const state = taskState(task, running);
   return (
     <TaskCard

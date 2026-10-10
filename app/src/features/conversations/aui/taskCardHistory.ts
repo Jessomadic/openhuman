@@ -14,7 +14,10 @@ export const taskFinished = (task: TurnTask) =>
 export const taskState = (task: TurnTask, running = true): 'done' | 'working' | 'waiting' =>
   taskFinished(task)
     ? 'done'
-    : running && task.goal?.status !== 'paused' && task.goal?.status !== 'budget_limited' && (task.goal?.status === 'active' || task.todos.some(item => item.status === 'in_progress'))
+    : running &&
+        task.goal?.status !== 'paused' &&
+        task.goal?.status !== 'budget_limited' &&
+        (task.goal?.status === 'active' || task.todos.some(item => item.status === 'in_progress'))
       ? 'working'
       : 'waiting';
 

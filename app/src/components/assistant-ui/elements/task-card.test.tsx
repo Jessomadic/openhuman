@@ -15,7 +15,11 @@ describe('task card conversation placement', () => {
         <TaskCardDock />
       </TaskCardDockProvider>
     );
-    expect(container.querySelector('[data-slot=task-card-dock]')).not.toHaveClass('sticky', 'fixed', 'absolute');
+    expect(container.querySelector('[data-slot=task-card-dock]')).not.toHaveClass(
+      'sticky',
+      'fixed',
+      'absolute'
+    );
     expect(container.querySelector('[data-slot=task-card]')?.parentElement).toHaveAttribute(
       'data-slot',
       'task-card-dock'
