@@ -133,6 +133,7 @@ pub(super) async fn finalize_turn_outcome(
         if let Err(err) = sink
             .send(AgentProgress::TurnCompleted {
                 iterations: run.model_calls as u32,
+                stop: None,
             })
             .await
         {
