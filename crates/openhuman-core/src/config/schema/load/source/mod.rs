@@ -147,7 +147,9 @@ pub(crate) fn apply_bootstrap(stored: &str, bootstrap_text: Option<&str>) -> Res
     // A bootstrap file that does not parse is an error, not an empty file:
     // treating it as empty would silently drop the storage table.
     let bootstrap: toml::Table = match bootstrap_text {
-        Some(text) => toml::from_str(text).context("the bootstrap config file is not valid TOML")?,
+        Some(text) => {
+            toml::from_str(text).context("the bootstrap config file is not valid TOML")?
+        }
         None => toml::Table::default(),
     };
     for name in BOOTSTRAP_TABLES {

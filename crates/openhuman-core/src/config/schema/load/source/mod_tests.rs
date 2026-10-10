@@ -140,8 +140,7 @@ async fn a_document_does_not_decrypt_under_another_scope_or_master_key() {
     alice.write("default_model = \"m\"\n").await.unwrap();
 
     // Another master key fails closed.
-    let wrong_key =
-        document_source_keyed(&storage, "alice", &tmp.path().join("a.toml"), keys(2));
+    let wrong_key = document_source_keyed(&storage, "alice", &tmp.path().join("a.toml"), keys(2));
     assert!(wrong_key.read().await.is_err());
 
     // Another scope's data key cannot open alice's ciphertext even when the
@@ -150,7 +149,12 @@ async fn a_document_does_not_decrypt_under_another_scope_or_master_key() {
     let sealed = docs.get("config", "alice").await.unwrap().unwrap().doc;
     let bob_docs = Arc::clone(scoped(&storage, "bob").documents());
     bob_docs
-        .put("config", "bob", sealed, tinystoragedrivers::Precondition::None)
+        .put(
+            "config",
+            "bob",
+            sealed,
+            tinystoragedrivers::Precondition::None,
+        )
         .await
         .unwrap();
     let bob = document_source(&storage, "bob", &tmp.path().join("b.toml"));
@@ -228,7 +232,10 @@ async fn two_scopes_keep_their_config_apart() {
         .await
         .unwrap();
     assert!(alice.exists().await.unwrap());
-    assert!(!bob.exists().await.unwrap(), "bob sees nothing of alice's config");
+    assert!(
+        !bob.exists().await.unwrap(),
+        "bob sees nothing of alice's config"
+    );
 
     bob.write("default_model = \"bob-model\"\n").await.unwrap();
     assert!(alice.read().await.unwrap().contents.contains("alice-model"));
@@ -277,4 +284,59 @@ async fn without_a_shared_backend_config_stays_on_the_file() {
     config.save().await.unwrap();
     assert!(config.config_path.exists());
     assert_eq!(for_config(&config.config_path).unwrap().label(), "file");
+}
+
+#[tokio::test]
+async fn a_document_backed_config_keeps_secrets_readable_on_reload() {
+    let tmp = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let _forced = ForcedDocumentSource::new(
+        scoped(&storage, "tenant-a"),
+        Scope::new("tenant-a").unwrap(),
+        keys(3),
+    );
+    let mut config = config_at(tmp.path(), "m");
+    config.api_key = Some("sk-portable".to_string());
+    config.save().await.unwrap();
+
+    // Sealed as a whole under the scope key, not field-by-field under the
+    // process-local key: the stored text has no per-field ciphertext, and a
+    // reload hands back the usable value.
+    let reloaded = Config::load_from_config_path(&config.config_path, &config.workspace_dir)
+        .await
+        .unwrap();
+    assert_eq!(reloaded.api_key.as_deref(), Some("sk-portable"));
+}
+
+#[test]
+fn forced_sources_nest_and_restore() {
+    let storage = MemoryStorage::new();
+    let outer = ForcedDocumentSource::new(
+        scoped(&storage, "outer"),
+        Scope::new("outer").unwrap(),
+        keys(1),
+    );
+    {
+        let _inner = ForcedDocumentSource::new(
+            scoped(&storage, "inner"),
+            Scope::new("inner").unwrap(),
+            keys(1),
+        );
+        assert_eq!(
+            tests_support::forced_document_scope()
+                .unwrap()
+                .scope
+                .as_str(),
+            "inner"
+        );
+    }
+    assert_eq!(
+        tests_support::forced_document_scope()
+            .unwrap()
+            .scope
+            .as_str(),
+        "outer"
+    );
+    drop(outer);
+    assert!(tests_support::forced_document_scope().is_none());
 }
