@@ -82,6 +82,12 @@ name = "cost_cap_removed"
 path = "../../tests/cost_cap_removed.rs"
 
 [[test]]
+# `cost_report`/`cost_cache_report` over a seeded ledger and a refuse budget:
+# the global CostTracker and OPENHUMAN_WORKSPACE need a process of their own.
+name = "cost_report_e2e"
+path = "../../tests/cost_report_e2e.rs"
+
+[[test]]
 # Installs a backend into the process-wide storage slot, so it needs its own
 # process: in a shared one it would reroute other suites' approvals.
 name = "storage_approvals_e2e"
@@ -103,6 +109,22 @@ path = "../../tests/storage_flows_e2e.rs"
 # sets the keyring master-key environment.
 name = "storage_secrets_e2e"
 path = "../../tests/storage_secrets_e2e.rs"
+
+[[test]]
+# Its own binary: it boots a core and installs a storage backend into the
+# process-wide slot.
+name = "storage_scope_e2e"
+path = "../../tests/storage_scope_e2e.rs"
+
+[[test]]
+# Its own binary: two agents on one backend keep cron jobs and flows apart.
+name = "storage_agent_scopes_e2e"
+path = "../../tests/storage_agent_scopes_e2e.rs"
+
+[[test]]
+# Its own binary: the delegation graph's checkpointer on every driver.
+name = "storage_delegation_e2e"
+path = "../../tests/storage_delegation_e2e.rs"
 
 [[test]]
 name = "embedded_server_shutdown_e2e"
@@ -176,8 +198,16 @@ name = "cli_sigpipe"
 path = "../../tests/cli_sigpipe.rs"
 
 [[test]]
+name = "cli_storage_url_e2e"
+path = "../../tests/cli_storage_url_e2e.rs"
+
+[[test]]
 name = "saas_mode_e2e"
 path = "../../tests/saas_mode_e2e.rs"
+
+[[test]]
+name = "saas_profile_isolation_e2e"
+path = "../../tests/saas_profile_isolation_e2e.rs"
 
 [[test]]
 name = "composio_list_tools_stack_overflow_regression"
@@ -292,6 +322,7 @@ parking_lot = "0.12"
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
 sha2 = "0.10"
 tar = "0.4"
+tinyagents-graph = { path = "../../vendor/tinyagents/crates/tinyagents-graph", features = ["sqlite", "storage-drivers"] }
 tinyagents-harness = { path = "../../vendor/tinyagents/crates/tinyagents-harness", features = ["sqlite", "multimodal"] }
 tinyagents-session = { path = "../../vendor/tinyagents/crates/tinyagents-session" }
 tinybus = { path = "../../vendor/tinybus/crates/tinybus", default-features = false, features = ["macros", "uds"] }

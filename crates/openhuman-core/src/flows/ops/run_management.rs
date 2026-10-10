@@ -270,6 +270,46 @@ pub async fn sweep_expired_parked_runs(config: &Config) -> usize {
 /// resumable — only `pending_approval` is). Best-effort by construction: a store
 /// error is logged and the sweep returns what it managed.
 pub async fn sweep_orphaned_running_runs_on_boot(config: &Config) -> usize {
+    match boot_sweep_plan(crate::storage::installed_is_shared()) {
+        BootSweepPlan::Nothing => {
+            tracing::info!(target: "flows", "[flows] boot sweep: skipped, the storage backend is shared");
+            0
+        }
+        BootSweepPlan::EveryScope => {
+            crate::storage::agents::for_each_scope("flows boot sweep", || {
+                sweep_orphaned_running_runs_in_scope(config)
+            })
+            .await
+            .into_iter()
+            .map(|(_, swept)| swept)
+            .sum()
+        }
+    }
+}
+
+/// Which scopes the boot sweep reconciles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BootSweepPlan {
+    /// `local`, then every agent scope (`crate::storage::agents`).
+    EveryScope,
+    /// No scope.
+    Nothing,
+}
+
+/// The boot sweep's scopes. On a backend other processes share (MongoDB) a
+/// `running` row below the boot floor — `local` or an agent's — can belong to
+/// a run another replica is still driving, and sweeping it would drop that
+/// run's checkpoint, so nothing is swept there, as the agent run reaper does.
+pub(crate) fn boot_sweep_plan(shared: bool) -> BootSweepPlan {
+    if shared {
+        BootSweepPlan::Nothing
+    } else {
+        BootSweepPlan::EveryScope
+    }
+}
+
+/// [`sweep_orphaned_running_runs_on_boot`] for the current storage scope.
+async fn sweep_orphaned_running_runs_in_scope(config: &Config) -> usize {
     let now_str = Utc::now().to_rfc3339();
     const REASON: &str =
         "Run interrupted by an app restart — no live run was executing this row after boot.";
