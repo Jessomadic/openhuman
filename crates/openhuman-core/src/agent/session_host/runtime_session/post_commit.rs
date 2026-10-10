@@ -217,11 +217,14 @@ pub(super) async fn finalize_committed_turn(
             "[session-runtime] post-commit: finalize hooks done"
         );
     }
+    // Never retain the receipt: its run context holds the turn's progress
+    // sender, which would keep the caller's bridge alive after
+    // `set_on_progress(None)`.
+    drop(receipt);
     {
         let mut state = state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.last_commit = Some(receipt);
         state.pending_post_commit = Some(pending);
     }
     crate::agent::hooks::fire_hooks(

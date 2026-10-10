@@ -36,9 +36,12 @@ on `storage-mongodb`.
   that driver is atomic across processes (MongoDB, SQLite), which a
   clustered node's leases need. Memory and file drivers coordinate only
   within one process.
-- `current_scope()` / `current_scoped()`: the acting agent's scope (`local`
-  on a single-user host; an error in SaaS mode with no acting agent) and the
-  installed backend under it.
+- `scope_for_profile(profile_id)`: the scope a SaaS profile's records live
+  under (`profile:<id>`, hashed when that is not a valid scope).
+- `current_scope()` / `current_scoped()`: the tenant's scope — its profile's
+  when it serves one, else the acting agent's, else `local` on a single-user
+  host; an error in SaaS mode without a profile — and the installed backend
+  under it.
 - `block_on(future)`: runs a storage future from synchronous store code on
   one shared runtime thread.
 - `documents::Repo` and `documents::compare_and_swap`: the base the domain
@@ -74,7 +77,7 @@ unique among live processes.
 | Store | Where | Use |
 | --- | --- | --- |
 | `DocumentLeases` | one document per key, scope `cluster`, collection `leases`; every write carries `Precondition::Absent` or `Version` | clustered nodes on a driver with cross-process CAS |
-| `LocalLeases` | an exclusive `fs2` flock on `<root>/<key>/.lease`, record in `.lease.json` beside it; no expiry, the OS drops the lock when the process dies | hosts without a backend |
+| `LocalLeases` | an exclusive `fs2` flock on `<root>/<sha256(key) hex>/.lease`, record in `.lease.json` beside it; no expiry, the OS drops the lock when the process dies | hosts without a backend |
 
 Keys are 1 to 200 bytes of ASCII letters, digits and `- _ . @`, not starting
 with `.`, so they are safe as directory names and document ids. The scope
@@ -91,6 +94,12 @@ reference model.
 
 ## Consumers
 
+- The SaaS profile host (`profiles::lease`, `profiles::registry`): one
+  lease per profile (`DocumentLeases` over the installed backend, else
+  `LocalLeases` under `<root>/users`) and the profile registry, collection
+  `profiles` in the same `cluster` scope. A lease taken over unclean runs
+  the profile's workspace recovery; a lost one fences the profile. See
+  `profiles/README.md`.
 - The session store: `openhuman_rpc::session_store::install_for_host` opens
   the configured backend before boot and installs `DriverSessionStores`
   over it. See that module's README.
@@ -121,7 +130,7 @@ reference model.
 ## Background work and agent scopes
 
 Work done inside an agent's turn runs under that agent's `CoreContext`
-(`session_agent`, set for embed agents and SaaS user agents), so with a
+(`session_agent`, set for embed agents and SaaS profiles), so with a
 backend installed its records land in that agent's scope. Background work
 runs under the process default context and on its own would only see
 `local`. `storage::agents` closes the gap:
@@ -151,7 +160,7 @@ before. The cron scheduler visits live agents only
 (`cron::scheduler::tick_live_agents`): an agent's jobs need its live
 context (host tools, prompt) to run, so a recorded agent's jobs wait until
 it is live again; with a backend it no longer needs the agent's `jobs.db`. In SaaS mode agent ids are not recorded and `local` is skipped;
-per-user background work there is `user_agents::background`.
+per-user background work there is `profiles::background`.
 
 ## Boundaries
 

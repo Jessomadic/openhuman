@@ -40,8 +40,8 @@ pub mod core {
             contains_transient_transport_phrase, expected_error_kind, is_api_key_rejected_message,
             is_session_expired_message, is_suppressed_usage_probe_backoff,
             is_transient_http_status_code, is_transient_message_failure, report_error_or_expected,
-            report_warning_message, API_KEY_REJECTED_PREFIX, BACKEND_UNAVAILABLE_PREFIX,
-            REPORT_ERROR_TRACING_TARGET,
+            report_warning_message, ExpectedErrorKind, API_KEY_REJECTED_PREFIX,
+            BACKEND_UNAVAILABLE_PREFIX, REPORT_ERROR_TRACING_TARGET,
         };
     }
 
@@ -80,7 +80,7 @@ pub mod core {
     }
     pub mod runtime {
         pub use openhuman_core::core::runtime::{
-            is_saas, CoreContext, CoreRuntime, Mode, SaasConfig,
+            current_tenant, is_saas, CoreContext, CoreRuntime, Mode, SaasConfig,
         };
         pub mod saas {
             pub use openhuman_core::core::runtime::saas::build;
@@ -287,11 +287,15 @@ pub mod storage {
     };
 }
 
-pub mod user_agents {
+pub mod profiles {
     pub mod gateway {
-        pub use openhuman_core::user_agents::gateway::{
-            resolve_scope, sign, verify, GatewayRefusal, GatewayScope, USER_HEADER, USER_SIG_HEADER,
+        pub use openhuman_core::profiles::gateway::{
+            resolve_scope, sign, verify, GatewayRefusal, GatewayScope, HeldBy, PROFILE_HELD,
+            PROFILE_OWNER_HEADER, USER_HEADER, USER_SIG_HEADER,
         };
+    }
+    pub mod host {
+        pub use openhuman_core::profiles::host::host;
     }
 }
 
