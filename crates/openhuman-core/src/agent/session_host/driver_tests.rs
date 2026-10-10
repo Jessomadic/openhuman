@@ -233,6 +233,10 @@ fn final_call_tokens_prefer_the_newest_call_that_reached_the_provider() {
         (95_000, 300)
     );
     assert_eq!(
+        final_call_tokens(loop_last, Some(&call(0, 300)), None),
+        (0, 300)
+    );
+    assert_eq!(
         final_call_tokens(
             loop_last,
             Some(&call(95_000, 300)),
