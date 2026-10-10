@@ -4,7 +4,6 @@
 //! awaiting input) records the same way, in the same workspace router, for the
 //! same parent thread. The queue itself is [`super::background_completions`].
 
-#[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;

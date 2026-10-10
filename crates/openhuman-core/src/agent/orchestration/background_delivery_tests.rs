@@ -688,7 +688,6 @@ async fn recover_on_open_rescans_a_workspace_already_recovered() {
     let w = ws.path();
     record(w, "bd-open", "sub-1", "left pending", "thread-open-resc").await;
     forget_workspace_for_test(w);
-    scheduled_for_test().lock().expect("scheduled").clear();
 
     assert_eq!(recover_on_boot(w), 1);
     assert_eq!(recover_on_boot(w), 0, "boot recovery claims once");
