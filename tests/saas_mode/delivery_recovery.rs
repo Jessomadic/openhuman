@@ -51,14 +51,17 @@ fn rpc_ok(node: &Node, user: &str, method: &str, params: Value) -> Value {
     body
 }
 
+/// `user`'s messages on [`THREAD`], as JSON text.
 fn messages(node: &Node, user: &str) -> String {
-    rpc_ok(
+    let body = rpc_ok(
         node,
         user,
         "openhuman.threads_messages_list",
         json!({ "thread_id": THREAD }),
-    )
-    .to_string()
+    );
+    find_key(&body, "messages")
+        .unwrap_or_else(|| panic!("{user} lists no messages: {body}"))
+        .to_string()
 }
 
 /// `user`'s thread [`THREAD`] with one message of their own.
