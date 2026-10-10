@@ -5,6 +5,7 @@
 
 use openhuman_core::web3::x402;
 use serde_json::json;
+use std::sync::Arc;
 use tinytools::Tool;
 
 #[tokio::test]
@@ -15,7 +16,10 @@ async fn x402_pay_twit_sh_for_hal_finney_tweet() {
     let tmp = tempfile::tempdir().unwrap();
     x402::init_ledger(tmp.path(), "test-session");
 
-    let tool = x402::request_tool();
+    let tool = x402::request_tool(
+        Arc::new(openhuman_core::security::SecurityPolicy::default()),
+        vec!["twit.sh".into()],
+    );
     let result = tool
         .execute(json!({
             "url": "https://x402.twit.sh/tweets/by/id?id=1110302988",

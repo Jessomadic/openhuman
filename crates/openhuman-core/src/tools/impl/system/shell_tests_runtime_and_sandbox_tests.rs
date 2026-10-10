@@ -230,6 +230,20 @@ fn shell_family_tools_route_to_sandbox_when_sandboxed_mode_active() {
     const SHELL_SRC: &str = include_str!("shell.rs");
     const NODE_EXEC_SRC: &str = include_str!("node_exec.rs");
     const NPM_EXEC_SRC: &str = include_str!("npm_exec.rs");
+    const SANDBOX_OPS_SRC: &str = include_str!("../../../sandbox/ops.rs");
+
+    // The sandbox-mode decision is shared by the shell-family tools so the
+    // SaaS and explicit backend rules stay consistent. Keep the mode guard
+    // checked in its owning helper rather than requiring every tool to repeat
+    // the same `current_sandbox_mode()` match inline.
+    assert!(
+        SANDBOX_OPS_SRC.contains("current_sandbox_mode()"),
+        "command_requires_sandbox must read the active sandbox mode"
+    );
+    assert!(
+        SANDBOX_OPS_SRC.contains("SandboxMode::Sandboxed"),
+        "command_requires_sandbox must sandbox SandboxMode::Sandboxed sessions"
+    );
 
     for (name, src) in [
         ("shell.rs", SHELL_SRC),
@@ -237,14 +251,8 @@ fn shell_family_tools_route_to_sandbox_when_sandboxed_mode_active() {
         ("npm_exec.rs", NPM_EXEC_SRC),
     ] {
         assert!(
-            src.contains("current_sandbox_mode()"),
-            "{name} must check `current_sandbox_mode()` to detect SandboxMode::Sandboxed \
-             sessions and route through the sandbox backend (see #3235)"
-        );
-        assert!(
-            src.contains("SandboxMode::Sandboxed"),
-            "{name} must compare against `SandboxMode::Sandboxed` to opt in to the \
-             sandbox routing path (see #3235)"
+            src.contains("command_requires_sandbox().await"),
+            "{name} must consult the shared sandbox-mode decision before execution"
         );
         // Use the call-site pattern `.run_sandboxed(` so the assertion
         // doesn't trivially pass on the helper definition itself
