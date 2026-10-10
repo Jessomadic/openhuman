@@ -1,5 +1,6 @@
 import { AssistantRuntimeProvider, useAuiState, useExternalStoreRuntime, ThreadPrimitive } from '@assistant-ui/react';
 import { render, screen } from '@testing-library/react';
+import { useMemo } from 'react';
 import { describe, expect, it } from 'vitest';
 import type { ThreadMessage } from '../../types/thread';
 import { buildRuntimeMessages } from '../assistantUiMessages';
@@ -8,15 +9,16 @@ const convertMessage = (message: ReturnType<typeof buildRuntimeMessages>[number]
 const onNew = async () => {};
 const row = (id: string, sender: 'user' | 'agent', content: string, requestId?: string): ThreadMessage => ({id, sender, content, type: 'text', createdAt: '2026-10-10T00:00:00Z', extraMetadata: requestId ? {requestId} : {}});
 function Message() {
-  const state = useAuiState(s => ({id: s.message.id, branches: s.message.branchCount}));
-  return <span data-testid={state.id}>{state.branches}</span>;
+  const id = useAuiState(s => s.message.id);
+  const branches = useAuiState(s => s.message.branchCount);
+  return <span data-testid={id}>{branches}</span>;
 }
 function State() {
   const ids = useAuiState(s => s.thread.messages.map(message => message.id).join(','));
   return <><output data-testid="order">{ids}</output><ThreadPrimitive.Messages>{() => <Message />}</ThreadPrimitive.Messages></>;
 }
 function Harness({history, requestId}: {history: ThreadMessage[]; requestId?: string}) {
-  const messages = buildRuntimeMessages(history, requestId ? {requestId, content: 'Streaming reply', thinking: ''} : null, {isRunning: Boolean(requestId), liveRequestId: requestId});
+  const messages = useMemo(() => buildRuntimeMessages(history, requestId ? {requestId, content: 'Streaming reply', thinking: ''} : null, {isRunning: Boolean(requestId), liveRequestId: requestId}), [history, requestId]);
   const runtime = useExternalStoreRuntime({messages, convertMessage, onNew, isRunning: Boolean(requestId)});
   return <AssistantRuntimeProvider runtime={runtime}><State /></AssistantRuntimeProvider>;
 }
