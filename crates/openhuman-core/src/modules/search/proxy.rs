@@ -160,18 +160,14 @@ pub async fn execute_tool(
     let current = current_config(config).await?;
     let tool = request.name.clone();
     with_module_lock(|| async {
-        proxy(&current)
-            .await?
-            // Keys travel only in the private module configuration; a call
-            // carries the model's arguments, which are not secrets. An
-            // ordinary call also works with a developer override, which is
-            // never attested.
-            .pipe_execute(request)
-            .await
-            .map_err(|error| {
-                tracing::debug!(tool = %tool, "[modules][search] ExecuteTool failed");
-                format!("search ExecuteTool failed: {error}")
-            })
+        let proxy = proxy(&current).await?;
+        // Keys travel only in the private module configuration; a call
+        // carries the model's arguments, which are not secrets. An ordinary
+        // call also works with a developer override, which is never attested.
+        call_execute_tool(proxy, request).await.map_err(|error| {
+            tracing::debug!(tool = %tool, "[modules][search] ExecuteTool failed");
+            format!("search ExecuteTool failed: {error}")
+        })
     })
     .await
 }
