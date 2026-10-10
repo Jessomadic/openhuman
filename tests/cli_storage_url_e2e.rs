@@ -17,6 +17,12 @@ fn core(workspace: &std::path::Path, url: Option<&str>, args: &[&str]) -> std::p
         .env("HOME", workspace)
         .env("USERPROFILE", workspace)
         .env("OPENHUMAN_WORKSPACE", workspace)
+        // A shared backend keeps the config document encrypted under the
+        // keyring master key and fails closed without one. CI has no OS
+        // keychain, so every process gets the same fixed key, the way a
+        // headless deployment would.
+        .env("OPENHUMAN_KEYRING_MASTER_KEY", "22".repeat(32))
+        .env_remove("OPENHUMAN_KEYRING_MASTER_KEY_FILE")
         .env_remove("OPENHUMAN_STORAGE_URL");
     if let Some(url) = url {
         cmd.env("OPENHUMAN_STORAGE_URL", url);
