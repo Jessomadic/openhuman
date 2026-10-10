@@ -251,3 +251,27 @@ fn a_legacy_dev_keychain_is_imported_once() {
     assert!(dir.path().join("dev-keychain.json.migrated").exists());
     assert!(dir.path().join("secrets.enc").exists());
 }
+
+#[test]
+fn recovery_never_quarantines_a_file_that_is_not_confirmed_corrupt() {
+    // The re-probe fails with an I/O error (the path is a directory), not a
+    // crypto/serialization one: nothing says the contents are bad, so nothing
+    // is moved and the error is surfaced.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("secrets.enc");
+    std::fs::create_dir(&path).unwrap();
+    let cause = tinystoragedrivers::StorageError::crypto("earlier failure");
+    let error = recover_corrupt_file(&path, &KEY, &cause).unwrap_err();
+    assert!(matches!(error, KeyringError::Backend(_)), "{error:?}");
+    assert!(path.is_dir(), "left in place");
+}
+
+#[test]
+fn recovery_leaves_a_file_that_became_readable() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = EncryptedFileBackend::new(dir.path());
+    b.set_with_key(&KEY, "u:a", "1").unwrap();
+    let cause = tinystoragedrivers::StorageError::crypto("stale failure");
+    recover_corrupt_file(&dir.path().join("secrets.enc"), &KEY, &cause).unwrap();
+    assert_eq!(b.get_with_key(&KEY, "u:a").unwrap().as_deref(), Some("1"));
+}
