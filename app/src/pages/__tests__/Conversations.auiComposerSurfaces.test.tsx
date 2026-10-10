@@ -293,7 +293,7 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     vi.mocked(chatSend).mockResolvedValue(undefined);
   });
 
-  it('places live plan cards in an overlay above the composer rather than normal chat flow', async () => {
+  it('attaches live task cards to an assistant message instead of the composer', async () => {
     const store = await renderChat();
     await act(async () =>
       store.dispatch(
@@ -308,8 +308,9 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     );
     const plan = await screen.findByTestId('todo-checklist');
     const overlay = plan.closest('[data-slot="composer-overlays"]');
-    expect(overlay).toHaveClass('absolute', 'bottom-full');
-    expect(overlay?.closest('form')).toHaveClass('relative');
+    expect(overlay).toBeNull();
+    expect(plan.closest('[data-slot="aui_assistant-message-root"]')).not.toBeNull();
+    expect(plan).toHaveAttribute('data-slot', 'task-card');
   });
 
   it('shows the send error when a send is rejected', async () => {
