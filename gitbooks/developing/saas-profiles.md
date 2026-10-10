@@ -58,7 +58,7 @@ idle_evict_secs = 1800               # close a profile idle this long
 profile_ids = "raw"                  # or "hashed"
 require_user_signature = true        # X-OpenHuman-User-Sig on every user request
 tool_allowlist = []                  # "host_files", "host_shell"
-shared_backend_api_key = false       # let every user ride OPENHUMAN_BACKEND_API_KEY
+shared_backend_api_key = true        # let every user ride OPENHUMAN_BACKEND_API_KEY
 custom_definitions = false
 
 # Cluster settings (see below)
