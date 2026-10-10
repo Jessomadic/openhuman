@@ -91,6 +91,8 @@ fn graph_failure_copies_snapshot_usage_and_failed_tool_outcome_to_sidecar() {
             input_tokens: 21,
             output_tokens: 8,
             cached_input_tokens: 3,
+            last_call_input_tokens: 13,
+            last_call_output_tokens: 5,
             charged_amount_usd: 0.004,
             resolved_route: Some(tinyinference_llm::model::ResolvedModelRoute::new(
                 "openhuman",
