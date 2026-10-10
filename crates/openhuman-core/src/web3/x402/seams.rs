@@ -94,11 +94,10 @@ impl RequestGuard for HostRequestGuard {
                 "Action blocked: rate limit exceeded".into(),
             ));
         }
-        self.security.disclose(
-            &target.host,
-            request.body.is_some(),
-            !request.headers.is_empty(),
-        );
+        // A 402 retry adds PAYMENT-SIGNATURE even when the original request
+        // has no headers. Disclose that potential metadata before either send.
+        self.security
+            .disclose(&target.host, request.body.is_some(), true);
         let mut approved_request = request.clone();
         approved_request.url = target.url;
         Ok(AuthorizedRequest {
