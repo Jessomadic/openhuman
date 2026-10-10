@@ -441,13 +441,12 @@ impl EventListener for OpenhumanEventBridge {
                 input,
                 ..
             } => {
-                // Unknown/invisible tool calls no longer produce a sentinel-named
-                // Started event: the migration replaced `UNKNOWN_TOOL_SENTINEL` +
-                // `UnknownToolRewriteMiddleware` with the crate
-                // `UnknownToolPolicy::ReturnToolError` path (01.2), which recovers
-                // the call and emits `AgentEvent::UnknownToolCall` (handled above)
-                // instead of a rewritten ToolStarted. So this arm fires only for
-                // real, model-visible tools and needs no sentinel guard.
+                // Unknown tool calls reach this arm too: the crate's
+                // `UnknownToolPolicy::ReturnToolError` path emits
+                // `AgentEvent::UnknownToolCall` (handled above) and then answers
+                // the call through `recover_tool_call`, which emits this
+                // `ToolStarted` under the same call id and the requested name.
+                // The call id recorded above gives it the "unavailable" label.
                 let iteration = self.iteration();
                 // Stamp the start instant so the completion event carries a real
                 // elapsed_ms (the crate's ToolCompleted has no timing payload).
