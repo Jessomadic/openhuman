@@ -6,7 +6,8 @@ pub(super) fn handle_web_event(
     state: &mut TranscriptState,
     ui: &mut UiState,
 ) {
-    if ev.client_id != state.client_id() || ev.thread_id != ui.thread_id {
+    if ui.thread_id.is_empty() || ev.client_id != state.client_id() || ev.thread_id != ui.thread_id
+    {
         return;
     }
     if matches!(ev.event.as_str(), "chat_done" | "chat_error") {

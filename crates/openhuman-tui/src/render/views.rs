@@ -130,7 +130,31 @@ pub(super) fn settings(frame: &mut Frame, area: Rect, ui: &mut UiState, p: Palet
             ),
         );
     }
-    if ui.login_token.is_some() || ui.logout_confirm {
+    if ui.login_url.is_some() && area.height > 12 {
+        for (index, (label, command)) in [
+            ("Open browser", "login-open"),
+            ("Copy link", "login-copy"),
+            ("Cancel", "login-cancel"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let width = area.width.saturating_sub(4) / 3;
+            button(
+                frame,
+                Rect::new(
+                    area.x + 2 + index as u16 * width,
+                    area.bottom().saturating_sub(2),
+                    width,
+                    1,
+                ),
+                label,
+                Action::Command(command),
+                ui,
+                p,
+            );
+        }
+    } else if ui.login_token.is_some() || ui.logout_confirm {
         button(
             frame,
             Rect::new(area.x + 2, area.bottom().saturating_sub(2), 12, 1),

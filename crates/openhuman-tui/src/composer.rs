@@ -6,7 +6,9 @@ use unicode_width::UnicodeWidthChar;
 /// OpenHuman-native: commands either map to a stable core RPC or a local view.
 pub const COMMANDS: &[(&str, &str)] = &[
     ("help", "show commands and keyboard shortcuts"),
-    ("login", "sign in with a one-time token"),
+    ("login", "sign in to TinyHumans with your browser"),
+    ("login-token", "paste a one-time token as a fallback"),
+    ("login-cancel", "cancel a pending browser sign-in"),
     ("sessions", "browse saved conversations"),
     ("subagents", "inspect child agent activity"),
     ("tools", "inspect tool calls and output"),

@@ -196,6 +196,13 @@ pub(super) async fn handle_overlay_key(
                 .cloned()
                 .cloned();
             match kind {
+                OverlayKind::Login => {
+                    if let Some(row) = selected {
+                        if let Some(provider) = crate::account::provider(&row.id) {
+                            crate::account::browser(runtime, ui, provider);
+                        }
+                    }
+                }
                 OverlayKind::Threads => {
                     if let Some(row) = selected {
                         switch_thread(runtime, state, ui, row.id).await;

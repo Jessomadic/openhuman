@@ -24,6 +24,7 @@ pub enum OverlayKind {
     HistorySearch,
     Files,
     Themes,
+    Login,
     Tools,
     Subagents,
     ToolDetail,

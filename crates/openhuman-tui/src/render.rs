@@ -24,6 +24,8 @@ pub fn draw(frame: &mut Frame, state: &TranscriptState, ui: &mut UiState) {
         area,
     );
     if area.width < 24 || area.height < 8 {
+        ui.transcript_area = Rect::default();
+        ui.composer_area = Rect::default();
         text(
             frame,
             area,
@@ -143,8 +145,8 @@ fn chat(frame: &mut Frame, area: Rect, state: &TranscriptState, ui: &mut UiState
         .display(area.width.saturating_sub(3).max(1) as usize);
     let count = ui.composer.command_matches().len().min(4);
     let height = ((rows.len().min(5) + 3 + count) as u16)
-        .min(area.height.saturating_sub(3))
-        .max(3);
+        .min(area.height.saturating_sub(1))
+        .max(4);
     let transcript_height = area.height.saturating_sub(height + 1);
     ui.transcript_area = Rect::new(area.x + 1, area.y, area.width - 2, transcript_height);
     let (visible, max_scroll) = ui.viewport.rows(
@@ -153,8 +155,8 @@ fn chat(frame: &mut Frame, area: Rect, state: &TranscriptState, ui: &mut UiState
         transcript_height,
         ui.scroll_from_bottom,
     );
-    ui.scroll_from_bottom = ui.scroll_from_bottom.min(max_scroll);
-    if visible.is_empty() {
+    ui.scroll_from_bottom = ui.viewport.resolved_offset().min(max_scroll);
+    if visible.is_empty() && transcript_height >= 5 {
         text(
             frame,
             Rect::new(area.x + 3, area.y + 2, area.width.saturating_sub(6), 1),
@@ -247,7 +249,12 @@ fn chat(frame: &mut Frame, area: Rect, state: &TranscriptState, ui: &mut UiState
     }
     composer(
         frame,
-        Rect::new(area.x, y + 1, area.width, height),
+        Rect::new(
+            area.x,
+            area.bottom().saturating_sub(height),
+            area.width,
+            height,
+        ),
         state,
         ui,
         p,
@@ -320,8 +327,16 @@ fn composer(frame: &mut Frame, area: Rect, state: &TranscriptState, ui: &mut UiS
     }
     let y = inner.bottom().saturating_sub(1);
     let agent = format!("{} ▾", ui.agent_name);
+    let reserved = if inner.width >= 64 {
+        30
+    } else if state.is_streaming() {
+        19
+    } else {
+        10
+    };
+    let selectors_width = inner.width.saturating_sub(reserved);
     let aw = (UnicodeWidthStr::width(agent.as_str()) as u16)
-        .min(inner.width / 3)
+        .min(selectors_width / 2)
         .max(1);
     button(
         frame,
@@ -333,7 +348,12 @@ fn composer(frame: &mut Frame, area: Rect, state: &TranscriptState, ui: &mut UiS
     );
     button(
         frame,
-        Rect::new(inner.x + aw + 1, y, (inner.width / 3).min(28), 1),
+        Rect::new(
+            inner.x + aw + 1,
+            y,
+            selectors_width.saturating_sub(aw + 1).min(28),
+            1,
+        ),
         &format!(
             "{} ▾",
             ui.model_override.as_deref().unwrap_or(&ui.effective_model)

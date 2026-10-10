@@ -63,12 +63,24 @@ default background. Dark, Light, and Monochrome are selectable with `/themes`;
 
 ## Login, agents, and activity
 
-`/login` opens masked one-time-token entry in Settings. Credential exchange and
-validation remain in `openhuman_tinyhumans::SessionManager`; the frontend only
-hands it the token. Sign-in runs in the background with a deadline, and secret
-buffers are zeroized. Account changes clear the prior account's draft/cache and
-start a new account-owned conversation. Product login is distinct from an
-inference provider's key configuration.
+`/login` opens a provider picker (Google, GitHub, Twitter, Discord);
+`/login google` starts that provider directly. Like Medulla, this opens the
+TinyHumans browser flow with a nonce-protected, ephemeral loopback callback.
+Credential exchange, profile validation, encrypted persistence, and account
+adoption remain in `openhuman_tinyhumans::SessionManager`. The TUI never renders
+tokens. Login and saved-account validation run in the background; the callback
+expires after five minutes. Settings has mouse controls to reopen the browser,
+copy its link via OSC52 (terminal support required), or cancel. Esc also cancels.
+Already accepted callbacks finish their atomic session update.
+
+Over SSH, forward the callback port shown in Settings before opening the copied
+link locally: `ssh -L <port>:127.0.0.1:<port> <host>`. `/login-token` retains
+masked one-time-token entry as a fallback. New sessions record the issuing
+backend origin; changing backends cannot send that JWT to a different origin.
+Restore the original backend or sign in again. Legacy sessions without origin
+metadata remain compatible. Expired sessions clear the account display; account
+changes discard prior-account drafts and create an account-owned conversation.
+Product login is distinct from an inference provider's key configuration.
 
 `/agents` loads runnable profiles and writes `config.update_agent_settings`'s
 `chat_agent_id` after selection. This is the core's configured chat agent for
@@ -99,8 +111,9 @@ off; stored tiers have no enforcement effect until that policy is enabled.
 
 ## Rendering and input
 
-The loop redraws only dirty state or active animation. Streaming paints are
-coalesced. Settled blocks are wrapped once per content revision and width;
+The loop redraws only dirty state or active animation. Live paints are
+coalesced at 16 ms. The bottom-anchored composer reflows on resize while the
+transcript retains its scroll anchor. Settled blocks are wrapped once per content revision and width;
 wide row offsets avoid 16-bit history overflow. Only viewport rows are copied
 into the frame, and formatted blocks far from the viewport are evicted while
 their height metadata and underlying transcript remain available.
@@ -111,6 +124,12 @@ activate controls. Tool/text content is sanitized before terminal rendering.
 Large tool previews are bounded; display truncation never deletes core history.
 Absolute performance budgets in the design spec are targets, not benchmark
 claims about every terminal or platform.
+
+`./target/debug/openhuman-tui --bench` measures the viewport and production
+renderer offline. `python3 scripts/debug/tui-profile.py --mode live` measures
+real terminal input-to-paint, idle CPU/output, and RSS in an isolated workspace
+without signing in or sending a model prompt. See
+[measured results and limits](../../docs/performance/tui-viewport.md).
 
 ## Source map
 

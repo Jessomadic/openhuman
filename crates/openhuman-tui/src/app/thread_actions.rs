@@ -10,6 +10,10 @@ pub(super) fn send_message(
     ui: &mut UiState,
     queue_mode: &str,
 ) {
+    if ui.thread_id.is_empty() {
+        state.push_system("Create or select a conversation first; your draft is preserved.");
+        return;
+    }
     if ui.auth_pending {
         state.push_system("Authentication is still in progress; your draft is preserved.");
         return;

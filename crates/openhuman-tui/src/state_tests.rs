@@ -1,5 +1,28 @@
 use super::*;
 
+#[test]
+fn viewport_journal_is_bounded_and_identifies_non_tail_changes_and_resets() {
+    let mut state = TranscriptState::new("client");
+    state.push_system("first");
+    state.push_system("second");
+    let snapshot = state.viewport_revision();
+    assert_eq!(state.viewport_changes_since(snapshot), Some(vec![]));
+    state.toggle_entry(0);
+    state.push_system("third");
+    assert_eq!(state.viewport_changes_since(snapshot), Some(vec![0, 2]));
+    for _ in 0..140 {
+        state.push_system("more");
+    }
+    assert_eq!(state.viewport_changes.len(), 128);
+    assert_eq!(state.viewport_changes_since(snapshot), None);
+    let snapshot = state.viewport_revision();
+    state.load_transcript(&serde_json::json!({"items":[]}));
+    assert_eq!(state.viewport_changes_since(snapshot), None);
+    let snapshot = state.viewport_revision();
+    state.clear();
+    assert_eq!(state.viewport_changes_since(snapshot), None);
+}
+
 const CLIENT: &str = "tui-abc123";
 
 fn ev(event: &str) -> WebChannelEvent {

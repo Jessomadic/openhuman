@@ -12,7 +12,7 @@
 
 use super::activity::{Activity, Status};
 use openhuman_rpc::embed::chat_surface::WebChannelEvent;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static REVISION: AtomicU64 = AtomicU64::new(1);
@@ -78,11 +78,14 @@ pub struct TranscriptState {
     cur_thinking: Option<usize>,
     activity_index: HashMap<String, usize>,
     sequences: HashMap<String, u64>,
+    viewport_revision: u64,
+    viewport_changes: VecDeque<(u64, usize)>,
 }
 
 impl TranscriptState {
     /// Create an empty transcript bound to `client_id`.
     pub fn new(client_id: impl Into<String>) -> Self {
+        let viewport_revision = revision();
         Self {
             client_id: client_id.into(),
             thread_id: String::new(),
@@ -92,12 +95,52 @@ impl TranscriptState {
             cur_thinking: None,
             activity_index: HashMap::new(),
             sequences: HashMap::new(),
+            viewport_revision,
+            viewport_changes: VecDeque::from([(viewport_revision, 0)]),
         }
     }
 
     /// The transcript entries, oldest first.
     pub fn entries(&self) -> &[Entry] {
         &self.entries
+    }
+
+    pub(crate) fn viewport_revision(&self) -> u64 {
+        self.viewport_revision
+    }
+
+    /// Changes after a known snapshot; an expired or foreign snapshot requires rebuilding.
+    pub(crate) fn viewport_changes_since(&self, prior: u64) -> Option<Vec<usize>> {
+        if prior == self.viewport_revision {
+            return Some(Vec::new());
+        }
+        let position = self
+            .viewport_changes
+            .iter()
+            .position(|(token, _)| *token == prior)?;
+        let mut indices: Vec<_> = self
+            .viewport_changes
+            .iter()
+            .skip(position + 1)
+            .map(|(_, index)| *index)
+            .collect();
+        indices.sort_unstable();
+        indices.dedup();
+        Some(indices)
+    }
+
+    fn viewport_changed(&mut self, index: usize) {
+        self.viewport_revision = revision();
+        self.viewport_changes
+            .push_back((self.viewport_revision, index));
+        if self.viewport_changes.len() > 128 {
+            self.viewport_changes.pop_front();
+        }
+    }
+
+    fn viewport_reset(&mut self) {
+        self.viewport_changes.clear();
+        self.viewport_changed(0);
     }
 
     /// Whether a turn is currently streaming.
@@ -115,6 +158,7 @@ impl TranscriptState {
     }
 
     pub fn clear(&mut self) {
+        self.viewport_reset();
         self.entries.clear();
         self.activity_index.clear();
         self.cur_assistant = None;
@@ -154,6 +198,7 @@ impl TranscriptState {
 
     /// Replace the view with a newest-first `threads.transcript_get` page.
     pub fn load_transcript(&mut self, value: &serde_json::Value) {
+        self.viewport_reset();
         self.entries.clear();
         self.activity_index.clear();
         self.sequences.clear();
@@ -172,6 +217,7 @@ impl TranscriptState {
     /// Resets the streaming cursors so the next `text_delta` / `thinking_delta`
     /// opens fresh assistant / thinking entries for this turn.
     pub fn begin_user_turn(&mut self, message: impl Into<String>) {
+        self.viewport_changed(self.entries.len());
         let text = message.into();
         log::debug!("[tui] state: begin_user_turn len={}", text.len());
         self.entries.push(Entry::new(EntryKind::User, text));
@@ -182,6 +228,7 @@ impl TranscriptState {
 
     /// Push a local system/status note (e.g. "Cancelled", connection info).
     pub fn push_system(&mut self, text: impl Into<String>) {
+        self.viewport_changed(self.entries.len());
         let text = text.into();
         log::debug!("[tui] state: push_system len={}", text.len());
         self.entries.push(Entry::new(EntryKind::System, text));
@@ -231,6 +278,7 @@ impl TranscriptState {
             "tool_call" | "tool_result" | "tool_args_delta" => self.apply_activity(ev, false),
             event if event.starts_with("subagent_") => self.apply_activity(ev, true),
             "artifact_pending" | "artifact_ready" | "artifact_failed" => {
+                self.viewport_changed(self.entries.len());
                 let status = ev.event.trim_start_matches("artifact_");
                 let detail = ev
                     .message
@@ -256,6 +304,7 @@ impl TranscriptState {
                 // `full_response` is authoritative — it replaces whatever the
                 // streamed text deltas accumulated (they can lag / be partial).
                 if let Some(full) = ev.full_response.as_deref() {
+                    self.viewport_changed(self.cur_assistant.unwrap_or(self.entries.len()));
                     match self.cur_assistant {
                         Some(idx) => {
                             self.entries[idx].text = full.to_string();
@@ -269,6 +318,7 @@ impl TranscriptState {
                 self.finish_turn();
             }
             "chat_error" => {
+                self.viewport_changed(self.entries.len());
                 let mut msg = ev.message.as_deref().unwrap_or("Unknown error").to_string();
                 if ev.error_retryable == Some(true) {
                     msg.push_str(" · retryable");
@@ -278,7 +328,8 @@ impl TranscriptState {
                 }
                 log::debug!("[tui] state: chat_error {msg}");
                 self.entries.push(Entry::new(EntryKind::Error, msg));
-                for entry in &mut self.entries {
+                let mut changed = Vec::new();
+                for (index, entry) in self.entries.iter_mut().enumerate() {
                     if let Some(activity) = &mut entry.activity {
                         if activity.status == Status::Running && !activity.child {
                             activity.status = if ev.error_type.as_deref() == Some("cancelled") {
@@ -288,8 +339,12 @@ impl TranscriptState {
                             };
                             entry.text = activity.summary();
                             entry.revision = revision();
+                            changed.push(index);
                         }
                     }
+                }
+                for index in changed {
+                    self.viewport_changed(index);
                 }
                 self.finish_turn();
             }
@@ -300,6 +355,7 @@ impl TranscriptState {
     }
 
     fn append_assistant(&mut self, delta: &str) {
+        self.viewport_changed(self.cur_assistant.unwrap_or(self.entries.len()));
         match self.cur_assistant {
             Some(idx) => {
                 self.entries[idx].text.push_str(delta);
@@ -314,6 +370,7 @@ impl TranscriptState {
     }
 
     fn append_thinking(&mut self, delta: &str) {
+        self.viewport_changed(self.cur_thinking.unwrap_or(self.entries.len()));
         match self.cur_thinking {
             Some(idx) => {
                 self.entries[idx].text.push_str(delta);
@@ -337,6 +394,7 @@ impl TranscriptState {
         if let Some(entry) = self.entries.get_mut(index) {
             entry.expanded = !entry.expanded;
             entry.revision = revision();
+            self.viewport_changed(index);
         }
     }
 
@@ -394,6 +452,7 @@ impl TranscriptState {
         activity.update(ev);
         entry.text = activity.summary();
         entry.revision = revision();
+        self.viewport_changed(index);
     }
 
     fn push_projected_item(&mut self, item: &serde_json::Value) {

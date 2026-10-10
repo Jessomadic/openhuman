@@ -66,6 +66,8 @@ pub async fn run(
     let mut state = TranscriptState::new(client_id.clone());
     state.set_thread(thread_id.clone());
     let mut ui = UiState::new(thread_id, client_id.clone());
+    let manager = super::session::session_manager(&runtime);
+    let mut session_rx = manager.subscribe();
     let (overlay_tx, mut overlay_rx) = tokio::sync::mpsc::unbounded_channel();
     ui.overlay_tx = Some(overlay_tx);
     let (auth_tx, mut auth_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -77,6 +79,7 @@ pub async fn run(
     }
     super::controls::refresh_config(&runtime, &mut ui).await;
     super::controls::refresh_auth(&runtime, &mut ui).await;
+    ui.identity_changed = false; // Startup is already bound to this persisted identity.
     refresh_agent_paths(&runtime, &mut ui).await;
     if options.resume_picker {
         open_rpc_overlay(
@@ -96,6 +99,7 @@ pub async fn run(
     // locked config must never strand the user on a blank raw-mode screen.
     let mut guard = TerminalGuard::enter_with_options(!options.no_alt_screen)?;
     guard.set_mouse(ui.mouse_enabled)?;
+    super::account::refresh(&runtime, &mut ui);
 
     if let Some(prompt) = options.initial_prompt {
         ui.composer.set_text(prompt);
@@ -130,7 +134,7 @@ pub async fn run(
     let mut last_draw = std::time::Instant::now() - Duration::from_secs(1);
 
     while !quit {
-        if dirty && last_draw.elapsed() >= Duration::from_millis(33) {
+        if dirty && last_draw.elapsed() >= Duration::from_millis(16) {
             guard.set_mouse(ui.mouse_enabled)?;
             guard
                 .terminal()
@@ -140,12 +144,14 @@ pub async fn run(
         }
 
         tokio::select! {
-            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(last_draw+Duration::from_millis(33))), if dirty => {},
-            Some(result)=auth_rx.recv()=>{
-                ui.auth_pending=false;
-                match result {
-                    Ok(())=>{ui.settings_status="Signed in.".into();super::controls::refresh_auth(&runtime,&mut ui).await;ui.identity_changed=true;},
-                    Err(error)=>{ui.settings_status=format!("Sign-in failed: {error}");ui.login_token=Some(String::new());ui.active_tab=AppTab::Settings;}
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(last_draw+Duration::from_millis(16))), if dirty => {},
+            Some(message)=auth_rx.recv()=>{super::account::apply(message,&mut ui);dirty=true;},
+            event=session_rx.recv()=>{
+                match event {
+                    Ok(openhuman_rpc::tinyhumans::SessionEvent::Changed(session))=>super::account::apply_session(&session,&mut ui),
+                    Ok(openhuman_rpc::tinyhumans::SessionEvent::Expired {..})=>{ui.auth_summary="Session expired".into();ui.auth_user_id=None;ui.auth_profile_id=None;ui.authenticated=false;ui.account_detail.clear();ui.identity_changed=true;ui.settings_status="Your saved session was rejected. Sign in again.".into();},
+                    Err(broadcast::error::RecvError::Lagged(_))=>super::account::refresh(&runtime,&mut ui),
+                    Err(broadcast::error::RecvError::Closed)=>{},
                 } dirty=true;
             },
             Some(reply)=overlay_rx.recv()=>{super::effects::apply(reply,&mut ui);dirty=true;},
@@ -192,8 +198,12 @@ pub async fn run(
             ui.model_override = None;
             ui.viewport = Default::default();
             ui.overlay = None;
+            ui.thread_id.clear();
+            ui.action_dir.clear();
+            ui.scroll_from_bottom = 0;
             state = TranscriptState::new(client_id.clone());
             super::controls::refresh_config(&runtime, &mut ui).await;
+            refresh_agent_paths(&runtime, &mut ui).await;
             new_thread(&runtime, &mut state, &mut ui).await;
             dirty = true;
         }
@@ -219,6 +229,10 @@ async fn handle_key(
         return false;
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    if ui.auth_pending && key.code == KeyCode::Esc {
+        super::account::cancel(ui);
+        return false;
+    }
 
     if ui.active_tab == AppTab::Chat
         && ui.overlay.is_none()
@@ -553,7 +567,11 @@ async fn send_or_command(
     }
     let text = ui.composer.text().trim().to_string();
     if let Some(command) = text.strip_prefix('/') {
-        let _ = ui.composer.take_for_send();
+        if command.starts_with("login") {
+            ui.composer.clear();
+        } else {
+            let _ = ui.composer.take_for_send();
+        }
         return execute_command(command, runtime, client_id, state, ui).await;
     }
     let mode = if state.is_streaming() {

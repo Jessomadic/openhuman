@@ -6,7 +6,10 @@ fn main() {
     // installs the tracing layer, while this creates the client that receives
     // its events and installs Sentry's panic integration.
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let _sentry_guard = if args.iter().any(|arg| arg == "--demo") {
+    let _sentry_guard = if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--demo" | "--bench" | "--no-telemetry"))
+    {
         None
     } else {
         Some(openhuman_tui::init_crash_reporting())

@@ -124,8 +124,12 @@ pub async fn refresh_config(runtime: &Arc<CoreRuntime>, ui: &mut UiState) {
 
 pub async fn handle_settings_key(key: KeyEvent, runtime: &Arc<CoreRuntime>, ui: &mut UiState) {
     if ui.auth_pending {
-        ui.settings_status =
-            "Signing in… You can browse views while authentication completes.".into();
+        match key.code {
+            KeyCode::Esc => super::account::cancel(ui),
+            KeyCode::Char('o' | 'O') => super::account::reopen(ui),
+            KeyCode::Char('c' | 'C') => copy_login_link(ui),
+            _ => {}
+        }
         return;
     }
     if let Some(token) = ui.login_token.as_mut() {
@@ -146,7 +150,7 @@ pub async fn handle_settings_key(key: KeyEvent, runtime: &Arc<CoreRuntime>, ui: 
     if ui.logout_confirm {
         match key.code {
             KeyCode::Esc | KeyCode::Char('n') => ui.logout_confirm = false,
-            KeyCode::Char('y') | KeyCode::Enter => logout(runtime, ui).await,
+            KeyCode::Char('y') | KeyCode::Enter => super::account::logout(runtime, ui),
             _ => {}
         }
         return;
@@ -157,8 +161,9 @@ pub async fn handle_settings_key(key: KeyEvent, runtime: &Arc<CoreRuntime>, ui: 
             ui.settings_selected = (ui.settings_selected + 1).min(SettingsAction::ALL.len() - 1)
         }
         KeyCode::Enter => match SettingsAction::ALL[ui.settings_selected] {
-            SettingsAction::ViewAccount => view_account(runtime, ui).await,
-            SettingsAction::Login => ui.login_token = Some(String::new()),
+            SettingsAction::ViewAccount => super::account::refresh(runtime, ui),
+            SettingsAction::Login => super::account::picker(ui),
+            SettingsAction::LoginToken => ui.login_token = Some(String::new()),
             SettingsAction::Logout => ui.logout_confirm = true,
         },
         _ => {}
@@ -166,104 +171,45 @@ pub async fn handle_settings_key(key: KeyEvent, runtime: &Arc<CoreRuntime>, ui: 
 }
 
 pub async fn refresh_auth(runtime: &Arc<CoreRuntime>, ui: &mut UiState) {
-    match runtime.invoke("openhuman.auth_get_state", json!({})).await {
-        Ok(value) => {
-            let state = rpc_payload(&value);
-            if state
-                .get("isAuthenticated")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-            {
-                let identity = string_at(state, &["userId"]);
-                ui.auth_summary = if identity.is_empty() {
-                    "Signed in".to_string()
-                } else {
-                    format!("Signed in · {identity}")
-                };
-            } else {
-                ui.auth_summary = "Signed out".to_string();
-                ui.account_detail.clear();
-            }
-        }
-        Err(err) => ui.auth_summary = format!("Account status unavailable: {err}"),
-    }
-}
-
-async fn view_account(runtime: &Arc<CoreRuntime>, ui: &mut UiState) {
-    ui.settings_status = "Refreshing account…".to_string();
-    match crate::session::session_manager(runtime)
-        .current_user(true)
-        .await
-    {
-        Ok(current) => {
-            ui.account_detail = current
-                .user
-                .as_ref()
-                .map(account_detail)
-                .unwrap_or_else(|| "No account details available.".to_string());
-            ui.settings_status = if current.stale {
-                "Account refreshed from the stored copy (backend unreachable).".to_string()
-            } else {
-                "Account refreshed.".to_string()
+    match super::session::session_manager(runtime).core_state().await {
+        Ok(core) => {
+            let stale = core.credential.as_deref() == Some("session");
+            let state = openhuman_rpc::tinyhumans::SessionState {
+                current_user: core.user.clone(),
+                current_user_stale: stale,
+                core,
+                ..Default::default()
             };
-            refresh_auth(runtime, ui).await;
+            super::account::apply_session(&state, ui);
         }
-        Err(err) => ui.settings_status = format!("Account refresh failed: {err}"),
+        Err(_) => ui.auth_summary = "Account status unavailable".into(),
     }
 }
 
 async fn login_with_token(runtime: &Arc<CoreRuntime>, ui: &mut UiState) {
-    let mut token = ui.login_token.take().unwrap_or_default();
+    let token = zeroize::Zeroizing::new(ui.login_token.take().unwrap_or_default());
     if token.trim().is_empty() {
-        ui.settings_status = "Login token cannot be empty.".to_string();
-        token.zeroize();
+        ui.settings_status = "Login token cannot be empty.".into();
+        ui.login_token = Some(String::new());
         return;
     }
-    ui.settings_status = "Signing in…".to_string();
-    if let Some(tx) = ui.auth_tx.clone() {
-        ui.auth_pending = true;
-        let manager = crate::session::session_manager(runtime);
-        let token = zeroize::Zeroizing::new(token);
-        tokio::spawn(async move {
-            let result = match tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                manager.login_with_token(token.trim()),
-            )
-            .await
-            {
-                Ok(result) => result.map(|_| ()).map_err(|error| error.to_string()),
-                Err(_) => Err("Sign-in timed out. Check Account before retrying.".into()),
-            };
-            let _ = tx.send(result);
-        });
-        return;
-    }
-    // Exchange, validate against `/auth/me`, and install in the core — all
-    // owned by `openhuman-tinyhumans`; the JWT never passes through this module.
-    let result = crate::session::session_manager(runtime)
-        .login_with_token(token.trim())
-        .await;
-    token.zeroize();
-    match result {
-        Ok(_) => {
-            ui.settings_status = "Signed in.".to_string();
-            refresh_auth(runtime, ui).await;
-            ui.identity_changed = true;
+    super::account::token(runtime, ui, token);
+}
+
+pub(crate) fn copy_login_link(ui: &mut UiState) {
+    use std::io::Write;
+    if let Some(url) = &ui.login_url {
+        match std::io::stdout().write_all(login_clipboard_sequence(url).as_bytes()).and_then(|_|std::io::stdout().flush()) {
+            Ok(())=>ui.settings_status=format!("Terminal clipboard copy requested. Forward port {} when remote. O reopens · Esc cancels.",ui.login_port.unwrap_or(0)),
+            Err(_)=>ui.settings_status="The terminal clipboard is unavailable. Use O to open the browser.".into()
         }
-        Err(err) => ui.settings_status = format!("Login failed: {err}"),
     }
 }
 
-async fn logout(runtime: &Arc<CoreRuntime>, ui: &mut UiState) {
-    ui.logout_confirm = false;
-    match crate::session::session_manager(runtime).logout().await {
-        Ok(_) => {
-            ui.settings_status = "Signed out.".to_string();
-            refresh_auth(runtime, ui).await;
-            ui.identity_changed = true;
-        }
-        Err(err) => ui.settings_status = format!("Logout failed: {err}"),
-    }
+fn login_clipboard_sequence(url: &str) -> String {
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(url.as_bytes());
+    format!("\u{1b}]52;c;{encoded}\u{7}")
 }
 
 fn rpc_payload(value: &serde_json::Value) -> &serde_json::Value {
@@ -300,7 +246,9 @@ fn string_at(value: &serde_json::Value, path: &[&str]) -> String {
         .to_string()
 }
 
-fn account_detail(user: &serde_json::Value) -> String {
+pub(crate) fn account_detail(user: &serde_json::Value) -> String {
+    let user = user.get("data").unwrap_or(user);
+    let user = user.get("user").unwrap_or(user);
     let name = [
         string_at(user, &["firstName"]),
         string_at(user, &["lastName"]),

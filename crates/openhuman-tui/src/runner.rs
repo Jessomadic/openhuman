@@ -37,6 +37,7 @@ pub fn run_from_cli(args: &[String]) -> anyhow::Result<()> {
     let mut no_alt_screen = false;
     let mut no_mouse = false;
     let mut demo = false;
+    let mut bench = false;
     let mut provider: Option<String> = None;
     let mut model: Option<String> = None;
     let mut prompt_parts = Vec::new();
@@ -44,6 +45,13 @@ pub fn run_from_cli(args: &[String]) -> anyhow::Result<()> {
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
+            "--no-telemetry" => {
+                i += 1;
+            }
+            "--bench" => {
+                bench = true;
+                i += 1;
+            }
             "--demo" => {
                 demo = true;
                 i += 1;
@@ -110,6 +118,9 @@ pub fn run_from_cli(args: &[String]) -> anyhow::Result<()> {
         }
     }
 
+    if bench {
+        return super::benchmark::run();
+    }
     if demo {
         return super::demo::run(no_mouse);
     }
@@ -284,6 +295,8 @@ fn print_help() {
     println!("and account settings. Runs the core in-process — no server, no ports.");
     println!();
     println!("  --demo          Offline interactive UI preview (no model calls).");
+    println!("  --bench         Reproducible offline viewport/render benchmark (JSON).");
+    println!("  --no-telemetry  Skip the host crash-report client for isolated profiling.");
     println!("  --no-mouse      Keep native terminal mouse selection.");
     println!("  --thread <id>   Attach to an existing conversation thread.");
     println!("  --new           Force a new thread (default when --thread is omitted).");

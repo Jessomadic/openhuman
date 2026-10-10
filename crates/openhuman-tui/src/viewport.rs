@@ -1,13 +1,21 @@
 //! Cached cell-wrapped blocks and indexed viewport lookup.
 use super::state::{EntryKind, TranscriptState};
 use super::theme::safe_text;
+use std::collections::BTreeSet;
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Default)]
 pub struct ViewportCache {
     width: u16,
     blocks: Vec<CachedBlock>,
-    ends: Vec<usize>,
+    heights: HeightIndex,
+    resident: BTreeSet<usize>,
+    revision: u64,
+    height: u16,
+    offset: usize,
+    anchor: Option<(usize, usize)>,
+    #[cfg(test)]
+    recomputed: usize,
 }
 struct CachedBlock {
     revision: u64,
@@ -23,6 +31,51 @@ pub struct VisibleRow {
     pub kind: EntryKind,
 }
 
+/// Dynamic Fenwick tree: append and point updates preserve logarithmic row lookup.
+#[derive(Default)]
+struct HeightIndex {
+    tree: Vec<usize>,
+    total: usize,
+}
+impl HeightIndex {
+    fn prefix(&self, mut count: usize) -> usize {
+        let mut sum = 0;
+        while count > 0 {
+            sum += self.tree[count - 1];
+            count &= count - 1;
+        }
+        sum
+    }
+    fn push(&mut self, height: usize) {
+        let index = self.tree.len() + 1;
+        let start = index - (index & index.wrapping_neg());
+        self.tree.push(height + self.total - self.prefix(start));
+        self.total += height;
+    }
+    fn update(&mut self, index: usize, before: usize, after: usize) {
+        self.total = self.total - before + after;
+        let mut index = index + 1;
+        while index <= self.tree.len() {
+            self.tree[index - 1] = self.tree[index - 1] - before + after;
+            index += index & index.wrapping_neg();
+        }
+    }
+    fn containing(&self, row: usize) -> usize {
+        let mut index = 0;
+        let mut sum = 0;
+        let mut bit = self.tree.len().checked_next_power_of_two().unwrap_or(0);
+        while bit != 0 {
+            let next = index + bit;
+            if next <= self.tree.len() && sum + self.tree[next - 1] <= row {
+                sum += self.tree[next - 1];
+                index = next;
+            }
+            bit >>= 1;
+        }
+        index
+    }
+}
+
 impl ViewportCache {
     pub fn rows(
         &mut self,
@@ -32,67 +85,119 @@ impl ViewportCache {
         offset: usize,
     ) -> (Vec<VisibleRow>, usize) {
         let width = width.max(1);
-        if self.width != width {
+        let changes = state.viewport_changes_since(self.revision);
+        let anchor = if offset > 0
+            && offset == self.offset
+            && changes.is_some()
+            && (self.width != width || self.height != height)
+        {
+            self.anchor
+        } else {
+            None
+        };
+        if self.width != width || changes.is_none() || self.blocks.len() > state.entries().len() {
             self.blocks.clear();
+            self.heights = HeightIndex::default();
+            self.resident.clear();
             self.width = width;
         }
-        self.blocks.truncate(state.entries().len());
-        self.ends.clear();
-        let mut total = 0usize;
-        for (index, entry) in state.entries().iter().enumerate() {
-            let fresh = self
-                .blocks
-                .get(index)
-                .is_none_or(|block| block.revision != entry.revision);
-            if fresh {
+        #[cfg(test)]
+        {
+            self.recomputed = 0;
+        }
+        for index in changes.unwrap_or_default() {
+            if index < self.blocks.len() {
+                let entry = &state.entries()[index];
+                if self.blocks[index].revision == entry.revision {
+                    continue;
+                }
                 let rows = entry_rows(entry, width);
-                let block = CachedBlock {
+                self.heights
+                    .update(index, self.blocks[index].height, rows.len());
+                self.blocks[index] = CachedBlock {
                     revision: entry.revision,
                     height: rows.len(),
                     rows,
                 };
-                if index == self.blocks.len() {
-                    self.blocks.push(block);
-                } else {
-                    self.blocks[index] = block;
+                self.resident.insert(index);
+                #[cfg(test)]
+                {
+                    self.recomputed += 1;
                 }
             }
-            total += self.blocks[index].height;
-            self.ends.push(total);
         }
-        let max_scroll = total.saturating_sub(height as usize);
-        let top = max_scroll.saturating_sub(offset.min(max_scroll));
-        let mut index = self.ends.partition_point(|end| *end <= top);
+        for entry in &state.entries()[self.blocks.len()..] {
+            let rows = entry_rows(entry, width);
+            let block = CachedBlock {
+                revision: entry.revision,
+                height: rows.len(),
+                rows,
+            };
+            self.heights.push(block.height);
+            self.resident.insert(self.blocks.len());
+            self.blocks.push(block);
+            #[cfg(test)]
+            {
+                self.recomputed += 1;
+            }
+        }
+        self.revision = state.viewport_revision();
+        let max_scroll = self.heights.total.saturating_sub(height as usize);
+        let top = anchor
+            .filter(|(entry, _)| *entry < self.blocks.len())
+            .map(|(entry, line)| {
+                self.heights.prefix(entry) + line.min(self.blocks[entry].height.saturating_sub(1))
+            })
+            .unwrap_or_else(|| max_scroll.saturating_sub(offset.min(max_scroll)))
+            .min(max_scroll);
+        self.offset = max_scroll - top;
+        self.height = height;
+        let mut index = self.heights.containing(top);
         let first_visible = index;
-        let mut absolute = if index == 0 { 0 } else { self.ends[index - 1] };
+        let mut absolute = self.heights.prefix(index);
+        self.anchor = (index < self.blocks.len()).then_some((index, top - absolute));
         let mut rows = Vec::with_capacity(height as usize);
         while index < self.blocks.len() && rows.len() < height as usize {
             if self.blocks[index].rows.is_empty() {
                 self.blocks[index].rows = entry_rows(&state.entries()[index], width);
+                self.resident.insert(index);
             }
-            for (line, text) in self.blocks[index].rows.iter().enumerate() {
-                if absolute >= top && rows.len() < height as usize {
-                    rows.push(VisibleRow {
-                        text: text.clone(),
-                        entry: index,
-                        first: line == 0,
-                        kind: state.entries()[index].kind,
-                    });
-                }
-                absolute += 1;
+            for (line, text) in self.blocks[index]
+                .rows
+                .iter()
+                .enumerate()
+                .skip(top.saturating_sub(absolute))
+                .take(height as usize - rows.len())
+            {
+                rows.push(VisibleRow {
+                    text: text.clone(),
+                    entry: index,
+                    first: line == 0,
+                    kind: state.entries()[index].kind,
+                });
             }
+            absolute += self.blocks[index].height;
             index += 1;
         }
-        for (index, block) in self.blocks.iter_mut().enumerate() {
-            if index < first_visible.saturating_sub(64) || index > first_visible + 128 {
-                block.rows.clear();
-                block.rows.shrink_to_fit();
-            }
+        let stale: Vec<_> = self
+            .resident
+            .iter()
+            .copied()
+            .filter(|index| {
+                *index < first_visible.saturating_sub(64) || *index > first_visible + 128
+            })
+            .collect();
+        for index in stale {
+            self.blocks[index].rows = Vec::new();
+            self.resident.remove(&index);
         }
         (rows, max_scroll)
     }
     pub fn total_rows(&self) -> usize {
-        self.ends.last().copied().unwrap_or(0)
+        self.heights.total
+    }
+    pub fn resolved_offset(&self) -> usize {
+        self.offset
     }
 }
 

@@ -30,9 +30,11 @@
 //!
 //! See `README.md` for build/run instructions and the packaging story.
 
+mod account;
 mod actions;
 mod activity;
 mod app;
+mod benchmark;
 mod cockpit;
 mod composer;
 mod controls;

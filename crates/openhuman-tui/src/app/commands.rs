@@ -262,14 +262,21 @@ pub(super) async fn execute_command(
         "config" => ui.active_tab = AppTab::Config,
         "settings" => ui.active_tab = AppTab::Settings,
         "login" => {
-            ui.active_tab = AppTab::Settings;
-            ui.login_token = Some(String::new());
-            ui.overlay = None;
+            if let Some(provider) = crate::account::provider(&argument) {
+                crate::account::browser(runtime, ui, provider);
+            } else {
+                crate::account::picker(ui);
+            }
         }
+        "login-token" => {
+            crate::account::form(ui, false);
+        }
+        "login-cancel" => crate::account::cancel(ui),
+        "login-open" => crate::account::reopen(ui),
+        "login-copy" => crate::controls::copy_login_link(ui),
         "plan" => present_pending_plan_review(ui),
         "logout" => {
-            ui.active_tab = AppTab::Settings;
-            ui.logout_confirm = true;
+            crate::account::form(ui, true);
         }
         _ => state.push_system(format!("Unknown command /{command}. Type /help.")),
     }
