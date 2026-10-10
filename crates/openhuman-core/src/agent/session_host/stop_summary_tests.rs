@@ -103,7 +103,10 @@ fn a_secret_in_an_error_line_is_not_repeated() {
              `http_request` on `http_request`. Resolve this blocker before retrying.",
         ),
     );
-    assert!(!out.contains("sk-live-abcdefghijklmnopqrstuvwxyz0123456789"), "{out}");
+    assert!(
+        !out.contains("sk-live-abcdefghijklmnopqrstuvwxyz0123456789"),
+        "{out}"
+    );
     assert!(out.contains("credentials"), "{out}");
 }
 
