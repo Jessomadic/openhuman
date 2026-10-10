@@ -65,7 +65,10 @@ pub fn estimate_call_cost_usd(model: &str, usage: &BilledUsage) -> Option<f64> {
 
 /// Where a cost figure came from. Ordered from most to least certain, so the
 /// cost of several calls takes the least certain of their sources.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum CostSource {
     /// Every call reported the amount the provider billed.
     #[default]
