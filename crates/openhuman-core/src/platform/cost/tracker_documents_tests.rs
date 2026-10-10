@@ -72,3 +72,40 @@ fn a_legacy_jsonl_ledger_is_imported_once_and_set_aside() {
     // Nothing left to import.
     assert_eq!(docs.import_legacy(&path).unwrap(), 0);
 }
+
+#[test]
+fn a_legacy_import_skips_ids_already_stored_or_repeated() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("costs.jsonl");
+    let first = record("a/model", 0.5, 30);
+    let second = record("b/model", 0.25, 10);
+    let line = |r: &CostRecord| serde_json::to_string(r).unwrap();
+    // `second` repeats in the file; `first` was stored by another core.
+    std::fs::write(
+        &path,
+        format!("{}\n{}\n{}\n", line(&first), line(&second), line(&second)),
+    )
+    .unwrap();
+    let docs = docs_in(&MemoryStorage::new(), "local");
+    docs.add(&first).unwrap();
+    assert_eq!(docs.import_legacy(&path).unwrap(), 1);
+    assert_eq!(docs.all().unwrap().len(), 2);
+}
+
+#[test]
+fn a_failed_rename_fails_the_import_and_a_retry_creates_nothing_twice() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("costs.jsonl");
+    let rec = record("a/model", 0.5, 30);
+    std::fs::write(&path, format!("{}\n", serde_json::to_string(&rec).unwrap())).unwrap();
+    // A non-empty directory where the rename target goes blocks the rename.
+    let blocker = dir.path().join("costs.jsonl.migrated");
+    std::fs::create_dir_all(blocker.join("x")).unwrap();
+    let docs = docs_in(&MemoryStorage::new(), "local");
+    assert!(docs.import_legacy(&path).is_err());
+    assert!(path.exists(), "the ledger stays for a retry");
+    std::fs::remove_dir_all(&blocker).unwrap();
+    assert_eq!(docs.import_legacy(&path).unwrap(), 0);
+    assert_eq!(docs.all().unwrap().len(), 1);
+    assert!(!path.exists());
+}
