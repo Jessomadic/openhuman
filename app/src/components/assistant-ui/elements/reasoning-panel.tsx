@@ -27,7 +27,7 @@ import {
 } from '@/components/assistant-ui/ui/collapsible';
 import { TextMessagePartProvider } from '@assistant-ui/react';
 import { ChevronDownIcon } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import { take } from '../utils/range';
 import type { ReasoningStep } from './reasoningSteps';
@@ -55,55 +55,6 @@ export interface ReasoningPanelProps {
   onAnimationStart?: () => void;
   className?: string;
   'data-testid'?: string;
-}
-
-/**
- * Keeps a bounded scroll region pinned to its newest content while `active`;
- * following pauses while the reader is scrolled up. Ported from the runtime
- * reasoning element's `ReasoningText`.
- */
-function usePinnedScroll(active: boolean) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLOListElement>(null);
-
-  useEffect(() => {
-    if (!active) return;
-    const scrollEl = scrollRef.current;
-    const contentEl = contentRef.current;
-    if (!scrollEl || !contentEl) return;
-
-    let pinned = true;
-    let lastScrollTop = scrollEl.scrollTop;
-    let lastScrollHeight = scrollEl.scrollHeight;
-    const isAtBottom = () =>
-      Math.abs(scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight) <= 1 ||
-      scrollEl.scrollHeight <= scrollEl.clientHeight;
-    const pin = () => {
-      if (pinned) scrollEl.scrollTop = scrollEl.scrollHeight;
-    };
-    // A pin's own scroll event can land after new content grew the height and
-    // read as "not at bottom"; only an upward move at unchanged height is the
-    // reader's intent.
-    const onScroll = () => {
-      if (isAtBottom()) pinned = true;
-      else if (scrollEl.scrollTop < lastScrollTop && scrollEl.scrollHeight === lastScrollHeight) {
-        pinned = false;
-      }
-      lastScrollTop = scrollEl.scrollTop;
-      lastScrollHeight = scrollEl.scrollHeight;
-    };
-
-    pin();
-    scrollEl.addEventListener('scroll', onScroll);
-    const observer = new ResizeObserver(pin);
-    observer.observe(contentEl);
-    return () => {
-      scrollEl.removeEventListener('scroll', onScroll);
-      observer.disconnect();
-    };
-  }, [active]);
-
-  return { scrollRef, contentRef };
 }
 
 function PanelLabel({
@@ -143,13 +94,11 @@ function StepList({
   streaming: boolean;
   bounded: boolean;
 }) {
-  const { scrollRef, contentRef } = usePinnedScroll(streaming && bounded);
   return (
     <div
-      ref={scrollRef}
       data-slot="reasoning-panel-scroll"
       className={cn(bounded && 'max-h-80 overflow-y-auto')}>
-      <ol ref={contentRef} className="flex flex-col gap-4 pt-3 pb-1">
+      <ol className="flex flex-col gap-4 pt-3 pb-1">
         {steps.map((step, i) => {
           const active = streaming && i === steps.length - 1;
           return (

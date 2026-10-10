@@ -6,6 +6,7 @@ import type { ThreadMessage } from '../../types/thread';
 import {
   buildRuntimeMessages,
   STREAMING_TAIL_ID,
+  streamingMessageId,
   streamingTailMessage,
   toThreadMessageLike,
 } from '../assistantUiMessages';
@@ -140,7 +141,7 @@ describe('streamingTailMessage', () => {
   it('is a running assistant message when tokens have landed', () => {
     const tail = streamingTailMessage({ requestId: 'r', content: 'partial', thinking: '' });
     expect(tail).toMatchObject({
-      id: STREAMING_TAIL_ID,
+      id: streamingMessageId('r'),
       role: 'assistant',
       status: { type: 'running' },
       content: [{ type: 'text', text: 'partial' }],
@@ -179,7 +180,7 @@ describe('streamingTailMessage', () => {
     // status line carried the whole burden of showing the turn was alive.
     const tail = streamingTailMessage({ requestId: 'r', content: '', thinking: 'still working' });
     expect(tail).toMatchObject({
-      id: STREAMING_TAIL_ID,
+      id: streamingMessageId('r'),
       status: { type: 'running' },
       content: [{ type: 'reasoning', text: 'still working' }],
     });
@@ -231,7 +232,7 @@ describe('buildRuntimeMessages', () => {
       content: 'tok',
       thinking: '',
     }).map(m => m.id);
-    expect(ids).toEqual(['a', STREAMING_TAIL_ID]);
+    expect(ids).toEqual(['a', streamingMessageId('r')]);
   });
 
   it('does not keep a synthetic thinking/tool tail running after lifecycle completion', () => {
@@ -985,7 +986,7 @@ describe('next-turn history stability', () => {
       before[0]!.id,
       before[1]!.id,
       'user-2',
-      STREAMING_TAIL_ID,
+      streamingMessageId('r2'),
     ]);
     expect(after[0]).toBe(before[0]);
     expect(after[1]).toBe(before[1]);
@@ -1005,7 +1006,7 @@ it('simulates repeated next turns without changing settled part order or identit
       );
       previous.forEach((message, index) => expect(running[index]).toBe(message));
       expect(running.at(-2)?.id).toBe(`user-${turn}`);
-      expect(running.at(-1)?.id).toBe(STREAMING_TAIL_ID);
+      expect(running.at(-1)?.id).toBe(streamingMessageId(`r${turn}`));
     }
     history.push(
       msg({

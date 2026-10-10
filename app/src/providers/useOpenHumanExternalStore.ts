@@ -79,6 +79,8 @@ export type OpenHumanThreadExtras = {
   activeSubagentEntry?: ToolTimelineEntry | undefined;
 };
 
+const convertRuntimeMessage = (message: ThreadMessageLike) => message;
+
 const EMPTY_EXTRAS: OpenHumanThreadExtras = { inferenceStatus: null };
 
 /**
@@ -546,7 +548,7 @@ export function useOpenHumanExternalStore(
       submit: ({ message, type }: { message: AuiThreadMessage; type: 'positive' | 'negative' }) => {
         // The live tail is not a persisted row; there is nothing to attach a
         // rating to until the turn settles.
-        if (!threadId || message.id === STREAMING_TAIL_ID) return;
+        if (!threadId || message.id === STREAMING_TAIL_ID || (message.metadata?.custom as {streaming?: boolean})?.streaming) return;
         const custom = message.metadata?.custom as
           | { extraMetadata?: Record<string, unknown> }
           | undefined;
@@ -849,7 +851,7 @@ export function useOpenHumanExternalStore(
       // reply, otherwise empty — see `useWelcomeSuggestions`.
       suggestions,
       // Already `ThreadMessageLike`; the runtime's converter is the identity.
-      convertMessage: (m: (typeof runtimeMessages)[number]) => m,
+      convertMessage: convertRuntimeMessage,
       onNew,
       onCancel,
       queue,
