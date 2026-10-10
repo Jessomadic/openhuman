@@ -153,7 +153,7 @@ async fn a_delivery_waits_while_a_relayed_turn_runs_on_its_thread() {
         "dd-relay-session",
         "sub-relay",
         "researcher",
-        "finished during the relayed turn".into(),
+        "finished during the relayed turn",
         Some(thread.to_owned()),
     )
     .await;
