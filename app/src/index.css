@@ -844,23 +844,6 @@
     @apply text-lg lg:text-xl;
   }
 
-  /* Composer cards share the input's width, including cards inside decks.
-     Keep these overrides local: gallery cards and popovers retain their sizing. */
-  .chat-composer-surfaces > *,
-  .chat-composer-surfaces :is(
-    [data-slot='approval-card'],
-    [data-slot='elicitation-form'],
-    [data-slot='artifact-card'],
-    [data-slot='task-card'],
-    [data-slot='subagent-list'],
-    [data-slot='background-inbox'],
-    [data-testid='plan-review-card']
-  ) {
-    width: 100%;
-    max-width: none;
-    min-width: 0;
-  }
-
   /* Suppress the default browser focus ring (outline + tap highlight) but
      leave borders and box-shadows alone — components rely on those for
      selected / focus-visible styling (e.g. the runtime picker cards).
@@ -992,3 +975,21 @@
   --cmd-overlay: rgb(var(--surface-overlay) / 0.7);
   --cmd-shadow-palette: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.25);
 }
+
+/* Composer cards share the input's width, including cards inside decks.
+   Keep these overrides local: gallery cards and popovers retain their sizing. */
+.chat-composer-surfaces > *,
+.chat-composer-surfaces :is(
+  [data-slot='approval-card'],
+  [data-slot='elicitation-form'],
+  [data-slot='artifact-card'],
+  [data-slot='task-card'],
+  [data-slot='subagent-list'],
+  [data-slot='background-inbox'],
+  [data-testid='plan-review-card']
+) {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
