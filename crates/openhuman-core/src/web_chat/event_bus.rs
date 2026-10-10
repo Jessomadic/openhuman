@@ -701,7 +701,6 @@ impl EventHandler<DomainEvent> for ApprovalSurfaceSubscriber {
                         client_id,
                         tool_call_id.as_deref(),
                         expires_at.as_deref(),
-                        *detached,
                     ));
                 }
                 _ => {
