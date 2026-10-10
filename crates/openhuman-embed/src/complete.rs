@@ -187,6 +187,12 @@ pub struct CompletionRequest {
     /// [`finish_reason`](CompletionResponse::finish_reason) `"length"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Physical provider HTTP timeout in milliseconds, applied to each dispatch.
+    /// `None` retains the provider default. A transport timeout is an RPC
+    /// failure eligible for a completion ladder fallback; it does not replace
+    /// the terminal logical deadline set by [`Completer::timeout`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
     /// Sampling temperature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
@@ -207,6 +213,7 @@ impl CompletionRequest {
             response_format: None,
             max_tokens: None,
             temperature: None,
+            timeout_ms: None,
             provider_options: Value::Null,
         }
     }
@@ -226,6 +233,13 @@ impl CompletionRequest {
     /// Set the output token ceiling.
     pub fn max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    /// Bound each physical provider HTTP request, including repair attempts.
+    /// This leaves the logical call deadline and cancellation scope unchanged.
+    pub fn timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.timeout_ms = Some(timeout_ms);
         self
     }
 
@@ -252,6 +266,7 @@ impl CompletionRequest {
         request.response_format = self.response_format.map(ResponseFormat::into_wire);
         request.max_tokens = self.max_tokens;
         request.temperature = self.temperature;
+        request.timeout_ms = self.timeout_ms;
         request.provider_options = self.provider_options;
         request
     }
@@ -456,6 +471,9 @@ impl Completer {
     }
 
     /// Bound the entire logical call, including structured repair attempts.
+    /// Expiration returns a terminal [`CoreError::DeadlineExceeded`]; a ladder
+    /// does not advance. Use [`CompletionRequest::timeout_ms`] to bound each
+    /// physical HTTP dispatch while allowing transport-error fallback.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
@@ -574,8 +592,9 @@ impl Completer {
         let format = request.response_format.clone();
         let model = request.model.clone();
         log::debug!(
-            "[embed] complete start method={COMPLETE} model={model} messages={}",
-            request.messages.len()
+            "[embed] complete start method={COMPLETE} model={model} messages={} timeout_ms={:?}",
+            request.messages.len(),
+            request.timeout_ms
         );
         let call = openhuman_core::inference::host_runtime::ops::complete_once(
             &endpoint,
