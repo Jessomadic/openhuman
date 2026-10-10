@@ -112,7 +112,7 @@ Discovered consumers (`crate::security::keyring::*`):
 - A corrupt file is never overwritten. `file` reads degrade to an empty map (so a missing token means "sign in again"), but a `set`/`delete` over an unparseable file quarantines it and returns an error. Returning empty on the write path is what turned a corrupt file into a wipe: the write that followed persisted a map holding nothing but the key being set.
 - Mutations hold a cross-process lock, on `<secrets file>.lock` rather than the secrets file itself, because `write_atomic` replaces the file by rename, so a lock on the old inode would guard nothing. Callers must hold it across the read and the write.
 - The `SecretStore` master-key file is write-once. On Windows it survives transient AV-scanner sharing violations via retry/backoff and attempts `icacls` ACL self-repair on permission errors. Decoded keys are cached so repeated decrypts (for example, snapshot polls) hit memory.
-- Legacy formats: `SecretStore` migrates `enc:` (XOR) to `enc2:` (ChaCha20-Poly1305) on decrypt; `EncryptedFileBackend` migrates plaintext `dev-keychain.json` to `secrets.enc` (renaming the legacy file `.json.migrated`).
+- Legacy formats: `SecretStore` migrates `enc:` (XOR) to `enc2:` (ChaCha20-Poly1305) on decrypt. `EncryptedFileBackend` writes `dev-keychain.json` into `secrets.enc`, reads back and verifies the encrypted map, then removes the plaintext source. It also removes older `.json.migrated` copies when their entries match the decrypted store. Invalid or divergent copies remain for manual recovery.
 - Errors never carry secret values, only namespaced keys. `diagnostic()` is safe to log and preserves the underlying `keyring::Error` variant and `OSStatus`.
 
 ## Further reading

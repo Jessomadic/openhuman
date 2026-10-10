@@ -450,16 +450,20 @@ impl EncryptedFileBackend {
         }
 
         match crypto::chacha20_decrypt(key, &blob) {
-            Ok(plaintext) => serde_json::from_slice::<HashMap<String, String>>(&plaintext)
-                .map_err(|e| {
+            Ok(plaintext) => match serde_json::from_slice::<HashMap<String, String>>(&plaintext) {
+                Ok(map) => {
+                    self.cleanup_matching_legacy_files(&map)?;
+                    Ok(map)
+                }
+                Err(e) => {
                     log::warn!(
                         "[keyring:encrypted_file] decrypted data is not valid JSON: {e}; \
                          treating as corrupt"
                     );
                     self.handle_corruption();
-                    KeyringError::Backend("corrupt secrets file (invalid JSON)".to_string())
-                })
-                .or_else(|_| Ok(HashMap::new())),
+                    Ok(HashMap::new())
+                }
+            },
             Err(e) => {
                 log::error!(
                     "[keyring:encrypted_file] decryption failed: {e}; master key may have \
@@ -493,6 +497,24 @@ impl EncryptedFileBackend {
         if !legacy_path.exists() {
             return Ok(HashMap::new());
         }
+        // The plaintext backend uses this same sidecar lock. Keep it across
+        // the read, encrypted write, verification, and source removal so a
+        // concurrent plaintext writer cannot lose an update during migration.
+        let _legacy_guard = file_store::lock_for_write(&legacy_path)?;
+        if !legacy_path.exists() {
+            return Ok(HashMap::new());
+        }
+        let metadata = std::fs::symlink_metadata(&legacy_path).map_err(|source| {
+            KeyringError::MigrationReadFailed {
+                path: legacy_path.display().to_string(),
+                source,
+            }
+        })?;
+        if !metadata.file_type().is_file() {
+            return Err(KeyringError::Backend(format!(
+                "legacy {LEGACY_DEV_KEYCHAIN} is not a regular file; preserving it for recovery"
+            )));
+        }
 
         log::info!(
             "[keyring:encrypted_file] found legacy {} — migrating to encrypted file",
@@ -507,34 +529,146 @@ impl EncryptedFileBackend {
         let map: HashMap<String, String> = if bytes.is_empty() {
             HashMap::new()
         } else {
-            serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-                log::warn!(
-                    "[keyring:encrypted_file] legacy {LEGACY_DEV_KEYCHAIN} is corrupt ({e}); \
-                     starting fresh"
-                );
-                HashMap::new()
-            })
+            serde_json::from_slice(&bytes).map_err(|e| {
+                KeyringError::Backend(format!(
+                    "legacy {LEGACY_DEV_KEYCHAIN} is invalid JSON; preserving it for recovery: {e}"
+                ))
+            })?
         };
 
-        if !map.is_empty() {
-            self.write_map(key, &map)?;
-        }
+        self.write_map(key, &map)?;
+        self.verify_migrated_map(key, &map)?;
 
-        let migrated_path = legacy_path.with_extension("json.migrated");
-        if let Err(e) = std::fs::rename(&legacy_path, &migrated_path) {
-            log::warn!(
-                "[keyring:encrypted_file] could not rename legacy file: {e}; \
-                 migration still succeeded"
-            );
-        } else {
-            log::info!(
-                "[keyring:encrypted_file] legacy {LEGACY_DEV_KEYCHAIN} migrated \
-                 ({} entries) and renamed to .migrated",
-                map.len()
-            );
+        std::fs::remove_file(&legacy_path).map_err(|source| {
+            KeyringError::MigrationDeleteFailed {
+                path: legacy_path.display().to_string(),
+                source,
+            }
+        })?;
+        log::info!(
+            "[keyring:encrypted_file] legacy {LEGACY_DEV_KEYCHAIN} migrated \
+             ({} entries), verified, and removed",
+            map.len()
+        );
+        if let Err(e) = self.cleanup_matching_legacy_file(
+            &legacy_path.with_extension("json.migrated"),
+            &map,
+            false,
+        ) {
+            log::warn!("[keyring:encrypted_file] could not clean up older legacy copy: {e}");
         }
 
         Ok(map)
+    }
+
+    /// Read the encrypted file back without the normal corruption quarantine.
+    /// A failed verification must leave the plaintext source available to retry.
+    fn verify_migrated_map(
+        &self,
+        key: &[u8; KEY_LEN],
+        expected: &HashMap<String, String>,
+    ) -> Result<(), KeyringError> {
+        let blob = std::fs::read(&self.path).map_err(|e| {
+            KeyringError::Backend(format!("cannot read encrypted migration result: {e}"))
+        })?;
+        let plaintext = crypto::chacha20_decrypt(key, &blob)
+            .map_err(|e| KeyringError::Backend(format!("cannot decrypt migration result: {e}")))?;
+        let actual: HashMap<String, String> = serde_json::from_slice(&plaintext).map_err(|e| {
+            KeyringError::Backend(format!("cannot parse decrypted migration result: {e}"))
+        })?;
+        if &actual != expected {
+            return Err(KeyringError::Backend(
+                "encrypted migration result differs from plaintext source".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Remove an old plaintext copy only when every entry is present with the
+    /// same value in the decrypted store. A changed or invalid copy may hold
+    /// data needed for recovery and is left in place for manual inspection.
+    fn cleanup_matching_legacy_file(
+        &self,
+        path: &Path,
+        encrypted: &HashMap<String, String>,
+        strict: bool,
+    ) -> Result<(), KeyringError> {
+        if !path.exists() {
+            return Ok(());
+        }
+        let _guard = file_store::lock_for_write(path)?;
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(KeyringError::MigrationReadFailed {
+                    path: path.display().to_string(),
+                    source,
+                });
+            }
+        };
+        if !metadata.file_type().is_file() {
+            if strict {
+                return Err(KeyringError::Backend(format!(
+                    "legacy {LEGACY_DEV_KEYCHAIN} is not a regular file; preserving it for recovery"
+                )));
+            }
+            log::warn!("[keyring:encrypted_file] legacy path {} is not a regular file; leaving it untouched", path.display());
+            return Ok(());
+        }
+        let bytes = std::fs::read(path).map_err(|source| KeyringError::MigrationReadFailed {
+            path: path.display().to_string(),
+            source,
+        })?;
+        let legacy: HashMap<String, String> = match serde_json::from_slice(&bytes) {
+            Ok(map) => map,
+            Err(e) => {
+                if strict {
+                    return Err(KeyringError::Backend(format!(
+                        "legacy {LEGACY_DEV_KEYCHAIN} is invalid JSON; preserving it for recovery: {e}"
+                    )));
+                }
+                log::warn!("[keyring:encrypted_file] legacy copy {} is invalid JSON ({e}); leaving it for recovery", path.display());
+                return Ok(());
+            }
+        };
+        if !legacy
+            .iter()
+            .all(|(key, value)| encrypted.get(key) == Some(value))
+        {
+            if strict {
+                return Err(KeyringError::Backend(format!(
+                    "legacy {LEGACY_DEV_KEYCHAIN} differs from encrypted secrets; preserving it for recovery"
+                )));
+            }
+            log::warn!("[keyring:encrypted_file] legacy copy {} differs from encrypted secrets; leaving it for recovery", path.display());
+            return Ok(());
+        }
+        std::fs::remove_file(path).map_err(|source| KeyringError::MigrationDeleteFailed {
+            path: path.display().to_string(),
+            source,
+        })?;
+        log::info!(
+            "[keyring:encrypted_file] removed verified legacy plaintext copy {}",
+            path.display()
+        );
+        Ok(())
+    }
+
+    fn cleanup_matching_legacy_files(
+        &self,
+        encrypted: &HashMap<String, String>,
+    ) -> Result<(), KeyringError> {
+        let legacy_path = self.workspace_dir.join(LEGACY_DEV_KEYCHAIN);
+        self.cleanup_matching_legacy_file(&legacy_path, encrypted, true)?;
+        if let Err(e) = self.cleanup_matching_legacy_file(
+            &legacy_path.with_extension("json.migrated"),
+            encrypted,
+            false,
+        ) {
+            log::warn!("[keyring:encrypted_file] could not clean up older legacy copy: {e}");
+        }
+        Ok(())
     }
 
     /// Move an undecryptable / unparseable secrets file aside so the next call
