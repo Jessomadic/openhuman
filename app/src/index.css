@@ -979,17 +979,17 @@
 /* Composer cards share the input's width, including cards inside decks.
    Keep these overrides local: gallery cards and popovers retain their sizing. */
 .chat-composer-surfaces > *,
-.chat-composer-surfaces :is(
-  [data-slot='approval-card'],
-  [data-slot='elicitation-form'],
-  [data-slot='artifact-card'],
-  [data-slot='task-card'],
-  [data-slot='subagent-list'],
-  [data-slot='background-inbox'],
-  [data-testid='plan-review-card']
-) {
+.chat-composer-surfaces
+  :is(
+    [data-slot='approval-card'],
+    [data-slot='elicitation-form'],
+    [data-slot='artifact-card'],
+    [data-slot='task-card'],
+    [data-slot='subagent-list'],
+    [data-slot='background-inbox'],
+    [data-testid='plan-review-card']
+  ) {
   width: 100%;
   max-width: none;
   min-width: 0;
 }
-

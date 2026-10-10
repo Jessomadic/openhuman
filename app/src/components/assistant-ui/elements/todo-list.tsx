@@ -64,7 +64,13 @@ export function TodoList({
 }
 
 /** The step rows, shared by every todo surface. */
-export function TodoItems({ items, compact = false }: { items: readonly TodoItem[]; compact?: boolean }) {
+export function TodoItems({
+  items,
+  compact = false,
+}: {
+  items: readonly TodoItem[];
+  compact?: boolean;
+}) {
   return (
     <ul className={cn('flex flex-col', compact ? 'gap-0.5' : 'gap-1')}>
       {items.map(item => (
@@ -76,7 +82,12 @@ export function TodoItems({ items, compact = false }: { items: readonly TodoItem
             'fade-in slide-in-from-bottom-1 animate-in fill-mode-both flex items-start duration-300',
             compact ? 'gap-2 py-0 text-xs' : 'gap-2.5 py-0.5 text-[13.5px]'
           )}>
-          <span aria-hidden className={cn('flex size-4 shrink-0 items-center justify-center', compact ? 'h-4' : 'h-5')}>
+          <span
+            aria-hidden
+            className={cn(
+              'flex size-4 shrink-0 items-center justify-center',
+              compact ? 'h-4' : 'h-5'
+            )}>
             {item.status === 'done' ? (
               <span className="border-foreground/20 bg-foreground/[0.06] flex size-3.5 items-center justify-center rounded-[5px] border">
                 <CheckIcon className="text-foreground/45 size-2.5" />
@@ -96,7 +107,10 @@ export function TodoItems({ items, compact = false }: { items: readonly TodoItem
             <span
               className={cn(
                 item.status === 'done' &&
-                  cn(compact ? 'text-foreground/55' : 'text-foreground/35', 'line-through decoration-[1.5px]'),
+                  cn(
+                    compact ? 'text-foreground/55' : 'text-foreground/35',
+                    'line-through decoration-[1.5px]'
+                  ),
                 item.status === 'active' && 'text-foreground/90',
                 item.status === 'pending' && 'text-foreground/50',
                 item.status === 'failed' && 'text-red-600 dark:text-red-400'
