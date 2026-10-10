@@ -59,8 +59,12 @@ impl std::fmt::Debug for ResponseShape {
 }
 
 /// What the turn's final model call reported.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FinalResponse {
+    /// Reported accounting captured before the harness can refuse an answer.
+    pub usage: Option<ResponseUsage>,
+    /// Whether any call omitted its charged cost.
+    pub unknown_cost: bool,
     /// Strict validation classification of the last terminal answer.
     pub validation_error: Option<String>,
     /// Number of terminal answer attempts (excluding tool calls).
@@ -73,6 +77,40 @@ pub struct FinalResponse {
     pub answered_model: Option<String>,
     /// Reasoning tokens summed over every call of the turn.
     pub reasoning_tokens: u64,
+}
+
+/// Usage summed over physical responses, including rejected terminal answers.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ResponseUsage {
+    /// Prompt tokens reported by the provider.
+    pub input_tokens: u64,
+    /// Generated tokens reported by the provider.
+    pub output_tokens: u64,
+    /// Cached prompt tokens.
+    pub cached_tokens: u64,
+    /// Reasoning tokens.
+    pub reasoning_tokens: u64,
+    /// Charged cost, unknown if any response omitted it.
+    pub cost_usd: Option<f64>,
+}
+
+impl ResponseUsage {
+    /// Build failure accounting when the session has no completed-turn record.
+    pub fn failure_usage(&self) -> crate::agent::tinyagents::host::LastTurnUsage {
+        crate::agent::tinyagents::host::LastTurnUsage {
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            cached_input_tokens: self.cached_tokens,
+            reasoning_tokens: self.reasoning_tokens,
+            cost_usd: self.cost_usd,
+            cost_source: if self.cost_usd.is_some() {
+                crate::agent::cost::CostSource::Charged
+            } else {
+                crate::agent::cost::CostSource::Unknown
+            },
+            ..Default::default()
+        }
+    }
 }
 
 /// A shape and the report slot its turn fills.
@@ -210,6 +248,11 @@ impl Middleware<(), OpenHumanRunContext> for ResponseShapeMiddleware {
             && !self.0.tool_succeeded.load(Ordering::Acquire)
             && response.tool_calls().is_empty()
         {
+            self.0
+                .report
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .validation_error = Some("RequiredToolCallMissing".into());
             // tool_choice is advisory on compatible gateways. Enforce the
             // host requirement even when a provider ignores that wire hint.
             return Err(
@@ -297,6 +340,41 @@ fn record(scope: &ResponseShapeScope, response: &ModelResponse) {
                 .filter(|model| !model.trim().is_empty())
         });
     if !response.served_from_cache {
+        let raw_cost = response.raw.as_ref().and_then(|raw| {
+            raw.pointer("/usage/buyer_cost_micro")
+                .and_then(serde_json::Value::as_f64)
+                .map(|value| value / 1_000_000.0)
+                .or_else(|| {
+                    raw.pointer("/usage/cost")
+                        .and_then(serde_json::Value::as_f64)
+                })
+        });
+        let cost = raw_cost
+            .or_else(|| {
+                response
+                    .usage
+                    .and_then(|usage| usage.charged_amount)
+                    .map(|amount| amount.micros as f64 / 1_000_000.0)
+            })
+            .filter(|cost| cost.is_finite() && *cost >= 0.0);
+        report.unknown_cost |= cost.is_none();
+        let unknown_cost = report.unknown_cost;
+        if response.usage.is_some() || cost.is_some() {
+            let total = report.usage.get_or_insert_with(ResponseUsage::default);
+            total.cost_usd = if unknown_cost {
+                None
+            } else {
+                Some(total.cost_usd.unwrap_or_default() + cost.unwrap_or_default())
+            };
+            if let Some(usage) = &response.usage {
+                total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
+                total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
+                total.cached_tokens = total.cached_tokens.saturating_add(usage.cache_read_tokens);
+                total.reasoning_tokens = total
+                    .reasoning_tokens
+                    .saturating_add(usage.reasoning_tokens);
+            }
+        }
         if let Some(usage) = &response.usage {
             report.reasoning_tokens += usage.reasoning_tokens;
         }

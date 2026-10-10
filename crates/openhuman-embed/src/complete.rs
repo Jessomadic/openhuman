@@ -406,6 +406,7 @@ pub struct Completer {
     headers: Vec<(String, String)>,
     timeout: Option<Duration>,
     observer: Option<Arc<dyn CompletionObserver>>,
+    cancellation: crate::cancellation::Cancellation,
 }
 
 impl std::fmt::Debug for Completer {
@@ -427,6 +428,7 @@ impl Completer {
             headers: Vec::new(),
             timeout: None,
             observer: None,
+            cancellation: Default::default(),
         }
     }
 
@@ -437,9 +439,15 @@ impl Completer {
         self
     }
 
-    /// Fail a call that has not settled within `timeout`.
+    /// Bound the entire logical call, including structured repair attempts.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Attach an acknowledged cancellation scope shared with other calls.
+    pub fn cancellation(mut self, cancellation: crate::cancellation::Cancellation) -> Self {
+        self.cancellation = cancellation;
         self
     }
 
@@ -462,7 +470,22 @@ impl Completer {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, CoreError> {
         let started = Instant::now();
-        let result = self.validated_dispatch(request.clone()).await;
+        let _guard = self.cancellation.enter();
+        let operation = async {
+            match self.timeout {
+                Some(limit) => {
+                    tokio::time::timeout(limit, self.validated_dispatch(request.clone()))
+                        .await
+                        .unwrap_or(Err(CoreError::DeadlineExceeded { method: COMPLETE }))
+                }
+                None => self.validated_dispatch(request.clone()).await,
+            }
+        };
+        let result = tokio::select! {
+            biased;
+            _ = self.cancellation.cancelled() => Err(CoreError::Cancelled { method: COMPLETE }),
+            result = operation => result,
+        };
         if let Some(observer) = &self.observer {
             observer.on_complete(&CompletionTrace {
                 request: &request,
@@ -496,9 +519,19 @@ impl Completer {
         let validator =
             Validator::new(request.response_format.as_ref()).map_err(initial_failure)?;
         let mut usage = None;
+        let mut unknown_cost = false;
         for attempt in 0..=request.structured_retries {
             let mut response = self.dispatch(request.clone()).await?;
+            unknown_cost |= response
+                .usage
+                .as_ref()
+                .is_none_or(|usage| usage.cost_usd.is_none());
             accumulate(&mut usage, response.usage.as_ref());
+            if unknown_cost {
+                if let Some(usage) = &mut usage {
+                    usage.cost_usd = None;
+                }
+            }
             match validator.validate(&response.text, response.finish_reason.as_deref()) {
                 Ok(value) => { response.structured = value; response.usage = usage; return Ok(response); }
                 Err(reason) if attempt == request.structured_retries => return Err(CoreError::StructuredOutput {
@@ -527,25 +560,7 @@ impl Completer {
             request.into_wire(),
         );
         let started = std::time::Instant::now();
-        let response = match self.timeout {
-            Some(limit) => match tokio::time::timeout(limit, call).await {
-                Ok(outcome) => outcome,
-                Err(_) => {
-                    // Metadata only: method, model and elapsed time, never content.
-                    log::warn!(
-                        "[embed] complete timed out method={COMPLETE} model={model} limit_ms={} elapsed_ms={}",
-                        limit.as_millis(),
-                        started.elapsed().as_millis()
-                    );
-                    return Err(CoreError::Rpc {
-                        method: COMPLETE,
-                        message: format!("timed out after {}ms", limit.as_millis()),
-                    });
-                }
-            },
-            None => call.await,
-        }
-        .map_err(|message| {
+        let response = call.await.map_err(|message| {
             log::warn!(
                 "[embed] complete failed method={COMPLETE} model={model} elapsed_ms={}",
                 started.elapsed().as_millis()

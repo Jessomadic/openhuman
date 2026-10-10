@@ -607,6 +607,8 @@ impl Turn {
             // variant classification are logged; the error itself propagates
             // to the caller untouched.
             let tag = match err {
+                crate::error::CoreError::Cancelled { .. } => "cancelled",
+                crate::error::CoreError::DeadlineExceeded { .. } => "deadline",
                 crate::error::CoreError::StructuredOutput { .. } => "structured_output",
                 crate::error::CoreError::Domain { .. } => "domain",
                 crate::error::CoreError::Unavailable { .. } => "unavailable",
@@ -820,18 +822,25 @@ async fn dispatch(
                     // report does. Folded in before the meter or the outcome reads
                     // the sink, on success and failure alike.
                     let report = options.shape.report();
-                    if let Some(spent) = usage
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .as_mut()
                     {
-                        spent.reasoning_tokens = report.reasoning_tokens;
+                        let mut captured = usage
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if captured.is_none() {
+                            if let Some(spent) = &report.usage {
+                                *captured = Some(spent.failure_usage());
+                            }
+                        }
+                        if let Some(spent) = captured.as_mut() {
+                            spent.reasoning_tokens = report.reasoning_tokens;
+                        }
                     }
                     if outcome.is_err() && report.structured_failed {
                         use crate::structured::{
                             StructuredFailureReason as Reason, StructuredOutputFailure,
                         };
                         let reason = match report.validation_error.as_deref() {
+                            Some("RequiredToolCallMissing") => Reason::RequiredToolCallMissing,
                             Some("Truncated") => Reason::Truncated,
                             Some("SchemaMismatch") => Reason::SchemaMismatch,
                             _ => Reason::InvalidJson,
@@ -843,17 +852,13 @@ async fn dispatch(
                                 reason,
                                 finish_reason: report.finish_reason,
                                 answered_model: report.answered_model,
-                                usage: usage
-                                    .lock()
-                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                    .as_ref()
-                                    .map(|spent| crate::complete::CompletionUsage {
-                                        input_tokens: spent.input_tokens,
-                                        output_tokens: spent.output_tokens,
-                                        cached_tokens: spent.cached_input_tokens,
-                                        reasoning_tokens: spent.reasoning_tokens,
-                                        cost_usd: spent.cost_usd,
-                                    }),
+                                usage: report.usage.map(|spent| crate::complete::CompletionUsage {
+                                    input_tokens: spent.input_tokens,
+                                    output_tokens: spent.output_tokens,
+                                    cached_tokens: spent.cached_tokens,
+                                    reasoning_tokens: spent.reasoning_tokens,
+                                    cost_usd: spent.cost_usd,
+                                }),
                             },
                         });
                     }

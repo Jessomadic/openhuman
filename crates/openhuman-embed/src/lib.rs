@@ -291,3 +291,6 @@ impl std::fmt::Debug for Core {
 
 /// Strict structured output failure metadata.
 pub mod structured;
+
+/// Acknowledged cancellation for stateless completion operations.
+pub mod cancellation;

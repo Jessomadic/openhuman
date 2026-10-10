@@ -200,6 +200,14 @@ impl CompletionLadder {
                         usage: response.usage.clone(),
                         failed: false,
                     },
+                    Err(CoreError::StructuredOutput { failure, .. }) => CompletionAttempt {
+                        requested_model: current.model.clone(),
+                        max_tokens: current.max_tokens,
+                        answered_model: failure.answered_model.clone(),
+                        finish_reason: failure.finish_reason.clone(),
+                        usage: failure.usage.clone(),
+                        failed: true,
+                    },
                     Err(_) => CompletionAttempt {
                         requested_model: current.model.clone(),
                         max_tokens: current.max_tokens,
@@ -226,7 +234,18 @@ impl CompletionLadder {
                         }
                     }
                     Err(error) => {
-                        if !matches!(error, CoreError::Rpc { .. }) {
+                        if !matches!(
+                            &error,
+                            CoreError::Rpc { .. } | CoreError::StructuredOutput {
+                                failure: crate::structured::StructuredOutputFailure {
+                                    reason: crate::structured::StructuredFailureReason::InvalidJson
+                                        | crate::structured::StructuredFailureReason::SchemaMismatch
+                                        | crate::structured::StructuredFailureReason::Truncated,
+                                    ..
+                                },
+                                ..
+                            }
+                        ) {
                             return Err(ladder_error(error, attempts));
                         }
                         last_error = error;

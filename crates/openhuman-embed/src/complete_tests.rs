@@ -267,10 +267,7 @@ async fn slow_provider_hits_the_timeout_branch() {
         .await
         .expect_err("the call must time out before the delayed reply");
     match err {
-        CoreError::Rpc { method, message } => {
-            assert_eq!(method, COMPLETE);
-            assert_eq!(message, "timed out after 50ms");
-        }
-        other => panic!("expected a timeout Rpc error, got {other:?}"),
+        CoreError::DeadlineExceeded { method } => assert_eq!(method, COMPLETE),
+        other => panic!("expected a typed deadline error, got {other:?}"),
     }
 }

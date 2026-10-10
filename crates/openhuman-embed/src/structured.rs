@@ -7,6 +7,8 @@ use serde_json::Value;
 /// Why a requested structured answer was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StructuredFailureReason {
+    /// The host required a successful repository read before the answer.
+    RequiredToolCallMissing,
     /// The host supplied an invalid or externally resolved schema.
     InvalidSchema,
     /// The reply was not complete JSON.

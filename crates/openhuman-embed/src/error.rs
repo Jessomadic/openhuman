@@ -26,6 +26,18 @@ use openhuman_core::core::StructuredRpcError;
 /// Error returned by every typed facade call.
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
+    /// The host cancelled the call and its provider future has stopped.
+    #[error("{method}: cancelled")]
+    Cancelled {
+        /// Cancelled operation.
+        method: &'static str,
+    },
+    /// The entire logical call exceeded its deadline, including repairs.
+    #[error("{method}: deadline exceeded")]
+    DeadlineExceeded {
+        /// Expired operation.
+        method: &'static str,
+    },
     /// Requested JSON failed strict validation after bounded repair.
     #[error("{method}: {failure}")]
     StructuredOutput {
@@ -169,7 +181,9 @@ impl CoreError {
     /// The RPC method this error came from.
     pub fn method(&self) -> &'static str {
         match self {
-            CoreError::StructuredOutput { method, .. }
+            CoreError::Cancelled { method }
+            | CoreError::DeadlineExceeded { method }
+            | CoreError::StructuredOutput { method, .. }
             | CoreError::Domain { method, .. }
             | CoreError::Unavailable { method }
             | CoreError::Rpc { method, .. }

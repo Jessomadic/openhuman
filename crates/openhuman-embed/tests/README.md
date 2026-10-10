@@ -39,6 +39,8 @@ recorded on the wrong server.
 | [`repository_tools.rs`](repository_tools.rs), [`repository_host_only.rs`](repository_host_only.rs) | Host-backed repository queries validate before dispatch, require redaction, fence and bound output, and remain isolated from shell/write/network under HostOnly, read-only, untrusted-input turns. See [repository contract](../src/repository/README.md). |
 | [`completion_routing.rs`](completion_routing.rs) | Ordered endpoint fallback, bounded 2x/4x truncation retries, final unpinned gateway routing, images and accounting across all attempts. |
 | [`tool_required_routing.rs`](tool_required_routing.rs) | Native host tool metadata for GPT, Kimi and MiniMax model IDs; premature JSON refusal; required successful execution before final schema; gateway options survive. |
+| [`completion_cancellation.rs`](completion_cancellation.rs) | Cancellation acknowledged after the provider future stops, pre-cancelled calls make no request, and deadlines are typed. |
+| [`structured_validation.rs`](structured_validation.rs) | Full schema constraints, invalid/external schema refusal before dispatch, typed failures and bounded repair usage. |
 | [`public_api.rs`](public_api.rs) | Compile-time check that the host-facing types and signatures stay exported. |
 
 ## Running
