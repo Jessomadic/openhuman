@@ -178,3 +178,17 @@ fn stop_notes_map_to_their_reason() {
         assert_eq!(StopReasonKind::from_stop_note(note), expected, "{note}");
     }
 }
+
+/// When more distinct results precede the stop than fit, the list keeps the
+/// most recent ones so the failure that stopped the turn stays visible.
+#[test]
+fn a_capped_summary_keeps_the_most_recent_groups() {
+    let mut results: Vec<_> = (0..MAX_LISTED + 2)
+        .map(|i| result(&format!("early_tool_{i}"), true, "ok"))
+        .collect();
+    results.push(result("final_blocker", false, "boom happened"));
+    let out = build_deterministic_final_summary(&results, StopReasonKind::RepeatedFailure);
+    assert!(out.contains("final_blocker"), "{out}");
+    assert!(!out.contains("early_tool_0`"), "{out}");
+    assert!(out.contains("more tool call(s)"), "{out}");
+}
