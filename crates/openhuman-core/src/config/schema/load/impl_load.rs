@@ -9,7 +9,9 @@ use super::migrate::{
     migrate_cloud_provider_slugs, migrate_legacy_inference_url, migrate_legacy_memory_backend,
     migrate_search_settings,
 };
-use super::secrets::{decrypt_config_secrets, decrypt_config_secrets_strict, encrypt_config_secrets};
+use super::secrets::{
+    decrypt_config_secrets, decrypt_config_secrets_strict, encrypt_config_secrets,
+};
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};

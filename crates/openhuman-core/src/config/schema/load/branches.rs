@@ -302,7 +302,10 @@ impl Config {
 /// strips the bootstrap tables and never writes the file, so the file is
 /// rewritten too: otherwise a storage URL that lived only in its `[storage]`
 /// table would be gone on the next boot.
-async fn save_recovered(config: &Config, source: &dyn super::source::ConfigSource) -> Result<()> {
+pub(super) async fn save_recovered(
+    config: &Config,
+    source: &dyn super::source::ConfigSource,
+) -> Result<()> {
     config.save().await?;
     if source.label() == "document" {
         let file = super::source::FileConfigSource::new(&config.config_path);

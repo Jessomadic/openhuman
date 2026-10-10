@@ -489,3 +489,60 @@ async fn a_document_save_never_nests_process_key_ciphertext() {
     assert!(body.contains("sk-node-local"), "{body}");
     assert!(!body.contains("enc2:"), "{body}");
 }
+
+#[tokio::test]
+async fn a_document_save_refuses_process_key_secrets_it_cannot_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let other_node = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let _forced = ForcedDocumentSource::new(
+        scoped(&storage, "tenant-a"),
+        Scope::new("tenant-a").unwrap(),
+        keys(3),
+    );
+    let mut config = config_at(tmp.path(), "m");
+    // Sealed under another node's key: this node cannot open it.
+    config.api_key = Some(
+        crate::security::keyring::SecretStore::new(other_node.path(), true)
+            .encrypt("sk-elsewhere")
+            .unwrap(),
+    );
+    let error = config.save().await.unwrap_err();
+    assert!(
+        format!("{error:#}").contains("could not be opened"),
+        "{error:#}"
+    );
+    let docs = Arc::clone(scoped(&storage, "tenant-a").documents());
+    docs.ensure_collection(&tinystoragedrivers::CollectionSpec::new("config"))
+        .await
+        .unwrap();
+    assert!(
+        docs.get("config", "tenant-a").await.unwrap().is_none(),
+        "nothing was written over the shared document"
+    );
+}
+
+#[tokio::test]
+async fn a_recovered_file_fallback_rewrites_the_bootstrap_file_too() {
+    let tmp = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let _forced = ForcedDocumentSource::new(
+        scoped(&storage, "tenant-a"),
+        Scope::new("tenant-a").unwrap(),
+        keys(3),
+    );
+    let mut config = config_at(tmp.path(), "recovered");
+    config.storage.url = Some("sqlite:/boot".to_string());
+    let source = for_config(&config.config_path).unwrap();
+    assert_eq!(source.label(), "document");
+
+    crate::config::schema::load::branches::save_recovered(&config, source.as_ref())
+        .await
+        .unwrap();
+
+    let file = std::fs::read_to_string(&config.config_path).unwrap();
+    assert!(file.contains("[storage]"), "{file}");
+    let body = source.read().await.unwrap();
+    assert!(body.from_document);
+    assert!(body.contents.contains("recovered"));
+}

@@ -96,10 +96,7 @@ fn a_failing_legacy_backend_reads_as_nothing_to_adopt() {
         legacy_or_warn(Err(KeyringError::Backend("locked".into()))),
         None
     );
-    assert_eq!(
-        legacy_or_warn(Ok(Some("v".into()))).as_deref(),
-        Some("v")
-    );
+    assert_eq!(legacy_or_warn(Ok(Some("v".into()))).as_deref(), Some("v"));
     // With nothing legacy to adopt, the storage read is still answered.
     let storage = MemoryStorage::new();
     let secrets = storage_secrets_in(&storage, "local");

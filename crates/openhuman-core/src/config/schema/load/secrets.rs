@@ -77,7 +77,10 @@ fn decrypt_optional_secret(
 /// open. The load path clears a field it cannot decrypt so the app stays
 /// usable; saving that cleared value over the shared document would turn a
 /// transient keychain failure into lost credentials, so this fails instead.
-pub(super) fn decrypt_config_secrets_strict(config: &mut Config, openhuman_dir: &Path) -> Result<()> {
+pub(super) fn decrypt_config_secrets_strict(
+    config: &mut Config,
+    openhuman_dir: &Path,
+) -> Result<()> {
     DECRYPT_FAILURES.with(|failures| failures.set(0));
     decrypt_config_secrets(config, openhuman_dir)?;
     let failed = DECRYPT_FAILURES.with(|failures| failures.replace(0));
