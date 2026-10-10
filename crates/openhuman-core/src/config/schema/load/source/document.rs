@@ -70,15 +70,18 @@ impl DocumentConfigSource {
             .get(CONFIG_COLLECTION, self.scope.as_str())
             .await
             .context("read the config document")?;
-        let Some(sealed) = stored.and_then(|versioned| {
-            versioned
-                .doc
-                .get(BODY_FIELD)
-                .and_then(|body| body.as_str())
-                .map(str::to_string)
-        }) else {
+        let Some(versioned) = stored else {
             return Ok(None);
         };
+        // A document that exists but has no sealed body is corruption, not
+        // absence: reading the file instead would let the next save overwrite
+        // the tenant's record with stale data.
+        let sealed = versioned
+            .doc
+            .get(BODY_FIELD)
+            .and_then(|body| body.as_str())
+            .ok_or_else(|| anyhow!("the config document has no sealed `{BODY_FIELD}` body"))?
+            .to_string();
         let key = self.key()?;
         let plain = crypto::decrypt_enc2(&key, &sealed)
             .map_err(|error| anyhow!("the config document does not decrypt: {error}"))?;
@@ -122,12 +125,12 @@ impl ConfigSource for DocumentConfigSource {
             return self.file.read().await;
         };
         // Bootstrap tables come from the file, whatever the document says.
-        let file_text = match tokio::fs::read_to_string(self.file.path()).await {
-            Ok(text) => Some(text),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                return Err(anyhow!(error).context("read the bootstrap config file"));
-            }
+        // Through the file source, so its corruption recovery (a `.bak`, a
+        // non-UTF-8 file renamed aside) applies to the bootstrap read too.
+        let file_text = if self.file.exists().await? {
+            Some(self.file.read().await?.contents)
+        } else {
+            None
         };
         let contents = apply_bootstrap(&body, file_text.as_deref())
             .context("apply the bootstrap tables to the config document")?;

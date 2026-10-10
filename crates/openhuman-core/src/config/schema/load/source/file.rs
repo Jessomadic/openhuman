@@ -41,7 +41,9 @@ impl ConfigSource for FileConfigSource {
     }
 
     async fn exists(&self) -> Result<bool> {
-        Ok(self.path.exists())
+        fs::try_exists(&self.path)
+            .await
+            .with_context(|| format!("Failed to check the config file: {}", self.path.display()))
     }
 
     async fn read(&self) -> Result<ConfigRead> {
@@ -140,6 +142,14 @@ impl ConfigSource for FileConfigSource {
         // `commit_replacement` owns the swap, and returns `Err` only while the
         // old config is still in place — see its docs for why callers that roll
         // back on `Err` depend on that.
-        commit_replacement(&temp_path, config_path, parent_dir, &backup_path).await
+        let committed =
+            commit_replacement(&temp_path, config_path, parent_dir, &backup_path).await;
+        if committed.is_err() {
+            // The helper removes the staged file after a failed rename but can
+            // return earlier (directory recreation); either way it must not be
+            // left behind holding the whole config.
+            let _ = fs::remove_file(&temp_path).await;
+        }
+        committed
     }
 }
