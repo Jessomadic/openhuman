@@ -460,7 +460,7 @@ impl EncryptedFileBackend {
         self.import_legacy_dev_keychain(key)?;
         match crate::storage::block_on(op(self.store(key))) {
             Err(error) if adapter::is_corruption(&error) => {
-                adapter::recover_corrupt_file(&self.path, &self.store(key), &error)?;
+                adapter::recover_corrupt_file(&self.path, key, &error)?;
                 crate::storage::block_on(op(self.store(key))).map_err(adapter::backend_error)
             }
             result => result.map_err(adapter::backend_error),

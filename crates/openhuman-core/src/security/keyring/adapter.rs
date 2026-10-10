@@ -80,15 +80,12 @@ pub(super) fn utf8(
 /// that could not be read, so the operation fails closed instead.
 pub(super) fn recover_corrupt_file(
     path: &Path,
-    store: &EncryptedFileSecrets,
+    key: &[u8; 32],
     cause: &StorageError,
 ) -> Result<(), KeyringError> {
     let _guard = file_store::lock_for_write(path)?;
-    if crate::storage::block_on({
-        let store = store.clone_handle();
-        async move { store.list("").await }
-    })
-    .is_ok()
+    let store = EncryptedFileSecrets::at_path(path, Zeroizing::new(*key));
+    if crate::storage::block_on(async move { store.list("").await }).is_ok()
     {
         log::info!("[keyring:encrypted_file] secrets file readable again; not quarantining");
         return Ok(());
