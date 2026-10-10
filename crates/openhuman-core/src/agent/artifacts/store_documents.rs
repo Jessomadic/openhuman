@@ -278,6 +278,30 @@ pub(super) async fn documents(workspace_dir: &Path) -> Result<Option<Docs>, Stri
     Ok(Some(docs))
 }
 
+/// Deletes artifact `id` in document mode: the record and its arguments,
+/// then its legacy directory (`artifact_dir`) so a later import does not bring
+/// it back. Not found when there was no record, as the file store reports.
+pub(super) async fn delete_record(docs: Docs, artifact_dir: &Path, id: &str) -> Result<(), String> {
+    let owned = id.to_string();
+    let existed = on_docs(docs, move |docs| docs.delete(&owned)).await?;
+    match tokio::fs::remove_dir_all(artifact_dir).await {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(format!(
+                "[artifacts] failed to delete legacy record for id={id}: {e}"
+            ))
+        }
+    }
+    if !existed {
+        return Err(format!(
+            "[artifacts] failed to delete artifact id={id}: not found"
+        ));
+    }
+    log::debug!("[artifacts] delete_artifact: deleted record id={id}");
+    Ok(())
+}
+
 /// Sorts newest first, applies the thread filter and then the page.
 pub(super) fn page_of(
     mut all: Vec<ArtifactMeta>,

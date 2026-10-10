@@ -193,8 +193,12 @@ fn one_time_work_runs_once_per_backend_and_scope_and_retries_failures() {
     repo.once_per_backend("k", count).unwrap();
     assert_eq!(runs.get(), 1, "a failure is retried, a success is recorded");
     repo.once_per_backend("other", count).unwrap();
-    repo_on(&first, "once-b").once_per_backend("k", count).unwrap();
-    repo_on(&backend(), "once").once_per_backend("k", count).unwrap();
+    repo_on(&first, "once-b")
+        .once_per_backend("k", count)
+        .unwrap();
+    repo_on(&backend(), "once")
+        .once_per_backend("k", count)
+        .unwrap();
     assert_eq!(runs.get(), 4, "another key, scope or backend runs afresh");
 
     // Without an origin there is no identity to key on: it always runs.
