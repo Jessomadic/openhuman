@@ -8,7 +8,7 @@ use super::super::Config;
 use super::dirs::{default_action_dir, resolve_action_dir, ConfigResolutionSource};
 use super::env::EnvLookup;
 use super::impl_load::{
-    migration_source, parse_config_boxed, read_config_with_recovery_or_default,
+    migration_source, parse_config_boxed,
 };
 use super::migrate::{
     migrate_cloud_provider_slugs, migrate_legacy_inference_url, migrate_legacy_memory_backend,
@@ -144,8 +144,10 @@ impl Config {
         // (e.g. non-UTF-8 bytes), the corrupted file is renamed to
         // `.corrupted.<timestamp>` and backup/defaults are attempted,
         // with rate-limited error logging (#5167).
-        let (contents, read_was_recovered) =
-            read_config_with_recovery_or_default(&config_path).await?;
+        let super::source::ConfigRead {
+            contents,
+            recovered: read_was_recovered,
+        } = super::source::for_config(&config_path)?.read().await?;
 
         // When `read_config_with_recovery_or_default` returned an empty
         // string (both primary and backup were unreadable), skip the TOML

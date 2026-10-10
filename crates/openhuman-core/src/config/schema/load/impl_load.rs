@@ -336,7 +336,10 @@ impl Config {
         // `Config` temporary its own stack slot, so folding all three branches
         // into this one state machine made the poll frame ~440 KB and stacked
         // on top of the whole agent tower (#6379).
-        if config_path.exists() {
+        // The first load of a process runs before any backend is installed, so
+        // it reads the file; later loads read the scope's config document on a
+        // shared backend.
+        if super::source::for_config(&config_path)?.exists().await? {
             Box::pin(Self::load_existing_config(
                 openhuman_dir,
                 workspace_dir,
@@ -417,8 +420,8 @@ impl Config {
         // scope's config document on a shared backend (bootstrap tables still
         // come from the file). The first load of a process does not: see
         // `source`.
-        let source = super::source::for_config(&config_path);
-        if !source.exists().await {
+        let source = super::source::for_config(&config_path)?;
+        if !source.exists().await? {
             let mut config = Config {
                 config_path,
                 workspace_dir,
@@ -481,16 +484,20 @@ impl Config {
     }
 
     async fn save_inner(&self) -> Result<()> {
+        // Where the text lives is the source's business: the file (atomic
+        // replace with a `.bak`) or, on a shared backend, the config document.
+        let source = super::source::for_config(&self.config_path)?;
         let mut config_to_save = self.clone();
         super::super::cli_overrides::restore_persisted_inference_fields(&mut config_to_save);
-        encrypt_config_secrets(&mut config_to_save)?;
+        // A document source seals the whole body under the scope's data key;
+        // the process-local field key would make it unreadable on another node.
+        if !source.encrypts_body() {
+            encrypt_config_secrets(&mut config_to_save)?;
+        }
 
         let toml_str =
             toml::to_string_pretty(&config_to_save).context("Failed to serialize config")?;
 
-        // Where the text lives is the source's business: the file (atomic
-        // replace with a `.bak`) or, on a shared backend, the config document.
-        let source = super::source::for_config(&self.config_path);
         tracing::debug!(source = source.label(), "[config] saving config");
         source.write(&toml_str).await?;
 
