@@ -193,8 +193,11 @@ fn production_read_tools() -> Vec<Box<dyn tinytools::Tool>> {
     use crate::security::SecurityPolicy;
     let security = std::sync::Arc::new(SecurityPolicy::default());
     let mut tools: Vec<Box<dyn tinytools::Tool>> = vec![
-        Box::new(crate::tools::impl_network_web_fetch_for_tests(
+        Box::new(crate::tools::implementations::network::web_fetch_tool(
             security.clone(),
+            vec!["example.com".into()],
+            None,
+            None,
         )),
         Box::new(tinytools_std::filesystem::FileReadTool::new(security.clone())),
         Box::new(tinytools_std::filesystem::ListFilesTool::new(security)),
