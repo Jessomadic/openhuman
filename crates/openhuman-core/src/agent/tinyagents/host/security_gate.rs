@@ -377,18 +377,6 @@ impl OpenHumanSecurityGate {
     }
 }
 
-/// Maps how the approval flow settled to what the runtime is told.
-///
-/// A refusal is a `Deny` whose text names no human and no timeout — every
-/// refusal reads the same — and rules out other routes explicitly, because
-/// `shell` never prompts while autonomy is disabled (`[autonomy] enabled =
-/// false`, the default) and was used to redo a refused call.
-///
-/// The text carries no `[policy-denied]` marker on purpose. The marker
-/// classifies as a policy failure with a zero recovery budget
-/// (`middleware::repeated_failure`), which pauses the turn before the model can
-/// answer. The model must get this turn to tell the user the action was not
-/// done, as it did with the harness's unmarked fallback text.
 /// What the model is told when the approval prompt for `tool_name` expired
 /// unanswered. Like the refusal text it carries no `[policy-denied]` marker
 /// (see [`decision_for_outcome`]), so the model keeps the turn to tell the
@@ -402,14 +390,27 @@ pub(crate) fn unanswered_approval_text(tool_name: &str) -> String {
     )
 }
 
+/// Maps how the approval flow settled to what the runtime is told.
+///
+/// A refusal is a `Deny` whose text names no human and no timeout — every
+/// refusal reads the same — and rules out other routes explicitly, because
+/// `shell` never prompts while autonomy is disabled (`[autonomy] enabled =
+/// false`, the default) and was used to redo a refused call.
+///
+/// The text carries no `[policy-denied]` marker on purpose. The marker
+/// classifies as a policy failure with a zero recovery budget
+/// (`middleware::repeated_failure`), which pauses the turn before the model can
+/// answer. The model must get this turn to tell the user the action was not
+/// done, as it did with the harness's unmarked fallback text.
 fn decision_for_outcome(tool_name: &str, outcome: GateOutcome) -> GateDecision {
     match outcome {
         GateOutcome::Allow => GateDecision::Prompted { approved: true },
-        // An expired prompt is not a refusal: nobody answered. Saying so lets
-        // the agent (and, for a sub-agent, its parent) tell the user the action
-        // is waiting on their approval rather than that it was declined — the
-        // generic text below left a 600s `media_generate_image` expiry reported
-        // as nothing at all.
+        // An expired prompt is not a refusal: nobody answered, and the gate has
+        // now denied the request. Saying so lets the agent (and, for a
+        // sub-agent, its parent) tell the user the approval window expired and
+        // that they must ask again for a new request, rather than that it was
+        // declined — the generic text below left a 600s `media_generate_image`
+        // expiry reported as nothing at all.
         GateOutcome::Deny { reason }
             if crate::security::approval::is_unanswered_approval_reason(&reason) =>
         {
