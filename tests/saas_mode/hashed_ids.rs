@@ -143,7 +143,10 @@ fn hashed_profile_ids_keep_user_ids_off_disk_out_of_responses_and_logs() {
             assert_eq!(&id, profile, "provisioning maps the user to users/h-<hash>");
             assert!(created);
             let (again, created) = provision_hashed(&client, &base, user, &mut seen);
-            assert_eq!(&again, profile, "the same user resolves to the same profile");
+            assert_eq!(
+                &again, profile,
+                "the same user resolves to the same profile"
+            );
             assert!(!created);
 
             let layout = d.root.join("users").join(profile);
@@ -175,14 +178,21 @@ fn hashed_profile_ids_keep_user_ids_off_disk_out_of_responses_and_logs() {
             assert!(body.get("result").is_some(), "{body}");
             seen.push_str(&body.to_string());
             let (_, body) = call("openhuman.threads_list", json!({}));
-            assert_eq!(thread_ids(&body), vec!["hashed-thread".to_string()], "{body}");
+            assert_eq!(
+                thread_ids(&body),
+                vec!["hashed-thread".to_string()],
+                "{body}"
+            );
             seen.push_str(&body.to_string());
         }
         let (_, body) = rpc(&client, &base, Some(BEARER), "openhuman.profiles_list");
         for profile in &expected {
             assert!(body.to_string().contains(profile.as_str()), "{body}");
         }
-        assert!(body.to_string().contains("\"has_credential\":true"), "{body}");
+        assert!(
+            body.to_string().contains("\"has_credential\":true"),
+            "{body}"
+        );
         seen.push_str(&body.to_string());
         drop(server);
     }
@@ -205,7 +215,11 @@ fn hashed_profile_ids_keep_user_ids_off_disk_out_of_responses_and_logs() {
                 json!({}),
             );
             assert_eq!(status, 200, "{body}");
-            assert_eq!(thread_ids(&body), vec!["hashed-thread".to_string()], "{body}");
+            assert_eq!(
+                thread_ids(&body),
+                vec!["hashed-thread".to_string()],
+                "{body}"
+            );
             seen.push_str(&body.to_string());
         }
         drop(server);
