@@ -59,17 +59,22 @@ async fn spawn_subagent_reports_a_stopped_child_as_a_failed_tool_result() {
     let _ = AgentDefinitionRegistry::init_global_builtins();
     let workspace = tempfile::TempDir::new().expect("workspace");
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(512);
-    let mut parent = parent_context(workspace.path(), Arc::new(LoopingToolModel), vec![]);
-    parent.on_progress = Some(progress_tx);
+    let parent = parent_context(workspace.path(), Arc::new(LoopingToolModel), vec![]);
+    let mut run_context = crate::agent::tinyagents::host::OpenHumanRunContext::new();
+    run_context.progress = Some(progress_tx);
 
     let result = with_parent_context(parent, async {
         SpawnSubagentTool::new()
-            .execute(json!({
-                "agent_id": "task_manager_agent",
-                "prompt": "List the task sources",
-                "model": "test-model",
-                "blocking": true
-            }))
+            .execute_with_parent_context(
+                json!({
+                    "agent_id": "task_manager_agent",
+                    "prompt": "List the task sources",
+                    "model": "test-model",
+                    "blocking": true
+                }),
+                None,
+                run_context,
+            )
             .await
     })
     .await
