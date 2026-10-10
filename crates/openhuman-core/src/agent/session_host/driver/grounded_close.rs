@@ -30,7 +30,10 @@ pub(super) struct RepairUsage {
     pub(super) input_tokens: u64,
     pub(super) output_tokens: u64,
     pub(super) cached_input_tokens: u64,
-    pub(super) charged_amount_usd: f64,
+    /// Cost of these calls: reported charge, catalog estimate, or unknown.
+    pub(super) cost: crate::agent::cost::CostTally,
+    /// Model the calls ran on, for pricing a call that reported no charge.
+    pub(super) pricing_model: String,
     /// The newest repair call's own input/output: a repair runs after the
     /// harness loop, so when one happened it is the turn's final call.
     pub(super) last_call_input_tokens: u64,
@@ -38,6 +41,14 @@ pub(super) struct RepairUsage {
 }
 
 impl RepairUsage {
+    /// Empty accounting for calls made on `model`.
+    pub(super) fn for_model(model: &str) -> Self {
+        Self {
+            pricing_model: model.to_string(),
+            ..Self::default()
+        }
+    }
+
     fn record(&mut self, usage: Option<BilledUsage>) {
         self.model_calls += 1;
         if let Some(usage) = usage {
@@ -46,7 +57,8 @@ impl RepairUsage {
             self.input_tokens += usage.input_tokens;
             self.output_tokens += usage.output_tokens;
             self.cached_input_tokens += usage.cached_input_tokens();
-            self.charged_amount_usd += usage.charged_amount_usd;
+            self.cost
+                .add(crate::agent::cost::call_cost(&self.pricing_model, &usage));
         }
     }
 }
@@ -104,7 +116,7 @@ pub(super) async fn repair_required_output(
     )));
     let (candidate, candidate_usage) =
         completion(source, model, temperature, thread_id, prompt_history).await;
-    let mut usage = RepairUsage::default();
+    let mut usage = RepairUsage::for_model(model);
     usage.record(candidate_usage);
     let candidate = candidate.trim().to_owned();
     let candidate_is_usable = !candidate.is_empty()
@@ -247,7 +259,7 @@ pub(super) async fn close_if_needed(
     };
 
     let (output, usage) =
-        close_with_one_repair(instruction, stop_reason, ask, verify, fallback).await;
+        close_with_one_repair(model, instruction, stop_reason, ask, verify, fallback).await;
     Some(GroundedClose { output, usage })
 }
 
