@@ -79,6 +79,7 @@ pub(crate) async fn project_spawn_parallel_result(
                 changed_files,
                 dirty_status,
                 emit_lifecycle_effects,
+                error,
                 ..
             } = result;
             if !emit_lifecycle_effects {
@@ -115,7 +116,11 @@ pub(crate) async fn project_spawn_parallel_result(
                         worktree_path: worktree_path.clone(),
                         changed_files: changed_files.clone(),
                         dirty_status: *dirty_status,
-                        stop: None,
+                        // An incomplete worker was stopped early (breaker /
+                        // cap); its span closes at WARNING with that stop.
+                        stop: matches!(result.status, ParallelAgentStatus::Incomplete)
+                            .then(|| TurnStop::from_incomplete_reason(error.as_deref().unwrap_or("")))
+                            ,
                     })
                     .await
                 {
