@@ -717,3 +717,7 @@ pub(crate) fn register_background_delivery() {
 #[cfg(test)]
 #[path = "background_delivery_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "background_delivery_slots_tests.rs"]
+mod slots_tests;
