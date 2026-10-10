@@ -71,6 +71,9 @@ pub mod session_host;
 pub mod session_import;
 pub mod session_store;
 pub mod stop_hooks;
+/// Wall-clock deadline of one top-level turn: the outer backstop and the
+/// harness wind-down / hard-stop points derived from it.
+pub mod turn_deadline;
 /// Product-specific adapters around `tinyagents_orchestration::subagent`.
 /// Generic lifecycle ordering and task-key coalescing live in TinyAgents;
 /// definitions, prompts, tools, policy, checkpoints and progress remain here.
@@ -85,7 +88,6 @@ pub mod triage;
 /// background jobs, CLI). Read by the approval gate to make
 /// origin-aware decisions rather than inferring trust from the absence of
 /// `APPROVAL_CHAT_CONTEXT`.
-pub mod turn_deadline;
 pub mod turn_origin;
 /// Turn-workspace task-local — the per-turn filesystem root an embedder binds
 /// a single agent turn to. Read by the session builder (as the turn's default
