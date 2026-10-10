@@ -20,7 +20,6 @@
 //! per-thread tables resolve that user's state.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -30,6 +29,7 @@ use super::registry::ProfileRegistry;
 use super::types::{ProfileId, ProfileMeta, ProfileSummary, LAYOUT_VERSION};
 use crate::config::Config;
 use crate::core::runtime::{ContextOverlay, CoreContext, DomainSet, SaasConfig};
+use crate::storage::fence::{FenceRegistry, LeaseFence};
 use crate::storage::lease::{LeaseError, LeaseGrant, LeaseStore};
 use crate::storage::StorageBackend;
 use crate::tools::toolpacks::ToolGroups;
@@ -40,7 +40,7 @@ pub struct Profile {
     pub layout: ProfileLayout,
     pub config: Config,
     context: Arc<CoreContext>,
-    fenced: AtomicBool,
+    fence: Arc<LeaseFence>,
 }
 
 impl std::fmt::Debug for Profile {
@@ -60,7 +60,12 @@ impl Profile {
 
     /// Whether this node lost the profile's lease: no new work may start.
     pub fn is_fenced(&self) -> bool {
-        self.fenced.load(Ordering::SeqCst)
+        self.fence.is_fenced()
+    }
+
+    /// The fence guarding this profile's storage writes ([`super::fence`]).
+    pub fn lease_fence(&self) -> &Arc<LeaseFence> {
+        &self.fence
     }
 }
 
@@ -81,6 +86,7 @@ pub struct ProfileHost {
     /// profile. Lookups of an open profile never wait for it.
     gate: tokio::sync::Mutex<()>,
     leases: Arc<dyn LeaseStore>,
+    fences: Arc<FenceRegistry>,
     registry: ProfileRegistry,
 }
 
@@ -143,8 +149,16 @@ impl ProfileHost {
             open: Mutex::new(HashMap::new()),
             gate: tokio::sync::Mutex::new(()),
             leases,
+            fences: crate::storage::fence::registry(),
             registry,
         })
+    }
+
+    /// This host registering its fences in `fences` instead of the process
+    /// registry (tests, which must not share one).
+    pub fn with_fences(mut self, fences: Arc<FenceRegistry>) -> Self {
+        self.fences = fences;
+        self
     }
 
     /// The operator's settings this host runs with.
@@ -159,6 +173,10 @@ impl ProfileHost {
 
     pub(crate) fn leases(&self) -> &dyn LeaseStore {
         self.leases.as_ref()
+    }
+
+    pub(crate) fn fences(&self) -> &FenceRegistry {
+        &self.fences
     }
 
     /// Where profile `id`'s state lives, provisioned or not.
@@ -239,7 +257,7 @@ impl ProfileHost {
             // Keep the profile so cleanup can be retried; archiving now would
             // leave the secret for a re-provisioned profile to inherit. It is
             // closed here, so give its lease back for the retry to take.
-            profile_lease::release_all(self.leases(), vec![(id.clone(), grant)]).await;
+            profile_lease::release_all(self, vec![(id.clone(), grant)]).await;
             return Err(format!("clearing credentials before archiving: {e}"));
         }
         if layout.dir.exists() {
@@ -256,7 +274,7 @@ impl ProfileHost {
                 .map_err(|e| format!("archiving {}: {e}", layout.dir.display()))?;
         }
         self.registry.remove(id).await?;
-        profile_lease::release_all(self.leases(), vec![(id.clone(), grant)]).await;
+        profile_lease::release_all(self, vec![(id.clone(), grant)]).await;
         log::info!("[profiles] deprovisioned profile={id} (archived)");
         Ok(true)
     }
@@ -293,7 +311,7 @@ impl ProfileHost {
             // holds the gate rather than waiting for it.
             if let Ok(_gate) = self.gate.try_lock() {
                 let closed = self.sweep_idle_locked(&mut self.lock(), Instant::now());
-                profile_lease::release_all(self.leases(), closed).await;
+                profile_lease::release_all(self, closed).await;
             }
             return Ok(state);
         }
@@ -315,7 +333,7 @@ impl ProfileHost {
             let closed = self.evict_locked(&mut open, Instant::now());
             (closed, open.len() >= self.saas.max_profiles_open.max(1))
         };
-        profile_lease::release_all(self.leases(), closed).await;
+        profile_lease::release_all(self, closed).await;
         if full {
             return Err(OpenError::Full {
                 max: self.saas.max_profiles_open,
@@ -332,7 +350,7 @@ impl ProfileHost {
             })?;
         let layout = self.layout_of(id);
         if let Err(error) = create_dirs(&layout) {
-            profile_lease::release_all(self.leases(), vec![(id.clone(), grant)]).await;
+            profile_lease::release_all(self, vec![(id.clone(), grant)]).await;
             return Err(OpenError::Storage(error));
         }
         let config = layout::profile_config(&layout, id);
@@ -352,12 +370,24 @@ impl ProfileHost {
             recover_session_store(id, &context);
         }
         crate::platform::cost::seed_tenant_tracker(&context, &config);
+        let fence = super::fence::for_grant(
+            Arc::clone(&self.leases),
+            &self.node,
+            id,
+            &grant,
+            self.saas.lease_ttl(),
+        );
+        // Once fenced, it refuses writes for as long as work on this context
+        // could still issue them.
+        let anchor: Arc<dyn std::any::Any + Send + Sync> = context.clone();
+        fence.anchor_to(Arc::downgrade(&anchor));
+        self.fences.register(Arc::clone(&fence));
         let state = Arc::new(Profile {
             id: id.clone(),
             layout,
             config,
             context,
-            fenced: AtomicBool::new(false),
+            fence,
         });
         let mut open = self.lock();
         open.insert(
@@ -434,7 +464,7 @@ impl ProfileHost {
     pub async fn evict_idle(&self) {
         let _gate = self.gate.lock().await;
         let closed = self.evict_locked(&mut self.lock(), Instant::now());
-        profile_lease::release_all(self.leases(), closed).await;
+        profile_lease::release_all(self, closed).await;
     }
 
     /// Close profile `id` here and release its lease, so another node can
@@ -453,6 +483,7 @@ impl ProfileHost {
             }
         };
         let grant = grant.expect("checked above");
+        self.fences.retire(id.as_str(), grant.epoch);
         self.leases.release(grant).await.map_err(|error| {
             log::warn!("[profiles] releasing profile={id} failed: {error}");
             format!("releasing profile {id}: {error}")
@@ -482,7 +513,7 @@ impl ProfileHost {
             closed.len(),
             self.open_count()
         );
-        profile_lease::release_all(self.leases(), closed).await;
+        profile_lease::release_all(self, closed).await;
     }
 
     /// The current grant of every open profile.
@@ -498,6 +529,7 @@ impl ProfileHost {
     pub(crate) fn store_grant(&self, id: &ProfileId, old: &LeaseGrant, renewed: LeaseGrant) {
         if let Some(slot) = self.lock().get_mut(id) {
             if slot.grant == *old {
+                slot.state.fence.renewed(renewed.expires_at_ms);
                 slot.grant = renewed;
             }
         }
@@ -518,7 +550,7 @@ impl ProfileHost {
             log::debug!("[profiles] fence profile={id}: already closed or re-opened");
             return;
         };
-        state.fenced.store(true, Ordering::SeqCst);
+        state.fence.fence();
         log::warn!(
             "[profiles] fenced profile={id} node={} ({why}); stopping its turns",
             self.node
@@ -690,10 +722,13 @@ pub fn ensure_hosted() -> Result<(), String> {
     else {
         return Ok(());
     };
+    // The latch, and the grant's expiry by this node's clock: a node whose
+    // renewals stopped landing refuses new work before anyone can take over.
+    let now = profile_lease::now_ms();
     let hosted = ProfileId::parse(&profile)
         .ok()
         .and_then(|id| host.get(&id))
-        .is_some_and(|state| !state.is_fenced());
+        .is_some_and(|state| state.fence.check_local(now).is_ok());
     if hosted {
         Ok(())
     } else {
