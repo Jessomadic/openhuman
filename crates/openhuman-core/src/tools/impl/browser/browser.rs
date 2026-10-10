@@ -30,7 +30,9 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
     time::Instant,
 };
-use task_actions::{approve_task_action, host_hint, parse_action, required, task_inputs};
+use task_actions::{
+    approve_task_action, host_hint, parse_action, required, task_inputs, task_outcome,
+};
 use tinycomputer_bus::agent::{ContinueTaskRequest, TaskId, TaskStatus, TaskView};
 use tinycomputer_bus::browser::{
     Action, DownloadState, DownloadWaitRequest, NavigateRequest, ReadRequest, SessionId,
@@ -321,11 +323,18 @@ impl BrowserTool {
         Ok(serde_json::to_value(view)?)
     }
 
-    /// Report a task view; a `needs_approval` pause is held with a one-use
-    /// token that only `confirm_pending` (through the host gate) can spend.
+    /// Report a task view as the tool's outcome ([`task_outcome`]): a task
+    /// that failed or was cancelled under the caller is an error.
     async fn report(&self, view: TaskView) -> anyhow::Result<Value> {
-        let mut output = serde_json::to_value(&view)?;
-        if let Some(hint) = host_hint(&view) {
+        let output = self.describe(&view).await?;
+        task_outcome(&view, output)
+    }
+
+    /// Render a task view; a `needs_approval` pause is held with a one-use
+    /// token that only `confirm_pending` (through the host gate) can spend.
+    async fn describe(&self, view: &TaskView) -> anyhow::Result<Value> {
+        let mut output = serde_json::to_value(view)?;
+        if let Some(hint) = host_hint(view) {
             output["host_hint"] = json!(hint);
         }
         if let TaskStatus::NeedsApproval { action, target, .. } = &view.status {
@@ -369,11 +378,11 @@ impl BrowserTool {
         )
         .await
         .map_err(anyhow::Error::msg)?;
-        let mut output = self.report(view).await?;
+        let mut output = self.describe(&view).await?;
         if !approved {
             output["approval"] = json!("denied by the host");
         }
-        Ok(output)
+        task_outcome(&view, output)
     }
 
     /// `origin` is the turn this call runs under; it decides only whether an
@@ -572,3 +581,7 @@ mod tests;
 #[cfg(test)]
 #[path = "browser_schema_tests.rs"]
 mod schema_tests;
+
+#[cfg(test)]
+#[path = "browser_task_outcome_tests.rs"]
+mod task_outcome_tests;

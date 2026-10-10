@@ -101,6 +101,13 @@ pub const UNSUPPORTED_MARKER: &str = "[unsupported]";
 /// matches the producer's wording instead of a copy of it.
 pub const MODULE_FAULT_MARKER: &str = "This is terminal for the running process";
 
+/// Marker prefixing a delegated task (a TinyComputer browser task) that ended
+/// without finishing: it failed, or was cancelled under the caller. The task
+/// reports what it did and what to change, so the recovery policy gives the
+/// model one changed attempt rather than reading the task's own prose (a
+/// page's `403`, a planner's `timed out`) as the tool call's verdict.
+pub const TASK_FAILED_MARKER: &str = "[task-failed]";
+
 /// The three top-level states the UI separates, per the #4254 acceptance
 /// criterion "clear separation between recoverable failure, blocked-by-policy,
 /// and action-needs-user-confirmation states".
