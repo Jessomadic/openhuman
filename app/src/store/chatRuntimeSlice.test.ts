@@ -276,6 +276,27 @@ describe('chatRuntimeSlice recordChatTurnUsage', () => {
     expect(bucket.turns).toBe(4);
     expect(bucket.costUsd).toBeCloseTo(0.024, 6);
   });
+
+  it('hydrateThreadUsage fills the gauge from the persisted final-call context', () => {
+    const store = makeStore();
+    store.dispatch(
+      hydrateThreadUsage({
+        threadId: 'thr-long',
+        inputTokens: 7_021_942,
+        outputTokens: 42_669,
+        cachedTokens: 6_466_688,
+        costUsd: 4.25,
+        turns: 3,
+        contextWindow: 1_048_576,
+        lastTurnInputTokens: 5_710_657,
+        lastTurnOutputTokens: 30_790,
+        lastTurnContextTokens: 103_900,
+      })
+    );
+    const bucket = store.getState().chatRuntime.usageByThread['thr-long'];
+    expect(bucket.lastTurnContextUsed).toBe(103_900);
+    expect(bucket.lastTurnContextUsed).toBeLessThanOrEqual(bucket.contextWindow);
+  });
 });
 
 describe('chatRuntimeSlice queue status', () => {
