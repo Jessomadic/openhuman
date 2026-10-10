@@ -399,6 +399,8 @@ mod classified_failure_fetch_tests;
 mod classified_failure_tests;
 #[path = "middleware_command_exit_failure_tests.rs"]
 mod command_exit_failure_tests;
+#[path = "middleware_failure_effect_tests.rs"]
+mod failure_effect_tests;
 #[path = "middleware_loop_guard_tests.rs"]
 mod loop_guard_tests;
 
