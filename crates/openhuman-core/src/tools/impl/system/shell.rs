@@ -387,13 +387,18 @@ impl ShellTool {
             };
         }
 
-        // When the agent's sandbox mode is `Sandboxed`, route execution
-        // through the sandbox backend (Docker or OS-level jail) instead
-        // of the normal runtime. Security checks above still apply.
-        if matches!(
-            crate::agent::harness::current_sandbox_mode(),
-            Some(crate::agent::harness::definition::SandboxMode::Sandboxed)
-        ) {
+        // A sandboxed agent or an explicit operator backend uses the sandbox
+        // execution path. Security checks above still apply.
+        let sandbox_required = match crate::sandbox::command_requires_sandbox().await {
+            Ok(required) => required,
+            Err(err) => {
+                return (
+                    false,
+                    ToolResult::error(format!("Cannot read sandbox configuration: {err}")),
+                )
+            }
+        };
+        if sandbox_required {
             let action_dir = self.effective_action_dir_for_context(context);
             return self
                 .run_sandboxed(command, requested_timeout, &action_dir)

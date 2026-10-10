@@ -613,8 +613,12 @@ impl OpenHumanTurnPrelude {
         );
         run_context.dispatch = Some(Arc::new(
             crate::agent::tinyagents::host::TurnDispatchState::new(
-                crate::agent::tinyagents::agent_turn_wall_clock_ms()
-                    .map(std::time::Duration::from_millis),
+                crate::agent::tinyagents::agent_turn_wall_clock_ms_for(
+                    self.runtime_config
+                        .as_deref()
+                        .is_some_and(crate::agent::tinyagents::chat_provider_is_local),
+                )
+                .map(std::time::Duration::from_millis),
             ),
         ));
         run_context.sandbox_mode = Some(self.sandbox_mode);

@@ -6,7 +6,7 @@ Interactive approval workflow for supervised mode (issue #1339). `ApprovalGate` 
 
 - Intercept external-effect tool calls and gate them behind explicit user consent.
 - Short-circuit to `Allow` when the tool is on the user's `autonomy.auto_approve` allowlist (read live via `security::live_policy`).
-- Allow through (never park) when there is no live chat context: background/triage/cron turns carry no `ApprovalChatContext` and are pre-authorized.
+- Cron agent turns may use read-only tools and the job's configured delivery. Their external-effect calls are denied, including schedule mutation. Other automation follows its origin-specific gate policy.
 - Persist pending requests in SQLite so they survive a core restart; lazily expire stale rows; keep a durable decided/executed audit trail.
 - Resolve a parked call on a user decision (`approve_once` / `approve_always_for_tool` / `deny`), TTL timeout, or channel drop, failing closed in every non-approve path.
 - Redact arguments (`redact_args`) and build safe action summaries (`summarize_action`) before anything leaves the gate.
