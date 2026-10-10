@@ -106,7 +106,7 @@ export function contextBreakdownSegments(
     },
     {
       label: t('conversations.composer.context.output'),
-      tokens: usage.lastTurnOutputTokens,
+      tokens: output,
       tint: 'bg-emerald-500',
     },
     {
