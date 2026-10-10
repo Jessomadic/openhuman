@@ -82,6 +82,25 @@ pub(super) fn composio_connect_tool_timeout(
     }
 }
 
+/// Smallest park the gate is given once pre-gate work has used up the bound,
+/// so the card is still raised (and abandoned cleanly) rather than skipped.
+const COMPOSIO_CONNECT_MIN_PARK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The park bound left for the approval gate after `pre_gate` was spent on
+/// config loading and the connection/catalog reads that precede it.
+///
+/// The tool's own deadline ([`composio_connect_tool_timeout`]) is one budget
+/// for the whole call: park bound plus slack for the post-approval liveness
+/// check. Handing the gate the full bound after slow pre-gate reads let the
+/// tool deadline fire while the gate still waited, which lost the gate's
+/// actionable "card not completed" result to a bare timeout.
+pub(super) fn remaining_park_bound(
+    park_bound: Option<std::time::Duration>,
+    pre_gate: std::time::Duration,
+) -> Option<std::time::Duration> {
+    park_bound.map(|bound| bound.saturating_sub(pre_gate).max(COMPOSIO_CONNECT_MIN_PARK))
+}
+
 /// Pure core of [`composio_connect_timeout`], kept env-free so it is
 /// deterministically unit-testable. An absent/unparseable value falls back to
 /// [`DEFAULT_COMPOSIO_CONNECT_TIMEOUT_SECS`]; `0` yields `None` (opt out of the
@@ -221,6 +240,9 @@ impl ComposioConnectTool {
         // `google_drive` where Composio expects `googledrive` (#3993).
         let toolkit = canonicalize_toolkit_slug(raw_toolkit);
         tracing::debug!(raw = %raw_toolkit, toolkit = %toolkit, "[composio] tool connect.execute");
+        // The tool deadline covers this whole call, so the gate's park is
+        // charged for the reads that precede it (see `remaining_park_bound`).
+        let started = std::time::Instant::now();
 
         // The inline connect card only has a surface on an interactive chat
         // turn (the web-chat path installs `APPROVAL_CHAT_CONTEXT`). On
@@ -332,12 +354,20 @@ impl ComposioConnectTool {
         // the parked future and orphan the waiter/routing) per the codex review
         // on this PR. The reply is shaped so the agent RELAYS it and does NOT
         // immediately retry `composio_connect` (a retry would just park again).
+        let pre_gate = started.elapsed();
+        let park_bound = remaining_park_bound(composio_connect_timeout(), pre_gate);
+        tracing::debug!(
+            toolkit = %toolkit,
+            pre_gate_ms = pre_gate.as_millis() as u64,
+            park_bound_secs = park_bound.map(|bound| bound.as_secs()),
+            "[composio] connect.execute: parking on the connect card"
+        );
         let (outcome, _request_id) = match gate
             .intercept_audited_bounded(
                 "composio_connect",
                 &summary,
                 json!({ "toolkit": toolkit }),
-                composio_connect_timeout(),
+                park_bound,
             )
             .await
         {
