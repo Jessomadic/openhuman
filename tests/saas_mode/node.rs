@@ -10,6 +10,41 @@ use serde_json::{json, Value};
 
 use super::*;
 
+/// The last lines of a core's log, without the polling RPCs and without lines
+/// that may carry a credential.
+pub fn log_tail_of(path: &std::path::Path) -> String {
+    let log = std::fs::read_to_string(path).unwrap_or_default();
+    // The polling RPCs drown everything else out.
+    let lines: Vec<&str> = log
+        .lines()
+        .filter(|line| !line.contains("rpc_handler [rpc]"))
+        .collect();
+    // A failure trace is shared output: drop lines that may carry a
+    // credential and cap the rest.
+    lines[lines.len().saturating_sub(80)..]
+        .iter()
+        .map(|line| {
+            let lower = line.to_ascii_lowercase();
+            if [
+                "bearer",
+                "token",
+                "authorization",
+                "secret",
+                "password",
+                "canary",
+            ]
+            .iter()
+            .any(|k| lower.contains(k))
+            {
+                "[redacted log line]".to_string()
+            } else {
+                line.chars().take(300).collect()
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
 /// One core of a deployment.
 pub struct Node {
     pub name: String,
@@ -20,36 +55,7 @@ pub struct Node {
 
 impl Node {
     pub fn log_tail(&self) -> String {
-        let log = std::fs::read_to_string(&self.log).unwrap_or_default();
-        // The polling RPCs drown everything else out.
-        let lines: Vec<&str> = log
-            .lines()
-            .filter(|line| !line.contains("rpc_handler [rpc]"))
-            .collect();
-        // A failure trace is shared output: drop lines that may carry a
-        // credential and cap the rest.
-        lines[lines.len().saturating_sub(80)..]
-            .iter()
-            .map(|line| {
-                let lower = line.to_ascii_lowercase();
-                if [
-                    "bearer",
-                    "token",
-                    "authorization",
-                    "secret",
-                    "password",
-                    "canary",
-                ]
-                .iter()
-                .any(|k| lower.contains(k))
-                {
-                    "[redacted log line]".to_string()
-                } else {
-                    line.chars().take(300).collect()
-                }
-            })
-            .collect::<Vec<String>>()
-            .join("\n")
+        log_tail_of(&self.log)
     }
 
     pub fn kill(&mut self) {
@@ -86,72 +92,56 @@ pub fn start_node_logging(
     backend: Option<u16>,
     rust_log: &str,
 ) -> Node {
-    let port = free_port();
-    let base = format!("http://127.0.0.1:{port}");
-    let mut config = format!(
-        "root = {:?}\nnode_id = \"core-{name}\"\noperator_dir = {:?}\nlease_ttl_secs = 3\n",
-        d.root.display().to_string(),
-        d.tmp
-            .path()
-            .join(format!("operator-{name}"))
-            .display()
-            .to_string(),
-    );
-    if let Some(url) = storage_url {
-        config.push_str(&format!(
-            "storage_url = {url:?}\nadvertise_url = {base:?}\n"
-        ));
-    }
-    config.push_str(extra);
-    let config_path = d.tmp.path().join(format!("operator-{name}.toml"));
-    std::fs::write(&config_path, config).unwrap();
-
     let log = d.tmp.path().join(format!("core-{name}.log"));
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_openhuman-core"));
-    cmd.args(["run", "--mode", "saas", "--saas-config"])
-        .arg(&config_path)
-        .args(["--port", &port.to_string()])
-        .env("HOME", d.tmp.path())
-        .env("USERPROFILE", d.tmp.path())
-        .env("RUST_LOG", rust_log)
-        .stdout(std::fs::File::create(&log).unwrap())
-        .stderr(Stdio::null());
-    for var in SCRUBBED_ENV {
-        cmd.env_remove(var);
-    }
-    match backend {
-        Some(port) => cmd.env("BACKEND_URL", format!("http://127.0.0.1:{port}")),
-        None => cmd.env("BACKEND_URL", "http://127.0.0.1:9"),
-    };
-    let child: Child = cmd.spawn().expect("spawn openhuman-core");
-    let mut node = Node {
+    let config_path = d.tmp.path().join(format!("operator-{name}.toml"));
+    let (server, base) = spawn_core_with(
+        |port| {
+            // The operator file names the port (`advertise_url`), so it is
+            // written again for each port tried.
+            let base = format!("http://127.0.0.1:{port}");
+            let mut config = format!(
+                "root = {:?}\nnode_id = \"core-{name}\"\noperator_dir = {:?}\nlease_ttl_secs = 3\n",
+                d.root.display().to_string(),
+                d.tmp
+                    .path()
+                    .join(format!("operator-{name}"))
+                    .display()
+                    .to_string(),
+            );
+            if let Some(url) = storage_url {
+                config.push_str(&format!(
+                    "storage_url = {url:?}\nadvertise_url = {base:?}\n"
+                ));
+            }
+            config.push_str(extra);
+            std::fs::write(&config_path, config).unwrap();
+
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_openhuman-core"));
+            cmd.args(["run", "--mode", "saas", "--saas-config"])
+                .arg(&config_path)
+                .args(["--port", &port.to_string()])
+                .env("HOME", d.tmp.path())
+                .env("USERPROFILE", d.tmp.path())
+                .env("RUST_LOG", rust_log)
+                .stdout(std::fs::File::create(&log).unwrap())
+                .stderr(Stdio::null());
+            for var in SCRUBBED_ENV {
+                cmd.env_remove(var);
+            }
+            match backend {
+                Some(port) => cmd.env("BACKEND_URL", format!("http://127.0.0.1:{port}")),
+                None => cmd.env("BACKEND_URL", "http://127.0.0.1:9"),
+            };
+            cmd
+        },
+        || format!("core {name}:\n{}", log_tail_of(&log)),
+    );
+    Node {
         name: name.to_string(),
-        server: Server(child),
+        server,
         base,
         log,
-    };
-    let client = client();
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !client
-        .get(format!("{}/health", node.base))
-        .send()
-        .is_ok_and(|r| r.status().is_success())
-    {
-        if let Ok(Some(status)) = node.server.0.try_wait() {
-            panic!(
-                "core {} exited before serving: {status}\n{}",
-                node.name,
-                node.log_tail()
-            );
-        }
-        assert!(
-            Instant::now() < deadline,
-            "core {} never became healthy",
-            name
-        );
-        std::thread::sleep(Duration::from_millis(250));
     }
-    node
 }
 
 pub fn client() -> reqwest::blocking::Client {

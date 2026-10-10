@@ -53,30 +53,19 @@ impl Stack {
     fn start() -> Self {
         let d = deployment(true);
         let mock = MockMemory::start();
-        let port = free_port();
         let log = d.tmp.path().join("core.log");
-        let child = core_command(&d, &["--port", &port.to_string()])
-            .env("BACKEND_URL", format!("http://127.0.0.1:{}", mock.port))
-            .env("RUST_LOG", "info,openhuman::memory=debug")
-            .stdout(std::fs::File::create(&log).unwrap())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn openhuman-core");
-        let server = Server(child);
-        let base = format!("http://127.0.0.1:{port}");
+        let (server, base) = spawn_core(|port| {
+            let mut cmd = core_command(&d, &["--port", &port.to_string()]);
+            cmd.env("BACKEND_URL", format!("http://127.0.0.1:{}", mock.port))
+                .env("RUST_LOG", "info,openhuman::memory=debug")
+                .stdout(std::fs::File::create(&log).unwrap())
+                .stderr(Stdio::null());
+            cmd
+        });
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(120);
-        while !client
-            .get(format!("{base}/health"))
-            .send()
-            .is_ok_and(|r| r.status().is_success())
-        {
-            assert!(Instant::now() < deadline, "SaaS core never became healthy");
-            std::thread::sleep(Duration::from_millis(250));
-        }
         Self {
             _server: server,
             base,

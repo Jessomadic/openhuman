@@ -246,11 +246,13 @@ fn probe_availability() -> bool {
         backend().name()
     );
 
-    // File-based and mock backends are always available.
     let b = backend();
-    if b.name() == "file" || b.name() == "mock" || b.name() == "encrypted_file" {
-        log::debug!("[keyring] is_available=true (non-os backend)");
-        return true;
+    if let Some(available) = backend_availability_without_probe(
+        b.name(),
+        super::encrypted_file_backend::master_key_available(),
+    ) {
+        log::debug!("[keyring] is_available={available} (non-os backend)");
+        return available;
     }
 
     let result = (|| -> Result<bool, KeyringError> {
@@ -281,6 +283,14 @@ fn probe_availability() -> bool {
             );
             false
         }
+    }
+}
+
+fn backend_availability_without_probe(name: &str, encrypted_key_available: bool) -> Option<bool> {
+    match name {
+        "file" | "mock" => Some(true),
+        "encrypted_file" => Some(encrypted_key_available),
+        _ => None,
     }
 }
 

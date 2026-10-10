@@ -31,3 +31,30 @@ fn unknown_backend_override_falls_back_to_environment_default() {
         BackendKind::EncryptedFile
     );
 }
+
+#[test]
+fn unset_app_environment_defaults_to_encrypted_file() {
+    assert_eq!(
+        effective_backend_kind_for(None, None, false),
+        BackendKind::EncryptedFile
+    );
+}
+
+#[test]
+fn only_explicit_development_environments_default_to_plain_file() {
+    for app_env in ["dev", "development", " dev "] {
+        assert_eq!(
+            effective_backend_kind_for(Some(app_env), None, false),
+            BackendKind::File,
+            "{app_env} should explicitly select the development default"
+        );
+    }
+
+    for app_env in ["", "production", "staging", "unknown"] {
+        assert_eq!(
+            effective_backend_kind_for(Some(app_env), None, false),
+            BackendKind::EncryptedFile,
+            "{app_env} must not silently select plaintext storage"
+        );
+    }
+}

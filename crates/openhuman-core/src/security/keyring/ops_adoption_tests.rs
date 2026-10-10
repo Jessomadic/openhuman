@@ -11,6 +11,27 @@ use crate::security::keyring::adapter::tests::fake_os_backend;
 use crate::security::keyring::KeyringBackend;
 use crate::storage::{MemoryStorage, Scope, StorageBackend};
 
+#[test]
+fn encrypted_file_is_unavailable_without_an_initialized_master_key() {
+    assert_eq!(
+        backend_availability_without_probe("encrypted_file", false),
+        Some(false)
+    );
+    assert_eq!(
+        backend_availability_without_probe("encrypted_file", true),
+        Some(true)
+    );
+    assert_eq!(
+        backend_availability_without_probe("file", false),
+        Some(true)
+    );
+    assert_eq!(
+        backend_availability_without_probe("mock", false),
+        Some(true)
+    );
+    assert_eq!(backend_availability_without_probe("os", false), None);
+}
+
 fn storage_secrets_in(
     storage: &MemoryStorage,
     scope: &str,

@@ -107,7 +107,7 @@
   {
     "rule": "ambient-context",
     "path": "crates/openhuman-core/src/agent/session_store/mod.rs",
-    "line": 211,
+    "line": 223,
     "text": "crate::core::runtime::CoreContext::current()",
     "occurrence": 1
   },
@@ -792,13 +792,6 @@
   },
   {
     "rule": "bare-spawn",
-    "path": "crates/openhuman-core/src/memory/lifecycle/hooks.rs",
-    "line": 241,
-    "text": "let task = tokio::spawn(async move {",
-    "occurrence": 1
-  },
-  {
-    "rule": "bare-spawn",
     "path": "crates/openhuman-core/src/modules/ops.rs",
     "line": 274,
     "text": "let found_on_search_path = tokio::task::spawn_blocking(move || {",
@@ -849,8 +842,8 @@
   {
     "rule": "home-dir",
     "path": "crates/openhuman-core/src/sandbox/ops.rs",
-    "line": 116,
-    "text": "resolve_local_jail_grants(dirs::home_dir().as_deref(), &runtime_config.local_jail)",
+    "line": 639,
+    "text": "dirs::home_dir()",
     "occurrence": 1
   },
   {
@@ -940,7 +933,7 @@
   {
     "rule": "home-dir",
     "path": "crates/openhuman-core/src/skills/ops_discover/api.rs",
-    "line": 65,
+    "line": 72,
     "text": "dirs::home_dir()",
     "occurrence": 1
   },
@@ -1019,20 +1012,6 @@
     "path": "crates/openhuman-core/src/skills/webhooks/router.rs",
     "line": 554,
     "text": "tokio::task::spawn_blocking(do_write);",
-    "occurrence": 1
-  },
-  {
-    "rule": "ambient-context",
-    "path": "crates/openhuman-core/src/skills/write_root.rs",
-    "line": 25,
-    "text": "let workspace = crate::core::runtime::CoreContext::current()?",
-    "occurrence": 1
-  },
-  {
-    "rule": "ambient-context",
-    "path": "crates/openhuman-core/src/storage/agents.rs",
-    "line": 179,
-    "text": "let acting = CoreContext::current().is_some_and(|context| context.session_agent().is_some());",
     "occurrence": 1
   },
   {

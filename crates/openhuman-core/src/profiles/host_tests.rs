@@ -46,8 +46,12 @@ async fn an_open_profile_runs_under_its_own_scope() {
     let state_a = host.open(&a).await.unwrap();
     let state_b = host.open(&b).await.unwrap();
 
-    assert_eq!(state_a.context().session_agent(), Some(a.as_str()));
-    assert_eq!(state_b.context().session_agent(), Some(b.as_str()));
+    // A profile's default agent runs as the desktop's does: no agent id, the
+    // profile is the tenant key.
+    assert_eq!(state_a.context().session_agent(), None);
+    assert_eq!(state_b.context().session_agent(), None);
+    assert_eq!(state_a.context().profile(), Some(a.as_str()));
+    assert_eq!(state_b.context().profile(), Some(b.as_str()));
     let config_a = state_a.context().embedder_config().unwrap();
     let config_b = state_b.context().embedder_config().unwrap();
     assert_ne!(config_a.workspace_dir, config_b.workspace_dir);

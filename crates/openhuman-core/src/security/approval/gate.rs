@@ -68,13 +68,26 @@ pub enum ApprovalError {
     WrongAgent { request_id: String },
 }
 
-/// The key `thread_to_request` files a parked chat thread under: the thread
-/// id alone for the process's own sessions, else the agent and thread.
-pub(crate) fn thread_route_key(agent_id: Option<&str>, thread_id: &str) -> String {
-    match agent_id {
-        Some(agent) => format!("{agent}\u{1f}{thread_id}"),
-        None => thread_id.to_string(),
+/// The key `thread_to_request` files a parked chat thread under, keyed by
+/// the tenant that parked it: the thread id alone for the process's own
+/// sessions, `<agent>\x1f<thread>` for an embedded agent (both unchanged),
+/// and the [`tenant_key`](crate::core::runtime::tenant_key) of the thread for
+/// a SaaS profile, so two profiles' default agents (which have no agent id)
+/// never share a route. A profile key starts with `\x1e`, which no agent id
+/// contains, and the desktop and SaaS modes never share a process.
+pub(crate) fn thread_route_key(tenant: &crate::core::runtime::Tenant, thread_id: &str) -> String {
+    match (&tenant.profile, &tenant.agent) {
+        (Some(_), _) => crate::core::runtime::tenant_key(tenant, thread_id),
+        (None, Some(agent)) => format!("{agent}\u{1f}{thread_id}"),
+        (None, None) => thread_id.to_string(),
     }
+}
+
+/// The tenant whose approvals the calling task parks and answers. A SaaS
+/// task with no scope gets a tenant nothing else shares, so it can neither
+/// find nor clear another user's route.
+pub(crate) fn current_route_tenant() -> crate::core::runtime::Tenant {
+    crate::core::runtime::tenant::current_tenant_or_isolated("approval_gate")
 }
 
 /// How long the gate will park a future before timing out and
@@ -255,6 +268,9 @@ pub(crate) struct RequestRoute {
     pub(crate) tool_call_id: Option<String>,
     pub(crate) forced: bool,
     pub(crate) agent_id: Option<String>,
+    /// The [`thread_route_key`] the request was parked under, so a decision
+    /// made outside the parking task's scope clears the right route.
+    pub(crate) thread_key: Option<String>,
     /// The park can outlive the chat turn it is shown on — an async-delegated
     /// sub-agent routed through the origin fallback (#5499). Carried so the
     /// replay path re-emits the same `detached` flag the live event had.
