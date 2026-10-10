@@ -489,11 +489,13 @@ fn observation_to_progress(obs: &AgentObservation, state: &mut ReplayState) -> V
             // `usage_carry` side-channel, which is not an `AgentEvent` and is not
             // journalled (§2a of the C4 parity plan), so the projection prices
             // the call with the same estimator the live path uses as its floor.
-            // The token counts are exact; `cost_usd` is an estimate.
+            // The token counts are exact; `cost_usd` is a catalog estimate, and
+            // adds nothing for a model the catalog does not price.
             state.cost_usd += crate::agent::cost::estimate_call_cost_usd(
                 &state.model,
                 &crate::inference::provider::BilledUsage::from_counts(usage.input_tokens, usage.output_tokens).with_cached_input_tokens(usage.cache_read_tokens).with_cache_creation_tokens(usage.cache_creation_tokens).with_reasoning_tokens(usage.reasoning_tokens),
-            );
+            )
+            .unwrap_or(0.0);
             state.input_tokens += usage.input_tokens;
             state.output_tokens += usage.output_tokens;
             state.cached_input_tokens += usage.cache_read_tokens;

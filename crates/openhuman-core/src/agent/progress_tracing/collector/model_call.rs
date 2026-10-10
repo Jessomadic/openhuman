@@ -136,18 +136,22 @@ impl SpanCollector {
         }
         // Pricing basis so Langfuse cost figures are auditable against the
         // client-side estimator (USD per million tokens).
-        attrs.insert(
-            "gen_ai.pricing.input_per_mtok_usd".to_string(),
-            json_f64(pricing.input_per_mtok_usd),
-        );
-        attrs.insert(
-            "gen_ai.pricing.cached_input_per_mtok_usd".to_string(),
-            json_f64(pricing.cached_input_per_mtok_usd),
-        );
-        attrs.insert(
-            "gen_ai.pricing.output_per_mtok_usd".to_string(),
-            json_f64(pricing.output_per_mtok_usd),
-        );
+        // Omitted for a model the catalog does not price: a made-up basis
+        // would make the trace's cost look audited when it is not.
+        if let Some(pricing) = pricing {
+            attrs.insert(
+                "gen_ai.pricing.input_per_mtok_usd".to_string(),
+                json_f64(pricing.input_per_mtok_usd),
+            );
+            attrs.insert(
+                "gen_ai.pricing.cached_input_per_mtok_usd".to_string(),
+                json_f64(pricing.cached_input_per_mtok_usd),
+            );
+            attrs.insert(
+                "gen_ai.pricing.output_per_mtok_usd".to_string(),
+                json_f64(pricing.output_per_mtok_usd),
+            );
+        }
 
         log::debug!(
             "[agent-tracing] generation span model={labeled_model} \
