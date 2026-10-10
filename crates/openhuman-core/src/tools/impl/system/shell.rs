@@ -2,7 +2,6 @@ use super::shell_platform::{
     command_param_description, python_utf8_env, shell_child_env, shell_description,
 };
 use crate::agent::host_runtime::RuntimeAdapter;
-use crate::agent::platform_shell::ShellFlavor;
 use crate::runtime::javascript::NodeBootstrap;
 use crate::runtime::python::PythonBootstrap;
 use crate::security::{AuditLogger, CommandExecutionLog, GateDecision, SecurityPolicy};
