@@ -115,3 +115,24 @@ fn the_store_dispatches_to_documents_when_a_backend_is_pinned() {
         .join(".openhuman/subagent_sessions.json")
         .exists());
 }
+
+#[test]
+fn a_stale_snapshot_does_not_revert_a_newer_session() {
+    let docs = docs_in(&MemoryStorage::new(), "local");
+    let old = session("a");
+    docs.save(&[old.clone()]).unwrap();
+
+    // Another core finishes the session.
+    let mut newer = old.clone();
+    newer.status = DurableSubagentStatus::Failed;
+    newer.updated_at = "2026-03-01T00:00:00Z".into();
+    docs.save(&[newer]).unwrap();
+
+    // This core still holds the old snapshot and saves it with a new session.
+    docs.save(&[old, session("b")]).unwrap();
+
+    let loaded = docs.load().unwrap();
+    assert_eq!(loaded.len(), 2);
+    let a = loaded.iter().find(|s| s.subagent_session_id == "a").unwrap();
+    assert_eq!(a.status, DurableSubagentStatus::Failed);
+}
