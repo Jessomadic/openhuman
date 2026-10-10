@@ -57,7 +57,8 @@ export function TaskStateIcon({ state, className }: { state: TaskCardState; clas
         aria-hidden
         className={cn(
           'text-muted-foreground size-3.5 shrink-0 animate-spin motion-reduce:animate-none',
-          className
+          (!dock || (state !== 'working' && state !== 'waiting')) && 'my-3',
+        className
         )}
       />
     );
@@ -122,14 +123,14 @@ export function TaskCard({
         className="hover:enabled:bg-foreground/[0.03] flex items-center gap-2.5 px-3.5 py-2.5 text-start transition-colors disabled:cursor-default">
         <TaskStateIcon state={state} />
         <span className="sr-only">{t(`conversations.taskCard.state.${state}`)}</span>
-        <span className="min-w-0 flex-1 truncate text-[13.5px]">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
         {meta !== undefined && (
-          <span className={cn(mono, 'text-muted-foreground max-w-24 shrink-0 truncate')}>
+          <span className={cn(mono, 'text-muted-foreground text-xs max-w-32 shrink-0 truncate')}>
             {meta}
           </span>
         )}
         {elapsed !== undefined && (
-          <span className={cn(mono, 'text-muted-foreground shrink-0 tabular-nums')}>{elapsed}</span>
+          <span className={cn(mono, 'text-muted-foreground text-xs shrink-0 tabular-nums')}>{elapsed}</span>
         )}
         {hasTranscript && (
           <ChevronRightIcon

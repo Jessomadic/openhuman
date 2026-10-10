@@ -1249,7 +1249,7 @@ const AssistantMessage: FC = () => {
         <MessageError />
         <ChatErrorNotice />
         {MessageTasks && (
-          <div className="mt-3">
+          <div>
             <MessageTasks />
           </div>
         )}
