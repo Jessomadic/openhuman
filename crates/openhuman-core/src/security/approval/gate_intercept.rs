@@ -55,13 +55,16 @@ impl ApprovalGate {
         // saved prompt and deliver its answer, not permission for arbitrary
         // future external effects. Enforce this before global auto-approval,
         // per-tool allowlists, and per-agent approval bypasses.
-        if matches!(
-            &origin,
-            AgentTurnOrigin::TrustedAutomation {
-                source: TrustedAutomationSource::Cron,
-                ..
-            }
-        ) {
+        if let AgentTurnOrigin::TrustedAutomation {
+            source: TrustedAutomationSource::Cron,
+            job_id,
+        } = &origin
+        {
+            tracing::warn!(
+                tool = tool_name,
+                job_id = %job_id,
+                "[approval::gate] scheduled agent external effect denied"
+            );
             return (
                 GateOutcome::Deny {
                     reason: format!(
