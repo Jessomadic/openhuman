@@ -203,7 +203,7 @@ async fn host_commands_receive_stdin_and_timeout_after_reaping() {
     let pidfile = scratch.path().join("host.pid");
     let mut cmd = tokio::process::Command::new("/bin/sh");
     cmd.args(["-c", &format!("echo $$ > {}; sleep 30", pidfile.display())]);
-    let outer = ProcessCleanup::default();
+    let outer = openhuman_embed::process::CommandCleanup::default();
     let result = outer
         .scope(openhuman_embed::process::command_output(
             &mut cmd,

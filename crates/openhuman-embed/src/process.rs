@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 
 pub use openhuman_core::core::runtime::{AGENT_WORKER_STACK_BYTES, MAX_BLOCKING_THREADS};
 
+/// Scoped ownership for host commands outside an agent turn. After dropping
+/// the scoped future, await `wait()` before acknowledging cancellation.
+pub use openhuman_core::tools::timeout::ProcessCleanup as CommandCleanup;
+
 #[cfg(feature = "crash-reporting")]
 #[path = "process_sentry.rs"]
 pub mod sentry;
