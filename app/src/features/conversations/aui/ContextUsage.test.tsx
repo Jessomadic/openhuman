@@ -74,6 +74,22 @@ describe('ContextUsage', () => {
     expect(trigger).toHaveTextContent('25%');
   });
 
+  it('fills the ring from the last call of a many-call turn, not its summed spend', () => {
+    // 5.7M input summed over 72 calls would pin the ring at 100% of a 1M
+    // window; the final request held ~100k.
+    renderUsage(
+      {},
+      {
+        lastTurnInputTokens: 5_710_657,
+        lastTurnOutputTokens: 30_790,
+        lastTurnContextTokens: 100_000,
+        contextWindow: 1_000_000,
+      }
+    );
+
+    expect(screen.getByTestId('composer-context-usage')).toHaveTextContent('10%');
+  });
+
   it("prefers the selected model's window over the one the last turn reported", () => {
     renderUsage({ modelContextWindow: 100_000 });
 
