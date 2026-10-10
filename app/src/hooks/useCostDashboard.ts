@@ -52,7 +52,11 @@ export interface CostUsageRecord {
   cache_creation_tokens: number;
   reasoning_tokens: number;
   cost_usd: number;
-  cost_source: 'estimated' | 'provider_charged';
+  /**
+   * `unknown`: no charge was reported and the model has no catalogued price,
+   * so `cost_usd` is `0` and must not be shown as free.
+   */
+  cost_source: 'estimated' | 'provider_charged' | 'unknown';
 }
 
 export interface CostUsageCategoryStats {
