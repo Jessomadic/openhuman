@@ -243,12 +243,18 @@ pub fn format_event(ev: &AgentProgress) -> Option<String> {
 }
 
 /// Drain the progress channel to the log until the agent drops its sender.
-pub async fn drain_to_log(mut rx: Receiver<AgentProgress>, path: PathBuf) {
+/// Returns how the run's turn was stopped early, if its `TurnCompleted` said
+/// so, so the caller can write a `STOPPED` footer instead of `DONE`.
+pub async fn drain_to_log(
+    mut rx: Receiver<AgentProgress>,
+    path: PathBuf,
+) -> Option<crate::agent::turn_stop::TurnStop> {
     while let Some(ev) = rx.recv().await {
         if let Some(line) = format_event(&ev) {
             let _ = append(&path, &line).await;
         }
     }
+    None
 }
 
 /// Detect the degenerate "model emitted the same paragraph many times in one
