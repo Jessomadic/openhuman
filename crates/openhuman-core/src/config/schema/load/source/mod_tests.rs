@@ -536,7 +536,7 @@ async fn a_recovered_file_fallback_rewrites_the_bootstrap_file_too() {
     let source = for_config(&config.config_path).unwrap();
     assert_eq!(source.label(), "document");
 
-    crate::config::schema::load::branches::save_recovered(&config, source.as_ref())
+    super::super::branches::save_recovered(&config, source.as_ref())
         .await
         .unwrap();
 
