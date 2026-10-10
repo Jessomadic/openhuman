@@ -4,7 +4,9 @@
 //! so a test can check which credential carried which content. Inference
 //! (`…/chat/completions`) is answered from the last message:
 //!
-//! - after a tool result: `TOOL-RESULT: <the tool's output>`;
+//! - after a tool result: `TOOL-RESULT: <the tool's output>`, unless the user
+//!   message holds [`HANG_AFTER_TOOL`]: then the follow-up request is held open
+//!   like [`HANG`], so the turn stays in flight after its tool call ran;
 //! - a user message containing [`HANG`]: the request is held open until the
 //!   peer goes away, so the turn stays in flight until it is cancelled;
 //! - a user message containing `PROBE-TOOL <name> <json args>`: one call to
@@ -26,6 +28,9 @@ use serde_json::{json, Value};
 pub const HANG: &str = "HANG-TURN";
 /// Marks a user message whose turn calls a tool: `PROBE-TOOL <name> <json>`.
 pub const PROBE: &str = "PROBE-TOOL";
+/// Marks a user message whose turn, once its tool call has run, must stay in
+/// flight: put it on a line after the [`PROBE`] line.
+pub const HANG_AFTER_TOOL: &str = "HANG-AFTER-TOOL";
 
 /// One request the backend received.
 #[derive(Debug, Clone)]
@@ -192,18 +197,21 @@ pub fn content_text(message: &Value) -> String {
 fn reply_for(request: &Value) -> Reply {
     let messages = request["messages"].as_array().cloned().unwrap_or_default();
     let agent_turn = request["tools"].as_array().is_some_and(|t| !t.is_empty());
-    if let Some(last) = messages.last() {
-        if last["role"] == "tool" {
-            let output: String = content_text(last).chars().take(4000).collect();
-            return Reply::Text(format!("TOOL-RESULT: {output}"));
-        }
-    }
     let text = messages
         .iter()
         .rev()
         .find(|m| m["role"] == "user")
         .map(content_text)
         .unwrap_or_default();
+    if let Some(last) = messages.last() {
+        if last["role"] == "tool" {
+            if agent_turn && text.contains(HANG_AFTER_TOOL) {
+                return Reply::Hang;
+            }
+            let output: String = content_text(last).chars().take(4000).collect();
+            return Reply::Text(format!("TOOL-RESULT: {output}"));
+        }
+    }
     if agent_turn && text.contains(HANG) {
         return Reply::Hang;
     }
