@@ -206,7 +206,10 @@ async fn no_acting_agent_falls_back_to_the_local_scope(case: Case) {
     // and the storage the stores read is that scope's.
     assert_eq!(storage::current_scope().unwrap(), Scope::local());
     assert!(storage::current_scoped().unwrap().is_some());
-    assert_eq!(storage::scope_from(None, None, false).unwrap(), Scope::local());
+    assert_eq!(
+        storage::scope_from(None, None, false).unwrap(),
+        Scope::local()
+    );
     // SaaS mode refuses the same call instead of sharing a bucket.
     assert!(storage::scope_from(None, None, true).is_err());
 
