@@ -385,6 +385,8 @@ impl ProfileHost {
     /// host it at once. Returns whether it was open here. A profile in use
     /// is not released from under its work.
     pub async fn release(&self, id: &ProfileId) -> Result<bool, String> {
+        // Lifecycle lock before the gate, as every lifecycle operation does.
+        let _profile = self.lifecycle.lock(id).await;
         let _gate = self.gate.lock().await;
         let Some(grant) = self.close_if_idle(id)? else {
             return Ok(false);

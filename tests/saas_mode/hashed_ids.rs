@@ -233,7 +233,9 @@ fn hashed_profile_ids_keep_user_ids_off_disk_out_of_responses_and_logs() {
     }
     assert_free_of_user_ids("a response", &seen);
     for log in &logs {
-        let text = std::fs::read_to_string(log).unwrap_or_default();
+        // The CLI server's logging layer writes to stderr (`<name>.err`).
+        let mut text = std::fs::read_to_string(log).unwrap_or_default();
+        text.push_str(&std::fs::read_to_string(log.with_extension("err")).unwrap_or_default());
         assert!(
             text.contains("[profiles]"),
             "the log was captured: {}",

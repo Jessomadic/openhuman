@@ -176,6 +176,7 @@ impl ProfileHost {
             // leave the secret for a re-provisioned profile to inherit.
             return Err(format!("clearing credentials before archiving: {e}"));
         }
+        let mut moved: Option<std::path::PathBuf> = None;
         if layout.dir.exists() {
             let archive = layout::archive_dir(&self.saas.root);
             std::fs::create_dir_all(&archive)
@@ -188,8 +189,21 @@ impl ProfileHost {
             ));
             std::fs::rename(&layout.dir, &dest)
                 .map_err(|e| format!("archiving {}: {e}", layout.dir.display()))?;
+            moved = Some(dest);
         }
-        self.registry.remove(id).await?;
+        if let Err(error) = self.registry.remove(id).await {
+            // The record still advertises the profile: put its directory back
+            // so an open does not recreate an empty one over archived state.
+            if let Some(dest) = moved {
+                if let Err(e) = std::fs::rename(&dest, &layout.dir) {
+                    log::error!(
+                        "[profiles] restoring {} after a failed record removal failed: {e}",
+                        layout.dir.display()
+                    );
+                }
+            }
+            return Err(error);
+        }
         Ok(())
     }
 
