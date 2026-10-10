@@ -64,8 +64,12 @@ fn park_as(
     ))
 }
 
+/// The request `tenant` parked on `t-test`. Returns as soon as it is parked;
+/// the ceiling only turns a turn that never parks into a failure instead of a
+/// hang, and is far above any scheduling delay a loaded CI runner adds.
 async fn parked_for(gate: &ApprovalGate, tenant: &Tenant) -> String {
-    for _ in 0..200 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while tokio::time::Instant::now() < deadline {
         if let Some(request_id) = gate.pending_for_tenant_thread(tenant, "t-test") {
             return request_id;
         }
