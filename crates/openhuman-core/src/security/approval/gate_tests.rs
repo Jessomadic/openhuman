@@ -206,9 +206,9 @@ mod core_flow_tests;
 mod forced_tests;
 #[path = "gate_origin_intercept_tests.rs"]
 mod origin_intercept_tests;
+#[path = "gate_tenant_tests.rs"]
+mod tenant_tests;
 #[path = "gate_triage_tests.rs"]
 mod triage_tests;
 #[path = "gate_ttl_and_triage_tests.rs"]
 mod ttl_and_triage_tests;
-#[path = "gate_tenant_tests.rs"]
-mod tenant_tests;

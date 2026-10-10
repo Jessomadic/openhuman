@@ -40,7 +40,10 @@ fn profile_route_keys_are_distinct_per_profile_and_from_the_desktop() {
     let b = thread_route_key(&tenant(Some("bob"), None), "t-1");
     assert_ne!(a, b);
     assert_ne!(a, "t-1");
-    assert_ne!(a, thread_route_key(&tenant(Some("alice"), Some("alice")), "t-1"));
+    assert_ne!(
+        a,
+        thread_route_key(&tenant(Some("alice"), Some("alice")), "t-1")
+    );
     assert!(a.starts_with('\u{1e}'), "a profile key is marked: {a:?}");
 }
 
@@ -88,7 +91,10 @@ async fn two_profiles_default_agents_park_on_one_thread_id_apart() {
         let gate = Arc::clone(&gate);
         CoreContext::scope(ctx, async move { gate.pending_for_thread("t-test") })
     };
-    assert_eq!(seen_by(Arc::clone(&alice)).await, Some(alice_request.clone()));
+    assert_eq!(
+        seen_by(Arc::clone(&alice)).await,
+        Some(alice_request.clone())
+    );
     assert_eq!(seen_by(Arc::clone(&bob)).await, Some(bob_request.clone()));
     // The process's own (unprofiled) route for the thread stays empty.
     assert!(gate.pending_for_agent_thread(None, "t-test").is_none());
@@ -97,8 +103,17 @@ async fn two_profiles_default_agents_park_on_one_thread_id_apart() {
     gate.decide(&bob_request, ApprovalDecision::Deny).unwrap();
     let (alice_outcome, _) = alice_turn.await.unwrap();
     let (bob_outcome, _) = bob_turn.await.unwrap();
-    assert!(matches!(alice_outcome, GateOutcome::Deny { .. }), "{alice_outcome:?}");
-    assert!(matches!(bob_outcome, GateOutcome::Deny { .. }), "{bob_outcome:?}");
-    assert!(seen_by(alice).await.is_none(), "a decision clears the route");
+    assert!(
+        matches!(alice_outcome, GateOutcome::Deny { .. }),
+        "{alice_outcome:?}"
+    );
+    assert!(
+        matches!(bob_outcome, GateOutcome::Deny { .. }),
+        "{bob_outcome:?}"
+    );
+    assert!(
+        seen_by(alice).await.is_none(),
+        "a decision clears the route"
+    );
     assert!(seen_by(bob).await.is_none());
 }

@@ -138,18 +138,14 @@ pub fn transcripts_or_files(
     agent_id: &str,
     workspace_dir: &std::path::Path,
 ) -> Arc<dyn tinyagents_session::transcript::TranscriptLocator> {
-    transcripts_for(agent_id).unwrap_or_else(|| {
-        match current_embedded_agent() {
-            Some(embedded) => {
-                log::debug!(
-                    "[session_store] transcripts under the agent's directory agent={embedded}"
-                );
-                Arc::new(AgentTranscriptFiles::new(workspace_dir, &embedded))
-            }
-            None => Arc::new(tinyagents_session::transcript::FileTranscriptLocator::new(
-                workspace_dir,
-            )),
+    transcripts_for(agent_id).unwrap_or_else(|| match current_embedded_agent() {
+        Some(embedded) => {
+            log::debug!("[session_store] transcripts under the agent's directory agent={embedded}");
+            Arc::new(AgentTranscriptFiles::new(workspace_dir, &embedded))
         }
+        None => Arc::new(tinyagents_session::transcript::FileTranscriptLocator::new(
+            workspace_dir,
+        )),
     })
 }
 

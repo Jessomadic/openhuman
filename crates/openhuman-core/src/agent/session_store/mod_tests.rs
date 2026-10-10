@@ -72,10 +72,7 @@ async fn without_a_store_transcripts_are_workspace_files() {
     assert_eq!(found, expected);
 }
 
-fn derived(
-    profile: Option<&str>,
-    agent: Option<&str>,
-) -> Arc<crate::core::runtime::CoreContext> {
+fn derived(profile: Option<&str>, agent: Option<&str>) -> Arc<crate::core::runtime::CoreContext> {
     use crate::core::runtime::{ContextOverlay, CoreContext, DomainSet};
     let mut overlay = ContextOverlay::new(
         crate::config::Config::default(),
@@ -91,10 +88,7 @@ fn derived(
     CoreContext::for_test(DomainSet::full(), None).derive_with(overlay)
 }
 
-async fn under<T>(
-    ctx: Arc<crate::core::runtime::CoreContext>,
-    f: impl FnOnce() -> T,
-) -> T {
+async fn under<T>(ctx: Arc<crate::core::runtime::CoreContext>, f: impl FnOnce() -> T) -> T {
     crate::core::runtime::CoreContext::scope(ctx, async move { f() }).await
 }
 
@@ -141,6 +135,11 @@ async fn two_profiles_default_agents_keep_separate_session_keys_and_stores() {
     assert_ne!(alice, bob);
     assert_eq!(
         alice,
-        Some(provider.for_agent("alice~default").transcripts.destination_key())
+        Some(
+            provider
+                .for_agent("alice~default")
+                .transcripts
+                .destination_key()
+        )
     );
 }

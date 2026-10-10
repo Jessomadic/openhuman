@@ -97,8 +97,7 @@ async fn reading_an_agents_connections_does_not_create_its_host() {
 /// own workspace, a profile id, and no agent id.
 fn profile_context(config: &Config, profile: &str) -> Arc<CoreContext> {
     CoreContext::for_test_with_config(DomainSet::full(), config.clone()).derive_with(
-        ContextOverlay::new(config.clone(), DomainSet::full(), ToolGroups::none())
-            .profile(profile),
+        ContextOverlay::new(config.clone(), DomainSet::full(), ToolGroups::none()).profile(profile),
     )
 }
 
@@ -133,7 +132,11 @@ async fn two_profiles_default_agents_get_their_own_hosts_and_never_the_default()
 
     let ambient_alice =
         CoreContext::scope(profile_context(&alice, "alice"), async { try_service() }).await;
-    let ambient_bob = CoreContext::scope(profile_context(&bob, "bob"), async { try_service() }).await;
-    assert!(Arc::ptr_eq(&ambient_alice.expect("alice's host"), &alice_host));
+    let ambient_bob =
+        CoreContext::scope(profile_context(&bob, "bob"), async { try_service() }).await;
+    assert!(Arc::ptr_eq(
+        &ambient_alice.expect("alice's host"),
+        &alice_host
+    ));
     assert!(Arc::ptr_eq(&ambient_bob.expect("bob's host"), &bob_host));
 }
