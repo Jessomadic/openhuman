@@ -213,7 +213,6 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
                     &snapshot,
                     &sidecar,
                     started.elapsed(),
-                    &self.model_name,
                 ));
             }
         };
@@ -523,7 +522,6 @@ fn driver_error_with_snapshot(
         std::sync::Mutex<crate::agent::tinyagents::host::run_context::SessionTurnSidecar>,
     >,
     elapsed: std::time::Duration,
-    fallback_model: &str,
 ) -> DriverFailure {
     // Classify from the typed harness error when the chain carries one, rather
     // than matching on its rendered text.
