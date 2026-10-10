@@ -1181,7 +1181,9 @@ export function buildRuntimeMessages(
       projection.liveTimelineRequestId !== requestId;
     const useSettledLiveFallback =
       projection.isRunning === false &&
-      !pendingApproval &&
+      // A detached approval's tail carries none of these rows (see
+      // `detachedAfterTurn`), so the settled message keeps them.
+      (!pendingApproval || detachedAfterTurn) &&
       msg.id === lastVisibleAgentId &&
       !persistedTimeline &&
       !persistedTranscript &&
