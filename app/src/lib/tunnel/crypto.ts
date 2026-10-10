@@ -7,7 +7,7 @@
  *
  * Frames produced with the previous `version=0x01` shape (single shared
  * key, same key in both directions, no KDF) are no longer accepted. Peers
- * see a distinctive "re-pair required" error instead of a generic AEAD
+ * see a distinctive "client upgrade required" error instead of a generic AEAD
  * authentication failure.
  *
  * Sealed-handshake format (device → core, first frame) uses marker 0x03,
@@ -222,7 +222,7 @@ function openWithKey(key: Uint8Array, frame: Uint8Array, tracker: ReplayTracker)
   }
   if (frame[0] === LEGACY_FRAME_VERSION_V1) {
     throw new Error(
-      '[crypto] UnsupportedFrameVersion: legacy v1 frame rejected — peer must re-pair to upgrade to v2 directional subkeys'
+      '[crypto] UnsupportedFrameVersion: legacy v1 frame rejected — peer must upgrade to v2 directional subkeys before reconnecting'
     );
   }
   if (frame[0] !== FRAME_VERSION) {
