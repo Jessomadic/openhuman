@@ -1,5 +1,5 @@
-use super::tests_support::ForcedDocumentSource;
 use super::*;
+use super::tests_support::ForcedDocumentSource;
 use crate::config::Config;
 use crate::storage::{MemoryStorage, Scope, ScopedStorage, StorageBackend};
 use std::sync::Arc;

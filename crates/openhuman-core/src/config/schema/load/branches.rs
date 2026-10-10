@@ -143,10 +143,7 @@ impl Config {
         // `.corrupted.<timestamp>` and backup/defaults are attempted,
         // with rate-limited error logging (#5167).
         let source = super::source::for_config(&config_path)?;
-        let super::source::ConfigRead {
-            contents,
-            recovered: read_was_recovered,
-        } = source.read().await?;
+        let read = source.read().await?;
 
         // When `read_config_with_recovery_or_default` returned an empty
         // string (both primary and backup were unreadable), skip the TOML
@@ -154,13 +151,13 @@ impl Config {
         // otherwise parse successfully with serde defaults (all fields at
         // their `Option::None` / `vec![]` / `false` values) instead of
         // the richer `Default` impl (issue #5167).
-        let (config, config_was_corrupted) = super::impl_load::parse_source_contents(
-            source.as_ref(),
-            &config_path,
-            &contents,
-            read_was_recovered,
-        )
-        .await?;
+        let (config, config_was_corrupted) =
+            super::impl_load::parse_source_contents(&read, &config_path).await?;
+        let super::source::ConfigRead {
+            contents,
+            recovered: read_was_recovered,
+            ..
+        } = read;
         let mut config = config;
 
         // If the read itself was recovered (non-UTF-8 file renamed, backup

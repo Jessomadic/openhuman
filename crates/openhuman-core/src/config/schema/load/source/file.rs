@@ -51,6 +51,7 @@ impl ConfigSource for FileConfigSource {
         Ok(ConfigRead {
             contents,
             recovered,
+            from_document: false,
         })
     }
 
