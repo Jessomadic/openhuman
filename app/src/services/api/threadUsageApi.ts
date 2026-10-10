@@ -19,6 +19,8 @@ interface ThreadTokenUsage {
   turnCount: number;
   lastTurnInputTokens: number;
   lastTurnOutputTokens: number;
+  /** Context the last turn ended with: the gauge numerator. `0` when unknown. */
+  lastTurnContextTokens: number;
   contextWindow: number;
   model: string | null;
   updated: string | null;
