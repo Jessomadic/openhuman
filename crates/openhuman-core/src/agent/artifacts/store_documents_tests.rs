@@ -93,9 +93,12 @@ fn the_legacy_files_are_imported_without_overwriting() {
     // A copy under another folder name is not the record.
     let copy = dir.path().join("copy-of-a");
     std::fs::create_dir_all(&copy).unwrap();
-    let mut stray = meta("a", 1, Some("t"));
-    stray.title = "stray".into();
-    std::fs::write(copy.join("meta.json"), serde_json::to_string(&stray).unwrap()).unwrap();
+    let stray = meta("z", 1, Some("t"));
+    std::fs::write(
+        copy.join("meta.json"),
+        serde_json::to_string(&stray).unwrap(),
+    )
+    .unwrap();
     std::fs::write(copy.join("args.json"), r#"{"x":5}"#).unwrap();
 
     let docs = docs_in(&MemoryStorage::new(), "local");
@@ -108,6 +111,10 @@ fn the_legacy_files_are_imported_without_overwriting() {
     assert_eq!(docs.get_meta("a").unwrap().unwrap().title, "kept");
     assert_eq!(docs.get_args("a").unwrap().unwrap()["x"], 9);
     assert!(docs.get_meta("b").unwrap().is_some());
+    assert!(
+        docs.get_meta("z").unwrap().is_none(),
+        "folder name must match"
+    );
 
     // Repeating it creates nothing.
     assert_eq!(docs.import_legacy(dir.path()).unwrap(), 0);
