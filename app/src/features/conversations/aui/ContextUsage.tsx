@@ -85,9 +85,13 @@ export function contextBreakdownSegments(
       systemPrompt += section.est_tokens;
     }
   }
+  // Partition the context the last turn ended with. Every reply the turn
+  // produced is in that context (each one is input to the next call), so the
+  // turn's output is a share of it and the rest is the conversation.
+  const output = Math.min(usage.lastTurnOutputTokens, usage.lastTurnContextUsed);
   const yourInput = Math.max(
     0,
-    usage.lastTurnInputTokens - systemPrompt - toolSchemas - hiddenToolUsage
+    usage.lastTurnContextUsed - output - systemPrompt - toolSchemas - hiddenToolUsage
   );
   return [
     {
