@@ -27,7 +27,8 @@
 //! appends to the thread's transcript. It persists its reply before announcing
 //! `chat_done`, so a reconnect cannot lose a completed delegated result.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -57,9 +58,13 @@ const RECOVERY_DELAY: Duration = Duration::from_secs(15);
 
 /// Sessions with a user turn in flight — delivery defers while busy. Keyed by
 /// [`tenant::profile_key`]: two SaaS profiles can share a session id (desktop: bare id).
-fn busy() -> &'static Mutex<HashSet<String>> {
-    static BUSY: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    BUSY.get_or_init(|| Mutex::new(HashSet::new()))
+///
+/// Each key holds the ids of the live [`TurnBusy`] guards on it, so a replacement
+/// turn that starts before the one it interrupted has unwound stays busy when
+/// the older guard drops.
+fn busy() -> &'static Mutex<HashMap<String, HashSet<u64>>> {
+    static BUSY: OnceLock<Mutex<HashMap<String, HashSet<u64>>>> = OnceLock::new();
+    BUSY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Threads whose delivery turn is in flight — prevents two concurrent turns.
@@ -86,23 +91,33 @@ fn session_of<'k>(key: &'k str, me: &Tenant) -> Option<&'k str> {
 /// tell whose session it is); the key is fixed, so a cancelled turn clears it.
 pub(crate) struct TurnBusy {
     key: String,
+    id: u64,
 }
 
 impl TurnBusy {
     pub(crate) fn start(session_id: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let key = tenant::profile_key(session_id);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
         busy()
             .lock()
             .expect("background_delivery busy poisoned")
-            .insert(key.clone());
-        Self { key }
+            .entry(key.clone())
+            .or_default()
+            .insert(id);
+        Self { key, id }
     }
 }
 
 impl Drop for TurnBusy {
     fn drop(&mut self) {
         if let Ok(mut busy) = busy().lock() {
-            busy.remove(&self.key);
+            if let Some(guards) = busy.get_mut(&self.key) {
+                guards.remove(&self.id);
+                if guards.is_empty() {
+                    busy.remove(&self.key);
+                }
+            }
         }
     }
 }
@@ -113,7 +128,7 @@ fn is_busy(thread_id: &str) -> bool {
     busy()
         .lock()
         .expect("background_delivery busy poisoned")
-        .iter()
+        .keys()
         .filter_map(|key| session_of(key, &me))
         .any(|session| {
             background_completions::thread_for_session(session).as_deref() == Some(thread_id)
@@ -129,7 +144,7 @@ pub(crate) fn clear_busy_for_thread(thread_id: &str) -> usize {
     let me = caller();
     let mut busy = busy().lock().expect("background_delivery busy poisoned");
     let before = busy.len();
-    busy.retain(|key| {
+    busy.retain(|key, _| {
         session_of(key, &me).is_none_or(|session| {
             background_completions::thread_for_session(session).as_deref() != Some(thread_id)
         })
@@ -312,6 +327,17 @@ pub(super) fn drain_schedule_in(
 
 /// Schedule a debounced delivery attempt for a thread.
 fn schedule_delivery(thread_id: String, delay: Duration) {
+    schedule_delivery_inner(thread_id, delay, false);
+}
+
+/// Poll interval and ceiling while a recovered drain waits for a busy thread.
+const RECOVERY_BUSY_POLL: Duration = Duration::from_secs(5);
+const RECOVERY_BUSY_POLLS: u32 = 360;
+
+/// `wait_idle`: after the delay, keep waiting while the thread's user turn is in
+/// flight instead of giving up. A recovered record has no owner noted (the table
+/// is process-local), so the turn's completion event would not wake the drain.
+fn schedule_delivery_inner(thread_id: String, delay: Duration, wait_idle: bool) {
     #[cfg(test)]
     scheduled_for_test()
         .lock()
@@ -321,6 +347,13 @@ fn schedule_delivery(thread_id: String, delay: Duration) {
     // delayed task must run under the profile that scheduled it.
     crate::core::runtime::spawn_scoped(async move {
         tokio::time::sleep(delay).await;
+        if wait_idle {
+            let mut polls = 0;
+            while is_busy(&thread_id) && polls < RECOVERY_BUSY_POLLS {
+                polls += 1;
+                tokio::time::sleep(RECOVERY_BUSY_POLL).await;
+            }
+        }
         try_deliver(thread_id).await;
     });
 }
@@ -356,9 +389,18 @@ pub(crate) fn recover_on_boot(workspace_dir: &Path) -> usize {
             "[background_delivery] scheduling redelivery of undelivered completions after restart \
              thread_id={thread_id}"
         );
-        schedule_delivery(thread_id.clone(), RECOVERY_DELAY);
+        schedule_delivery_inner(thread_id.clone(), RECOVERY_DELAY, true);
     }
     threads.len()
+}
+
+/// Recovery for a profile that was just opened: forget the workspace's earlier
+/// claim (a profile released and re-leased may have results another node left
+/// pending since), then recover. Duplicate drains are harmless: delivery is
+/// lease-claimed.
+pub(crate) fn recover_on_open(workspace_dir: &Path) -> usize {
+    background_completions::forget_recovery(workspace_dir);
+    recover_on_boot(workspace_dir)
 }
 
 /// Claim everything ready for a thread **right now** (sync, testable): `None`

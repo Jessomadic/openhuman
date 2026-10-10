@@ -216,6 +216,11 @@ pub(crate) fn claim_recovery(workspace_dir: &Path) -> bool {
         .insert(workspace_dir.to_path_buf())
 }
 
+/// Let `workspace_dir` be recovered again (a profile re-leased after release).
+pub(crate) fn forget_recovery(workspace_dir: &Path) {
+    state().recovered_workspaces.remove(workspace_dir);
+}
+
 /// Remember that `session_id` is a turn on `thread_id`.
 pub(crate) fn note_session_thread(session_id: &str, thread_id: &str) {
     let session_key = key(session_id);

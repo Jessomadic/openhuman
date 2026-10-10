@@ -90,12 +90,12 @@ impl OpenHumanSessionHost {
             Ok(response) => {
                 let history = self.history();
                 let new_entries = Self::new_entries_for_turn(&history_snapshot, &history);
-                drop(busy);
                 BUS.publish(DomainEvent::AgentTurnCompleted {
                     session_id: self.event_session_id().to_string(),
                     text_chars: response.chars().count(),
                     iterations: Self::count_iterations(new_entries),
                 });
+                drop(busy);
                 Ok(response)
             }
             Err(err) => {
