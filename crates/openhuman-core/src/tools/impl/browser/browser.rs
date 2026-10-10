@@ -480,6 +480,10 @@ impl BrowserTool {
     }
 }
 
+/// The browser tool's deadline: the approval gate's ten-minute park plus two
+/// minutes for the action itself. See `BrowserTool::timeout_policy`.
+pub(crate) const BROWSER_TOOL_TIMEOUT_MS: u64 = 12 * 60 * 1000;
+
 #[async_trait]
 impl Tool for BrowserTool {
     fn exposure(&self) -> tinytools::ToolExposure {
