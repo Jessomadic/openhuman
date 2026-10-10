@@ -172,8 +172,10 @@ impl ApprovalGate {
                         GateOutcome::Deny {
                             reason: format!(
                                 "{POLICY_DENIED_MARKER} Approval for '{tool_name}' timed out after \
-                                 {}s. Do not re-request the same call this turn; take a different \
-                                 approach or stop.",
+                                 {}s: {APPROVAL_UNANSWERED_PHRASE}, so it was not run. Tell the \
+                                 user it was not done because the approval was not answered, and \
+                                 that they can ask again to retry. Do not re-request the same call \
+                                 this turn.",
                                 effective_ttl.as_secs()
                             ),
                         },
