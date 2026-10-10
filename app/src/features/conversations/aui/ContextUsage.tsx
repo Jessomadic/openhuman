@@ -36,6 +36,7 @@ import debug from 'debug';
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
+import type { CostSource } from '../../../services/chatService';
 import {
   type ContextBreakdown as ContextBreakdownData,
   getContextBreakdown,
