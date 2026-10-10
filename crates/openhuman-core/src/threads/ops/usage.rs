@@ -153,6 +153,7 @@ pub async fn token_usage(
         turn_count: spend.root.turns,
         last_turn_input_tokens: spend.root.last_input_tokens,
         last_turn_output_tokens: spend.root.last_output_tokens,
+        last_turn_context_tokens: spend.root.last_context_tokens,
         context_window,
         model: root_model,
         updated: spend.updated,
