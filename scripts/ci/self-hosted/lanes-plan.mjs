@@ -25,6 +25,7 @@ export const AREA_ENV = {
   inventory: "CI_AREA_INVENTORY",
   toolchainImage: "CI_AREA_TOOLCHAIN_IMAGE",
   installPs1: "CI_AREA_INSTALL_PS1",
+  storage: "CI_AREA_STORAGE",
 };
 
 /** Read the area flags from an environment object. Missing means false. */
@@ -54,11 +55,45 @@ export const HOSTED_GROUPS = [
   },
   { group: "rust-cov", lanes: ["rust-cov"], maxParallel: 1, container: true },
   { group: "tauri", lanes: ["tauri"], maxParallel: 1, container: true },
+  // The storage drivers build the core with features no other lane enables,
+  // so they get a runner (and a `target/`) of their own.
+  {
+    group: "storage",
+    lanes: ["storage-drivers"],
+    maxParallel: 1,
+    container: true,
+  },
   // pwsh ships on the bare ubuntu-latest image, not in the CI container.
   { group: "pester", lanes: ["pester"], maxParallel: 1, container: false },
 ];
 
 const PRODUCT = '"$(bash scripts/ci/product-features.sh)"';
+
+// The storage-drivers lane: the drivers it turns on, the root e2e targets that
+// run once per driver (tests/support/storage_drivers.rs), and the lib-test
+// filters of the domains that sit on the storage ports.
+const STORAGE_DRIVERS = "storage-sqlite,storage-file";
+const STORAGE_E2E_TARGETS = [
+  "storage_approvals_e2e",
+  "storage_domains_e2e",
+  "storage_flows_e2e",
+  "storage_secrets_e2e",
+  "storage_scope_e2e",
+  "storage_agent_scopes_e2e",
+  "storage_delegation_e2e",
+  "cli_storage_url_e2e",
+];
+const STORAGE_LIB_FILTERS = [
+  "storage::",
+  "cron::",
+  "flows::",
+  "security::approval::",
+  "security::devices::",
+  "security::keyring::",
+  "security::credentials::",
+  "desktop::notifications::",
+  "integrations::task_sources::",
+];
 
 /**
  * Build the lane plan.
@@ -451,6 +486,41 @@ export function buildPlan({ profile, areas, env = {}, isPullRequest = true }) {
             " && cargo llvm-cov clean --manifest-path crates/openhuman-app/Cargo.toml" +
             " && cargo llvm-cov --no-rustc-wrapper --manifest-path crates/openhuman-app/Cargo.toml" +
             " --lcov --output-path ci-out/lcov/lcov-tauri.info",
+        },
+      ],
+    },
+    {
+      // The sqlite and file storage drivers, which no other lane compiles in:
+      // every `storage_*_e2e` target runs once per driver (memory, sqlite,
+      // file) and the stores that sit on the storage ports run their lib
+      // tests with the drivers on. The MongoDB driver needs a replica set and
+      // has its own workflow (storage-mongodb.yml). Armed by the `storage`
+      // area (.github/ci-paths-filter.yml).
+      name: "storage-drivers",
+      // Compiles the core crate with its own feature set: holds one of the
+      // VM's heavy-compile slots (lanes.mjs). Lower number = served first.
+      heavy: 2,
+      targetDir: targetDir("storage"),
+      env: { ...rustEnv, ...sccache, RUST_MIN_STACK: "16777216" },
+      checks: [
+        {
+          name: "storage-e2e",
+          when: areas.storage,
+          run:
+            `cargo test -p openhuman-cli --features ${STORAGE_DRIVERS}` +
+            STORAGE_E2E_TARGETS.map((t) => ` --test ${t}`).join(""),
+        },
+        {
+          name: "storage-lib-tests",
+          when: areas.storage,
+          run:
+            `cargo test -p openhuman --features ${STORAGE_DRIVERS} --lib --` +
+            STORAGE_LIB_FILTERS.map((f) => ` ${f}`).join(""),
+        },
+        {
+          name: "storage-session-store-tests",
+          when: areas.storage,
+          run: `cargo test -p openhuman-rpc --features session-store,${STORAGE_DRIVERS} --lib -- session_store::`,
         },
       ],
     },
