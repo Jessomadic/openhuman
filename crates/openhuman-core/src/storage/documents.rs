@@ -160,11 +160,7 @@ impl Repo {
         f()?;
         done.retain(|_, weak| weak.strong_count() > 0);
         done.insert(once_key, Arc::downgrade(&origin.backend));
-        log::debug!(
-            "[storage] {} one-time work done scope={} key={key}",
-            self.domain,
-            origin.scope
-        );
+        log::debug!("[storage] {} one-time work done", self.domain);
         Ok(())
     }
 

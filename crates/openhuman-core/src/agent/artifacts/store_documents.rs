@@ -181,7 +181,8 @@ impl Docs {
 
     /// Imports the workspace's legacy `meta.json` / `args.json` files and
     /// returns how many records it created. Only absent records are written,
-    /// so a repeat is harmless. A missing folder or a folder without
+    /// so a repeat is harmless, and an interrupted import (meta in, args not)
+    /// is completed by the next one. A missing folder or a folder without
     /// `meta.json` is nothing to import and a corrupt `meta.json` is skipped,
     /// but any other read error fails the import, so it is retried rather than
     /// recorded as done.
@@ -211,6 +212,16 @@ impl Docs {
                 );
                 continue;
             };
+            // The file store keeps each record in `artifacts/<id>/`; a copy
+            // under another name is not the record, so the id is unique and
+            // the winner does not depend on directory order.
+            if dir.file_name().and_then(|name| name.to_str()) != Some(meta.id.as_str()) {
+                log::warn!(
+                    "[artifacts] legacy import: skipping meta.json whose id does not match its folder {}",
+                    dir.display()
+                );
+                continue;
+            }
             if self.put_meta_if_absent(&meta)? {
                 imported += 1;
             }
@@ -278,12 +289,13 @@ pub(super) async fn documents(workspace_dir: &Path) -> Result<Option<Docs>, Stri
     Ok(Some(docs))
 }
 
-/// Deletes artifact `id` in document mode: the record and its arguments,
-/// then its legacy directory (`artifact_dir`) so a later import does not bring
-/// it back. Not found when there was no record, as the file store reports.
+/// Deletes artifact `id` in document mode. The legacy directory
+/// (`artifact_dir`) goes first: it is what a later import would bring back,
+/// so if anything after it fails (or the process dies) the artifact is still
+/// listed and a retry finishes the job, rather than a gone record coming back
+/// from a leftover `meta.json`. Not found when there was no record, as the
+/// file store reports.
 pub(super) async fn delete_record(docs: Docs, artifact_dir: &Path, id: &str) -> Result<(), String> {
-    let owned = id.to_string();
-    let existed = on_docs(docs, move |docs| docs.delete(&owned)).await?;
     match tokio::fs::remove_dir_all(artifact_dir).await {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -293,6 +305,8 @@ pub(super) async fn delete_record(docs: Docs, artifact_dir: &Path, id: &str) -> 
             ))
         }
     }
+    let owned = id.to_string();
+    let existed = on_docs(docs, move |docs| docs.delete(&owned)).await?;
     if !existed {
         return Err(format!(
             "[artifacts] failed to delete artifact id={id}: not found"

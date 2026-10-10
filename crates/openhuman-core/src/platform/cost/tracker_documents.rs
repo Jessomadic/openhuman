@@ -91,13 +91,24 @@ impl CostDocs {
     /// the import is not recorded as done, so the next call retries it (and
     /// creates nothing twice).
     pub(super) fn import_legacy(&self, path: &std::path::Path) -> Result<usize> {
-        if !path.exists() {
-            return Ok(0);
-        }
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("read legacy cost ledger {}", path.display()))?;
+        let raw = match std::fs::read(path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("read legacy cost ledger {}", path.display()))
+            }
+        };
         let mut imported = 0;
-        for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        for line in raw.split(|byte| *byte == b'\n') {
+            let Ok(line) = std::str::from_utf8(line) else {
+                log::warn!("[cost::tracker] legacy import: skipping a line that is not UTF-8");
+                continue;
+            };
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
             match serde_json::from_str::<CostRecord>(line) {
                 Ok(record) => {
                     if self.add_if_absent(&record)? {
@@ -107,14 +118,7 @@ impl CostDocs {
                 Err(error) => log::warn!("[cost::tracker] legacy import: skipping line: {error}"),
             }
         }
-        let migrated = path.with_extension("jsonl.migrated");
-        std::fs::rename(path, &migrated).with_context(|| {
-            format!(
-                "set aside legacy cost ledger {} as {}",
-                path.display(),
-                migrated.display()
-            )
-        })?;
+        set_aside(path)?;
         log::debug!("[cost::tracker] legacy import: imported={imported}");
         Ok(imported)
     }
@@ -164,6 +168,34 @@ impl CostDocs {
                 }
             })
             .collect())
+    }
+}
+
+/// Renames the imported ledger to `costs.jsonl.migrated`, or the first free
+/// `costs.jsonl.migrated.<n>` so an earlier set-aside file is never replaced.
+/// A ledger already gone was set aside by another core importing at the same
+/// time, which is success.
+fn set_aside(path: &std::path::Path) -> Result<()> {
+    let base = path.with_extension("jsonl.migrated");
+    let mut target = base.clone();
+    let mut n = 0;
+    while target.exists() {
+        n += 1;
+        target = std::path::PathBuf::from(format!("{}.{n}", base.display()));
+    }
+    match std::fs::rename(path, &target) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !path.exists() => {
+            log::debug!("[cost::tracker] legacy import: ledger already set aside");
+            Ok(())
+        }
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "set aside legacy cost ledger {} as {}",
+                path.display(),
+                target.display()
+            )
+        }),
     }
 }
 
