@@ -55,8 +55,8 @@ on:
       - "tests/storage_*.rs"
       - "tests/cli_storage_url_e2e.rs"
       - "tests/support/storage_drivers.rs"
-      - "vendor/tinyagents"
-      - "vendor/tinyflows"
+      - ".gitmodules"
+      - "vendor/**"
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch: {}

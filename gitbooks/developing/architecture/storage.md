@@ -39,14 +39,14 @@ The storage URL is the first of these that is set. Blank values count as unset.
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
 | `memory`                                                               | In-process maps, keeps nothing                                                                                                                                                                                       | Always            |
 | `sqlite:<path>` (a `.db` file, or a directory that holds `storage.db`) | SQLite                                                                                                                                                                                                               | `storage-sqlite`  |
-| `file:<dir>`                                                           | `<dir>/scopes/<scope>/docs/<collection>/<id>.json` for documents, with collection metadata in `<dir>/_meta/collections/<collection>.json`. Streams are JSONL and blobs are raw files under the same scope directory. |
+| `file:<dir>`                                                           | `<dir>/scopes/<scope>/docs/<collection>/<id>.json` for documents, with collection metadata in `<dir>/_meta/collections/<collection>.json`. Streams are JSONL and blobs are raw files under the same scope directory. | `storage-file`    |
 | `mongodb://…/<db>`, `mongodb+srv://…/<db>`                             | MongoDB, one database shared by every scope                                                                                                                                                                          | `storage-mongodb` |
 
 A URL for a driver the build lacks fails at `storage::open`, and the error names the Cargo feature. A misconfigured deployment therefore stops at boot rather than at its first write. Credentials in a URL are redacted in logs and in `Debug` output.
 
 Each feature is forwarded through the whole library chain (`openhuman-core`, `openhuman-embed`, `openhuman-tinyhumans`, `openhuman-rpc`, then the `openhuman-cli` and `openhuman-tui` hosts). `scripts/ci/check-feature-forwarding.mjs` checks the links. A desktop build never links a MongoDB client, and a cloud build does not need SQLite.
 
-The host opens the configured backend before the core boots and installs it with `storage::install`. It then installs TinyAgents' `DriverSessionStores` over the same backend, so transcripts, turn states, the run ledger and journals live in it too. `RuntimeBuilder::storage(..)` does the same for library hosts.
+The host opens the configured backend before the core boots and installs it with `storage::install`. It then installs TinyAgents' `DriverSessionStores` over the same backend, so transcripts, turn states, the run ledger and journals live in it too. Library hosts use `RuntimeBuilder::storage(..)`, which installs only the backend: conversations move onto it with `RuntimeBuilder::session_store(..)`, configured separately.
 
 ## Scopes
 
@@ -58,7 +58,7 @@ Every record lives in a scope, and two scopes on one backend never see each othe
 2. Otherwise the acting **agent** (`CoreContext::session_agent`): the scope is that agent's.
 3. Otherwise `local`: the operator, the CLI and the desktop shell in single-user mode.
 
-In SaaS mode a call with no profile is refused instead of falling into a bucket other users could share, whether or not an agent acts.
+In SaaS mode a call with no profile is refused instead of falling into a bucket other users could share, whether or not an agent acts. If the task's tenant cannot be resolved at all (`current_tenant()` fails), `current_scope()` returns that error in every mode instead of falling back to `local`.
 
 A backend decides how it enforces the scope. SQLite and the file driver keep each scope's data apart, and `local` is the scope a single-user install uses. MongoDB injects a scope key into every filter and every index prefix.
 
@@ -75,10 +75,10 @@ On a shared backend (MongoDB) other processes may write the same records, so boo
 | `memory`           | Nowhere. Records last as long as the backend value.                                                                                                                                                                  |
 | `sqlite:<dir>`     | `<dir>/storage.db` in WAL mode (with its `-wal` and `-shm` files). The scope is a column on every row. The large relational stores keep their tables through the driver's native mode.                               |
 | `sqlite:<file>.db` | That file, laid out the same way.                                                                                                                                                                                    |
-| `file:<dir>`       | `<dir>/scopes/<scope>/docs/<collection>/<id>.json` for documents, with collection metadata in `<dir>/_meta/collections/<collection>.json`. Streams are JSONL and blobs are raw files under the same scope directory. |
+| `file:<dir>`       | `<dir>/scopes/<scope>/docs/<collection>/<id>.json` for documents, with collection metadata in `<dir>/_meta/collections/<collection>.json`. Streams are JSONL and blobs are raw files under the same scope directory. | `storage-file` |
 | `mongodb://…/<db>` | One database. Each named database is a collection prefix, and every record carries its scope.                                                                                                                        |
 
-Without a URL, the classic layout is unchanged: per-domain SQLite databases (`approval/approval.db`, `devices/devices.db`, `notifications/notifications.db`, `task_sources/sources.db`, `cron/jobs.db`, `flows/flows.db`, `graph_checkpoints.db`), JSON and JSONL files, and the OS keyring or `secrets.enc`. Records written to a configured backend are not copied back to those files, and the files are not imported into the backend.
+Without a URL, the classic layout is unchanged: per-domain SQLite databases (`approval/approval.db`, `devices/devices.db`, `notifications/notifications.db`, `task_sources/sources.db`, `cron/jobs.db`, `flows/flows.db`, `graph_checkpoints.db`), JSON and JSONL files, and the OS keyring or `secrets.enc`. Records written to a configured backend are not copied back to those files. The domain stores do not import their files either, with one exception: credentials. On first read with a backend installed, the auth-profile and HTTP-credential stores copy the records in their files into the backend, and the keyring adopts a secret it finds in the process backend. The source files are left untouched.
 
 Secrets with a backend installed are encrypted documents in the acting agent's scope. Each scope's data key is derived with HKDF-SHA256 from the keyring master key (`OPENHUMAN_KEYRING_MASTER_KEY` or `_FILE`, else the OS keychain), and with no master key they fail closed. The config encryption key stays on the process keyring because `config.toml` is loaded before any agent acts.
 

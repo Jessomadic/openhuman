@@ -123,8 +123,8 @@ for any commit without posting it.
   - Target dirs are not kept between jobs.
   - vitest runs with 8 workers.
 - **`hosted`**: lanes grouped into jobs sized for 4-core, ~14 GB runners:
-  `checks`, `rust-lint` (lint and gates-off in turn), `rust-cov`, `tauri`
-  and `pester`. Groups whose areas are untouched don't start.
+  `checks`, `rust-lint` (lint and gates-off in turn), `rust-cov`, `tauri`,
+  `storage` (the `storage-drivers` lane) and `pester`. Groups whose areas are untouched don't start.
 
 ## Why the EX63 cannot run outsider code
 

@@ -245,8 +245,10 @@ test("the storage area arms only the storage-drivers lane, with the sqlite and f
     const on = plan.lanes.flatMap((l) =>
       l.checks.filter((c) => c.when).map((c) => `${l.name}:${c.name}`),
     );
+    // Only the always-on gates plus this lane: the storage area arms no
+    // frontend, Rust or other area lane.
     assert.deepEqual(
-      on.filter((id) => id.startsWith("storage-drivers:")),
+      on.filter((id) => !id.startsWith("static:")),
       [
         "storage-drivers:storage-e2e",
         "storage-drivers:storage-lib-tests",
@@ -254,10 +256,24 @@ test("the storage area arms only the storage-drivers lane, with the sqlite and f
       ],
       profile,
     );
+    assert.deepEqual(
+      on.filter((id) => id.startsWith("static:")),
+      [
+        "static:orch-ip-gate",
+        "static:feature-forwarding",
+        "static:crate-chain",
+        "static:module-pins",
+        "static:submodule-monotonic",
+      ],
+      profile,
+    );
     const lane = plan.lanes.find((l) => l.name === "storage-drivers");
     assert.equal(lane.active, true, profile);
     for (const check of lane.checks) {
-      assert.match(check.run, /--features [a-z,-]*storage-sqlite,storage-file(?:\s|$)/);
+      assert.match(
+        check.run,
+        /--features (?:session-store,)?storage-sqlite,storage-file(?:\s|$)/,
+      );
     }
     // Every root storage target runs in the lane, so a new one cannot be
     // forgotten: the targets on disk are exactly the targets in the command.
