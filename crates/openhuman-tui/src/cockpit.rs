@@ -23,6 +23,10 @@ pub enum OverlayKind {
     Diff,
     HistorySearch,
     Files,
+    Themes,
+    Tools,
+    Subagents,
+    ToolDetail,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +118,7 @@ pub fn row_from_value(value: &Value, id_keys: &[&str], label_keys: &[&str]) -> O
         label: if label.is_empty() { id } else { label },
         detail: value
             .get("description")
+            .or_else(|| value.get("when_to_use"))
             .or_else(|| value.get("status"))
             .and_then(Value::as_str)
             .unwrap_or_default()

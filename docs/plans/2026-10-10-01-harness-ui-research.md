@@ -119,7 +119,7 @@ These are OpenHuman design decisions inferred from the sources above, not additi
 | Flat `Entry { kind, text }`; separate text rows for call/result   | `src/state.rs`                                                  | Retain stable call IDs and structured states                       |
 | Children reduced to descriptive tool rows                         | `src/state.rs::apply_event`                                     | Retain child lifecycle and parent links                            |
 | Agents overlay closes on Enter without selecting a profile        | `src/app.rs::handle_overlay_key`                                | Agent browsing is not agent selection yet                          |
-| Enter sends `queue_mode: interrupt` despite steer hint            | `src/app.rs`, `src/render.rs::draw_footer`                      | Align labeling and actual send semantics                           |
+| Enter uses steer during a run; Tab queues                         | `src/app.rs::send_or_command`, `src/app.rs::handle_tab_key`     | Preserve steering; give queue its own action so Tab can move focus |
 | Login is one-time-token entry owned by SessionManager             | `src/session.rs`, `src/controls.rs`                             | Reuse the host auth owner; browser login is a separate enhancement |
 | Rich web-channel call IDs, timing, labels, sequence, child detail | `crates/openhuman-core/src/web_chat/channel_event.rs`           | Consume existing contracts before proposing backend work           |
 | Desktop already has rich disclosures and child state              | `app/src/store/chatRuntimeSlice.ts`, `AssistantUiToolCall.tsx`  | Reference semantics; avoid inventing competing states              |

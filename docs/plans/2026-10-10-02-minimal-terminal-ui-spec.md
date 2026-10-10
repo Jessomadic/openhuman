@@ -1,6 +1,6 @@
 # 2. OpenHuman minimal terminal UI specification
 
-Status: proposed specification, ready for implementation sequencing. Date: 2026-10-10. Scope confirmed: terminal UI first; OpenClaw is the intended third harness. Evidence: [1. Harness UI research](2026-10-10-01-harness-ui-research.md). Code baseline: OpenHuman `f6e17bc343`.
+Status: initial terminal implementation delivered; remaining target behavior is recorded below. Date: 2026-10-10. Scope confirmed: terminal UI first; OpenClaw is the intended third harness. Evidence: [1. Harness UI research](2026-10-10-01-harness-ui-research.md). Code baseline: OpenHuman `f6e17bc343`.
 
 ## Product goal
 
@@ -212,4 +212,8 @@ Focused checks: `cargo test -p openhuman-tui`, `cargo check -p openhuman-tui`, `
 
 Agent routing, model catalog shape, child transcript retrieval/cancellation, question response, and complete tool-output retrieval require contract verification before wiring controls. Where an existing API cannot support a proposed action, initially show a clear unavailable state and implement the capability in its owning repository as a separate scoped change. This spec does not authorize replacing the harness or copying vendored implementation into the TUI.
 
-The next implementation milestone is the shell/actions/theme/mouse slice after the baseline checks. No UI code has been changed in this specification phase.
+The initial implementation now covers the conversation shell, shared actions and mouse hit testing, session/model/agent pickers, masked token login, tool/child inspection, themes, cached viewport rendering, and offline preview. See [the TUI guide](../../crates/openhuman-tui/README.md) for launch commands and controls.
+
+Verified locally: baseline tests, TUI unit/CLI tests, build, scoped Clippy, crate-chain/layout checks, and live/demo startup plus terminal mouse navigation in macOS tmux. The broader dependency Clippy command encounters a pre-existing `type_complexity` lint in the core relay store. Windows/Linux terminal behavior, real provider execution, and successful backend login were not exercised in this implementation session.
+
+Remaining extensions: browser/device-code login, session branching/older-page loading, scoped child steering/cancellation, interactive question forms, persistent appearance preferences, and Markdown/diff-specific rich formatting. Current themes are process-local; child/output inspectors show stored bounded previews. The performance budgets above remain measurement targets; the implementation does not claim every budget has been met on every platform.

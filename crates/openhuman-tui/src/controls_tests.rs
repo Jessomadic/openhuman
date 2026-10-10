@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn model_catalog_uses_the_actual_configured_provider() {
+    assert_eq!(catalog_provider(&json!({})), "openhuman");
+    assert_eq!(
+        catalog_provider(&json!({"chat_provider":"cloud","primary_cloud":"my-provider-id"})),
+        "my-provider-id"
+    );
+    assert_eq!(
+        catalog_provider(&json!({"chat_provider":"ollama:local"})),
+        "ollama"
+    );
+    assert_eq!(
+        catalog_provider(&json!({"chat_provider":"pid:opaque-id:model"})),
+        "opaque-id"
+    );
+}
+
+#[test]
 fn rpc_payload_unwraps_runtime_and_api_envelopes() {
     let value = json!({"result": {"data": {"mode": "standard"}}, "logs": []});
     assert_eq!(rpc_payload(&value), &json!({"mode": "standard"}));

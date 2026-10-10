@@ -86,7 +86,7 @@ impl SettingsAction {
 pub struct UiState {
     pub active_tab: AppTab,
     pub composer: Composer,
-    pub scroll_from_bottom: u16,
+    pub scroll_from_bottom: usize,
     pub spinner_tick: usize,
     pub thread_id: String,
     pub log_scroll_from_bottom: u16,
@@ -107,6 +107,27 @@ pub struct UiState {
     pub model_override: Option<String>,
     pub action_dir: String,
     pub queue_status: String,
+    pub theme: super::theme::Theme,
+    pub hits: Vec<super::actions::Hit>,
+    pub viewport: super::viewport::ViewportCache,
+    pub transcript_area: ratatui::layout::Rect,
+    pub composer_area: ratatui::layout::Rect,
+    pub composer_first_row: usize,
+    pub focus: usize,
+    pub agent_name: String,
+    pub mouse_enabled: bool,
+    pub stopping: bool,
+    pub demo: bool,
+    pub drafts: std::collections::HashMap<String, String>,
+    pub provider_id: String,
+    pub effective_model: String,
+    pub overlay_generation: u64,
+    pub overlay_tx: Option<tokio::sync::mpsc::UnboundedSender<super::effects::OverlayReply>>,
+    pub auth_tx: Option<tokio::sync::mpsc::UnboundedSender<Result<(), String>>>,
+    pub auth_pending: bool,
+    pub policy_enabled: bool,
+    pub overlay_area: ratatui::layout::Rect,
+    pub suggestion_selected: usize,
 }
 
 impl UiState {
@@ -161,6 +182,31 @@ impl UiState {
             model_override: None,
             action_dir: String::new(),
             queue_status: String::new(),
+            theme: if std::env::var_os("NO_COLOR").is_some() {
+                super::theme::Theme::Mono
+            } else {
+                super::theme::Theme::System
+            },
+            hits: Vec::new(),
+            viewport: Default::default(),
+            transcript_area: Default::default(),
+            composer_area: Default::default(),
+            composer_first_row: 0,
+            focus: 0,
+            agent_name: "orchestrator".into(),
+            mouse_enabled: true,
+            stopping: false,
+            demo: false,
+            drafts: Default::default(),
+            provider_id: "openhuman".into(),
+            effective_model: "Model".into(),
+            overlay_generation: 0,
+            overlay_tx: None,
+            auth_tx: None,
+            auth_pending: false,
+            policy_enabled: false,
+            overlay_area: Default::default(),
+            suggestion_selected: 0,
         }
     }
 

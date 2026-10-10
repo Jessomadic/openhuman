@@ -84,10 +84,28 @@ pub async fn refresh_config(runtime: &Arc<CoreRuntime>, ui: &mut UiState) {
     let privacy = runtime
         .invoke("openhuman.config_get_privacy_mode", json!({}))
         .await;
+    if let Ok(snapshot) = runtime.invoke("openhuman.config_get", json!({})).await {
+        ui.agent_name = rpc_payload(&snapshot)
+            .pointer("/config/agent/chat_agent_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("orchestrator")
+            .to_string();
+    }
     match (client, autonomy, privacy) {
         (Ok(client), Ok(autonomy), Ok(privacy)) => {
             let client = rpc_payload(&client);
+            ui.provider_id = catalog_provider(client);
+            ui.effective_model = client
+                .get("default_model")
+                .and_then(serde_json::Value::as_str)
+                .filter(|model| !model.is_empty())
+                .unwrap_or("Configured model")
+                .to_string();
             let autonomy = rpc_payload(&autonomy);
+            ui.policy_enabled = autonomy
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
             let privacy = rpc_payload(&privacy);
             for item in &mut ui.config_items {
                 item.value = match item.key {
@@ -105,6 +123,11 @@ pub async fn refresh_config(runtime: &Arc<CoreRuntime>, ui: &mut UiState) {
 }
 
 pub async fn handle_settings_key(key: KeyEvent, runtime: &Arc<CoreRuntime>, ui: &mut UiState) {
+    if ui.auth_pending {
+        ui.settings_status =
+            "Signing in… You can browse views while authentication completes.".into();
+        return;
+    }
     if let Some(token) = ui.login_token.as_mut() {
         match key.code {
             KeyCode::Esc => {
@@ -197,6 +220,24 @@ async fn login_with_token(runtime: &Arc<CoreRuntime>, ui: &mut UiState) {
         return;
     }
     ui.settings_status = "Signing in…".to_string();
+    if let Some(tx) = ui.auth_tx.clone() {
+        ui.auth_pending = true;
+        let manager = crate::session::session_manager(runtime);
+        let token = zeroize::Zeroizing::new(token);
+        tokio::spawn(async move {
+            let result = match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                manager.login_with_token(token.trim()),
+            )
+            .await
+            {
+                Ok(result) => result.map(|_| ()).map_err(|error| error.to_string()),
+                Err(_) => Err("Sign-in timed out. Check Account before retrying.".into()),
+            };
+            let _ = tx.send(result);
+        });
+        return;
+    }
     // Exchange, validate against `/auth/me`, and install in the core — all
     // owned by `openhuman-tinyhumans`; the JWT never passes through this module.
     let result = crate::session::session_manager(runtime)
@@ -227,6 +268,28 @@ async fn logout(runtime: &Arc<CoreRuntime>, ui: &mut UiState) {
 
 fn rpc_payload(value: &serde_json::Value) -> &serde_json::Value {
     openhuman_rpc::unwrap_rpc(value)
+}
+
+fn catalog_provider(client: &serde_json::Value) -> String {
+    let route = client
+        .get("chat_provider")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("cloud")
+        .trim();
+    if let Some(id) = route.strip_prefix("pid:") {
+        return id.split(':').next().unwrap_or("openhuman").to_string();
+    }
+    let prefix = route.split(':').next().unwrap_or("cloud");
+    if matches!(prefix, "cloud" | "primary" | "") {
+        client
+            .get("primary_cloud")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or("openhuman")
+            .to_string()
+    } else {
+        prefix.to_string()
+    }
 }
 
 fn string_at(value: &serde_json::Value, path: &[&str]) -> String {
