@@ -2,6 +2,7 @@
 //! flight, and the teardown of the per-agent state the core keeps for it.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::{watch, Notify};
@@ -11,17 +12,46 @@ use crate::CoreError;
 /// Turn admission and in-flight accounting for one agent.
 pub(crate) struct Lifecycle {
     removed: watch::Sender<bool>,
-    removal_claimed: AtomicBool,
+    approvals: Arc<ApprovalState>,
     in_flight: AtomicUsize,
     idle: Notify,
     torn_down: AtomicBool,
+}
+
+/// Serializes live approval decisions with the instance's removal claim.
+#[derive(Debug, Default)]
+pub(crate) struct ApprovalState {
+    claimed: AtomicBool,
+    decisions: Mutex<()>,
+}
+
+impl ApprovalState {
+    pub(crate) fn with_live<T>(&self, decide: impl FnOnce() -> T) -> Option<T> {
+        let _decision = self
+            .decisions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.claimed.load(Ordering::SeqCst) {
+            None
+        } else {
+            Some(decide())
+        }
+    }
+
+    fn claim_removal(&self) -> bool {
+        let _decision = self
+            .decisions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        !self.claimed.swap(true, Ordering::SeqCst)
+    }
 }
 
 impl Lifecycle {
     pub(crate) fn new() -> Self {
         Self {
             removed: watch::Sender::new(false),
-            removal_claimed: AtomicBool::new(false),
+            approvals: Arc::new(ApprovalState::default()),
             in_flight: AtomicUsize::new(0),
             idle: Notify::new(),
             torn_down: AtomicBool::new(false),
@@ -36,7 +66,7 @@ impl Lifecycle {
 
     /// Claim removal and settle owned approvals before waking in-flight turns.
     pub(crate) fn mark_removed_with(&self, before_notify: impl FnOnce()) -> bool {
-        if self.removal_claimed.swap(true, Ordering::SeqCst) {
+        if !self.approvals.claim_removal() {
             return false;
         }
         before_notify();
@@ -44,6 +74,10 @@ impl Lifecycle {
         // Only the first claimant writes; repeated teardown never waits on it.
         self.removed.send_replace(true);
         true
+    }
+
+    pub(crate) fn approval_state(&self) -> Arc<ApprovalState> {
+        self.approvals.clone()
     }
 
     /// Bind handles to this agent instance, even after its public id is reused.
@@ -66,7 +100,7 @@ impl Lifecycle {
         let mut watcher = self.removed.subscribe();
         // Claiming removal closes admission immediately; waking existing turns
         // waits until their approvals have been settled with the removal reason.
-        if self.removal_claimed.load(Ordering::SeqCst) || *watcher.borrow_and_update() {
+        if self.approvals.claimed.load(Ordering::SeqCst) || *watcher.borrow_and_update() {
             log::debug!("[embed][agent] turn refused: agent removed id={agent_id}");
             return Err(removed());
         }

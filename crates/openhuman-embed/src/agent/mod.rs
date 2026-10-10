@@ -264,7 +264,12 @@ impl Agent {
     /// Subscribe a host callback to this agent’s pending approvals.
     /// Removing the agent cancels its callbacks, even if its id is reused.
     pub fn handle_approvals(&self, handler: Arc<dyn ApprovalHandler>) -> ApprovalSubscription {
-        ApprovalSubscription::new(self.id(), handler, self.inner.lifecycle.removed())
+        ApprovalSubscription::new(
+            self.id(),
+            handler,
+            self.inner.lifecycle.removed(),
+            self.inner.lifecycle.approval_state(),
+        )
     }
 
     /// Add, replace, or remove an agent-local post-turn hook by name.
@@ -280,7 +285,11 @@ impl Agent {
     /// This agent's pending approvals: the requests its turns parked, and
     /// only those.
     pub fn approvals(&self) -> Approvals {
-        Approvals::new(&self.inner.id, self.inner.lifecycle.removed())
+        Approvals::new(
+            &self.inner.id,
+            self.inner.lifecycle.removed(),
+            self.inner.lifecycle.approval_state(),
+        )
     }
 
     /// The agent's read/write root for acting tools.

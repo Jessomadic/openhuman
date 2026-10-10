@@ -12,11 +12,10 @@ fn removal_refuses_late_registration_without_creating_a_pending_row() {
 }
 
 #[test]
-fn removal_waits_for_accepted_registration_before_taking_its_snapshot() {
+fn accepted_registration_holds_the_removal_barrier_until_it_finishes() {
     let scope = Arc::new(ApprovalScope::default());
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
-    let (closed_tx, closed_rx) = mpsc::channel();
     let registering = scope.clone();
     let registration = std::thread::spawn(move || {
         registering.register(|| {
@@ -25,21 +24,20 @@ fn removal_waits_for_accepted_registration_before_taking_its_snapshot() {
         })
     });
     entered_rx.recv().unwrap();
-    let removing = scope.clone();
-    let removal = std::thread::spawn(move || {
-        removing.close("agent_removed");
-        closed_tx.send(()).unwrap();
-    });
-    let closed_early = closed_rx
-        .recv_timeout(std::time::Duration::from_millis(100))
-        .is_ok();
+    // Observe ownership directly while the accepted registration is suspended;
+    // no scheduler delay or elapsed-time assertion can hide an unlocked barrier.
+    let held = matches!(
+        scope.closed.try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    );
     release_tx.send(()).unwrap();
     assert_eq!(registration.join().unwrap(), Ok(()));
-    removal.join().unwrap();
     assert!(
-        !closed_early,
-        "removal snapshot raced an accepted registration"
+        held,
+        "registration released the removal barrier before finishing"
     );
+    scope.close("agent_removed");
+    assert_eq!(scope.register(|| ()), Err("agent_removed".to_owned()));
 }
 
 #[test]

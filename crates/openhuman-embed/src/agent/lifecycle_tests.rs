@@ -84,3 +84,56 @@ async fn a_claimed_removal_refuses_turns_before_approvals_are_settled() {
         "removal admitted a new turn while settling approvals"
     );
 }
+
+#[test]
+fn a_claimed_removal_refuses_approval_decisions_before_denial_finishes() {
+    let lifecycle = Arc::new(Lifecycle::new());
+    let approvals = crate::Approvals::new("a", lifecycle.removed(), lifecycle.approval_state());
+    let removing = lifecycle.clone();
+    let (entered, callback_entered) = std::sync::mpsc::channel();
+    let (release, callback_release) = std::sync::mpsc::channel();
+    let removal = std::thread::spawn(move || {
+        removing.mark_removed_with(|| {
+            entered.send(()).unwrap();
+            callback_release.recv().unwrap();
+        })
+    });
+    callback_entered.recv().unwrap();
+    let outcome = approvals.decide("pending-request", crate::ApprovalDecision::ApproveOnce);
+    release.send(()).unwrap();
+    assert!(removal.join().unwrap());
+    assert!(
+        matches!(outcome, Err(crate::ApprovalsError::NotFound(_))),
+        "{outcome:?}"
+    );
+}
+
+#[test]
+fn accepted_approval_decisions_hold_the_removal_claim_barrier() {
+    let state = Arc::new(ApprovalState::default());
+    let deciding = state.clone();
+    let (entered, decision_entered) = std::sync::mpsc::channel();
+    let (release, decision_release) = std::sync::mpsc::channel();
+    let decision = std::thread::spawn(move || {
+        deciding.with_live(|| {
+            entered.send(()).unwrap();
+            decision_release.recv().unwrap();
+            7
+        })
+    });
+    decision_entered.recv().unwrap();
+    let held = matches!(
+        state.decisions.try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    );
+    release.send(()).unwrap();
+    assert_eq!(decision.join().unwrap(), Some(7));
+    assert!(
+        held,
+        "removal could claim while a decision was still being applied"
+    );
+    assert!(state.claim_removal());
+    let mut ran = false;
+    assert_eq!(state.with_live(|| ran = true), None);
+    assert!(!ran);
+}

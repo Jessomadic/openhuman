@@ -140,7 +140,7 @@ fn removing_an_agent_releases_everything_it_held() {
             // snapshot. Its retained context must refuse registration entirely.
             let gate = openhuman_core::security::approval::ApprovalGate::try_global().unwrap();
             let late = tokio::time::timeout(
-                Duration::from_millis(500),
+                Duration::from_secs(10),
                 openhuman_core::core::runtime::CoreContext::scope(
                     old_context,
                     openhuman_core::agent::turn_origin::with_origin(

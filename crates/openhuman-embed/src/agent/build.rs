@@ -280,7 +280,12 @@ pub(crate) fn instantiate(runtime: &Runtime, spec: AgentSpec) -> Result<AgentInn
     }
     let lifecycle = super::lifecycle::Lifecycle::new();
     let approval_subscription = parts.approval_handler.map(|handler| {
-        super::approval_handler::ApprovalSubscription::new(&id, handler, lifecycle.removed())
+        super::approval_handler::ApprovalSubscription::new(
+            &id,
+            handler,
+            lifecycle.removed(),
+            lifecycle.approval_state(),
+        )
     });
     let overlay = ContextOverlay {
         host_overrides: Some(overrides.clone()),
