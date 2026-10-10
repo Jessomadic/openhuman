@@ -185,6 +185,13 @@ pub(super) fn classified_recovery_policy(
         // there can repeat an effect the agent cannot observe.
         Class::Timeout if tool == "shell" => ("uncertain_side_effect", 1),
         Class::Timeout => ("uncertain_side_effect", 0),
+        // The harness's own schema-validation answer, classified from its
+        // prefix before any keyword in the echoed schema could read as a
+        // timeout or a credential failure.
+        Class::InvalidArguments => ("invalid_arguments", ARGUMENT_SCHEMA_RECOVERY),
+        // A finished command's exit report; `is_command_exit_report` above
+        // already returns before this for the bare shape. Same reasoning.
+        Class::CommandFailed => return None,
         Class::Unknown if is_recoverable_tool_failure(error) => ("transient", 2),
         // Its own class, not the `validation` bucket: the ledger keys on
         // (class, operation, scope), so pooling this with `unknown tool` and

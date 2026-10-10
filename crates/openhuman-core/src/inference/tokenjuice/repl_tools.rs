@@ -334,7 +334,7 @@ impl Tool for ModuleReplTool {
         self.schema.clone()
     }
 
-    async fn execute(&self, mut args: Value) -> anyhow::Result<ToolResult> {
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         let Some(raw) = args.get("handle").and_then(Value::as_str) else {
             return Ok(ToolResult::error("missing required argument: handle"));
         };
@@ -362,9 +362,6 @@ impl Tool for ModuleReplTool {
             self.name,
             content.len()
         );
-        if let Some(object) = args.as_object_mut() {
-            object.insert("handle".into(), Value::String(handle.clone()));
-        }
         self.run_stock(handle, content, args).await
     }
 
