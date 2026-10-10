@@ -138,6 +138,33 @@ pub(super) async fn read_config_with_recovery_or_default(
     }
 }
 
+/// Parse the text a [`ConfigSource`](super::source::ConfigSource) returned.
+///
+/// A file keeps its recovery: a body that does not parse falls back to the
+/// `.bak` next to it, then to defaults. A document is parsed strictly and a
+/// body that does not parse is an error: the file recovery would consume the
+/// node-local bootstrap `config.toml.bak`, rename the bootstrap file, and save
+/// stale defaults over the shared document.
+pub(super) async fn parse_source_contents(
+    source: &dyn super::source::ConfigSource,
+    config_path: &Path,
+    contents: &str,
+    read_was_recovered: bool,
+) -> Result<(Box<Config>, bool)> {
+    if source.encrypts_body() {
+        let config = parse_toml_off_worker(contents.to_string())
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("the config document for this scope could not be parsed: {error}")
+            })?;
+        return Ok((config, false));
+    }
+    if read_was_recovered && contents.is_empty() {
+        return Ok((super::branches::default_config_boxed(), true));
+    }
+    Ok(Box::pin(parse_config_boxed(config_path, contents)).await)
+}
+
 pub(crate) async fn parse_config_with_recovery(
     config_path: &Path,
     contents: &str,
@@ -222,7 +249,7 @@ pub(super) async fn migration_source(config_path: &Path, contents: &str) -> Stri
     }
 }
 
-async fn parse_toml_off_worker(contents: String) -> Result<Box<Config>, String> {
+pub(super) async fn parse_toml_off_worker(contents: String) -> Result<Box<Config>, String> {
     match tokio::task::spawn_blocking(move || {
         super::parse::config_from_toml_str(&contents).map(Box::new)
     })
@@ -336,9 +363,10 @@ impl Config {
         // `Config` temporary its own stack slot, so folding all three branches
         // into this one state machine made the poll frame ~440 KB and stacked
         // on top of the whole agent tower (#6379).
-        // The first load of a process runs before any backend is installed, so
-        // it reads the file; later loads read the scope's config document on a
-        // shared backend.
+        // Which source holds the config is decided per call: the file unless a
+        // shared backend and a scope are installed. A process boots before its
+        // backend is installed, so its first load normally reads the file (the
+        // bootstrap config); nothing here enforces that ordering.
         if super::source::for_config(&config_path)?.exists().await? {
             Box::pin(Self::load_existing_config(
                 openhuman_dir,
@@ -446,11 +474,9 @@ impl Config {
             contents: raw,
             recovered: read_was_recovered,
         } = Box::pin(source.read()).await?;
-        let (mut config, config_was_corrupted) = if read_was_recovered && raw.is_empty() {
-            (Config::default(), true)
-        } else {
-            parse_config_with_recovery(&config_path, &raw).await
-        };
+        let (config, config_was_corrupted) =
+            parse_source_contents(source.as_ref(), &config_path, &raw, read_was_recovered).await?;
+        let mut config = *config;
         let config_was_corrupted = config_was_corrupted || read_was_recovered;
         config.config_path = config_path.clone();
         config.workspace_dir = workspace_dir;
