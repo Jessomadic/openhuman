@@ -448,7 +448,7 @@ pub fn find_run_log_path(workspace: &Path, run_id: &str) -> Option<PathBuf> {
 }
 
 /// Terminal outcome of a finished run, parsed from the `--- result ---`
-/// footer: the status word (`DONE` / `DEGENERATE` / `FAILED`) and the
+/// footer: the status word (`DONE` / `STOPPED` / `DEGENERATE` / `FAILED`) and the
 /// final output body that follows it. Used by `run_workflow` /
 /// `await_workflow` to hand the spawned run's result straight back to the
 /// orchestrator instead of making it scrape the log itself.

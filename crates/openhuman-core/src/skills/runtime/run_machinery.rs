@@ -35,7 +35,7 @@ pub struct WorkflowRunStarted {
 /// open).
 ///
 /// Returns immediately with the run handle; the actual work runs in the
-/// background until DONE / DEGENERATE / FAILED. Errors (unknown skill,
+/// background until DONE / STOPPED / DEGENERATE / FAILED. Errors (unknown skill,
 /// missing required inputs) surface as `Err(String)` *before* the spawn so
 /// callers can reject malformed invocations synchronously.
 pub async fn spawn_workflow_run_background(
@@ -309,7 +309,7 @@ pub async fn spawn_workflow_run_background(
 
 /// Poll a spawned run's log file until its terminal footer lands or the
 /// `budget` elapses. Returns `Some(outcome)` the moment the footer is
-/// readable (DONE / DEGENERATE / FAILED), or `None` if the run is still
+/// readable (DONE / STOPPED / DEGENERATE / FAILED), or `None` if the run is still
 /// `RUNNING` when the budget runs out — the caller then auto-detaches and
 /// hands back the `run_id` so the work continues in the background.
 ///
