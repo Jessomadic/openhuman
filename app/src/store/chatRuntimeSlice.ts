@@ -557,6 +557,13 @@ interface ChatTurnUsagePayload {
   cachedTokens?: number;
   costUsd?: number;
   contextWindow?: number;
+  /**
+   * Tokens the orchestrator's context held after the turn's final model call
+   * (`chat_done.usage.context_tokens`). `inputTokens` sums every call of the
+   * turn, so it is spend, not occupancy. Absent from an older core; the gauge
+   * then falls back to the turn totals.
+   */
+  contextTokens?: number;
   /** Thread the turn belongs to; routes the delta to that thread's bucket. */
   threadId?: string;
   subAgents?: Array<{
