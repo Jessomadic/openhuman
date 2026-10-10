@@ -4631,6 +4631,7 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "tempfile",
+ "tinyagents-graph",
  "tinyagents-harness",
  "tinyagents-session",
  "tinybus",
