@@ -85,7 +85,11 @@ async fn spawn_subagent_reports_a_stopped_child_as_a_failed_tool_result() {
         "a stopped child must fail the parent's tool call: {}",
         result.output()
     );
-    assert!(result.output().contains("[SUBAGENT_INCOMPLETE]"));
+    assert!(
+        result.output().contains("[SUBAGENT_INCOMPLETE]"),
+        "{}",
+        result.output()
+    );
 
     let mut stop = None;
     while let Ok(event) = progress_rx.try_recv() {
