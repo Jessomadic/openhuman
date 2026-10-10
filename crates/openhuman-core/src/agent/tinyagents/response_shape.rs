@@ -94,6 +94,9 @@ pub struct ResponseUsage {
     pub reasoning_tokens: u64,
     /// Charged cost, unknown if any response omitted it.
     pub cost_usd: Option<f64>,
+    /// At least one call supplied a billing receipt, including a malformed one.
+    /// Distinguishes absent receipts from invalid authoritative billing data.
+    pub has_cost_receipt: bool,
 }
 
 impl ResponseUsage {
@@ -373,6 +376,11 @@ fn record(scope: &ResponseShapeScope, response: &ModelResponse) {
         let unknown_cost = report.unknown_cost;
         if response.usage.is_some() || cost.is_some() {
             let total = report.usage.get_or_insert_with(ResponseUsage::default);
+            total.has_cost_receipt |= raw_cost.is_some()
+                || response
+                    .usage
+                    .and_then(|usage| usage.charged_amount)
+                    .is_some();
             total.cost_usd = if unknown_cost {
                 None
             } else {

@@ -11,6 +11,11 @@ pub(super) fn overlay_response_usage(
     reported: &openhuman_core::agent::tinyagents::response_shape::ResponseUsage,
 ) {
     let usage = captured.get_or_insert_with(Default::default);
+    // A session may have a legitimate catalog estimate when every provider
+    // omitted billing. Invalid receipts must still replace it with unknown.
+    let preserve_host_cost = reported.cost_usd.is_none() && !reported.has_cost_receipt;
+    let host_cost = usage.cost_usd;
+    let host_source = usage.cost_source;
     let root = reported.failure_usage();
     usage.input_tokens = root.input_tokens;
     usage.output_tokens = root.output_tokens;
@@ -31,8 +36,12 @@ pub(super) fn overlay_response_usage(
             .map(|(root, child)| root + child);
         source = source.max(child.usage.cost_source);
     }
-    usage.cost_usd = cost;
-    usage.cost_source = source;
+    usage.cost_usd = if preserve_host_cost { host_cost } else { cost };
+    usage.cost_source = if preserve_host_cost {
+        host_source
+    } else {
+        source
+    };
 }
 
 /// The routed chat entry point.

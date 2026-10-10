@@ -12,6 +12,7 @@ fn reported_root_usage_preserves_children_and_session_context_without_double_cou
         cached_tokens: 3,
         reasoning_tokens: 2,
         cost_usd: Some(0.007),
+        has_cost_receipt: true,
     };
     let mut captured = Some(LastTurnUsage {
         input_tokens: 99,
@@ -51,4 +52,21 @@ fn reported_root_usage_preserves_children_and_session_context_without_double_cou
     overlay_response_usage(&mut captured, &report);
     assert_eq!(captured.as_ref().unwrap().cost_usd, None);
     assert_eq!(captured.as_ref().unwrap().input_tokens, 30);
+}
+
+#[test]
+fn absent_receipts_preserve_host_cost_but_invalid_receipts_remain_unknown() {
+    let mut report = ResponseUsage {
+        input_tokens: 10,
+        ..Default::default()
+    };
+    let mut captured = Some(LastTurnUsage {
+        cost_usd: Some(5.0),
+        ..Default::default()
+    });
+    overlay_response_usage(&mut captured, &report);
+    assert_eq!(captured.as_ref().unwrap().cost_usd, Some(5.0));
+    report.has_cost_receipt = true;
+    overlay_response_usage(&mut captured, &report);
+    assert_eq!(captured.as_ref().unwrap().cost_usd, None);
 }
