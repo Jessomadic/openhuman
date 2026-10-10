@@ -277,5 +277,6 @@ Provisioning, opening, credential changes (`profiles.set_credential` /
 
 Credential changes take no lease: the profile is normally hosted by some node
 while the gateway installs a credential, and must not be refused for it. So
-across nodes they are not ordered against a deprovision running elsewhere;
-with per-node keyrings (above) they do not share a slot with it either.
+across nodes they are not ordered against a deprovision running elsewhere.
+That only matters when secrets live in the storage backend; per-node
+keyrings (above) never share a slot across nodes.
