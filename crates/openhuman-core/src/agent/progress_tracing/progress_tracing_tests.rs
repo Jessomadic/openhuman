@@ -155,3 +155,5 @@ mod span_tree_tests;
 mod tool_span_tests;
 #[path = "progress_tracing_ttft_tests.rs"]
 mod ttft_tests;
+#[path = "progress_tracing_stop_tests.rs"]
+mod stop_tests;
