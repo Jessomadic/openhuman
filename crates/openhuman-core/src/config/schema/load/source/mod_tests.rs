@@ -79,7 +79,7 @@ async fn a_save_keeps_hand_edits_but_not_comments() {
         .replace("before", "hand-edited");
     std::fs::write(&config.config_path, format!("# keep me?\n{edited}")).unwrap();
 
-    let mut reloaded = Config::load_from_config_path(&config.config_path, &config.workspace_dir)
+    let reloaded = Config::load_from_config_path(&config.config_path, &config.workspace_dir)
         .await
         .unwrap();
     assert_eq!(reloaded.default_model.as_deref(), Some("hand-edited"));
