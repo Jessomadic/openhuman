@@ -91,7 +91,6 @@ async fn an_async_subagent_park_reaches_the_parent_thread_detached_with_a_short_
         request_id,
         thread_id,
         client_id,
-        detached,
         ..
     } = event
     else {
@@ -104,12 +103,8 @@ async fn an_async_subagent_park_reaches_the_parent_thread_detached_with_a_short_
     );
     assert_eq!(client_id.as_deref(), Some("client-sub"));
     assert!(
-        detached,
-        "a park that can outlive its turn is marked detached"
-    );
-    assert!(
         gate.request_is_detached(&request_id),
-        "the replay path sees it too"
+        "a park that can outlive its turn is marked detached for the surface and replay"
     );
 
     let row = wait_parked(&gate).await;
@@ -148,15 +143,15 @@ async fn an_inline_chat_park_is_not_detached_and_keeps_the_full_window() {
         .await
     });
 
-    let crate::core::events::DomainEvent::ApprovalRequested {
-        request_id,
-        detached,
-        ..
-    } = requested_event(&mut events, tool).await
+    let crate::core::events::DomainEvent::ApprovalRequested { request_id, .. } =
+        requested_event(&mut events, tool).await
     else {
         unreachable!()
     };
-    assert!(!detached, "a park inside the chat turn ends with it");
+    assert!(
+        !gate.request_is_detached(&request_id),
+        "a park inside the chat turn ends with it"
+    );
     let row = wait_parked(&gate).await;
     assert!(
         window(&row, before) > chrono::Duration::from_std(SUBAGENT_APPROVAL_TTL).unwrap(),
