@@ -226,12 +226,14 @@ pub async fn eventually<T>(what: &str, mut check: impl FnMut() -> Option<T>) -> 
 /// whose configs name no inference endpoint of their own.
 pub struct PointedTransport {
     base_url: String,
+    client: reqwest::Client,
 }
 
 impl PointedTransport {
     pub fn install(base_url: &str) {
         openhuman_embed::install_backend_transport(std::sync::Arc::new(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
+            client: reqwest::Client::new(),
         }));
     }
 }
@@ -240,9 +242,22 @@ impl PointedTransport {
 impl openhuman_embed::BackendTransport for PointedTransport {
     async fn send_json(
         &self,
-        _req: openhuman_embed::BackendRequest<'_>,
+        req: openhuman_embed::BackendRequest<'_>,
     ) -> Result<serde_json::Value, openhuman_embed::BackendTransportError> {
-        Err(openhuman_embed::BackendTransportError::Unavailable)
+        // Forward inference requests to the pointed mock endpoint.
+        // This uses the same HTTP client as a real transport would.
+        let url = format!(
+            "{}/{}",
+            self.base_url,
+            req.path.trim_start_matches('/')
+        );
+        self.client
+            .post(&url)
+            .json(&req.body)
+            .send()
+            .await
+            .and_then(|resp| resp.json())
+            .map_err(|e| openhuman_embed::BackendTransportError::Unavailable)
     }
 
     async fn send_multipart(
