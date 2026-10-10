@@ -15,6 +15,8 @@ use support::*;
 
 #[path = "saas_mode/cluster.rs"]
 mod cluster;
+#[path = "saas_mode/hashed_ids.rs"]
+mod hashed_ids;
 #[path = "saas_mode/memory.rs"]
 mod memory;
 #[path = "saas_mode/mock_memory.rs"]
