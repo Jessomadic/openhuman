@@ -30,7 +30,6 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -45,11 +44,10 @@ use tinybus::SubscriptionHandle;
 
 use super::background_completions;
 use super::completion_notice::build_undelivered_notice;
-use super::busy_guard::{clear_busy_for_thread, is_busy};
+use super::busy_guard::is_busy;
 #[cfg(test)]
-use super::busy_guard::{busy, TurnBusy};
+use super::busy_guard::{busy, clear_busy_for_thread, TurnBusy};
 use super::completion_owners;
-use crate::core::runtime::tenant::{self, Tenant};
 use crate::core::runtime::CoreContext;
 
 /// Coalesce completions landing within this window into one delivery turn.
