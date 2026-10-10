@@ -71,8 +71,13 @@ fn act(w: &mut World, actor: usize, method: &str, params: Value) -> Value {
     let (status, _, body) = call(&w.node, USERS[actor], method, params.clone());
     let text = body.to_string();
     let short: String = text.chars().take(160).collect();
+    // Parameter names only: the values are user content and credentials.
+    let keys: Vec<&str> = params
+        .as_object()
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default();
     w.trace.push(format!(
-        "#{} {} {method} {params} -> {status} {short}",
+        "#{} {} {method} {keys:?} -> {status} {short}",
         w.step, USERS[actor]
     ));
     let stat = w.stats.entry(method.to_string()).or_default();
@@ -262,6 +267,10 @@ fn settle(llm: &mock_llm::MockLlm, quiet: Duration, max: Duration) {
             return;
         }
     }
+    panic!(
+        "backend traffic never settled within {max:?} ({} requests recorded)",
+        llm.recorded().len()
+    );
 }
 
 fn verify_victims(w: &mut World) {

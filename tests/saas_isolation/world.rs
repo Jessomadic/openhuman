@@ -307,15 +307,19 @@ impl World {
         if let Some(client) = params["client_id"].as_str() {
             Pools::push(&mut self.pools.clients, actor, client, None);
         }
-        let sent: HashSet<String> = params
-            .as_object()
-            .map(|m| {
-                m.values()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Every string anywhere in the params, however deeply nested.
+        let mut sent: HashSet<String> = HashSet::new();
+        let mut pending = vec![params];
+        while let Some(value) = pending.pop() {
+            match value {
+                Value::String(s) => {
+                    sent.insert(s.clone());
+                }
+                Value::Array(items) => pending.extend(items),
+                Value::Object(map) => pending.extend(map.values()),
+                _ => {}
+            }
+        }
         let mut stack = vec![(body.clone(), thread)];
         while let Some((value, thread)) = stack.pop() {
             match value {

@@ -184,7 +184,7 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
         d.root.join("users/alice/sandbox/link-to-bob"),
     )
     .unwrap();
-    let probes: Vec<(&str, &str, Value)> = vec![
+    let mut probes: Vec<(&str, &str, Value)> = vec![
         ("host-read", "file_read", json!({ "path": host_secret })),
         (
             "operator-read",
@@ -238,16 +238,18 @@ fn host_tool_probes_are_refused_under_the_profile_policy() {
         }] }),
         ),
         (
-            "symlink-read",
-            "file_read",
-            json!({ "path": "link-to-bob/workspace/memory/conversations/threads.jsonl" }),
-        ),
-        (
             "shell",
             "shell",
             json!({ "command": format!("touch {}", shell_marker.display()) }),
         ),
     ];
+    // The link above only exists on Unix, so only Unix probes through it.
+    #[cfg(unix)]
+    probes.push((
+        "symlink-read",
+        "file_read",
+        json!({ "path": "link-to-bob/workspace/memory/conversations/threads.jsonl" }),
+    ));
     let results: Vec<(&str, &str, Outcome)> = std::thread::scope(|s| {
         let handles: Vec<_> = probes
             .iter()

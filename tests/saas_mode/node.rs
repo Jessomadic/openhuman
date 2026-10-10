@@ -26,7 +26,23 @@ impl Node {
             .lines()
             .filter(|line| !line.contains("rpc_handler [rpc]"))
             .collect();
-        lines[lines.len().saturating_sub(80)..].join("\n")
+        // A failure trace is shared output: drop lines that may carry a
+        // credential and cap the rest.
+        lines[lines.len().saturating_sub(80)..]
+            .iter()
+            .map(|line| {
+                let lower = line.to_ascii_lowercase();
+                if ["bearer", "token", "authorization", "secret", "password", "canary"]
+                    .iter()
+                    .any(|k| lower.contains(k))
+                {
+                    "[redacted log line]".to_string()
+                } else {
+                    line.chars().take(300).collect()
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
     }
 
     pub fn kill(&mut self) {
