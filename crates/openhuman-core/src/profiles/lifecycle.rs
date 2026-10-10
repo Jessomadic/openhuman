@@ -96,7 +96,7 @@ impl ProfileHost {
         }
         let grant = self.acquire_for_lifecycle(id, "provision").await?;
         let created = self.provision_leased(id).await;
-        profile_lease::release_all(self.leases(), vec![(id.clone(), grant)]).await;
+        profile_lease::release_all(self, vec![(id.clone(), grant)]).await;
         let created = created?;
         log::info!("[profiles] provisioned profile={id} created={created}");
         Ok(created)
@@ -153,7 +153,7 @@ impl ProfileHost {
         let archived = self.archive_leased(id, &layout).await;
         // Released only now: until the record is gone, another node's open
         // or provision of this id is held out by the lease.
-        profile_lease::release_all(self.leases(), vec![(id.clone(), grant)]).await;
+        profile_lease::release_all(self, vec![(id.clone(), grant)]).await;
         archived?;
         log::info!("[profiles] deprovisioned profile={id} (archived)");
         Ok(true)
@@ -259,7 +259,7 @@ impl ProfileHost {
     /// happen.
     async fn give_back(&self, id: &ProfileId, grant: Option<LeaseGrant>) {
         if let Some(grant) = grant {
-            profile_lease::release_all(self.leases(), vec![(id.clone(), grant)]).await;
+            profile_lease::release_all(self, vec![(id.clone(), grant)]).await;
         }
     }
 }
