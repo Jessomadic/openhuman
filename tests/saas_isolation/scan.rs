@@ -7,19 +7,37 @@ use super::mock_llm::Recorded;
 use super::world::{owners_in, USERS};
 
 /// Every file under `dir`, recursively.
-fn files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
+/// Directories or entries that cannot be read are recorded in `errors`: an
+/// unreadable tree is an unaudited tree, not a clean one.
+fn files(dir: &Path, out: &mut Vec<std::path::PathBuf>, errors: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            errors.push(format!("could not list {}: {e}", dir.display()));
+            return;
+        }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                errors.push(format!("could not read an entry of {}: {e}", dir.display()));
+                continue;
+            }
+        };
         let path = entry.path();
         match entry.file_type() {
-            Ok(t) if t.is_dir() => files(&path, out),
+            Ok(t) if t.is_dir() => files(&path, out, errors),
             Ok(t) if t.is_file() => out.push(path),
-            _ => {}
+            Ok(_) => {}
+            Err(e) => errors.push(format!("could not stat {}: {e}", path.display())),
         }
     }
 }
+
+/// Largest file the audit reads whole; a bigger one is itself a violation
+/// rather than a silently unaudited file.
+const MAX_AUDITED_BYTES: u64 = 512 * 1024 * 1024;
 
 /// The user whose `users/<id>/` tree holds `path`, if any.
 fn owner_of(root: &Path, path: &Path) -> Option<usize> {
@@ -37,7 +55,7 @@ pub fn scan_files(root: &Path, home: &Path) -> (Vec<String>, [usize; 3]) {
     let mut own = [0usize; 3];
     for base in [root, home] {
         let mut all = Vec::new();
-        files(base, &mut all);
+        files(base, &mut all, &mut violations);
         for path in all {
             if base == home && path.starts_with(root) {
                 continue;
@@ -46,14 +64,27 @@ pub fn scan_files(root: &Path, home: &Path) -> (Vec<String>, [usize; 3]) {
             if path.extension().is_some_and(|e| e == "log") && !path.starts_with(root) {
                 continue;
             }
-            let Ok(meta) = std::fs::metadata(&path) else {
-                continue;
+            let meta = match std::fs::metadata(&path) {
+                Ok(meta) => meta,
+                Err(e) => {
+                    violations.push(format!("could not stat {}: {e}", path.display()));
+                    continue;
+                }
             };
-            if meta.len() > 64 * 1024 * 1024 {
+            if meta.len() > MAX_AUDITED_BYTES {
+                violations.push(format!(
+                    "{} is {} bytes, too large to audit",
+                    path.display(),
+                    meta.len()
+                ));
                 continue;
             }
-            let Ok(bytes) = std::fs::read(&path) else {
-                continue;
+            let bytes = match std::fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    violations.push(format!("could not read {}: {e}", path.display()));
+                    continue;
+                }
             };
             let text = String::from_utf8_lossy(&bytes);
             // The process keyring (the dev file backend in this build) is one
@@ -92,9 +123,14 @@ pub fn scan_files(root: &Path, home: &Path) -> (Vec<String>, [usize; 3]) {
 
 /// Keyring entries holding a user's canary outside that user's namespace.
 fn keychain_violations(path: &Path, text: &str) -> Vec<String> {
-    let map: std::collections::HashMap<String, String> =
-        serde_json::from_str(text).unwrap_or_default();
     let mut out = Vec::new();
+    let map: std::collections::HashMap<String, String> = match serde_json::from_str(text) {
+        Ok(map) => map,
+        Err(e) => {
+            out.push(format!("{}: malformed keychain data: {e}", path.display()));
+            return out;
+        }
+    };
     for (key, value) in &map {
         let namespace = key.split(':').next().unwrap_or_default();
         for user in owners_in(value) {
@@ -128,12 +164,11 @@ pub fn audit_backend(requests: &[Recorded]) -> (Vec<String>, [usize; 3]) {
         if r.is_inference() {
             match by {
                 Some(user) => per_user[user] += 1,
-                None if !content.is_empty() => violations.push(format!(
-                    "inference for {:?} without that user's credential (auth `{}`)",
+                None => violations.push(format!(
+                    "inference request without a user credential (content of {:?}, auth `{}`)",
                     content.iter().map(|&u| USERS[u]).collect::<Vec<_>>(),
                     redact(&r.auth),
                 )),
-                None => {}
             }
         }
         for user in content {
