@@ -20,7 +20,11 @@ pub struct ThreadTokenUsageResponse {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
-    pub cost_usd: f64,
+    /// The thread's cost, or `null` when some turn's cost is not known (no
+    /// recorded charge and no catalogued price). Never a guessed rate.
+    pub cost_usd: Option<f64>,
+    /// `charged`, `estimated` (some turn priced from list rates) or `unknown`.
+    pub cost_source: crate::agent::cost::CostSource,
     pub turn_count: usize,
     /// Spend of the most recent turn, the orchestrator's own: every model call
     /// of that turn summed, so a long tool loop reports many times its context.
@@ -52,7 +56,8 @@ pub struct SubagentUsageDto {
     pub agent_id: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cost_usd: f64,
+    /// `null` when this archetype's cost is not known.
+    pub cost_usd: Option<f64>,
     pub runs: usize,
 }
 
