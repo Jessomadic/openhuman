@@ -114,7 +114,9 @@ pub(crate) struct SessionTurnSidecar {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
-    pub cost_usd: f64,
+    /// The turn's own cost (sub-agents excluded): every call's reported
+    /// charge, else catalog estimate, else unknown.
+    pub cost: crate::agent::cost::CostTally,
     /// Input and output tokens of the turn's final model call. The totals
     /// above sum every call of the turn (its spend); these are the context the
     /// model last held, the numerator of the context-window gauge.
