@@ -421,7 +421,7 @@ impl SpawnAsyncSubagentTool {
         // below is a staging bridge for those two scopes only.
         let detached_run_context = detached_parent.data.child();
         let mut abort_report = AbortReport::arm(progress_sink.clone(), &definition.id, &task_id);
-        let join = tokio::spawn(crate::agent::turn_origin::propagate(
+        let join = crate::core::runtime::spawn_scoped(crate::agent::turn_origin::propagate(
             crate::agent::turn_workspace::propagate(async move {
                 let options = SubagentRunOptions {
                     skill_filter_override: None,
