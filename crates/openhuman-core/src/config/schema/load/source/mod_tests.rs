@@ -340,3 +340,64 @@ fn forced_sources_nest_and_restore() {
     drop(outer);
     assert!(tests_support::forced_document_scope().is_none());
 }
+
+#[tokio::test]
+async fn a_present_but_malformed_document_is_an_error_not_absence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("config.toml");
+    std::fs::write(&file, "default_model = \"stale-file\"\n").unwrap();
+    let storage = MemoryStorage::new();
+    let source = document_source(&storage, "alice", &file);
+    let docs = Arc::clone(scoped(&storage, "alice").documents());
+    docs.put(
+        "config",
+        "alice",
+        serde_json::json!({ "toml_enc": 123 }),
+        tinystoragedrivers::Precondition::None,
+    )
+    .await
+    .unwrap();
+    assert!(source.exists().await.unwrap());
+    assert!(
+        source.read().await.is_err(),
+        "must not fall back to the file"
+    );
+}
+
+#[tokio::test]
+async fn a_document_that_does_not_parse_is_an_error_and_leaves_the_bootstrap_file_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let _forced = ForcedDocumentSource::new(
+        scoped(&storage, "tenant-a"),
+        Scope::new("tenant-a").unwrap(),
+        keys(3),
+    );
+    let config = config_at(tmp.path(), "m");
+    let docs = Arc::clone(scoped(&storage, "tenant-a").documents());
+    let key = keys(3).data_key(&Scope::new("tenant-a").unwrap()).unwrap();
+    let sealed = crypto::encrypt_enc2(&key, b"default_model = 5\n").unwrap();
+    docs.put(
+        "config",
+        "tenant-a",
+        serde_json::json!({ "toml_enc": sealed }),
+        tinystoragedrivers::Precondition::None,
+    )
+    .await
+    .unwrap();
+    let bootstrap = "[storage]\nurl = \"sqlite:/b\"\n";
+    std::fs::write(&config.config_path, bootstrap).unwrap();
+
+    let error = Config::load_from_config_path(&config.config_path, &config.workspace_dir)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("could not be parsed"),
+        "{error:#}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&config.config_path).unwrap(),
+        bootstrap
+    );
+    assert!(!tmp.path().join("config.toml.bak").exists());
+}

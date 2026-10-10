@@ -15,8 +15,9 @@
 //! The `[storage]` table decides which backend exists, so it cannot be read
 //! from one (and its URL can carry a database password). [`BOOTSTRAP_TABLES`]
 //! are therefore stripped before a document is written and re-applied from the
-//! file on every document read. The first load of a process (`load_or_init`)
-//! always reads the file: it runs before any backend is installed.
+//! file on every document read. A process boots before its backend is installed,
+//! so its first load (`load_or_init`) normally reads the file; nothing
+//! enforces that ordering.
 //!
 //! # Why text, not a JSON tree
 //!
