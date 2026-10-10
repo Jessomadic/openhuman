@@ -235,9 +235,13 @@ pub(super) fn build_token_usage(model: &str, usage: &BilledUsage) -> Option<Toke
         return None;
     }
     let total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
-    let provider_charged = !usage.cost_is_estimate
-        && usage.charged_amount_usd.is_finite()
-        && usage.charged_amount_usd > 0.0;
+    let cost_source = if usage.cost_is_estimate {
+        CostSource::Estimated
+    } else if usage.charge_reported {
+        CostSource::ProviderCharged
+    } else {
+        CostSource::Unknown
+    };
     Some(TokenUsage {
         model: model.to_string(),
         input_tokens: usage.input_tokens,
