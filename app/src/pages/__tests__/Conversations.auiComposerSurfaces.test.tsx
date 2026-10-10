@@ -38,7 +38,11 @@ import runModeReducer from '../../store/runModeSlice';
 import socketReducer from '../../store/socketSlice';
 import themeReducer from '../../store/themeSlice';
 import threadGoalReducer from '../../store/threadGoalSlice';
-import { addMessageLocal } from '../../store/threadSlice';
+import {
+  addMessageLocal,
+  clearThreadInferenceActive,
+  markThreadInferenceActive,
+} from '../../store/threadSlice';
 import threadReducer from '../../store/threadSlice';
 import threadTodosReducer, { setThreadTodos } from '../../store/threadTodosSlice';
 import type { Thread, ThreadMessage } from '../../types/thread';
@@ -341,6 +345,12 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     expect(overlay).toBeNull();
     expect(plan.closest('[data-slot="task-card-dock"]')).not.toBeNull();
     expect(plan).toHaveAttribute('data-slot', 'task-card');
+    expect(plan).toHaveAttribute('data-state', 'waiting');
+    await act(async () => store.dispatch(markThreadInferenceActive(THREAD_ID)));
+    expect(screen.getByTestId('todo-checklist')).toHaveAttribute('data-state', 'working');
+    await act(async () => store.dispatch(clearThreadInferenceActive(THREAD_ID)));
+    expect(screen.getByTestId('todo-checklist')).toHaveAttribute('data-state', 'waiting');
+
     await act(async () =>
       store.dispatch(
         setThreadTodos({
