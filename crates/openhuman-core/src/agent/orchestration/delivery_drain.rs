@@ -105,7 +105,9 @@ where
     Fut: Future<Output = ()>,
 {
     if !fence.sleep(delay).await {
-        log::info!("[background_delivery] profile lease lost; dropping the drain thread_id={thread_id}");
+        log::info!(
+            "[background_delivery] profile lease lost; dropping the drain thread_id={thread_id}"
+        );
         return DrainOutcome::Fenced;
     }
     if wait_idle {
@@ -125,7 +127,9 @@ where
         }
     }
     if !fence.admits() {
-        log::info!("[background_delivery] profile lease lost; dropping the drain thread_id={thread_id}");
+        log::info!(
+            "[background_delivery] profile lease lost; dropping the drain thread_id={thread_id}"
+        );
         return DrainOutcome::Fenced;
     }
     deliver().await;

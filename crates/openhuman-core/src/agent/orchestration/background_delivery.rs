@@ -355,7 +355,9 @@ fn claim_ready(router: &CompletionRouter, thread_id: &str) -> Option<Vec<Complet
 /// delivering. Batches everything ready at this instant into one system turn.
 async fn try_deliver(thread_id: String, fence: DrainFence) {
     if !fence.admits() {
-        log::info!("[background_delivery] profile lease lost; not delivering thread_id={thread_id}");
+        log::info!(
+            "[background_delivery] profile lease lost; not delivering thread_id={thread_id}"
+        );
         return;
     }
     let Some(workspace_dir) = background_completions::workspace_for_thread(&thread_id) else {
@@ -389,6 +391,26 @@ async fn try_deliver(thread_id: String, fence: DrainFence) {
         );
         schedule_delivery_inner(thread_id, delay, false, fence);
     }
+}
+
+/// One pass of the delivery loop whose turn only counts itself, for tests
+/// outside this module.
+#[cfg(test)]
+pub(super) async fn try_deliver_for_test(
+    thread_id: String,
+    router: Arc<CompletionRouter>,
+    turns: Arc<std::sync::atomic::AtomicU32>,
+) -> Option<Duration> {
+    try_deliver_with(
+        thread_id,
+        router,
+        move |_, _| {
+            turns.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async { Ok(String::new()) }
+        },
+        |_, _| async {},
+    )
+    .await
 }
 
 /// Backoff before retrying a delivery whose record has now failed `attempts` times.

@@ -30,7 +30,12 @@ fn live_fence() -> (Arc<dyn LeaseStore>, Arc<LeaseFence>) {
 }
 
 /// Run a drain whose `deliver` only notes that it ran.
-async fn drain(thread: &str, delay: Duration, wait_idle: bool, fence: &DrainFence) -> (DrainOutcome, bool) {
+async fn drain(
+    thread: &str,
+    delay: Duration,
+    wait_idle: bool,
+    fence: &DrainFence,
+) -> (DrainOutcome, bool) {
     let ran = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&ran);
     let outcome = run_drain(thread, delay, wait_idle, fence, SHORT, || async move {
@@ -78,7 +83,10 @@ async fn losing_the_lease_during_the_delay_cuts_the_drain_short() {
     .await;
     assert_eq!(outcome, DrainOutcome::Fenced);
     assert!(!ran);
-    assert!(started.elapsed() < Duration::from_secs(10), "aborted, not slept out");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "aborted, not slept out"
+    );
 }
 
 #[tokio::test]
@@ -161,11 +169,19 @@ async fn a_delivery_waits_while_a_relayed_turn_runs_on_its_thread() {
 
     let relayed = TurnBusy::start_on_thread(thread);
     attempt(Arc::clone(&turns)).await;
-    assert_eq!(turns.load(Ordering::SeqCst), 0, "no delivery over a running relayed turn");
+    assert_eq!(
+        turns.load(Ordering::SeqCst),
+        0,
+        "no delivery over a running relayed turn"
+    );
     assert_eq!(pending_for(w, thread).len(), 1, "the result stays pending");
 
     drop(relayed);
     attempt(Arc::clone(&turns)).await;
-    assert_eq!(turns.load(Ordering::SeqCst), 1, "delivered once the turn ends");
+    assert_eq!(
+        turns.load(Ordering::SeqCst),
+        1,
+        "delivered once the turn ends"
+    );
     assert!(pending_for(w, thread).is_empty());
 }
