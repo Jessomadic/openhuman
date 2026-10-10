@@ -83,8 +83,8 @@ fn get_adopting(
     use tinystoragedrivers::secrets::SecretStore as _;
     let write_back = secrets.clone();
     let owned = name.to_string();
-    let value =
-        crate::storage::block_on(async move { secrets.get(&owned).await }).map_err(storage_error)?;
+    let value = crate::storage::block_on(async move { secrets.get(&owned).await })
+        .map_err(storage_error)?;
     let Some(value) = value else {
         let legacy = legacy();
         if let Some(legacy) = &legacy {

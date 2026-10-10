@@ -503,9 +503,10 @@ impl EncryptedFileBackend {
         };
 
         if !map.is_empty() {
-            let json = zeroize::Zeroizing::new(serde_json::to_vec(&map).map_err(|e| {
-                KeyringError::Backend(format!("failed to serialize secrets: {e}"))
-            })?);
+            let json =
+                zeroize::Zeroizing::new(serde_json::to_vec(&map).map_err(|e| {
+                    KeyringError::Backend(format!("failed to serialize secrets: {e}"))
+                })?);
             let blob = crypto::chacha20_encrypt(key, &json)
                 .map_err(|e| KeyringError::Backend(format!("encryption failed: {e}")))?;
             file_store::write_atomic(&self.path, &blob)?;

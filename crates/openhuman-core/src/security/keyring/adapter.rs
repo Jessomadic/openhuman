@@ -41,10 +41,7 @@ pub(super) fn is_no_access(error: &StorageError) -> bool {
 /// Whether the driver reports the secrets file itself as unreadable
 /// (undecryptable under this key, or not the expected JSON).
 pub(super) fn is_corruption(error: &StorageError) -> bool {
-    matches!(
-        error.kind(),
-        ErrorKind::Crypto | ErrorKind::Serialization
-    )
+    matches!(error.kind(), ErrorKind::Crypto | ErrorKind::Serialization)
 }
 
 /// Decode a stored value as UTF-8 text.
@@ -85,8 +82,7 @@ pub(super) fn recover_corrupt_file(
 ) -> Result<(), KeyringError> {
     let _guard = file_store::lock_for_write(path)?;
     let store = EncryptedFileSecrets::at_path(path, Zeroizing::new(*key));
-    if crate::storage::block_on(async move { store.list("").await }).is_ok()
-    {
+    if crate::storage::block_on(async move { store.list("").await }).is_ok() {
         log::info!("[keyring:encrypted_file] secrets file readable again; not quarantining");
         return Ok(());
     }
