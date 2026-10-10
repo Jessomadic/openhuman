@@ -329,14 +329,14 @@ async fn unknown_tool_call_projects_exactly_one_failed_timeline_row() {
     assert_eq!(started[0].0, "search_files");
     assert_eq!(
         started[0].1.as_deref(),
-        Some("Search files (unavailable)"),
+        Some("Search Files (unavailable)"),
         "the timeline still says the tool was unavailable"
     );
     let (tool_name, success, failure, output, label) = completed.remove(0);
     assert_eq!(tool_name, "search_files");
     assert!(!success, "the attempted tool is projected as a failed call");
     assert_eq!(output, UNKNOWN_TOOL_ANSWER, "the row carries the error text");
-    assert_eq!(label.as_deref(), Some("Search files (unavailable)"));
+    assert_eq!(label.as_deref(), Some("Search Files (unavailable)"));
     // #6277: a tool the agent does not have fails identically on every retry,
     // so the timeline must not tell the user to "try again / run diagnostics".
     let failure = failure.expect("the failed row carries a classified failure");
