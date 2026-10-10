@@ -341,7 +341,14 @@ mod harness_install {
 
         let started = std::time::Instant::now();
         let run = harness
-            .invoke_in_context(&(), (), vec![Message::user("go")])
+            .invoke_in_context(
+                &(),
+                tinyagents_harness::context::RunContext::new(
+                    tinyagents_harness::context::RunConfig::new("timeout-e2e"),
+                    (),
+                ),
+                vec![Message::user("go")],
+            )
             .await
             .expect("a timed-out tool is a recoverable result, not a run failure");
         let elapsed = started.elapsed();
