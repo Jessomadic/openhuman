@@ -1,4 +1,6 @@
+/* global window, document, getComputedStyle */
 import assert from 'node:assert/strict';
+import { URL } from 'node:url';
 import { createRequire } from 'node:module';
 
 // Use the repository's shared browser element adapter, including in this CLI scenario.
