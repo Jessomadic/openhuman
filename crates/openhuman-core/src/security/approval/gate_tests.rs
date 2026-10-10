@@ -210,3 +210,5 @@ mod origin_intercept_tests;
 mod triage_tests;
 #[path = "gate_ttl_and_triage_tests.rs"]
 mod ttl_and_triage_tests;
+#[path = "gate_tenant_tests.rs"]
+mod tenant_tests;
