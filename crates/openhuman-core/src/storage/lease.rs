@@ -25,8 +25,8 @@
 //!   stop the previous holder: resources a lease protects must reject writes
 //!   carrying an epoch below the current one, and a holder must stop work
 //!   before `expires_at_ms` minus the maximum clock skew between nodes (each
-//!   node supplies its own `now_ms`). Nothing in this module checks epochs at
-//!   the protected resource. An epoch at `u64::MAX` cannot be advanced, so a
+//!   node supplies its own `now_ms`). This module does not check epochs at
+//!   the protected resource; [`super::fence`] does, for storage-port writes. An epoch at `u64::MAX` cannot be advanced, so a
 //!   takeover of it fails with a storage error instead of repeating it.
 //! - **renew** extends a grant by compare-and-swap on the version it holds.
 //!   Any write since (a takeover, a release) makes it [`LeaseError::Lost`].

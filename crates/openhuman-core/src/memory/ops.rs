@@ -386,15 +386,20 @@ pub async fn forget(config: &Config, params: ForgetParams) -> MemoryResult<Forge
         Some(root) => Some(super::user_scope::clamp_reach(params.reach, &root)),
         None => params.reach,
     };
-    let ids = match reach {
-        Some(reach) => within_reach(&bound, ids, reach).await?,
-        None => ids,
+    let report = match reach {
+        // With a reach the engine forgets by id inside it: `forget_within`
+        // never looks beyond the reach for an id, where `ForgetTarget::Ids`
+        // sweeps every scope of the tree to find one.
+        Some(reach) => {
+            let ids = within_reach(&bound, ids, reach.clone()).await?;
+            if ids.is_empty() {
+                tracing::debug!(engine = %bound.id, "[memory:ops] forget: nothing in reach");
+                return Ok(ForgetView { forgotten: 0 });
+            }
+            bound.engine.forget_within(ids, reach).await?
+        }
+        None => bound.engine.forget(ForgetTarget::Ids(ids)).await?,
     };
-    if ids.is_empty() {
-        tracing::debug!(engine = %bound.id, "[memory:ops] forget: nothing in reach");
-        return Ok(ForgetView { forgotten: 0 });
-    }
-    let report = bound.engine.forget(ForgetTarget::Ids(ids)).await?;
     tracing::debug!(engine = %bound.id, forgotten = report.forgotten, "[memory:ops] forget");
     Ok(ForgetView {
         forgotten: report.forgotten,

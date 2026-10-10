@@ -212,6 +212,13 @@ pub fn session_key(tenant: &Tenant) -> String {
     }
 }
 
+/// The prefix every [`session_key`] of `profile` starts with (`<profile>~`,
+/// escaped the same way), so a caller can name all of one profile's session
+/// scopes at once.
+pub fn session_key_prefix(profile: &str) -> String {
+    format!("{}~", escape_profile(profile))
+}
+
 fn escape_profile(profile: &str) -> String {
     profile.replace('%', "%25").replace('~', "%7E")
 }

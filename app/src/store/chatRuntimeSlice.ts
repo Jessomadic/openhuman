@@ -680,6 +680,58 @@ export interface PendingApproval {
    * `ToolCallMessagePart.approval.resolution` union.
    */
   resolution?: 'expired' | 'cancelled';
+  /**
+   * The park can outlive the turn it is shown on
+   * (`ChatApprovalRequestEvent.detached`): an async-delegated sub-agent asking
+   * for approval after — or while — its parent turn finishes. Turn-end
+   * handlers keep a detached entry (its gate is still parked; clearing it was
+   * what left every async `image_agent` approval invisible until it expired)
+   * and `approval_decided` clears it instead.
+   */
+  detached?: boolean;
+}
+
+/**
+ * Drop the thread's parked approval at a turn boundary, unless it is detached
+ * from that turn (see `PendingApproval.detached`) — a detached park is still
+ * waiting on the user after the turn that surfaced it ends.
+ */
+function dropTurnBoundApproval(state: ChatRuntimeState, threadId: string): void {
+  if (state.pendingApprovalByThread[threadId]?.detached) return;
+  removeShownApproval(state, threadId);
+}
+
+/**
+ * Remove the thread's shown approval and promote the next queued detached one
+ * (see `ChatRuntimeState.queuedApprovalsByThread`), so every parked request on
+ * the thread is answerable in turn.
+ */
+function removeShownApproval(state: ChatRuntimeState, threadId: string): void {
+  delete state.pendingApprovalByThread[threadId];
+  const queue = state.queuedApprovalsByThread[threadId];
+  if (!queue || queue.length === 0) {
+    delete state.queuedApprovalsByThread[threadId];
+    return;
+  }
+  const [next, ...rest] = queue;
+  state.pendingApprovalByThread[threadId] = next;
+  if (rest.length > 0) state.queuedApprovalsByThread[threadId] = rest;
+  else delete state.queuedApprovalsByThread[threadId];
+}
+
+/** Drop `requestId` from the thread's queue; `true` when it was queued. */
+function removeQueuedApproval(
+  state: ChatRuntimeState,
+  threadId: string,
+  requestId: string
+): boolean {
+  const queue = state.queuedApprovalsByThread[threadId];
+  if (!queue) return false;
+  const rest = queue.filter(entry => entry.requestId !== requestId);
+  if (rest.length === queue.length) return false;
+  if (rest.length > 0) state.queuedApprovalsByThread[threadId] = rest;
+  else delete state.queuedApprovalsByThread[threadId];
+  return true;
 }
 
 /**
@@ -937,6 +989,14 @@ interface ChatRuntimeState {
   processingByThread: Record<string, ProcessingTranscriptItem[]>;
   inferenceTurnLifecycleByThread: Record<string, InferenceTurnLifecycle>;
   pendingApprovalByThread: Record<string, PendingApproval>;
+  /**
+   * Detached approvals waiting behind the thread's shown card, oldest first.
+   * Several async sub-agents can park on one parent thread at once; the card
+   * surface shows one approval per thread, so the rest wait here and are
+   * promoted as the shown one is answered, instead of replacing it while its
+   * gate still waits.
+   */
+  queuedApprovalsByThread: Record<string, PendingApproval[]>;
   pendingPlanReviewByThread: Record<string, PendingPlanReview>;
   /**
    * Thread-scoped candidate workflow proposed by the `propose_workflow` agent
@@ -994,6 +1054,7 @@ const initialState: ChatRuntimeState = {
   processingByThread: {},
   inferenceTurnLifecycleByThread: {},
   pendingApprovalByThread: {},
+  queuedApprovalsByThread: {},
   pendingPlanReviewByThread: {},
   pendingWorkflowProposalsByThread: {},
   artifactsByThread: {},
@@ -2382,10 +2443,71 @@ const chatRuntimeSlice = createSlice({
       state,
       action: PayloadAction<{ threadId: string; approval: PendingApproval }>
     ) => {
-      state.pendingApprovalByThread[action.payload.threadId] = action.payload.approval;
+      const { threadId, approval } = action.payload;
+      const current = state.pendingApprovalByThread[threadId];
+      const queue = state.queuedApprovalsByThread[threadId];
+      // A replay of a request already waiting in the queue updates it there.
+      const queuedAt = queue?.findIndex(entry => entry.requestId === approval.requestId) ?? -1;
+      if (queue && queuedAt >= 0) {
+        queue[queuedAt] = approval;
+        return;
+      }
+      if (current && current.requestId !== approval.requestId && !current.resolution) {
+        // A detached request never displaces a card that is still waiting:
+        // both gates stay parked until answered or expired, so it queues.
+        if (approval.detached) {
+          state.queuedApprovalsByThread[threadId] = [...(queue ?? []), approval];
+          return;
+        }
+        // The parent turn's own approval goes first (it blocks that turn); a
+        // detached card it covers waits at the head of the queue.
+        if (current.detached) {
+          state.queuedApprovalsByThread[threadId] = [current, ...(queue ?? [])];
+        }
+      }
+      state.pendingApprovalByThread[threadId] = approval;
     },
     clearPendingApprovalForThread: (state, action: PayloadAction<{ threadId: string }>) => {
-      delete state.pendingApprovalByThread[action.payload.threadId];
+      removeShownApproval(state, action.payload.threadId);
+    },
+    /**
+     * Drop every detached approval on the thread, shown or queued, for
+     * reconciliation: after a socket drop (which a core restart always
+     * causes) the client cannot tell which parks the core still holds, so it
+     * forgets them and the thread rejoin replays exactly the live ones.
+     */
+    dropDetachedApprovalsForThread: (state, action: PayloadAction<{ threadId: string }>) => {
+      const { threadId } = action.payload;
+      delete state.queuedApprovalsByThread[threadId];
+      if (state.pendingApprovalByThread[threadId]?.detached) {
+        delete state.pendingApprovalByThread[threadId];
+      }
+    },
+    /**
+     * Turn-end clear (`chat_done` / `chat_error`): a park bound to the turn
+     * cannot outlive it, but a detached one (an async sub-agent's) is still
+     * waiting on the user and stays until `approval_decided` clears it.
+     */
+    clearTurnApprovalForThread: (state, action: PayloadAction<{ threadId: string }>) => {
+      dropTurnBoundApproval(state, action.payload.threadId);
+    },
+    /**
+     * Clear the thread's parked approval when it is `requestId` — for an
+     * `approval_decided` that resolves a detached card on a client that did
+     * not answer it (no turn end follows to clear it). A no-op when the store
+     * holds a different request.
+     */
+    clearPendingApprovalIfRequest: (
+      state,
+      action: PayloadAction<{ threadId: string; requestId: string }>
+    ) => {
+      const { threadId, requestId } = action.payload;
+      const current = state.pendingApprovalByThread[threadId];
+      if (current?.requestId === requestId) {
+        removeShownApproval(state, threadId);
+        return;
+      }
+      removeQueuedApproval(state, threadId, requestId);
     },
     /**
      * Record a server-decided terminal resolution (`approval_decided` socket
@@ -2406,7 +2528,12 @@ const chatRuntimeSlice = createSlice({
       }>
     ) => {
       const current = state.pendingApprovalByThread[action.payload.threadId];
-      if (!current || current.requestId !== action.payload.requestId) return;
+      if (!current || current.requestId !== action.payload.requestId) {
+        // A queued request that expired or was cancelled was never shown;
+        // there is nothing to explain, so it simply leaves the queue.
+        removeQueuedApproval(state, action.payload.threadId, action.payload.requestId);
+        return;
+      }
       current.resolution = action.payload.resolution;
     },
     setPendingPlanReviewForThread: (
@@ -2684,7 +2811,7 @@ const chatRuntimeSlice = createSlice({
       turnStateLog('turn settled thread=%s request=%s', threadId, requestId ?? 'none');
       delete state.streamingAssistantByThread[threadId];
       delete state.inferenceStatusByThread[threadId];
-      delete state.pendingApprovalByThread[threadId];
+      dropTurnBoundApproval(state, threadId);
       delete state.pendingPlanReviewByThread[threadId];
       delete state.liveRequestIdByThread[threadId];
       delete state.inferenceTurnLifecycleByThread[threadId];
@@ -2720,7 +2847,7 @@ const chatRuntimeSlice = createSlice({
       // failed send, the silence timeout) would remount every settled turn.
       delete state.liveRequestIdByThread[action.payload.threadId];
       delete state.inferenceTurnLifecycleByThread[action.payload.threadId];
-      delete state.pendingApprovalByThread[action.payload.threadId];
+      dropTurnBoundApproval(state, action.payload.threadId);
       delete state.pendingPlanReviewByThread[action.payload.threadId];
       delete state.pendingWorkflowProposalsByThread[action.payload.threadId];
       delete state.queueStatusByThread[action.payload.threadId];
@@ -2748,6 +2875,7 @@ const chatRuntimeSlice = createSlice({
       state.processingByThread = {};
       state.inferenceTurnLifecycleByThread = {};
       state.pendingApprovalByThread = {};
+      state.queuedApprovalsByThread = {};
       state.pendingPlanReviewByThread = {};
       state.pendingWorkflowProposalsByThread = {};
       state.artifactsByThread = {};
@@ -2873,7 +3001,7 @@ const chatRuntimeSlice = createSlice({
       }
       // Snapshots don't carry pending-approval payloads; drop any stale in-memory
       // approval so the card reflects the rehydrated core truth, not pre-drift state.
-      delete state.pendingApprovalByThread[threadId];
+      dropTurnBoundApproval(state, threadId);
       // Likewise drop any stale parked plan review — its gate future cannot
       // survive a rehydrate, so the card must not linger.
       delete state.pendingPlanReviewByThread[threadId];
@@ -3086,6 +3214,9 @@ export const {
   resolveSubagentTranscriptTool,
   setPendingApprovalForThread,
   clearPendingApprovalForThread,
+  dropDetachedApprovalsForThread,
+  clearPendingApprovalIfRequest,
+  clearTurnApprovalForThread,
   resolvePendingApprovalForThread,
   setPendingPlanReviewForThread,
   clearPendingPlanReviewForThread,

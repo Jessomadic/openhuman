@@ -51,9 +51,12 @@ import {
   clearInferenceStatusForThread,
   clearParallelRequest,
   clearPendingApprovalForThread,
+  clearPendingApprovalIfRequest,
   clearPendingPlanReviewForThread,
   clearProcessingForThread,
   clearStreamingAssistantForThread,
+  clearTurnApprovalForThread,
+  dropDetachedApprovalsForThread,
   endInferenceTurn,
   fetchAndHydrateCompletedTurnState,
   fetchAndHydrateTurnState,
@@ -1437,6 +1440,7 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
                 toolkit,
                 toolCallId: event.tool_call_id,
                 expiresAt: event.expires_at,
+                ...(event.detached === true ? { detached: true } : {}),
               },
             })
           );
@@ -1457,10 +1461,29 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
           // would race the optimistic clear and, worse, drop a card whose
           // decision the USER on this client is mid-click on when the event
           // for a DIFFERENT thread's request arrives.
-          if (
-            !event.thread_id ||
-            (event.resolution !== 'expired' && event.resolution !== 'cancelled')
-          ) {
+          if (!event.thread_id) return;
+          // A detached card (an async sub-agent's) has no turn end of its own
+          // to clear it, so any resolution of exactly that request — a decision
+          // made on another client or by a typed reply, an expiry, a cancel —
+          // removes it here. Matching on `request_id` keeps a different
+          // thread's or a newer request's card.
+          const runtime = store.getState().chatRuntime;
+          const held = runtime.pendingApprovalByThread[event.thread_id];
+          // A detached request can also be waiting in the thread's queue
+          // behind the shown card; its resolution drops it from there.
+          const queued = (runtime.queuedApprovalsByThread?.[event.thread_id] ?? []).some(
+            entry => entry.requestId === event.request_id
+          );
+          if ((held?.detached && held.requestId === event.request_id) || queued) {
+            dispatch(
+              clearPendingApprovalIfRequest({
+                threadId: event.thread_id,
+                requestId: event.request_id,
+              })
+            );
+            return;
+          }
+          if (event.resolution !== 'expired' && event.resolution !== 'cancelled') {
             return;
           }
           dispatch(
@@ -1685,8 +1708,9 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
           const completeSegmentDelivery = hasCompleteSegmentDelivery(event, segmentDelivery);
 
           dispatch(recordChatTurnUsage(chatTurnUsagePayload(event)));
-          // A parked gate cannot outlive its turn, so those go now.
-          dispatch(clearPendingApprovalForThread({ threadId: event.thread_id }));
+          // A parked gate cannot outlive its turn, so those go now — except a
+          // detached one (an async sub-agent's), which is still waiting.
+          dispatch(clearTurnApprovalForThread({ threadId: event.thread_id }));
           dispatch(clearPendingPlanReviewForThread({ threadId: event.thread_id }));
           // Nothing the turn RENDERED is cleared here. The streaming buffer, the
           // status line and the running rows used to be torn down first, before
@@ -1889,7 +1913,7 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
           if (!olderTurn) {
             dispatch(clearInferenceStatusForThread({ threadId: event.thread_id }));
             dispatch(clearStreamingAssistantForThread({ threadId: event.thread_id }));
-            dispatch(clearPendingApprovalForThread({ threadId: event.thread_id }));
+            dispatch(clearTurnApprovalForThread({ threadId: event.thread_id }));
             dispatch(clearPendingPlanReviewForThread({ threadId: event.thread_id }));
 
             const existing = currentState.chatRuntime.toolTimelineByThread[event.thread_id] ?? [];
@@ -1985,14 +2009,31 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
     const lifecycles = state.chatRuntime.inferenceTurnLifecycleByThread;
     const threadIds = Object.keys(lifecycles);
     const activeThreadIds = Object.keys(state.thread.activeThreadIds);
-    if (threadIds.length === 0 && activeThreadIds.length === 0) return;
+    // Threads holding a detached approval (an async sub-agent's), shown or
+    // queued. Its parent turn may long be over, so it is in neither list
+    // above, but a drop (always the case when the core restarts) can lose the
+    // park or its `approval_decided`. Forget the cards and rejoin the thread
+    // on reconnect: the core replays exactly the parks it still holds.
+    const detachedThreadIds = Object.entries(state.chatRuntime.pendingApprovalByThread)
+      .filter(([, approval]) => approval?.detached)
+      .map(([threadId]) => threadId)
+      .concat(Object.keys(state.chatRuntime.queuedApprovalsByThread ?? {}));
+    if (threadIds.length === 0 && activeThreadIds.length === 0 && detachedThreadIds.length === 0)
+      return;
     // Remember what was in flight BEFORE the markers are cleared below. The
     // reconnect handler in `socketService` re-subscribes from
     // `activeThreadIds`, which this effect is about to empty — so without this
     // snapshot the new socket rejoins only the selected thread's room, and a
     // turn finishing on any other thread announces itself to a `client_id`
     // that no longer exists (#6034).
-    interruptedThreadsRef.current = new Set([...threadIds, ...activeThreadIds]);
+    interruptedThreadsRef.current = new Set([
+      ...threadIds,
+      ...activeThreadIds,
+      ...detachedThreadIds,
+    ]);
+    for (const threadId of new Set(detachedThreadIds)) {
+      dispatch(dropDetachedApprovalsForThread({ threadId }));
+    }
     // Abandon any in-flight tool-chain latency windows: a disconnect tears down
     // these turns without an onDone/onError, so without this the next tool call
     // on a reused thread would attribute stale elapsed/tool counts (#4288).
@@ -2001,6 +2042,7 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
       socket: socketStatus,
       inFlight: threadIds.length,
       active: activeThreadIds.length,
+      detached: detachedThreadIds.length,
     });
     for (const threadId of threadIds) {
       dispatch(clearInferenceStatusForThread({ threadId }));

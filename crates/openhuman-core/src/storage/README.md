@@ -36,6 +36,8 @@ on `storage-mongodb`.
   that driver is atomic across processes (MongoDB, SQLite), which a
   clustered node's leases need. Memory and file drivers coordinate only
   within one process.
+- `fence` / `fenced_backend`: lease-epoch write fencing (see
+  [Write fencing](#write-fencing)).
 - `scope_for_profile(profile_id)`: the scope a SaaS profile's records live
   under (`profile:<id>`, hashed when that is not a valid scope).
 - `current_scope()` / `current_scoped()`: the tenant's scope — its profile's
@@ -92,6 +94,45 @@ eight-thread race on a SQLite file with `--features storage-sqlite`),
 release, clock and crash steps across 2 to 4 nodes checked against a
 reference model.
 
+## Write fencing
+
+`storage::fence` and `storage::fenced_backend` fence writes by lease epoch.
+Every backend `open` returns is a `FencedBackend`: its scoped handles look
+the scope up in the process's `FenceRegistry` on each write (document `put`,
+`delete`, `delete_where`, `claim`, `atomic_batch`, `drop_collection`; stream
+`append`, `append_batch`, `truncate_before`, `delete_stream`; blob `put`,
+`delete`). A scope with no fence passes through, so single-user hosts see no
+change. A scope with one runs `LeaseFence::check` first:
+
+1. the latch (set by the heartbeat on a lost lease, or by an earlier check);
+2. the grant's expiry by this node's clock, less a skew margin (no I/O);
+3. the stored lease record must still name this node at this epoch,
+   unreleased and unexpired; a moved record latches the fence, an
+   unreadable one refuses the write without latching.
+
+A refusal is a `StorageError` of kind `Backend` (not retryable, so CAS loops
+do not spin) whose source is the typed `FenceError`; `fence::fence_error`
+recovers it. The lookup is per write rather than per bound scope because
+the session store caches its handles across a profile's open, fence and
+re-open.
+
+What it cannot do on the current ports: make the write itself conditional
+on the lease. `atomic_batch` is optional (`Capability::Transactions`, only
+MongoDB replica sets), it has no read-only guard op, and leases live in the
+`cluster` scope while the guarded data lives in the profile's; streams and
+blobs take no precondition at all. So a holder that passes the check and is
+then paused past the margin can still land one write. Closing that is
+upstream work in tinystoragedrivers: a fencing token on the ports (for
+example a `Precondition::Fence { scope_doc, epoch }` or a `WriteOp::Check`
+guard op, enforced by each driver in the same statement or transaction as
+the write, with an `ErrorKind::Fenced`).
+
+Tests: `fence_tests.rs` (matching, local expiry, latch, record checks,
+registry replace/retire/prune), `fenced_backend_tests.rs` (node A loses the
+lease to node B by a clock advance: A's writes on every port are refused,
+B's succeed; a paused node refuses its own writes inside the margin; named
+databases; a fence over `LocalLeases`).
+
 ## Consumers
 
 - The SaaS profile host (`profiles::lease`, `profiles::registry`): one
@@ -99,7 +140,10 @@ reference model.
   `LocalLeases` under `<root>/users`) and the profile registry, collection
   `profiles` in the same `cluster` scope. A lease taken over unclean runs
   the profile's workspace recovery; a lost one fences the profile. See
-  `profiles/README.md`.
+  `profiles/README.md`. The server opens the operator's storage URL before
+  boot (`openhuman-rpc`'s `session_store::install_for_saas`);
+  `openhuman_embed::ProfileRuntime` opens and installs it itself when no
+  backend is installed yet.
 - The session store: `openhuman_rpc::session_store::install_for_host` opens
   the configured backend before boot and installs `DriverSessionStores`
   over it. See that module's README.

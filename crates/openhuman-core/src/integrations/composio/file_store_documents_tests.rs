@@ -72,3 +72,69 @@ async fn the_file_path_still_works_with_no_backend() {
     super::super::file_store::save(&path, &value).await.unwrap();
     assert!(path.exists());
 }
+
+#[test]
+fn update_creates_applies_and_skips_unchanged() {
+    let docs = docs_in(&MemoryStorage::new(), "local");
+    let added = docs
+        .update(&path(), |v: &mut BTreeMap<String, u32>| {
+            v.insert("gmail".into(), 1);
+            (v.len(), true)
+        })
+        .unwrap();
+    assert_eq!(added, 1);
+    let unchanged = docs
+        .update(&path(), |v: &mut BTreeMap<String, u32>| (v.len(), false))
+        .unwrap();
+    assert_eq!(unchanged, 1);
+    let loaded: BTreeMap<String, u32> = docs.load(&path()).unwrap();
+    assert_eq!(loaded.get("gmail"), Some(&1));
+}
+
+#[test]
+fn concurrent_updates_do_not_lose_each_other() {
+    let docs = docs_in(&MemoryStorage::new(), "local");
+    let handles: Vec<_> = (0..8u32)
+        .map(|n| {
+            let docs = docs.clone();
+            std::thread::spawn(move || {
+                docs.update(&path(), move |v: &mut BTreeMap<String, u32>| {
+                    v.insert(format!("k{n}"), n);
+                    ((), true)
+                })
+                .unwrap();
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    let loaded: BTreeMap<String, u32> = docs.load(&path()).unwrap();
+    assert_eq!(loaded.len(), 8);
+}
+
+#[tokio::test]
+async fn file_store_update_uses_the_file_with_no_backend_and_documents_when_pinned() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("state.json");
+    let bump = |v: &mut BTreeMap<String, u32>| {
+        *v.entry("n".into()).or_default() += 1;
+        ((), true)
+    };
+    super::super::file_store::update(&file, bump).await.unwrap();
+    super::super::file_store::update(&file, bump).await.unwrap();
+    let loaded: BTreeMap<String, u32> = super::super::file_store::load(&file).await.unwrap();
+    assert_eq!(loaded["n"], 2);
+    assert!(file.exists());
+
+    let docs = docs_in(&MemoryStorage::new(), "local");
+    let pinned = dir.path().join("pinned.json");
+    super::TEST_OVERRIDE.with(|slot| *slot.borrow_mut() = Some(docs.clone()));
+    super::super::file_store::update(&pinned, bump)
+        .await
+        .unwrap();
+    super::TEST_OVERRIDE.with(|slot| *slot.borrow_mut() = None);
+    let stored: BTreeMap<String, u32> = docs.load(&pinned).unwrap();
+    assert_eq!(stored["n"], 1);
+    assert!(!pinned.exists());
+}
