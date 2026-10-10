@@ -365,6 +365,7 @@ function chatTurnUsagePayload(event: ChatDoneEvent): {
   cachedTokens?: number;
   costUsd?: number;
   contextWindow?: number;
+  contextTokens?: number;
   threadId?: string;
   subAgents?: Array<{
     agentId: string;
