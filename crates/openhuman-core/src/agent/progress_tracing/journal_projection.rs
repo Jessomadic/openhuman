@@ -595,6 +595,7 @@ fn observation_to_progress(obs: &AgentObservation, state: &mut ReplayState) -> V
                 worktree_path: None,
                 changed_files: Vec::new(),
                 dirty_status: None,
+                stop: None,
             }]
         }
 
@@ -604,6 +605,7 @@ fn observation_to_progress(obs: &AgentObservation, state: &mut ReplayState) -> V
             } else {
                 vec![AgentProgress::TurnCompleted {
                     iterations: state.iteration,
+                    stop: None,
                 }]
             }
         }

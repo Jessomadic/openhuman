@@ -31,7 +31,7 @@ use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 use tinyinference_llm::model::ModelResponse;
 use tinytools::ToolResult;
 
-use crate::agent::tinyagents::host::OpenHumanRunContext;
+use crate::agent::tinyagents::host::{OpenHumanRunContext, SessionTurnSidecar};
 use crate::agent::tinyagents::observability::SubagentScope;
 use crate::agent::turn_deadline::TurnDeadline;
 
@@ -41,6 +41,9 @@ pub(crate) struct DeadlineWindDownMiddleware {
     deadline: TurnDeadline,
     /// Latched on the first pause, so `Pause` is sent exactly once.
     fired: Arc<AtomicBool>,
+    /// The turn's session sidecar; the pause is recorded there so the driver
+    /// can report the turn as wound down rather than completed.
+    sidecar: std::sync::OnceLock<Arc<std::sync::Mutex<SessionTurnSidecar>>>,
 }
 
 impl DeadlineWindDownMiddleware {
@@ -49,7 +52,14 @@ impl DeadlineWindDownMiddleware {
             handle,
             deadline,
             fired: Arc::new(AtomicBool::new(false)),
+            sidecar: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Record the pause on `sidecar` (the turn's run-context sidecar). Set
+    /// once, before the run starts.
+    pub(crate) fn set_sidecar(&self, sidecar: Arc<std::sync::Mutex<SessionTurnSidecar>>) {
+        let _ = self.sidecar.set(sidecar);
     }
 
     /// Whether this middleware has paused the run.
@@ -72,6 +82,16 @@ impl DeadlineWindDownMiddleware {
             "[turn_deadline] wind-down point passed; pausing the run so the turn closes with an answer before the backstop"
         );
         self.handle.send(SteeringCommand::Pause);
+        if let Some(sidecar) = self.sidecar.get() {
+            sidecar
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .wind_down = true;
+            tracing::debug!(
+                target: "turn_deadline",
+                "[turn_deadline] wind-down recorded on the turn sidecar; the turn will be reported as stopped"
+            );
+        }
         true
     }
 }
@@ -121,12 +141,16 @@ pub(super) fn install(
     run_context: &OpenHumanRunContext,
     subagent_scope: &Option<SubagentScope>,
 ) -> Option<Arc<DeadlineWindDownMiddleware>> {
-    install_for(
+    let middleware = install_for(
         harness,
         handle.as_ref(),
         run_context.turn_deadline,
         subagent_scope.is_some(),
-    )
+    )?;
+    // `install_for` hands back the instance it registered; record the pause
+    // on the turn's sidecar through that same shared state.
+    middleware.set_sidecar(run_context.session_sidecar.clone());
+    Some(middleware)
 }
 
 /// [`install`] over plain values, for tests.
