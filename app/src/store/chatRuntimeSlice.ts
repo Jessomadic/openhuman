@@ -557,6 +557,13 @@ interface ChatTurnUsagePayload {
   cachedTokens?: number;
   costUsd?: number;
   contextWindow?: number;
+  /**
+   * Tokens the orchestrator's context held after the turn's final model call
+   * (`chat_done.usage.context_tokens`). `inputTokens` sums every call of the
+   * turn, so it is spend, not occupancy. Absent from an older core; the gauge
+   * then falls back to the turn totals.
+   */
+  contextTokens?: number;
   /** Thread the turn belongs to; routes the delta to that thread's bucket. */
   threadId?: string;
   subAgents?: Array<{
@@ -621,7 +628,9 @@ function applyTurnUsage(usage: SessionTokenUsage, payload: ChatTurnUsagePayload)
   // correctly. The parent's value already excludes children by design (#4271),
   // which is exactly what this delta must not disturb.
   if (!payload.subAgentSpendOnly) {
-    usage.lastTurnContextUsed = Math.max(0, inTok + outTok - subTurnTokens);
+    const contextTokens = nonNeg(payload.contextTokens);
+    usage.lastTurnContextUsed =
+      contextTokens > 0 ? contextTokens : Math.max(0, inTok + outTok - subTurnTokens);
   }
 }
 
@@ -2902,6 +2911,11 @@ const chatRuntimeSlice = createSlice({
         contextWindow: number;
         lastTurnInputTokens: number;
         lastTurnOutputTokens: number;
+        /**
+         * Context the last turn ended with (one request, not the turn's summed
+         * spend). `0`/absent from an older core: fall back to the turn totals.
+         */
+        lastTurnContextTokens?: number;
         subAgents?: Array<{
           agentId: string;
           inputTokens: number;
@@ -2936,7 +2950,10 @@ const chatRuntimeSlice = createSlice({
         lastTurnInputTokens: nonNeg(p.lastTurnInputTokens),
         lastTurnOutputTokens: nonNeg(p.lastTurnOutputTokens),
         contextWindow: nonNeg(p.contextWindow),
-        lastTurnContextUsed: nonNeg(p.lastTurnInputTokens) + nonNeg(p.lastTurnOutputTokens),
+        lastTurnContextUsed:
+          nonNeg(p.lastTurnContextTokens) > 0
+            ? nonNeg(p.lastTurnContextTokens)
+            : nonNeg(p.lastTurnInputTokens) + nonNeg(p.lastTurnOutputTokens),
         subAgents,
       };
     },

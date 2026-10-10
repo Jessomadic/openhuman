@@ -395,6 +395,18 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
                 + repair_usage
                     .map(|usage| usage.charged_amount_usd)
                     .unwrap_or_default();
+            let loop_last_call = snapshot
+                .lock()
+                .ok()
+                .map(|guard| (guard.last_call_input_tokens, guard.last_call_output_tokens));
+            (
+                observed.last_call_input_tokens,
+                observed.last_call_output_tokens,
+            ) = final_call_tokens(
+                loop_last_call,
+                close.as_ref().map(|close| &close.usage),
+                repair_usage,
+            );
             observed.duration = Some(started.elapsed());
             observed.driver_finished_at = Some(std::time::Instant::now());
             observed.tool_outcomes = outcome.tool_outcomes.clone();
@@ -433,6 +445,26 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
             outcome: None,
         })
     }
+}
+
+/// Input and output tokens of the turn's final model call.
+///
+/// The grounded close and the required-output repair both run after the
+/// harness loop, in that order, so the newest of them that reached the
+/// provider made the final call; without either, the loop's last answered
+/// call did.
+fn final_call_tokens(
+    loop_last_call: Option<(u64, u64)>,
+    close: Option<&grounded_close::RepairUsage>,
+    repair: Option<&grounded_close::RepairUsage>,
+) -> (u64, u64) {
+    [repair, close]
+        .into_iter()
+        .flatten()
+        .find(|usage| usage.last_call_input_tokens > 0 || usage.last_call_output_tokens > 0)
+        .map(|usage| (usage.last_call_input_tokens, usage.last_call_output_tokens))
+        .or(loop_last_call)
+        .unwrap_or_default()
 }
 
 fn system_prefix_len(history: &[Message]) -> usize {
@@ -541,6 +573,8 @@ fn driver_error_with_snapshot(
         observed.input_tokens = guard.input_tokens;
         observed.output_tokens = guard.output_tokens;
         observed.cached_input_tokens = guard.cached_input_tokens;
+        observed.last_call_input_tokens = guard.last_call_input_tokens;
+        observed.last_call_output_tokens = guard.last_call_output_tokens;
         observed.cost_usd = if guard.charged_amount_usd > 0.0 {
             guard.charged_amount_usd
         } else {

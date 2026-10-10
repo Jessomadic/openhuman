@@ -828,6 +828,9 @@ pub(super) fn holistic_last_turn_usage(
         cached_input_tokens,
         cost_usd,
         context_window: sidecar.context_window,
+        context_tokens: sidecar
+            .last_call_input_tokens
+            .saturating_add(sidecar.last_call_output_tokens),
         subagents: sidecar.subagents.clone(),
         // The session does not count these; a library turn that asked for a
         // final-response report fills them in (`response_shape`).

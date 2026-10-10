@@ -89,6 +89,12 @@ pub struct LastTurnUsage {
     pub cached_input_tokens: u64,
     pub cost_usd: f64,
     pub context_window: u64,
+    /// Tokens the root agent's context held after the turn's final model call
+    /// (that call's input plus its reply): the numerator of the context-window
+    /// gauge. The token fields above are the turn's spend, summed over every
+    /// call, and may exceed the window many times over on a long tool loop.
+    /// Sub-agents are excluded, as each runs in its own window.
+    pub context_tokens: u64,
     pub subagents: Vec<SubagentUsageEntry>,
     /// Reasoning/thinking tokens the turn's own model calls spent. Reported
     /// only for a turn run with a response-shape scope (library agent turns,
@@ -109,6 +115,11 @@ pub(crate) struct SessionTurnSidecar {
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
     pub cost_usd: f64,
+    /// Input and output tokens of the turn's final model call. The totals
+    /// above sum every call of the turn (its spend); these are the context the
+    /// model last held, the numerator of the context-window gauge.
+    pub last_call_input_tokens: u64,
+    pub last_call_output_tokens: u64,
     /// The selected model's context window for this exact request.  The
     /// provider response's generic usage cannot represent this host datum.
     pub context_window: u64,

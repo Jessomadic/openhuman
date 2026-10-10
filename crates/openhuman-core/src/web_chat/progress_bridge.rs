@@ -1187,6 +1187,7 @@ pub(crate) fn spawn_progress_bridge(
                                     cached_input_tokens,
                                     cost_usd: total_usd,
                                     context_window: 0,
+                                    context_tokens: 0,
                                     subagents: Vec::new(),
                                 }),
                                 ..Default::default()

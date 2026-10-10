@@ -156,6 +156,24 @@ describe('chatRuntimeSlice recordChatTurnUsage', () => {
     expect(store.getState().chatRuntime.sessionTokenUsage.lastTurnContextUsed).toBe(920);
   });
 
+  it('fills the gauge from the final call, not the summed spend of a many-call turn', () => {
+    const store = makeStore();
+    // A 72-call tool loop: 5.7M input summed across calls, ~104k in the last one.
+    store.dispatch(
+      recordChatTurnUsage({
+        inputTokens: 5_710_657,
+        outputTokens: 30_790,
+        contextWindow: 1_048_576,
+        contextTokens: 103_900,
+      })
+    );
+    const usage = store.getState().chatRuntime.sessionTokenUsage;
+    expect(usage.lastTurnContextUsed).toBe(103_900);
+    // Spend is untouched: the turn still cost what it cost.
+    expect(usage.lastTurnInputTokens).toBe(5_710_657);
+    expect(usage.inputTokens).toBe(5_710_657);
+  });
+
   it('clamps the gauge numerator to zero when sub-agents exceed the turn total (#4271)', () => {
     const store = makeStore();
     store.dispatch(
@@ -263,6 +281,27 @@ describe('chatRuntimeSlice recordChatTurnUsage', () => {
     expect(bucket.inputTokens).toBe(1200);
     expect(bucket.turns).toBe(4);
     expect(bucket.costUsd).toBeCloseTo(0.024, 6);
+  });
+
+  it('hydrateThreadUsage fills the gauge from the persisted final-call context', () => {
+    const store = makeStore();
+    store.dispatch(
+      hydrateThreadUsage({
+        threadId: 'thr-long',
+        inputTokens: 7_021_942,
+        outputTokens: 42_669,
+        cachedTokens: 6_466_688,
+        costUsd: 4.25,
+        turns: 3,
+        contextWindow: 1_048_576,
+        lastTurnInputTokens: 5_710_657,
+        lastTurnOutputTokens: 30_790,
+        lastTurnContextTokens: 103_900,
+      })
+    );
+    const bucket = store.getState().chatRuntime.usageByThread['thr-long'];
+    expect(bucket.lastTurnContextUsed).toBe(103_900);
+    expect(bucket.lastTurnContextUsed).toBeLessThanOrEqual(bucket.contextWindow);
   });
 });
 

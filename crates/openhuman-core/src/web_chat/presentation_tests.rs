@@ -54,6 +54,7 @@ async fn chat_done_carries_timing_when_a_snapshot_is_supplied() {
         cached_input_tokens: 0,
         cost_usd: 0.01,
         context_window: 8000,
+        context_tokens: 60,
         subagents: Vec::new(),
         reasoning_tokens: 0,
     };
@@ -91,6 +92,9 @@ async fn chat_done_carries_timing_when_a_snapshot_is_supplied() {
     assert_eq!(payload.total_ms, Some(2000));
     // 40 output tokens / (2000ms / 1000) = 20 tokens/sec.
     assert_eq!(payload.tokens_per_second, Some(20.0));
+    // The gauge numerator travels beside the spend totals, unsummed.
+    let usage = done.usage.expect("chat_done.usage must be Some");
+    assert_eq!((usage.input_tokens, usage.context_tokens), (100, 60));
 }
 
 /// A caller with no timing snapshot in scope (e.g. the flows stream

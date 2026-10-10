@@ -66,7 +66,7 @@ type BreakdownState =
 export function contextBreakdownSegments(
   data: ContextBreakdownData,
   t: (key: string) => string,
-  usage: Pick<SessionTokenUsage, 'lastTurnInputTokens' | 'lastTurnOutputTokens'> = EMPTY_USAGE
+  usage: Pick<SessionTokenUsage, 'lastTurnContextUsed'> = EMPTY_USAGE
 ): readonly ContextSegment[] {
   let systemPrompt = 0;
   let toolSchemas = 0;
@@ -85,9 +85,12 @@ export function contextBreakdownSegments(
       systemPrompt += section.est_tokens;
     }
   }
+  // The turn-wide output total includes replies from earlier calls that may
+  // have been trimmed or compacted out of the final request. Keep the final
+  // context partition limited to its fixed prompt and remaining conversation.
   const yourInput = Math.max(
     0,
-    usage.lastTurnInputTokens - systemPrompt - toolSchemas - hiddenToolUsage
+    usage.lastTurnContextUsed - systemPrompt - toolSchemas - hiddenToolUsage
   );
   return [
     {
@@ -99,11 +102,6 @@ export function contextBreakdownSegments(
       label: t('conversations.composer.context.section.toolSchemas'),
       tokens: toolSchemas,
       tint: 'bg-violet-500',
-    },
-    {
-      label: t('conversations.composer.context.output'),
-      tokens: usage.lastTurnOutputTokens,
-      tint: 'bg-emerald-500',
     },
     {
       label: t('conversations.composer.context.section.yourInput'),
@@ -137,13 +135,13 @@ export function ContextUsage({
         ? usage.contextWindow
         : DEFAULT_CONTEXT_WINDOW;
 
+  // The ring measures one request against the window. The turn's input and
+  // output totals sum every model call of the turn, so on a long tool loop
+  // they run to many times the window; they belong with the spend figures
+  // below, not under the gauge.
   const ringUsage = useMemo<TokenUsage>(
-    () => ({
-      totalTokens: usage.lastTurnContextUsed,
-      inputTokens: usage.lastTurnInputTokens,
-      outputTokens: usage.lastTurnOutputTokens,
-    }),
-    [usage.lastTurnContextUsed, usage.lastTurnInputTokens, usage.lastTurnOutputTokens]
+    () => ({ totalTokens: usage.lastTurnContextUsed }),
+    [usage.lastTurnContextUsed]
   );
 
   const labels = useMemo<ContextDisplayLabels>(

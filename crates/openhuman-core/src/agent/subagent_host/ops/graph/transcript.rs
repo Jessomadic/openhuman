@@ -78,6 +78,8 @@ pub(super) fn persist_subagent_transcript(
             cached_input: usage.cached_input_tokens,
             context_window,
             cost_usd: usage.charged_amount_usd,
+            // No per-call figure reaches here; readers fall back to the mean
+            // request size (`spend::context_tokens_of`).
             ..Default::default()
         },
         ts: now.clone(),

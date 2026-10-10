@@ -19,6 +19,8 @@ interface ThreadTokenUsage {
   turnCount: number;
   lastTurnInputTokens: number;
   lastTurnOutputTokens: number;
+  /** Context the last turn ended with: the gauge numerator. `0` when unknown. */
+  lastTurnContextTokens: number;
   contextWindow: number;
   model: string | null;
   updated: string | null;
@@ -45,6 +47,8 @@ interface ThreadTokenUsageWire {
   turn_count: number;
   last_turn_input_tokens: number;
   last_turn_output_tokens: number;
+  /** Absent from a core that predates it. */
+  last_turn_context_tokens?: number;
   context_window: number;
   model: string | null;
   updated: string | null;
@@ -77,6 +81,7 @@ export async function fetchThreadTokenUsage(threadId: string): Promise<ThreadTok
     turnCount: d.turn_count,
     lastTurnInputTokens: d.last_turn_input_tokens,
     lastTurnOutputTokens: d.last_turn_output_tokens,
+    lastTurnContextTokens: d.last_turn_context_tokens ?? 0,
     contextWindow: d.context_window,
     model: d.model,
     updated: d.updated,
