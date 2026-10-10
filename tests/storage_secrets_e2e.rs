@@ -6,14 +6,17 @@
 //! reroute every other suite's secrets in a shared process. One test, so
 //! nothing in this binary races either.
 
-use std::sync::Arc;
-
 use openhuman_core::security::credentials::http_creds::{HttpCredential, HttpCredentialsStore};
 use openhuman_core::security::credentials::profiles::{AuthProfile, AuthProfilesStore};
 use openhuman_core::security::keyring;
 
-#[test]
-fn a_configured_backend_holds_keyring_and_credential_secrets() {
+#[macro_use]
+#[path = "support/storage_drivers.rs"]
+mod storage_drivers;
+
+use storage_drivers::Case;
+
+fn a_configured_backend_holds_keyring_and_credential_secrets(case: Case) {
     let workspace = tempfile::tempdir().unwrap();
     // Keep any process-backend fallback inside the temp workspace, and give
     // the storage secrets a master key without touching an OS keychain.
@@ -42,7 +45,7 @@ fn a_configured_backend_holds_keyring_and_credential_secrets() {
             .map(|f| (f, std::fs::read(workspace.path().join(f)).ok()))
             .collect();
 
-    openhuman_core::storage::install(Arc::new(openhuman_core::storage::MemoryStorage::new()));
+    case.install();
 
     keyring::set("user-1", "api_token", "tok-123").unwrap();
     assert_eq!(
@@ -104,3 +107,5 @@ fn a_configured_backend_holds_keyring_and_credential_secrets() {
     assert!(http.get("legacy-http").unwrap().is_some());
     assert_eq!(profiles.load().unwrap().profiles.len(), 1);
 }
+
+driver_cases!(sync a_configured_backend_holds_keyring_and_credential_secrets);
