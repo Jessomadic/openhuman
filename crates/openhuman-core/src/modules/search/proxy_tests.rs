@@ -129,3 +129,21 @@ fn the_execute_tool_deadline_stays_under_the_harness_tool_deadline() {
         "the harness would kill the call before the module could answer"
     );
 }
+
+#[test]
+fn the_execute_tool_deadline_follows_a_raised_tool_budget() {
+    // A user who raises the action timeout to 10 minutes must not have the
+    // search call cut off at the fixed 90 s floor.
+    assert_eq!(
+        execute_tool_timeout_for(600),
+        std::time::Duration::from_secs(570)
+    );
+    assert!(execute_tool_timeout_for(600).as_secs() < 600);
+    // The default budget keeps today's 90 s, and a tighter budget never drops
+    // the bus deadline below the floor (the harness deadline is tighter).
+    assert_eq!(
+        execute_tool_timeout_for(crate::tools::timeout::DEFAULT_TIMEOUT_SECS),
+        EXECUTE_TOOL_TIMEOUT
+    );
+    assert_eq!(execute_tool_timeout_for(10), EXECUTE_TOOL_TIMEOUT);
+}
