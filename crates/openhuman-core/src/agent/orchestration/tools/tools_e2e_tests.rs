@@ -50,6 +50,54 @@ async fn spawn_subagent_tool_runs_child_agent_e2e() {
     assert!(provider.saw("parent supplied context"));
 }
 
+/// A child the harness stops early (failure breaker / iteration cap) is not a
+/// finished delegation: the parent's tool result must be a failure, so its own
+/// failure policy and its trace see it, and the `SubagentCompleted` progress
+/// event must say how the child was stopped.
+#[tokio::test]
+async fn spawn_subagent_reports_a_stopped_child_as_a_failed_tool_result() {
+    let _ = AgentDefinitionRegistry::init_global_builtins();
+    let workspace = tempfile::TempDir::new().expect("workspace");
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(512);
+    let mut parent = parent_context(workspace.path(), Arc::new(LoopingToolModel), vec![]);
+    parent.on_progress = Some(progress_tx);
+
+    let result = with_parent_context(parent, async {
+        SpawnSubagentTool::new()
+            .execute(json!({
+                "agent_id": "task_manager_agent",
+                "prompt": "List the task sources",
+                "model": "test-model",
+                "blocking": true
+            }))
+            .await
+    })
+    .await
+    .expect("tool execution");
+
+    assert!(
+        result.is_error,
+        "a stopped child must fail the parent's tool call: {}",
+        result.output()
+    );
+    assert!(result.output().contains("[SUBAGENT_INCOMPLETE]"));
+
+    let mut stop = None;
+    while let Ok(event) = progress_rx.try_recv() {
+        if let crate::agent::progress::AgentProgress::SubagentCompleted { stop: s, .. } = event {
+            stop = Some(s);
+        }
+    }
+    let stop = stop
+        .expect("SubagentCompleted was emitted")
+        .expect("SubagentCompleted carries the child's stop");
+    assert!(matches!(
+        stop.kind,
+        crate::agent::turn_stop::TurnStopKind::Breaker
+            | crate::agent::turn_stop::TurnStopKind::IterationCap
+    ));
+}
+
 #[tokio::test]
 async fn archetype_delegation_tool_runs_child_agent_e2e() {
     let _ = AgentDefinitionRegistry::init_global_builtins();
@@ -501,4 +549,35 @@ fn flatten_messages(messages: &[Message]) -> String {
         .map(Message::text)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A model that never stops asking for the same unavailable tool, so the child
+/// run can only end by being stopped.
+struct LoopingToolModel;
+
+#[async_trait]
+impl ChatModel<()> for LoopingToolModel {
+    fn profile(&self) -> Option<&ModelProfile> {
+        static PROFILE: std::sync::OnceLock<ModelProfile> = std::sync::OnceLock::new();
+        Some(PROFILE.get_or_init(|| {
+            let mut profile = ModelProfile::default();
+            profile.tool_calling = true;
+            profile
+        }))
+    }
+
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        let mut response = ModelResponse::assistant("");
+        response.message.tool_calls = vec![tinyinference_llm::tool::ToolCall::new(
+            "call-loop",
+            "task_source_list",
+            json!({}),
+        )];
+        response.finish_reason = Some("tool_calls".to_string());
+        Ok(response)
+    }
 }
