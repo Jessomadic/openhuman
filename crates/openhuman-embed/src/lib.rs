@@ -105,6 +105,7 @@ pub mod skill_registry {
 mod agent;
 pub mod artifacts;
 mod auth;
+pub mod budget;
 mod call;
 #[cfg(feature = "channels")]
 pub mod channels;
@@ -115,16 +116,22 @@ mod core_agent;
 pub mod cron;
 pub mod embeddings;
 mod error;
+pub mod fanout;
 mod harness;
 pub mod identity;
 pub mod memory;
 #[cfg(feature = "modules")]
 pub mod modules;
+pub mod observe;
 pub mod process;
 #[cfg(feature = "channels")]
 pub mod profiles;
+pub mod repository;
+/// Explicit ordered fallback and truncation policies.
+pub mod routing;
 mod runtime;
 mod turn;
+mod turn_cancellation;
 
 /// Core internals for `openhuman-tinyhumans` and `openhuman-rpc` only; see
 /// the module docs. Not part of the host-facing API.
@@ -224,6 +231,7 @@ pub use complete::{
 };
 pub use session_store::{InMemorySessionStores, SessionStoreProvider};
 pub use turn::{absolute, Route, Turn, TurnOutcome, TurnRequest};
+pub use turn_cancellation::TurnCancellation;
 
 use std::sync::Arc;
 
@@ -295,6 +303,11 @@ impl std::fmt::Debug for Core {
     }
 }
 
+/// Strict structured output failure metadata.
+pub mod structured;
+
+/// Acknowledged cancellation for stateless completion operations.
+pub mod cancellation;
 /// Runtime event subscriptions without content or credentials.
 pub mod events;
 /// Owned streaming turns and cooperative cancellation.

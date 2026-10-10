@@ -451,7 +451,7 @@ impl ShellTool {
         );
         let result = match explicit_timeout {
             Some(timeout) => crate::tools::timeout::output_or_kill(&mut cmd, timeout).await,
-            None => Ok(cmd.output().await),
+            None => Ok(crate::tools::timeout::output_unbounded(&mut cmd).await),
         };
 
         let tool_result = match result {
