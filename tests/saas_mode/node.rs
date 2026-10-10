@@ -32,9 +32,16 @@ impl Node {
             .iter()
             .map(|line| {
                 let lower = line.to_ascii_lowercase();
-                if ["bearer", "token", "authorization", "secret", "password", "canary"]
-                    .iter()
-                    .any(|k| lower.contains(k))
+                if [
+                    "bearer",
+                    "token",
+                    "authorization",
+                    "secret",
+                    "password",
+                    "canary",
+                ]
+                .iter()
+                .any(|k| lower.contains(k))
                 {
                     "[redacted log line]".to_string()
                 } else {

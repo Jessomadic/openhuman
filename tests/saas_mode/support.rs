@@ -26,6 +26,8 @@ pub const SCRUBBED_ENV: &[&str] = &[
     "OPENHUMAN_MODE",
     "OPENHUMAN_STORAGE_URL",
     "OPENHUMAN_NODE_ID",
+    "BACKEND_URL",
+    "VITE_BACKEND_URL",
 ];
 
 pub struct Deployment {
@@ -144,6 +146,9 @@ pub fn start(d: &Deployment) -> (Server, String, reqwest::blocking::Client) {
             if response.status().is_success() {
                 break;
             }
+        }
+        if let Ok(Some(status)) = server.0.try_wait() {
+            panic!("SaaS core exited before serving: {status}");
         }
         if let Ok(Some(status)) = server.0.try_wait() {
             panic!("SaaS core exited before serving: {status}");
@@ -310,7 +315,7 @@ pub fn start_offline(d: &Deployment) -> (Server, String, reqwest::blocking::Clie
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn openhuman-core");
-    let server = Server(child);
+    let mut server = Server(child);
     let base = format!("http://127.0.0.1:{port}");
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -322,6 +327,9 @@ pub fn start_offline(d: &Deployment) -> (Server, String, reqwest::blocking::Clie
         .send()
         .is_ok_and(|r| r.status().is_success())
     {
+        if let Ok(Some(status)) = server.0.try_wait() {
+            panic!("SaaS core exited before serving: {status}");
+        }
         assert!(Instant::now() < deadline, "SaaS core never became healthy");
         std::thread::sleep(Duration::from_millis(250));
     }
