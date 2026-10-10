@@ -8,6 +8,14 @@ struct StreamingFixture;
 
 #[async_trait]
 impl ChatModel<()> for StreamingFixture {
+    fn supports_input(&self, modality: InputModality, mime: &str, source: InputSource) -> bool {
+        modality == InputModality::Image && mime == "image/png" && source == InputSource::Url
+    }
+
+    fn cache_identity(&self) -> Option<String> {
+        Some("fixture-identity".to_owned())
+    }
+
     async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
         Ok(ModelResponse {
             usage: Some(Usage::new(10, 5)),
@@ -78,4 +86,29 @@ fn integer_buyer_charge_does_not_lose_fixed_point_precision() {
         response.usage.unwrap().charged_amount.unwrap().micros,
         amount
     );
+}
+
+#[test]
+fn charge_adapter_preserves_transport_and_cache_identity() {
+    let model = GatewayChargeModel::new(Arc::new(StreamingFixture));
+    assert!(model.profile().is_none());
+    assert!(model.supports_input(InputModality::Image, "image/png", InputSource::Url));
+    assert!(!model.supports_input(InputModality::Audio, "audio/wav", InputSource::Url));
+    assert_eq!(model.cache_identity().as_deref(), Some("fixture-identity"));
+}
+
+#[test]
+fn invalid_gateway_amount_discards_a_typed_charge_but_absent_metadata_preserves_it() {
+    let mut response = ModelResponse {
+        usage: Some(Usage {
+            charged_amount: Some(ChargedAmount::usd_micros(12)),
+            ..Usage::new(10, 5)
+        }),
+        ..ModelResponse::assistant("done")
+    };
+    normalize_charge(&mut response);
+    assert_eq!(response.usage.unwrap().charged_amount.unwrap().micros, 12);
+    response.raw = Some(serde_json::json!({"usage": {"buyer_cost_micro": -0.5, "cost": 0}}));
+    normalize_charge(&mut response);
+    assert!(response.usage.unwrap().charged_amount.is_none());
 }
