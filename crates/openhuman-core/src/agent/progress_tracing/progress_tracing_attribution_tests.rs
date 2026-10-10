@@ -258,7 +258,7 @@ fn custom_model_generation_is_stamped_custom_provenance() {
         cached_input_tokens: 0,
         cache_creation_tokens: 0,
         reasoning_tokens: 0,
-        cost_usd: 0.0001,
+        cost_usd: Some(0.0001),
     };
     let mut c = collect(&[(AgentProgress::TurnStarted, 0), (event, 10)]);
     c.finish(20);
