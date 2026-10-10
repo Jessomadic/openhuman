@@ -536,3 +536,27 @@ async fn erasing_one_owner_fences_pending_writes_from_every_team_root() {
     assert_eq!(drain(&second).await, 0);
     assert!(stored(&engine, MetaFilter::default()).await.is_empty());
 }
+
+#[tokio::test]
+async fn a_later_erase_clears_pending_writes_when_the_owner_state_was_released() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = config_in(&tmp);
+    let first = fence_and_clear(&config).await.unwrap();
+    enqueue(
+        &config,
+        &json!({"action":"learn","text":"Queued after the first erase began"}),
+        &facts(&config),
+    )
+    .unwrap();
+    let previous_owner = Arc::downgrade(&first.state);
+    drop(first);
+    // The default current-thread test runtime has not polled the scheduled
+    // retry yet; the weak map no longer owns the previous fence generation.
+    assert!(previous_owner.upgrade().is_none());
+    let second = fence_and_clear(&config).await.unwrap();
+    assert!(
+        read(&config.workspace_dir).unwrap().is_empty(),
+        "the second erase must discard a learning admitted before it started"
+    );
+    drop(second);
+}

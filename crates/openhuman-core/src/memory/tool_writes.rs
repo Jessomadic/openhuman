@@ -22,6 +22,7 @@ use crate::config::Config;
 const MAX_PENDING: usize = 256;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(120);
+static FENCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static PROCESS_EPOCH: LazyLock<String> = LazyLock::new(|| uuid::Uuid::new_v4().to_string());
 const QUEUED: &str = "queued; not yet saved to memory";
 static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -329,6 +330,40 @@ fn partitions(config: &Config) -> MemoryResult<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// Owner epoch captured when automatic turn work is admitted, before it can
+/// wait in the prefetch queue. Erasure retires older work and waits for active
+/// mutations while subsequent work waits behind the exclusive barrier.
+pub(crate) struct AutomaticMutation {
+    state: Arc<OwnerState>,
+    generation: u64,
+}
+
+impl AutomaticMutation {
+    pub(crate) async fn run<T>(self, work: impl std::future::Future<Output = T>) -> Option<T> {
+        if self.state.generation.load(Ordering::SeqCst) != self.generation {
+            return None;
+        }
+        let _barrier = self.state.barrier.read().await;
+        if self.state.generation.load(Ordering::SeqCst) != self.generation {
+            return None;
+        }
+        Some(work.await)
+    }
+}
+
+/// Captures authority without waiting on the engine or an active erasure.
+pub(crate) fn automatic_mutation(config: &Config) -> AutomaticMutation {
+    let state = owner_state(config);
+    let generation = {
+        let _admission = state
+            .admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.generation.load(Ordering::SeqCst)
+    };
+    AutomaticMutation { state, generation }
+}
+
 /// Holds the owner's mutation barrier through explicit engine erasure.
 /// Subsequent queued writes resume only after the outer erasure finishes.
 pub(crate) struct WriteFence {
@@ -365,7 +400,9 @@ pub(crate) async fn fence_and_clear(config: &Config) -> MemoryResult<WriteFence>
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.fences.fetch_add(1, Ordering::SeqCst);
-        state.generation.fetch_add(1, Ordering::SeqCst) + 1
+        let next = FENCE_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
+        state.generation.store(next, Ordering::SeqCst);
+        next
     };
     let mut fence = WriteFence {
         guard: None,

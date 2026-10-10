@@ -167,21 +167,29 @@ pub(crate) fn pre_turn(
     enqueue(
         cache,
         key,
-        Box::pin(crate::core::runtime::spawn::scoped(async move {
-            if config.memory.conversations.enabled {
-                if let Some(channel) = channel {
-                    let workspace = config.workspace_dir.clone();
-                    let thread = input.thread_id.clone();
-                    let _ = crate::core::runtime::spawn_blocking_scoped(move || {
-                        crate::memory::channels::record(&workspace, &channel, &thread)
-                    })
-                    .await;
+        guard_turn_work(
+            &config.clone(),
+            Box::pin(crate::core::runtime::spawn::scoped(async move {
+                if config.memory.conversations.enabled {
+                    if let Some(channel) = channel {
+                        let workspace = config.workspace_dir.clone();
+                        let thread = input.thread_id.clone();
+                        let _ = crate::core::runtime::spawn_blocking_scoped(move || {
+                            crate::memory::channels::record(&workspace, &channel, &thread)
+                        })
+                        .await;
+                    }
                 }
-            }
-            hooks::pre_turn_work(&config, &identity, input).await
-        })),
+                hooks::pre_turn_work(&config, &identity, input).await
+            })),
+        ),
     );
     pack.map(cached_notice)
+}
+
+fn guard_turn_work(config: &Config, work: Work) -> Work {
+    let mutation = crate::memory::tool_writes::automatic_mutation(config);
+    Box::pin(async move { mutation.run(work).await.flatten() })
 }
 
 fn cached_notice(mut pack: TurnPack) -> TurnPack {

@@ -312,10 +312,12 @@ impl Tool for MemoryTool {
         "Long-term memory across conversations, documents and learnings. \
          `recall` answers a question from memory with citations; `fetch` returns raw \
          matching items (filter by metadata such as workspace, repo, file_path, kinds); \
-         `learn` stores a durable fact, preference, procedure or correction about the \
+         `learn` queues a durable fact, preference, procedure or correction about the \
          user or their work, shared with every agent working alongside you; `forget` \
-         removes items by id. Relevant memory is already added to each turn as \
-         <memory-context>; use `recall` or `fetch` to look further, and set `refers_to` when \
+         queues removal of items by id. Write acknowledgements mean locally queued, \
+         not yet saved or removed remotely; do not repeat them to force indexing. \
+         Cached memory may be added as <memory-context>; use `recall` or `fetch` \
+         for current information, and set `refers_to` when \
          the question is about a particular time. Recall before asking \
          the user something they may already have told you; learn things worth \
          remembering next time."
@@ -358,8 +360,7 @@ impl Tool for MemoryTool {
         let run_id = context
             .and_then(ToolRunContext::host_extension)
             .and_then(|any| any.downcast_ref::<tinyagents_harness::tool::ToolExecutionContext>())
-            .map(|ctx| ctx.run_id.as_str().to_string())
-            .or_else(crate::agent::turn_origin::current_request_id);
+            .map(|ctx| ctx.run_id.as_str().to_string());
         Ok(self
             .budget
             .run(run_id, async {
@@ -403,3 +404,7 @@ mod agent_tests;
 #[cfg(test)]
 #[path = "tools_schema_tests.rs"]
 mod schema_tests;
+
+#[cfg(test)]
+#[path = "tools_budget_tests.rs"]
+mod budget_tests;

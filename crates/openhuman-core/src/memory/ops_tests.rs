@@ -478,9 +478,12 @@ async fn erasing_memory_cancels_queued_learning_so_restart_cannot_restore_it() {
         &config,
         &serde_json::json!({"action":"learn","text":"Prefers tea"}),
         &facts,
-    ).unwrap();
+    )
+    .unwrap();
     assert!(queued["status"].as_str().unwrap().starts_with("queued"));
-    erase_all(&config, EraseAllParams { confirm: true }).await.unwrap();
+    erase_all(&config, EraseAllParams { confirm: true })
+        .await
+        .unwrap();
     let restarted = config.clone();
     crate::memory::tool_writes::drain(&restarted).await;
     assert!(stored(&engine, MetaFilter::default()).await.is_empty());

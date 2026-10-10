@@ -431,3 +431,93 @@ fn runtime_shutdown_releases_worker_and_pending_work() {
     assert!(!state.entries[&key].active);
     assert!(state.entries[&key].pending.is_empty());
 }
+
+#[tokio::test]
+async fn an_erase_retires_queued_automatic_work_and_allows_later_work() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let tmp = tempfile::tempdir().unwrap();
+    let config = crate::memory::test_fixtures::config_in(&tmp);
+    let identity = crate::memory::scope::MemoryIdentity::agent("erase-prefetch").resolve(&config);
+    let key = Key::new(&config, &identity, "erase-prefetch", false);
+    let cache = Arc::new(Cache::default());
+    let earlier = Arc::new(AtomicUsize::new(0));
+    let later = Arc::new(AtomicUsize::new(0));
+    let old_count = earlier.clone();
+    enqueue(
+        cache.clone(),
+        key.clone(),
+        guard_turn_work(
+            &config,
+            Box::pin(async move {
+                old_count.fetch_add(1, Ordering::SeqCst);
+                Some(pack("earlier automatic log"))
+            }),
+        ),
+    );
+    // The current-thread executor has not polled the earlier job. Erasure
+    // advances the owner fence synchronously before its first suspension.
+    let fence = crate::memory::tool_writes::fence_and_clear(&config)
+        .await
+        .unwrap();
+    let new_count = later.clone();
+    enqueue(
+        cache.clone(),
+        key.clone(),
+        guard_turn_work(
+            &config,
+            Box::pin(async move {
+                new_count.fetch_add(1, Ordering::SeqCst);
+                Some(pack("later automatic log"))
+            }),
+        ),
+    );
+    drop(fence);
+    drain(&cache, &key).await;
+    assert_eq!(
+        earlier.load(Ordering::SeqCst),
+        0,
+        "old automatic logs must never poll after erase begins"
+    );
+    assert_eq!(later.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn erase_waits_for_current_automatic_work_before_returning_its_barrier() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = crate::memory::test_fixtures::config_in(&tmp);
+    let identity = crate::memory::scope::MemoryIdentity::agent("erase-active").resolve(&config);
+    let key = Key::new(&config, &identity, "erase-active", false);
+    let cache = Arc::new(Cache::default());
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let began = started.clone();
+    let done = release.clone();
+    enqueue(
+        cache.clone(),
+        key.clone(),
+        guard_turn_work(
+            &config,
+            Box::pin(async move {
+                began.notify_one();
+                done.notified().await;
+                Some(pack("current automatic log"))
+            }),
+        ),
+    );
+    started.notified().await;
+    let erase_config = config.clone();
+    let mut fencing =
+        tokio::spawn(
+            async move { crate::memory::tool_writes::fence_and_clear(&erase_config).await },
+        );
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), &mut fencing)
+            .await
+            .is_err(),
+        "erase must wait for the active automatic mutation"
+    );
+    release.notify_one();
+    let fence = fencing.await.unwrap().unwrap();
+    drop(fence);
+    drain(&cache, &key).await;
+}
