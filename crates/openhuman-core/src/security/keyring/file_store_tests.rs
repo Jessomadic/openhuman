@@ -33,13 +33,19 @@ fn existing_ciphertext_is_republished_and_verified_before_plaintext_cleanup() {
     let path = dir.path().join("secrets.enc");
     std::fs::write(&path, b"ciphertext").unwrap();
 
-    super::sync_parent_dir_with_republish(&path, |destination, bytes| {
+    let destination_lock = lock_for_write(&path).unwrap();
+    super::sync_parent_dir_with_republish(&path, &destination_lock, |destination, bytes| {
         assert_eq!(destination, path);
         assert_eq!(bytes, b"ciphertext");
         super::write_atomic(destination, bytes)
     })
     .unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), b"ciphertext");
+}
+
+#[test]
+fn relative_keyring_paths_sync_the_current_directory() {
+    assert_eq!(super::parent_dir(Path::new("keyring")), Path::new("."));
 }
 
 #[test]

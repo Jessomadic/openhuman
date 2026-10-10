@@ -104,6 +104,12 @@ pub fn lock_path_for(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
+fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
 /// Replace `path`'s contents with `bytes`, atomically, durably, and `0600`.
 ///
 /// Staged through a temp file unique to this process and call, then renamed —
@@ -118,14 +124,13 @@ pub fn lock_path_for(path: &Path) -> PathBuf {
 /// Returns [`KeyringError::Backend`] when the parent directory cannot be
 /// created, or the temp file cannot be written or renamed.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), KeyringError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            KeyringError::Backend(format!(
-                "could not create {} for a keyring write: {e}",
-                parent.display()
-            ))
-        })?;
-    }
+    let parent = parent_dir(path);
+    std::fs::create_dir_all(parent).map_err(|e| {
+        KeyringError::Backend(format!(
+            "could not create {} for a keyring write: {e}",
+            parent.display()
+        ))
+    })?;
 
     // A stale temp file can survive a crash. PID reuse then makes the first
     // sequence value collide, so keep allocating sequence values until a new
@@ -169,15 +174,18 @@ fn replace_durably(source: &Path, destination: &Path) -> std::io::Result<()> {
     replace_durably_with_sync(source, destination, |parent| File::open(parent)?.sync_all())
 }
 
-/// Ensure a previously published encrypted file is durable before removing a
-/// matching plaintext migration source. This retries an earlier publication
-/// that returned an error after the destination had already appeared.
-pub fn sync_parent_dir(path: &Path) -> Result<(), KeyringError> {
+/// Ensure a previously published encrypted file is durable before cleaning a
+/// matching plaintext migration source. The caller must hold `destination_lock`
+/// across the read, comparison, and cleanup; on Windows this also prevents a
+/// durability retry from republishing stale bytes over a newer write.
+///
+/// This retries an earlier publication that returned an error after the
+/// destination had already appeared.
+pub fn sync_parent_dir(path: &Path, destination_lock: &WriteLock) -> Result<(), KeyringError> {
     #[cfg(unix)]
     {
-        let parent = path.parent().ok_or_else(|| {
-            KeyringError::Backend(format!("keyring path {} has no parent", path.display()))
-        })?;
+        let _ = destination_lock;
+        let parent = parent_dir(path);
         File::open(parent)
             .and_then(|directory| directory.sync_all())
             .map_err(|error| {
@@ -192,13 +200,14 @@ pub fn sync_parent_dir(path: &Path) -> Result<(), KeyringError> {
         // A failed MoveFileExW can leave the destination visible. Republish
         // the same bytes with WRITE_THROUGH and verify the result before the
         // caller deletes the last plaintext copy.
-        sync_parent_dir_with_republish(path, write_atomic)
+        sync_parent_dir_with_republish(path, destination_lock, write_atomic)
     }
 }
 
 #[cfg(windows)]
 fn sync_parent_dir_with_republish(
     path: &Path,
+    _destination_lock: &WriteLock,
     republish: impl FnOnce(&Path, &[u8]) -> Result<(), KeyringError>,
 ) -> Result<(), KeyringError> {
     let expected = std::fs::read(path).map_err(|source| KeyringError::MigrationReadFailed {
@@ -226,12 +235,7 @@ fn replace_durably_with_sync(
     sync_parent: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     std::fs::rename(source, destination)?;
-    let parent = destination.parent().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "keyring path has no parent",
-        )
-    })?;
+    let parent = parent_dir(destination);
     sync_parent(parent)
 }
 
