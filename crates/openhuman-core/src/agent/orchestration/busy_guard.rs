@@ -35,7 +35,7 @@ pub(super) fn session_of<'k>(key: &'k str, me: &Tenant) -> Option<&'k str> {
 /// The turn loop takes it in scope (the bus subscriber runs off-task and cannot
 /// tell whose session it is); the key is fixed, so a cancelled turn clears it.
 pub(crate) struct TurnBusy {
-    key: String,
+    pub(super) key: String,
     id: u64,
 }
 

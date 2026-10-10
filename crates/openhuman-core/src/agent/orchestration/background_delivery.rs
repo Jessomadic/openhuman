@@ -27,7 +27,7 @@
 //! appends to the thread's transcript. It persists its reply before announcing
 //! `chat_done`, so a reconnect cannot lose a completed delegated result.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -48,6 +48,7 @@ use super::busy_guard::is_busy;
 #[cfg(test)]
 use super::busy_guard::{busy, clear_busy_for_thread, TurnBusy};
 use super::completion_owners;
+use crate::core::runtime::tenant;
 use crate::core::runtime::CoreContext;
 
 /// Coalesce completions landing within this window into one delivery turn.
