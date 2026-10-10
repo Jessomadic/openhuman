@@ -114,7 +114,7 @@ jobs:
           restore-keys: |
             storage-mongodb-${{ runner.os }}-
 
-      - name: Test the storage targets with the MongoDB driver
+      - name: Test the storage targets and the session store with the MongoDB driver
         # Runs in the CI image (toolchain, mold, system libraries) on the host
         # network, so 127.0.0.1:27017 reaches the replica set above.
         run: |
@@ -142,6 +142,7 @@ jobs:
                 --test storage_agent_scopes_e2e \
                 --test storage_delegation_e2e \
                 --test cli_storage_url_e2e
+              cargo test -p openhuman-rpc --features session-store,storage-mongodb --lib -- session_store::
             '
 
       - name: Fix ownership of the build output
