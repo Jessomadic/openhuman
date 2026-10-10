@@ -48,6 +48,10 @@ pub(super) const NOTIFICATIONS: &str = "integration_notifications";
 const DEDUP: &str = "notification_dedup";
 pub(super) const SETTINGS: &str = "notification_settings";
 pub(super) const CORE: &str = "core_notifications";
+
+/// The `workspace` key of core notifications in the per-workspace default
+/// file (see [`current`]).
+pub(super) const LOCAL_WORKSPACE: &str = "local";
 const DOMAIN: &str = "notifications::store";
 
 /// How long identical content counts as a duplicate.
@@ -71,13 +75,23 @@ fn collections() -> Vec<CollectionSpec> {
 /// default, the document tables in `notifications.db` (the legacy tables
 /// imported on first open). `None` keeps the legacy tables.
 pub(super) fn current(config: &Config) -> Result<Option<Docs>> {
+    // An installed backend may be shared by several workspaces, so it keeps
+    // core notifications apart by workspace path. The default file lives in
+    // the workspace and moves with it, so it uses a fixed key: a renamed or
+    // restored workspace still finds its notifications.
+    let workspace = if crate::storage::installed().is_some() {
+        config.workspace_dir.to_string_lossy().into_owned()
+    } else {
+        LOCAL_WORKSPACE.to_string()
+    };
     let plan = ImportPlan {
         domain: DOMAIN,
         tables: super::store::import::TABLES,
         read: &|| super::store::import::read(config),
     };
     let db_path = super::store::db_path(config);
-    Ok(local::repo(config, &db_path, DOMAIN, collections, &plan)?.map(Docs))
+    Ok(local::repo(config, &db_path, DOMAIN, collections, &plan)?
+        .map(|repo| Docs(repo, workspace)))
 }
 
 fn status_of(raw: Option<&str>) -> NotificationStatus {
@@ -239,12 +253,17 @@ pub(super) fn core_id(workspace: &str, event_id: &str) -> String {
 
 /// The notification store over one scoped document handle.
 #[derive(Clone)]
-pub(super) struct Docs(Repo);
+pub(super) struct Docs(Repo, String);
 
 impl Docs {
     #[cfg(test)]
     pub(super) fn over(scoped: &crate::storage::ScopedStorage) -> Self {
-        Self(Repo::over(scoped, DOMAIN, collections))
+        Self(Repo::over(scoped, DOMAIN, collections), String::new())
+    }
+
+    /// The `workspace` key this handle files core notifications under.
+    pub(super) fn workspace(&self) -> &str {
+        &self.1
     }
 
     /// Inserts `n`, failing if its id exists. With `skip_recent`, returns

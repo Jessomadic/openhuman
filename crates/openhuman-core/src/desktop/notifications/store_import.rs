@@ -5,11 +5,12 @@
 //! | --- | --- | --- |
 //! | `integration_notifications` | `integration_notifications` | row id |
 //! | `notification_settings` | `notification_settings` | provider |
-//! | `core_notifications` | `core_notifications` | `core_id(workspace, id)` |
+//! | `core_notifications` | `core_notifications` | `core_id("local", id)` |
 //!
 //! Documents come from the store's own `to_doc` and field names. The legacy
-//! `core_notifications` rows carry no workspace, so they take this
-//! workspace's directory, which is the one value a later read filters on.
+//! `core_notifications` rows carry no workspace, so they take the fixed
+//! `LOCAL_WORKSPACE` key the per-workspace default file filters on (not the
+//! directory path, which changes when the workspace is moved).
 //! (The content-dedup window needs no import: it lasts a minute.) The driver
 //! ([`crate::storage::local`]) writes the documents and then renames the
 //! tables to `_legacy_<name>`.
@@ -18,7 +19,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde_json::json;
 
-use super::super::store_documents::{core_id, to_doc, CORE, NOTIFICATIONS, SETTINGS};
+use super::super::store_documents::{core_id, to_doc, CORE, LOCAL_WORKSPACE, NOTIFICATIONS, SETTINGS};
 use crate::config::Config;
 use crate::storage::local::{table_exists, ImportDoc};
 
@@ -31,8 +32,7 @@ pub(crate) const TABLES: &[&str] = &[
 
 /// Reads every legacy row.
 pub(crate) fn read(config: &Config) -> Result<Vec<ImportDoc>> {
-    let workspace = config.workspace_dir.to_string_lossy().into_owned();
-    super::with_connection(config, |conn| read_rows(conn, &workspace))
+    super::with_connection(config, |conn| read_rows(conn, LOCAL_WORKSPACE))
 }
 
 fn read_rows(conn: &Connection, workspace: &str) -> Result<Vec<ImportDoc>> {
