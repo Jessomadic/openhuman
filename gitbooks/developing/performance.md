@@ -21,7 +21,7 @@ The original measurements below were made on Apple Silicon macOS with a `--relea
 | 100 | 1,866 | 356 | 3 | 123 | 820 |
 | 500 | 1,770 | 1,393 | 3 | 211 | 3,220 |
 
-500 agents fit in one process at roughly 1.77 MiB marginal cost each. Idle CPU stays flat as N grows, which matters because an agent that is not mid-turn should not spend cycles. Thread count grows by about 0.35 per agent. Watch that line before pushing past 500 in production.
+500 agents fit in one process at 1,770 KiB (about 1.73 MiB) marginal cost each. Idle CPU stays flat as N grows, which matters because an agent that is not mid-turn should not spend cycles. Thread count grows by about 0.35 per agent. Watch that line before pushing past 500 in production.
 
 Thousands of agents on one box is a goal, not a measured result. The marginal cost settles across 50, 100 and 500 agents instead of rising, which makes the goal plausible.
 
@@ -114,8 +114,8 @@ Other builds were running on the host, so these are shared-host measurements.
 
 Each run starts in a fresh cgroup with `memory.max = 2147483648` and
 `cpu.max = 200000 100000` (2 GiB and a two-CPU quota). Three fresh processes
-were measured at each size; the table gives medians. RSS is sampled after every
-agent completes one concurrent turn, with all agent handles retained. Marginal
+were measured at each size with the default swap limit; the table gives medians.
+RSS is sampled after every agent completes one concurrent turn, with all agent handles retained. Marginal
 RSS is `(RSS after turns - RSS after Runtime::build) / N`, without allocator
 trimming. The cgroup peak includes the HTTP mock and the Python measurement
 wrapper. Mock request recording is disabled, so retained HTTP request history
@@ -128,8 +128,9 @@ charged outside the new cgroup.
 | 100 | 437.38 MiB | 4.028 MiB | 417.89 MiB | 3,537 ms | 3,370 ms |
 | 500 | 1,712.97 MiB | 3.355 MiB | 1,760.32 MiB | 20,784 ms | 19,450 ms |
 
-The 500-agent median is within twice the earlier macOS/mock 1.77 MiB
-figure (3.54 MiB); the 50- and 100-agent medians miss that target. The
+The 500-agent median is within twice the earlier macOS/mock 1,770 KiB
+figure (1.728515625 MiB per agent, doubled to 3.45703125 MiB, or about
+3.46 MiB); the 50- and 100-agent medians miss that target. The
 500-agent runs ranged from 3.341 to 3.585 MiB per agent. These are different
 hosts and harness entry points, so the table is a capacity measurement rather
 than a controlled comparison of the platforms. This run also incorporates the
@@ -144,8 +145,10 @@ executable; the OS page cache was warm.
 
 A separate 500-agent run with **swap disabled** (`MemorySwapMax=0`) completed
 in 19,090 ms, with 3.541 MiB marginal RSS per agent and a
-1,884.52 MiB cgroup peak. Its marginal RSS narrowly exceeds the 3.54 MiB
-target. Every run recorded zero `max`, `oom`, and `oom_kill` memory events.
+1,884.52 MiB cgroup peak. Its marginal RSS exceeds the approximately
+3.46 MiB target. The integration ticket used a nominal 1.77 MiB baseline
+and 3.54 MiB doubled target; this run also narrowly exceeds that nominal target.
+Every run recorded zero `max`, `oom`, and `oom_kill` memory events.
 This does not establish capacity for real providers, tool subprocesses, MCP
 servers, or 1,000 simultaneously active turns. Measure those workloads before
 sizing a production fleet.
@@ -154,11 +157,19 @@ To reproduce from the OpenHuman repository root:
 
 ```sh
 cargo build -p openhuman-embed --locked --release --no-default-features --example linux_fleet
+systemd-run --user --scope -p MemoryMax=2G -p CPUQuota=200% --quiet \
+  python3 crates/openhuman-embed/examples/linux_fleet_cgroup.py 500
+```
+
+Use `50` or `100` for the other sizes and repeat each command in a fresh scope
+three times to reproduce the main table medians. Leave swap at its default
+limit for those runs. To reproduce the separate no-swap 500-agent run:
+
+```sh
 systemd-run --user --scope -p MemoryMax=2G -p MemorySwapMax=0 -p CPUQuota=200% --quiet \
   python3 crates/openhuman-embed/examples/linux_fleet_cgroup.py 500
 ```
 
-Use `50` or `100` for the other sizes and repeat each command in a fresh scope.
 The JSON output records process RSS, bootstrap/turn timings, cgroup limits,
 peak memory, and OOM counters. The raw runs are checked in as
 [`docs/benchmarks/medulla-embed-linux.json`](../../docs/benchmarks/medulla-embed-linux.json).
