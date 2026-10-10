@@ -15,13 +15,13 @@ With no URL configured, which is the desktop default, nothing here is opened and
 
 A backend is a `StorageBackend`. It hands out a `ScopedStorage` for each `Scope`, and every handle on it is already bound to that scope, so no method takes a scope argument.
 
-| Port | Holds | Used for |
-| --- | --- | --- |
+| Port            | Holds                                                                                                                                                      | Used for                                                                                                                    |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `DocumentStore` | Versioned JSON documents in named collections, with filters, paging, unique indexes, compare-and-swap (`Precondition`), atomic `claim` and optional expiry | Approvals, devices, notifications, task sources, cron jobs and runs, the flow catalog, graph checkpoints, encrypted secrets |
-| `StreamStore` | Append-only logs with dense offsets | Transcripts, journals |
-| `BlobStore` | Opaque bytes by key | Attachments, artifacts |
-| `SearchIndex` | Full-text membership | Where the driver supports it |
-| `SecretStore` | Encrypted values (`enc2:` envelope) | Keyring user secrets and the credential stores |
+| `StreamStore`   | Append-only logs with dense offsets                                                                                                                        | Transcripts, journals                                                                                                       |
+| `BlobStore`     | Opaque bytes by key                                                                                                                                        | Attachments, artifacts                                                                                                      |
+| `SearchIndex`   | Full-text membership                                                                                                                                       | Where the driver supports it                                                                                                |
+| `SecretStore`   | Encrypted values (`enc2:` envelope)                                                                                                                        | Keyring user secrets and the credential stores                                                                              |
 
 The core's stores are mostly synchronous, so `storage::block_on` runs a storage future on one shared runtime thread. It never uses `block_in_place`, which panics on a current-thread runtime. `storage::documents::Repo` is the base the domain stores build on. It declares a domain's collections once per process and runs each call.
 
@@ -35,12 +35,12 @@ The storage URL is the first of these that is set. Blank values count as unset.
 
 `[storage]` is bootstrap configuration. It is always read from the environment or the file and never from storage itself.
 
-| URL | Driver | Cargo feature |
-| --- | --- | --- |
-| `memory` | In-process maps, keeps nothing | Always |
-| `sqlite:<path>` (a `.db` file, or a directory with one file per database) | SQLite | `storage-sqlite` |
-| `file:<dir>` | JSON documents, JSONL streams and raw files | `storage-file` |
-| `mongodb://…/<db>`, `mongodb+srv://…/<db>` | MongoDB, one database shared by every scope | `storage-mongodb` |
+| URL                                                                       | Driver                                      | Cargo feature     |
+| ------------------------------------------------------------------------- | ------------------------------------------- | ----------------- |
+| `memory`                                                                  | In-process maps, keeps nothing              | Always            |
+| `sqlite:<path>` (a `.db` file, or a directory with one file per database) | SQLite                                      | `storage-sqlite`  |
+| `file:<dir>`                                                              | JSON documents, JSONL streams and raw files | `storage-file`    |
+| `mongodb://…/<db>`, `mongodb+srv://…/<db>`                                | MongoDB, one database shared by every scope | `storage-mongodb` |
 
 A URL for a driver the build lacks fails at `storage::open`, and the error names the Cargo feature. A misconfigured deployment therefore stops at boot rather than at its first write. Credentials in a URL are redacted in logs and in `Debug` output.
 
@@ -68,13 +68,13 @@ On a shared backend (MongoDB) other processes may write the same records, so boo
 
 ## Drivers and on-disk layout
 
-| Driver | Where the data lives |
-| --- | --- |
-| `memory` | Nowhere. Records last as long as the backend value. |
-| `sqlite:<dir>` | One SQLite file per named database inside `<dir>`, in WAL mode, with a single writer and a reader pool per file. The large relational stores keep their tables through the driver's native mode. |
-| `sqlite:<file>.db` | One database file for everything. |
-| `file:<dir>` | JSON documents, JSONL streams and blobs as files under `<dir>`. |
-| `mongodb://…/<db>` | One database. Each named database is a collection prefix, and every record carries its scope. |
+| Driver             | Where the data lives                                                                                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `memory`           | Nowhere. Records last as long as the backend value.                                                                                                                                              |
+| `sqlite:<dir>`     | One SQLite file per named database inside `<dir>`, in WAL mode, with a single writer and a reader pool per file. The large relational stores keep their tables through the driver's native mode. |
+| `sqlite:<file>.db` | One database file for everything.                                                                                                                                                                |
+| `file:<dir>`       | JSON documents, JSONL streams and blobs as files under `<dir>`.                                                                                                                                  |
+| `mongodb://…/<db>` | One database. Each named database is a collection prefix, and every record carries its scope.                                                                                                    |
 
 Without a URL, the classic layout is unchanged: per-domain SQLite databases (`approval/approval.db`, `devices/devices.db`, `notifications/notifications.db`, `task_sources/sources.db`, `cron/jobs.db`, `flows/flows.db`, `graph_checkpoints.db`), JSON and JSONL files, and the OS keyring or `secrets.enc`. Records written to a configured backend are not copied back to those files, and the files are not imported into the backend.
 
@@ -84,11 +84,11 @@ Secrets with a backend installed are encrypted documents in the acting agent's s
 
 Every storage test target runs the same body once per driver, and each run is a separate test case named after the driver (`memory::…`, `sqlite::…`, `file::…`, `mongodb::…`), so a failure says which driver broke. The shared helper is `tests/support/storage_drivers.rs`.
 
-| Driver | Runs |
-| --- | --- |
-| `memory` | Always |
-| `sqlite`, `file` | When `storage-sqlite` or `storage-file` is compiled in, on temp directories |
-| `mongodb` | When `storage-mongodb` is compiled in and `TSD_MONGO_URL` is set. Each case uses a database of its own. |
+| Driver           | Runs                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------- |
+| `memory`         | Always                                                                                                  |
+| `sqlite`, `file` | When `storage-sqlite` or `storage-file` is compiled in, on temp directories                             |
+| `mongodb`        | When `storage-mongodb` is compiled in and `TSD_MONGO_URL` is set. Each case uses a database of its own. |
 
 The targets are `storage_approvals_e2e`, `storage_domains_e2e`, `storage_flows_e2e`, `storage_secrets_e2e`, `storage_scope_e2e`, `storage_agent_scopes_e2e`, `storage_delegation_e2e` and `cli_storage_url_e2e`. Run one locally with the drivers you want:
 
