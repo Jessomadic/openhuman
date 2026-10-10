@@ -11,7 +11,8 @@ use tinyagents_harness::middleware::{
     RepeatProgressMiddleware, RunModeHandle, ToolPolicyMiddleware as TaToolPolicyMiddleware,
 };
 use tinyagents_harness::runtime::AgentHarness;
-use tinyagents_registry::CapabilityRegistry;
+use tinyagents_harness::steering::SteeringHandle;
+use tinyagents_registry::{CapabilityRegistry, RegistryDiagnostic, RegistrySnapshot};
 use tinyinference_llm::model::CapabilitySet;
 use tokio::sync::mpsc::Sender;
 
@@ -37,10 +38,8 @@ use crate::agent::tinyagents::verify_before_finish;
 use tinyagents_harness::store::InMemoryStore as ToolResultArtifactIndexStore;
 
 use super::ToolPolicyEnforcement;
-
-#[path = "harness_assembly_state.rs"]
-mod state;
-pub(super) use state::AssembledTurnHarness;
+mod assembled;
+pub(super) use assembled::AssembledTurnHarness;
 
 /// Assemble the turn harness for [`run_turn_via_tinyagents_shared`](super::run_turn_via_tinyagents_shared):
 /// register the provider model, every shared tool, and the full middleware

@@ -263,7 +263,7 @@ pub async fn output_with_input(
     let stdin = child.stdin.take();
     let reaped = process_cleanup::Reaped::register();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
-    let waiter = tokio::spawn(async move {
+    let waiter = crate::core::runtime::spawn_scoped(async move {
         let _reaped = reaped;
         let write_input = async move {
             if let (Some(mut stdin), Some(input)) = (stdin, input) {

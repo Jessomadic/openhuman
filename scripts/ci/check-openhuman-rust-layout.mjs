@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { rootRustTargetNames } from "../lib/root-rust-targets.mjs";
 
 const ROOT = "crates/openhuman-core/src";
 const CRATES_ROOT = "crates";
@@ -159,11 +160,8 @@ for (const [directory, table] of [
   ["tests", "test"],
   ["examples", "example"],
 ]) {
-  const files = new Set(
-    (fs.existsSync(directory) ? fs.readdirSync(directory) : [])
-      .filter((name) => name.endsWith(".rs"))
-      .map((name) => name.slice(0, -3)),
-  );
+  const files = rootRustTargetNames(directory);
+
   const declared = declaredTargets(table);
   for (const name of files) {
     if (!declared.has(name))

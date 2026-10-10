@@ -26,6 +26,35 @@ use openhuman_core::core::StructuredRpcError;
 /// Error returned by every typed facade call.
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
+    /// The host cancelled the call and its provider future has stopped.
+    #[error("{method}: cancelled")]
+    Cancelled {
+        /// Cancelled operation.
+        method: &'static str,
+    },
+    /// The entire logical call exceeded its deadline, including repairs.
+    #[error("{method}: deadline exceeded")]
+    DeadlineExceeded {
+        /// Expired operation.
+        method: &'static str,
+    },
+    /// Requested JSON failed strict validation after bounded repair.
+    #[error("{method}: {failure}")]
+    StructuredOutput {
+        /// Operation that refused the answer.
+        method: &'static str,
+        /// Safe accounting and classification metadata.
+        failure: crate::structured::StructuredOutputFailure,
+    },
+
+    /// Model call refused before dispatch by a shared run or turn budget.
+    #[error("{method}: {source}")]
+    BudgetExceeded {
+        /// Method that attempted the call.
+        method: &'static str,
+        /// Refusal including spend so far and outstanding reservations.
+        source: crate::budget::BudgetExceeded,
+    },
     /// The host cancelled this turn through its cancellation handle.
     #[error("{method}: turn cancelled")]
     TurnCancelled {
@@ -166,7 +195,11 @@ impl CoreError {
     /// The RPC method this error came from.
     pub fn method(&self) -> &'static str {
         match self {
-            CoreError::Domain { method, .. }
+            CoreError::Cancelled { method }
+            | CoreError::DeadlineExceeded { method }
+            | CoreError::StructuredOutput { method, .. }
+            | CoreError::BudgetExceeded { method, .. }
+            | CoreError::Domain { method, .. }
             | CoreError::Unavailable { method }
             | CoreError::Rpc { method, .. }
             | CoreError::Encode { method, .. }
@@ -189,10 +222,11 @@ impl CoreError {
     pub fn is_expected_user_state(&self) -> bool {
         matches!(
             self,
-            CoreError::Domain {
-                expected_user_state: true,
-                ..
-            }
+            CoreError::BudgetExceeded { .. }
+                | CoreError::Domain {
+                    expected_user_state: true,
+                    ..
+                }
         )
     }
 

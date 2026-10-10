@@ -82,3 +82,7 @@ managed interpreter paths and scratch directories. Scoped turns bypass Node and
 Python pools, which cannot acknowledge per-job cancellation or swap a job's
 process environment. A host tool that spawns a separate Tokio task must explicitly
 carry the command environment and cleanup scopes into that task.
+
+Standalone exact source pins and generated Cargo patches: [consumer setup](CONSUMERS.md).
+Ordered fallbacks and required exploration: [routing](ROUTING.md).
+Host telemetry and the existing exporter: [observers](OBSERVERS.md).

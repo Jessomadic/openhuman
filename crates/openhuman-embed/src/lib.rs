@@ -105,6 +105,7 @@ pub mod skill_registry {
 mod agent;
 pub mod artifacts;
 mod auth;
+pub mod budget;
 mod call;
 #[cfg(feature = "channels")]
 pub mod channels;
@@ -115,6 +116,7 @@ mod core_agent;
 pub mod cron;
 pub mod embeddings;
 mod error;
+pub mod fanout;
 mod harness;
 pub mod identity;
 pub mod memory;
@@ -122,9 +124,14 @@ pub mod memory;
 pub mod modules;
 mod permission;
 pub use permission::PermissionFuture;
+pub mod observe;
+
 pub mod process;
 #[cfg(feature = "channels")]
 pub mod profiles;
+pub mod repository;
+/// Explicit ordered fallback and truncation policies.
+pub mod routing;
 mod runtime;
 mod turn;
 mod turn_cancellation;
@@ -303,6 +310,11 @@ impl std::fmt::Debug for Core {
     }
 }
 
+/// Strict structured output failure metadata.
+pub mod structured;
+
+/// Acknowledged cancellation for stateless completion operations.
+pub mod cancellation;
 /// Runtime event subscriptions without content or credentials.
 pub mod events;
 /// Owned streaming turns and cooperative cancellation.

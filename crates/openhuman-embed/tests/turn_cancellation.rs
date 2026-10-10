@@ -2,7 +2,18 @@
 
 mod common;
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+#[derive(Default)]
+struct Outcomes(Mutex<Vec<openhuman_embed::observe::TurnFailure>>);
+impl openhuman_embed::observe::TurnObserver for Outcomes {
+    fn on_turn(&self, trace: &openhuman_embed::observe::TurnTrace<'_>) {
+        assert!(trace.message.is_none());
+        assert!(trace.reply.is_none());
+        self.0.lock().unwrap().push(trace.failure.unwrap());
+    }
+}
 
 use common::{offline_config, provider, route, runtime, stub_backend};
 use openhuman_embed::{
@@ -102,15 +113,34 @@ async fn scenario() {
     assert_eq!(metered.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert_eq!(agent.run("still usable").await.unwrap().reply, "finished");
 
+    let observed = Arc::new(Outcomes::default());
+    // A whole-turn deadline drops inference and leaves the same agent reusable.
+    assert!(matches!(
+        blocked
+            .turn("deadline")
+            .timeout(Duration::from_millis(100))
+            .observer(observed.clone())
+            .send()
+            .await,
+        Err(CoreError::DeadlineExceeded { .. })
+    ));
+    assert_eq!(agent.run("after deadline").await.unwrap().reply, "finished");
+    assert_eq!(
+        *observed.0.lock().unwrap(),
+        vec![openhuman_embed::observe::TurnFailure::Deadline]
+    );
+
     // An externally dropped send future also acknowledges cancellation.
+    let prior_requests = common::chat_requests(&slow).await.len();
     let observed = metered.clone();
     let mut turn = blocked.turn("drop this inference request").meter(move |_| {
         observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     });
+
     let cancel = turn.cancellation_handle();
     let sent = tokio::spawn(turn.send());
     tokio::time::timeout(Duration::from_secs(5), async {
-        while common::chat_requests(&slow).await.len() < 2 {
+        while common::chat_requests(&slow).await.len() <= prior_requests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
