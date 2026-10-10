@@ -1,6 +1,11 @@
 import { expect, type Page, test } from '@playwright/test';
 
-import { bootRuntimeReadyGuestPage, callCoreRpc, waitForAppReady } from '../helpers/core-rpc';
+import {
+  bootRuntimeReadyGuestPage,
+  callCoreRpc,
+  signInViaBypassUser,
+  waitForAppReady,
+} from '../helpers/core-rpc';
 
 const MOCK_ADMIN_BASE = `http://127.0.0.1:${process.env.E2E_MOCK_PORT || '18473'}`;
 
@@ -17,7 +22,7 @@ async function clickTestId(page: Page, testId: string, timeout = 10_000): Promis
   try {
     await locator.waitFor({ state: 'visible', timeout });
     await expect(locator).toBeEnabled({ timeout: 5_000 });
-    await locator.click({ force: true, timeout: 5_000 });
+    await locator.click({ timeout: 5_000 });
     return true;
   } catch {
     return false;
@@ -83,24 +88,7 @@ test.describe('Onboarding modes', () => {
   test('TinyHumans sessions land directly in chat', async ({ page }) => {
     await resetMock().catch(() => undefined);
     await bootRuntimeReadyGuestPage(page);
-    const payload = Buffer.from(
-      JSON.stringify({
-        sub: 'pw-onboarding-cloud',
-        userId: 'pw-onboarding-cloud',
-        exp: Math.floor(Date.now() / 1000) + 3600,
-      })
-    ).toString('base64url');
-    await callCoreRpc('openhuman.auth_store_session', {
-      token: `eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.${payload}.sig`,
-      userId: 'pw-onboarding-cloud',
-      user: {
-        _id: 'pw-onboarding-cloud',
-        id: 'pw-onboarding-cloud',
-        displayName: 'Playwright User',
-      },
-    });
-    await page.goto('/#/home');
-    await waitForAppReady(page);
+    await signInViaBypassUser(page, 'pw-onboarding-cloud');
     await expect.poll(() => page.evaluate(() => window.location.hash)).toMatch(/^#\/chat/);
   });
 
@@ -114,6 +102,9 @@ test.describe('Onboarding modes', () => {
 
     await expect(page.getByTestId('onboarding-custom-search-step')).toBeVisible();
     expect(await clickTestId(page, 'onboarding-search-skip')).toBe(true);
+    await expect
+      .poll(() => page.evaluate(() => window.location.hash), { timeout: 10_000 })
+      .toContain('/onboarding/custom/vault');
 
     await expect(page.getByTestId('onboarding-custom-vault-step')).toBeVisible();
     // Voice, OAuth and embeddings are no longer wizard steps.

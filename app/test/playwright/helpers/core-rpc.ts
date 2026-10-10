@@ -250,35 +250,49 @@ export async function waitForAppReady(page: Page): Promise<void> {
   // Harness setup can install runtimes on a cold core. It deliberately blocks
   // user input behind a full-screen dialog until the user chooses to continue
   // in the background, so settle that product flow before a spec drives UI.
-  const init = await callCoreRpc<{ snapshot?: { overall?: string; started_at?: string | null } }>(
-    'openhuman.harness_init_status'
-  );
-  if (init.snapshot?.overall === 'running' || init.snapshot?.overall === 'failed') {
+  const readInitStatus = async (): Promise<{
+    overall?: string;
+    started_at?: string | null;
+  } | null> => {
+    try {
+      const result = await callCoreRpc<{
+        snapshot?: { overall?: string; started_at?: string | null };
+      }>('openhuman.harness_init_status');
+      return result.snapshot ?? null;
+    } catch (error) {
+      // Some slim or older cores do not expose this optional status method.
+      if (
+        error instanceof Error &&
+        error.message.includes('unknown method: openhuman.harness_init_status')
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  };
+  const init = await readInitStatus();
+  if (init?.overall === 'running' || init?.overall === 'failed') {
     const alreadyDismissed = await page.evaluate(
       startedAt =>
-        window.sessionStorage.getItem('harness-init-dismissed-run') === (startedAt ?? 'unkeyed'),
-      init.snapshot.started_at
+        window.sessionStorage.getItem('harness-init-dismissed-run') === (startedAt ?? 'pending'),
+      init.started_at
     );
     if (alreadyDismissed) return;
 
-    const continueButton = page.getByRole('button', { name: /Run in background|Continue anyway/ });
+    const continueButton = page.getByTestId('harness-init-continue');
     await expect
       .poll(
         async () => {
           if (await continueButton.isVisible().catch(() => false)) return true;
-          const current = await callCoreRpc<{ snapshot?: { overall?: string } }>(
-            'openhuman.harness_init_status'
-          );
-          return current.snapshot?.overall === 'done' || current.snapshot?.overall === 'idle';
+          const current = await readInitStatus();
+          return current?.overall === 'done' || current?.overall === 'idle' || current === null;
         },
         { timeout: 10_000 }
       )
       .toBe(true);
     if (await continueButton.isVisible().catch(() => false)) {
       await continueButton.click();
-      await expect(page.getByRole('dialog', { name: 'Setting things up' })).toBeHidden({
-        timeout: 5_000,
-      });
+      await expect(page.getByTestId('harness-init-dialog')).toBeHidden({ timeout: 5_000 });
     }
   }
 }

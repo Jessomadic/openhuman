@@ -13,6 +13,8 @@ export const THREAD_NOT_FOUND_MESSAGE = 'This thread is no longer available.';
 interface ThreadState {
   threads: Thread[];
   selectedThreadId: string | null;
+  /** Incremented by every explicit thread selection to invalidate stale async continuations. */
+  selectionIntentVersion: number;
   /**
    * Set of threads that currently have an in-flight inference turn, keyed by
    * thread id. Replaces the legacy single `activeThreadId` so that turns on
@@ -60,6 +62,7 @@ interface ThreadState {
 const initialState: ThreadState = {
   threads: [],
   selectedThreadId: null,
+  selectionIntentVersion: 0,
   activeThreadIds: {},
   welcomeThreadId: null,
   messagesByThreadId: {},
@@ -471,11 +474,16 @@ const threadSlice = createSlice({
       state.createThreadError = null;
     },
     setSelectedThread: (state, action: { payload: string }) => {
+      state.selectionIntentVersion = (state.selectionIntentVersion ?? 0) + 1;
       state.selectedThreadId = action.payload;
       state.messages = state.messagesByThreadId[action.payload] ?? [];
       state.messagesError = null;
     },
+    invalidateThreadSelection: state => {
+      state.selectionIntentVersion = (state.selectionIntentVersion ?? 0) + 1;
+    },
     clearSelectedThread: state => {
+      state.selectionIntentVersion = (state.selectionIntentVersion ?? 0) + 1;
       state.selectedThreadId = null;
       state.messages = [];
       state.messagesError = null;
@@ -693,6 +701,7 @@ const threadSlice = createSlice({
 export const {
   clearCreateThreadError,
   setSelectedThread,
+  invalidateThreadSelection,
   clearSelectedThread,
   setActiveThread,
   markThreadInferenceActive,
