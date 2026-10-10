@@ -336,6 +336,16 @@ fn composio_connect_outlives_its_approval_park() {
 }
 
 #[test]
+fn composio_connect_timeout_saturates_instead_of_overflowing() {
+    // `u64::MAX` seconds plus the slack must not panic in `Duration` addition.
+    let bound = std::time::Duration::from_secs(u64::MAX);
+    assert_eq!(
+        composio_connect_tool_timeout(Some(bound)),
+        tinytools::ToolTimeout::Millis(u64::MAX)
+    );
+}
+
+#[test]
 fn parse_composio_connect_timeout_honors_override_and_zero_opt_out() {
     // Explicit value → that many seconds.
     assert_eq!(

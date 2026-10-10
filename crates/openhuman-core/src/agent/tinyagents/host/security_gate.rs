@@ -396,7 +396,7 @@ impl OpenHumanSecurityGate {
 pub(crate) fn unanswered_approval_text(tool_name: &str) -> String {
     format!(
         "The approval request for '{tool_name}' was not answered in time, so it was not run. \
-         Tell the user it is waiting on their approval and that they can ask again to retry. \
+         Tell the user the approval window expired and that they must ask again to retry. \
          Do not retry this call yourself this turn and do not achieve the same result another \
          way (shell, CLI, another tool)."
     )

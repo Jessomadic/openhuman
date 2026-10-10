@@ -345,6 +345,7 @@ async fn failures_of_different_use_skill_tools_do_not_share_a_budget() {
 // tools declared no policy and `web_answer_tool` carries no reading verb, the
 // timeout read as a possible side effect with zero retries.
 
+#[cfg(feature = "modules")]
 fn search_spec(name: &str) -> tinysearch_bus::ToolSpec {
     tinysearch_bus::ToolSpec {
         name: name.to_string(),
@@ -353,6 +354,7 @@ fn search_spec(name: &str) -> tinysearch_bus::ToolSpec {
     }
 }
 
+#[cfg(feature = "modules")]
 #[test]
 fn a_web_search_tool_timeout_is_transient_not_an_uncertain_action() {
     let tools: Vec<Box<dyn tinytools::Tool>> =

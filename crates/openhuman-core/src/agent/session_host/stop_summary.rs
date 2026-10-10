@@ -263,7 +263,10 @@ pub(crate) fn render_stop_summary(results: &[CheckpointToolResult], stop_note: &
     let mut out = format!("I stopped this turn early because {}.\n", kind.copy());
     if !groups.is_empty() {
         out.push_str("\n**What happened**\n");
-        for group in groups.iter().take(MAX_LISTED) {
+        // Show the most recent groups (the immediate blocker is last), in
+        // chronological order.
+        let shown_from = groups.len().saturating_sub(MAX_LISTED);
+        for group in groups.iter().skip(shown_from) {
             let name = crate::util::truncate_with_ellipsis(&group.name, 60);
             let count = times(group.count);
             let _ = if group.success {
@@ -274,7 +277,7 @@ pub(crate) fn render_stop_summary(results: &[CheckpointToolResult], stop_note: &
                 writeln!(out, "- `{name}` failed{count}: {}", group.error)
             };
         }
-        let hidden: usize = groups.iter().skip(MAX_LISTED).map(|g| g.count).sum();
+        let hidden: usize = groups.iter().take(shown_from).map(|g| g.count).sum();
         if hidden > 0 {
             let _ = writeln!(out, "- …and {hidden} more tool call(s)");
         }
