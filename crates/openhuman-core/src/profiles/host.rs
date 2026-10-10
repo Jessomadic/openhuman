@@ -224,6 +224,17 @@ impl ProfileHost {
                 .agent_policy(profile_policy(&config)),
         );
         crate::platform::cost::seed_tenant_tracker(&context, &config);
+        if first_open {
+            // Results a previous process finished but never delivered. The
+            // owner table that routes them is process-local and empty after a
+            // restart, so recover them in this profile's scope: the scheduled
+            // drains then run as this profile and reach only its tables.
+            CoreContext::sync_scope(Arc::clone(&context), || {
+                crate::agent::orchestration::background_delivery::recover_on_boot(
+                    &layout.workspace_dir,
+                )
+            });
+        }
         let state = Arc::new(Profile {
             id: id.clone(),
             layout,
