@@ -1,0 +1,123 @@
+//! Cancelling a tool output future must stop its shell descendants.
+
+#![cfg(target_os = "linux")]
+
+use openhuman_core::tools::timeout::{output_or_kill, output_unbounded, ProcessCleanup};
+use std::time::Duration;
+
+/// Cancelling a tool must also stop descendants of its shell.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn dropping_command_output_kills_the_shells_children() {
+    for bounded in [true, false] {
+        dropped_command(bounded).await;
+    }
+}
+
+async fn dropped_command(bounded: bool) {
+    let scratch = tempfile::tempdir().unwrap();
+    let pidfile = scratch.path().join("child.pid");
+    let mut cmd = openhuman_core::agent::platform_shell::build_tokio_command(&format!(
+        "sleep 30 & echo $$ $! > {}; wait",
+        pidfile.display()
+    ));
+    let cleanup = ProcessCleanup::default();
+    let mut run = Box::pin(cleanup.scope(async {
+        if bounded {
+            output_or_kill(&mut cmd, Duration::from_secs(60))
+                .await
+                .unwrap()
+        } else {
+            output_unbounded(&mut cmd).await
+        }
+    }));
+    let (shell, child): (i32, i32) = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::select! {
+                result = &mut run => panic!("command ended before cancellation: {result:?}"),
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+            if let Ok(pid) = std::fs::read_to_string(&pidfile) {
+                let mut pids = pid.split_whitespace().filter_map(|pid| pid.parse().ok());
+                if let (Some(shell), Some(child)) = (pids.next(), pids.next()) {
+                    break (shell, child);
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    drop(run);
+    tokio::time::timeout(Duration::from_secs(2), cleanup.wait())
+        .await
+        .unwrap();
+    assert!(
+        !std::path::Path::new(&format!("/proc/{shell}")).exists(),
+        "direct shell was not reaped"
+    );
+    let stopped = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let stat = std::fs::read_to_string(format!("/proc/{child}/stat"));
+            if stat
+                .as_ref()
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+                || stat.as_ref().is_ok_and(|s| {
+                    s.rsplit_once(") ")
+                        .is_some_and(|(_, rest)| rest.starts_with('Z'))
+                })
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    // Clean up even on the unfixed implementation.
+    if stopped.is_err() {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &child.to_string()])
+            .status();
+    }
+    assert!(
+        stopped.is_ok(),
+        "shell child {child} survived dropped output future"
+    );
+}
+
+#[tokio::test]
+async fn captured_commands_preserve_output_and_exit_status() {
+    for bounded in [true, false] {
+        let mut cmd = openhuman_core::agent::platform_shell::build_tokio_command(
+            "printf stdout; printf stderr >&2; exit 7",
+        );
+        let output = if bounded {
+            output_or_kill(&mut cmd, Duration::from_secs(5))
+                .await
+                .unwrap()
+                .unwrap()
+        } else {
+            output_unbounded(&mut cmd).await.unwrap()
+        };
+        assert_eq!(output.stdout, b"stdout");
+        assert_eq!(output.stderr, b"stderr");
+        assert_eq!(output.status.code(), Some(7));
+    }
+    let mut missing = tokio::process::Command::new("/does-not-exist/openhuman-test");
+    assert_eq!(
+        output_unbounded(&mut missing).await.unwrap_err().kind(),
+        std::io::ErrorKind::NotFound
+    );
+}
+
+#[tokio::test]
+async fn deadline_kills_and_reaps_a_command() {
+    let cleanup = ProcessCleanup::default();
+    let mut command = openhuman_core::agent::platform_shell::build_tokio_command("sleep 30");
+    assert!(cleanup
+        .scope(output_or_kill(&mut command, Duration::from_millis(30)))
+        .await
+        .is_err());
+    tokio::time::timeout(Duration::from_secs(2), cleanup.wait())
+        .await
+        .unwrap();
+}

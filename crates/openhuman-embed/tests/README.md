@@ -42,6 +42,8 @@ recorded on the wrong server.
 | [`completion_cancellation.rs`](completion_cancellation.rs) | Cancellation acknowledged after the provider future stops, pre-cancelled calls make no request, and deadlines are typed. |
 | [`structured_validation.rs`](structured_validation.rs) | Full schema constraints, invalid/external schema refusal before dispatch, typed failures and bounded repair usage. |
 | [`public_api.rs`](public_api.rs) | Compile-time check that the host-facing types and signatures stay exported. |
+| [`turn_cancellation.rs`](turn_cancellation.rs) | Cancellation before send, during inference and during a builtin shell command; repeated requests and agent reuse. |
+| [`process_cancellation.rs`](process_cancellation.rs) | On Linux, dropping a command future kills its shell descendants. |
 
 ## Running
 

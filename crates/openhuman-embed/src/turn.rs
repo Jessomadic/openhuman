@@ -262,6 +262,7 @@ pub struct Turn {
     provider_options: serde_json::Value,
     require_tool_call: bool,
     untrusted_input: bool,
+    cancellation: Option<crate::TurnCancellation>,
 }
 
 impl Turn {
@@ -281,6 +282,7 @@ impl Turn {
             provider_options: serde_json::Value::Null,
             require_tool_call: false,
             untrusted_input: false,
+            cancellation: None,
         }
     }
 
@@ -507,6 +509,38 @@ impl Turn {
     /// that is a build/composition fact, not a failure, and a host should hide
     /// the surface rather than report an error.
     pub async fn send(mut self) -> Result<TurnOutcome, CoreError> {
+        let Some(cancellation) = self.cancellation.take() else {
+            return self.send_inner().await;
+        };
+        let _guard = cancellation.enter();
+        let outcome = cancellation
+            .cleanup()
+            .scope(async {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => {
+                        log::debug!("[embed][agent] turn cancelled");
+                        Err(CoreError::TurnCancelled { method: AGENT_CHAT })
+                    }
+                    outcome = Box::pin(self.send_inner()) => outcome,
+                }
+            })
+            .await;
+        // The dispatch future is dropped before waiting for its command
+        // waiters. No new command can register after this point.
+        cancellation.cleanup().wait().await;
+        outcome
+    }
+
+    /// Obtain a cloneable handle that cancels only this turn and awaits its
+    /// subprocess cleanup. Acquire it before moving the turn to `send()`.
+    pub fn cancellation_handle(&mut self) -> crate::TurnCancellation {
+        self.cancellation
+            .get_or_insert_with(Default::default)
+            .clone()
+    }
+
+    async fn send_inner(mut self) -> Result<TurnOutcome, CoreError> {
         // The core neither mints nor returns a session id, so continuing a
         // conversation would otherwise be impossible without the caller
         // inventing an id scheme — which every embedder has then done
@@ -628,6 +662,7 @@ impl Turn {
             // variant classification are logged; the error itself propagates
             // to the caller untouched.
             let tag = match err {
+                crate::error::CoreError::TurnCancelled { .. } => "turn_cancelled",
                 crate::error::CoreError::Cancelled { .. } => "cancelled",
                 crate::error::CoreError::DeadlineExceeded { .. } => "deadline",
                 crate::error::CoreError::StructuredOutput { .. } => "structured_output",
@@ -640,6 +675,7 @@ impl Turn {
                 crate::error::CoreError::InsecureRoute { .. } => "insecure_route",
                 crate::error::CoreError::InvalidRoute { .. } => "invalid_route",
                 crate::error::CoreError::AgentRemoved { .. } => "agent_removed",
+                crate::error::CoreError::TurnCancelled { .. } => "turn_cancelled",
             };
             log::debug!("[embed][agent] turn_failed session={session_id} kind={tag}");
         });

@@ -55,6 +55,12 @@ pub enum CoreError {
         /// Refusal including spend so far and outstanding reservations.
         source: crate::budget::BudgetExceeded,
     },
+    /// The host cancelled this turn through its cancellation handle.
+    #[error("{method}: turn cancelled")]
+    TurnCancelled {
+        /// RPC method the turn was dispatching.
+        method: &'static str,
+    },
     /// The domain returned a structured error envelope.
     #[error("{method}: {message}")]
     Domain {
@@ -200,7 +206,8 @@ impl CoreError {
             | CoreError::Decode { method, .. }
             | CoreError::InsecureRoute { method, .. }
             | CoreError::InvalidRoute { method }
-            | CoreError::AgentRemoved { method, .. } => method,
+            | CoreError::AgentRemoved { method, .. }
+            | CoreError::TurnCancelled { method } => method,
         }
     }
 

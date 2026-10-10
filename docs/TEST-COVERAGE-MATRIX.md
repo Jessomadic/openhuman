@@ -666,6 +666,7 @@ The thread JSONL store moved to `tinyagents_session::threads` (`vendor/tinyagent
 | 16.1.19 | Pinned standalone Embed source consumer | Script+RI | `scripts/__tests__/embed-consumer-bootstrap.test.mjs` | ✅ | Exact SHA verification, inherited workspace edition, generated active patches, stable locked offline builds with optional Embed enabled/disabled, default dependency tree without HTTP, no untracked secrets or Git metadata, refused malformed/escaping patches and existing destinations |
 | 16.1.17 | Enforced shared turn/run budgets | RU+RI | `crates/openhuman-embed/tests/budget_fanout.rs`, `vendor/tinyagents/vendor/tinyinference/crates/tinyinference-llm/src/model/budget_tests.rs` | ✅ | Atomic parent/child reservations, physical provider admission, conservative unknown spend, cancellation and output cap |
 | 16.1.18 | Ordered bounded fanout | RI | `crates/openhuman-embed/tests/budget_fanout.rs` | ✅ | Input-order results, per-branch and child error isolation, branch ceilings, shared-budget concurrent refusal and empty fanout |
+| 16.1.13 | Awaited per-turn cancellation | RI | `crates/openhuman-embed/tests/turn_cancellation.rs`, `crates/openhuman-embed/tests/process_cancellation.rs` | ✅ | Before send, during inference and during a builtin shell command; agent reuse, concurrent cancellation handles, failure/drop acknowledgement, bounded and unbounded descendant termination plus direct-child reaping on Linux |
 
 ## Summary
 

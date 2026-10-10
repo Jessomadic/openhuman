@@ -79,6 +79,32 @@ that controllers emit. `CoreAgent` runs the runtime's orchestrator over the
 facade does not model yet; a raw call that keeps coming back is a candidate
 for a typed method here.
 
+## Cancelling one turn
+
+Acquire `Turn::cancellation_handle()` before sending a turn. The handle is
+cloneable and `cancel().await` waits for the turn to stop and for tracked
+commands to be reaped. The agent remains available for later turns:
+
+```rust,no_run
+# async fn demo(agent: &openhuman_embed::Agent) -> Result<(), Box<dyn std::error::Error>> {
+let mut turn = agent.turn("Run the job.");
+let cancel = turn.cancellation_handle();
+let running = tokio::spawn(turn.send());
+// When the host receives an abort request:
+cancel.cancel().await;
+assert!(matches!(running.await?, Err(openhuman_embed::CoreError::TurnCancelled { .. })));
+# Ok(())
+# }
+```
+
+Cancellation is scoped to this turn, including while waiting for inference.
+Before send, cancellation prevents dispatch; after completion it is a no-op.
+On Unix, the built-in shell, Node, Python and npm commands kill their process
+group, including descendants. Other platforms stop the direct command. Host
+tools that spawn independent tasks or processes must provide their own cleanup;
+MCP server lifecycles remain owned by the agent. Keep polling `send()` while
+awaiting cancellation, for example in a spawned task as above.
+
 ## Using it
 
 Use the [pinned consumer bootstrap](CONSUMERS.md) to prepare source,
