@@ -50,7 +50,7 @@ pub use definition_registry::OpenHumanDefinitionRegistry;
 pub use learning_sink::OpenHumanLearningSink;
 pub use model_resolver::OpenHumanModelResolver;
 pub use progress_sink::OpenHumanProgressSink;
-pub(crate) use run_context::direct_subagent_child;
+pub(crate) use run_context::{direct_subagent_child, SessionTurnSidecar};
 pub use run_context::{
     decide_dispatch, DispatchDecision, DispatchInputs, LastTurnUsage, OpenHumanRunContext,
     SubagentUsageEntry, TurnDispatchState,
