@@ -77,7 +77,12 @@ pub(super) fn persist_subagent_transcript(
             output: usage.output_tokens,
             cached_input: usage.cached_input_tokens,
             context_window,
-            cost_usd: usage.charged_amount_usd,
+            cost_usd: usage.cost.known_usd,
+            cost_source: Some(match usage.cost.source {
+                crate::agent::cost::CostSource::Charged => transcript::UsageCostSource::Charged,
+                crate::agent::cost::CostSource::Estimated => transcript::UsageCostSource::Estimated,
+                crate::agent::cost::CostSource::Unknown => transcript::UsageCostSource::Unknown,
+            }),
             // No per-call figure reaches here; readers fall back to the mean
             // request size (`spend::context_tokens_of`).
             ..Default::default()
@@ -103,7 +108,7 @@ pub(super) fn persist_subagent_transcript(
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         cached_input_tokens: usage.cached_input_tokens,
-        charged_amount_usd: usage.charged_amount_usd,
+        charged_amount_usd: usage.cost.known_usd,
         thread_id: thread_id.map(str::to_owned),
         task_id: Some(task_id.to_string()),
     };
