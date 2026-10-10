@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { type TurnTask, updateTaskHistory } from './taskCardHistory';
+import { taskState, type TurnTask, updateTaskHistory } from './taskCardHistory';
 
 const task = (anchor: string, completed = false): TurnTask => ({
   anchor,

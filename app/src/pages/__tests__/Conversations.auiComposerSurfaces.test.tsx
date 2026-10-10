@@ -302,7 +302,7 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     vi.mocked(chatSend).mockResolvedValue(undefined);
   });
 
-  it('attaches live task cards to an assistant message instead of the composer', async () => {
+  it('docks active task cards and leaves completed cards with their original turn', async () => {
     const store = await renderChat();
     await act(async () => {
       for (const [id, sender] of [
@@ -341,6 +341,22 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     expect(overlay).toBeNull();
     expect(plan.closest('[data-slot="task-card-dock"]')).not.toBeNull();
     expect(plan).toHaveAttribute('data-slot', 'task-card');
+    await act(async () => store.dispatch(setThreadTodos({threadId: THREAD_ID, todos: [
+      {content: 'Inspect the current UI', status: 'completed'},
+      {content: 'Verify overlay geometry', status: 'completed'},
+    ]})));
+    await waitFor(() => expect(screen.getByTestId('todo-checklist')).toHaveAttribute('data-state', 'done'));
+    await act(async () => {
+      for (const [id, sender] of [['user-next', 'user'], ['agent-next', 'agent']] as const) {
+        store.dispatch({type: addMessageLocal.fulfilled.type, payload: {threadId: THREAD_ID, message: {id, sender, content: 'Next conversation turn', type: 'text', extraMetadata: {}, createdAt: '2026-01-01T00:01:00Z'}}});
+      }
+    });
+    const completed = screen.getByTestId('todo-checklist');
+    expect(completed.closest('[data-slot="task-card-dock"]')).toBeNull();
+    const owningMessage = completed.closest('[data-slot="aui_assistant-message-root"]');
+    expect(owningMessage).toHaveTextContent('Task turn');
+    expect(owningMessage).not.toHaveTextContent('Next conversation turn');
+
   });
 
   it('shows the send error when a send is rejected', async () => {
