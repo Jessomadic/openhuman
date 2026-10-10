@@ -53,7 +53,7 @@ export function ConnectionState({
       data-slot="connection-state"
       className={cn(
         paper,
-        'fade-in slide-in-from-top-1 animate-in flex w-full max-w-sm items-center gap-2.5 rounded-2xl px-3.5 py-2.5 duration-300',
+        'fade-in slide-in-from-top-1 animate-in flex w-full items-center gap-2.5 rounded-2xl px-3.5 py-2.5 duration-300',
         className
       )}
       {...props}>

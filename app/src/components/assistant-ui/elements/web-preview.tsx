@@ -47,7 +47,7 @@ export function WebPreview({
   return (
     <div
       data-slot="web-preview"
-      className={cn(paper, 'flex w-full max-w-md flex-col overflow-hidden rounded-2xl', className)}
+      className={cn(paper, 'flex w-full flex-col overflow-hidden rounded-2xl', className)}
       {...props}>
       <div className="flex items-center gap-1.5 px-2.5 py-2">
         {onReload ? (

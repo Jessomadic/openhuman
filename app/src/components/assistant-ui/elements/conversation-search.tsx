@@ -51,10 +51,7 @@ export function ConversationSearch({
   const active = index === -1 ? undefined : hits[index];
 
   return (
-    <div
-      data-slot="conversation-search"
-      className={cn('flex w-full max-w-sm gap-2', className)}
-      {...props}>
+    <div data-slot="conversation-search" className={cn('flex w-full gap-2', className)} {...props}>
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className={cn(paper, 'flex items-center gap-2 rounded-full py-1.5 pr-1.5 pl-3')}>
           <SearchIcon className="text-muted-foreground size-3.5 shrink-0" />

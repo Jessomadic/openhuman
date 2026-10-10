@@ -40,7 +40,7 @@ export function ErrorState({
         key="retrying"
         role="status"
         className={cn(
-          'fade-in animate-in flex w-full max-w-sm items-center gap-2.5 text-sm duration-300 motion-reduce:animate-none',
+          'fade-in animate-in flex w-full items-center gap-2.5 text-sm duration-300 motion-reduce:animate-none',
           className
         )}
         {...props}>
@@ -58,7 +58,7 @@ export function ErrorState({
       key="error"
       role="alert"
       className={cn(
-        'fade-in animate-in flex w-full max-w-sm items-start gap-2.5 rounded-2xl bg-red-500/[0.06] px-4 py-3 text-sm duration-300 motion-reduce:animate-none dark:bg-red-500/10',
+        'fade-in animate-in flex w-full items-start gap-2.5 rounded-2xl bg-red-500/[0.06] px-4 py-3 text-sm duration-300 motion-reduce:animate-none dark:bg-red-500/10',
         className
       )}
       {...props}>

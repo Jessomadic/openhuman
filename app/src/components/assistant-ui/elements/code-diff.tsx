@@ -41,11 +41,7 @@ export function CodeDiff({
   return (
     <div
       data-slot="code-diff"
-      className={cn(
-        paper,
-        'w-full max-w-md overflow-hidden rounded-2xl font-mono text-xs',
-        className
-      )}
+      className={cn(paper, 'w-full overflow-hidden rounded-2xl font-mono text-xs', className)}
       {...props}>
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
         <span className="text-foreground/90">{filename}</span>

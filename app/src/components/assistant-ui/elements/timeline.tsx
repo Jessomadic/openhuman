@@ -41,7 +41,7 @@ export function Timeline({
   return (
     <div
       data-slot="timeline"
-      className={cn(paper, 'flex w-full max-w-sm flex-col rounded-2xl p-4', className)}
+      className={cn(paper, 'flex w-full flex-col rounded-2xl p-4', className)}
       {...props}>
       {take(events, visibleCount).map((event, i, shown) => (
         <div

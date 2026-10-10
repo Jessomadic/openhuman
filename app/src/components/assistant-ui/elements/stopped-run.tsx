@@ -32,10 +32,7 @@ export function StoppedRun({
   discardLabel?: string;
 }) {
   return (
-    <div
-      data-slot="stopped-run"
-      className={cn('flex w-full max-w-sm flex-col gap-3', className)}
-      {...props}>
+    <div data-slot="stopped-run" className={cn('flex w-full flex-col gap-3', className)} {...props}>
       <p className="text-foreground/80 text-[13.5px] leading-relaxed">
         {words.join(' ')}
         <span

@@ -46,10 +46,7 @@ export function TodoList({
   const done = items.filter(item => item.status === 'done').length;
 
   return (
-    <div
-      data-slot="todo-list"
-      className={cn('flex w-full max-w-sm flex-col gap-3', className)}
-      {...props}>
+    <div data-slot="todo-list" className={cn('flex w-full flex-col gap-3', className)} {...props}>
       <div className="flex items-start justify-between gap-3">
         <span className="text-[13.5px] font-medium">{title}</span>
         <span className={cn(mono, 'text-muted-foreground tabular-nums')}>
@@ -275,7 +272,7 @@ export function TodoReceipt({
 }) {
   const progress = todoProgress(items);
   return (
-    <div data-slot="todo-receipt" className="flex w-full max-w-md flex-col">
+    <div data-slot="todo-receipt" className="flex w-full flex-col">
       <button
         type="button"
         aria-expanded={open}

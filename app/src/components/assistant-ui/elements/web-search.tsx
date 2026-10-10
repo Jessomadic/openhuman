@@ -64,7 +64,7 @@ export function WebSearch({
   return (
     <div
       data-slot="web-search"
-      className={cn('flex w-full max-w-sm flex-col gap-2.5', className)}
+      className={cn('flex w-full flex-col gap-2.5', className)}
       {...props}>
       {query.trim() ? (
         <span

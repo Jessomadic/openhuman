@@ -93,7 +93,7 @@ export function ApprovalCard({
   return (
     <div
       data-slot="approval-card"
-      className={cn(paper, 'flex w-full max-w-sm flex-col gap-3.5 rounded-[20px] p-4', className)}
+      className={cn(paper, 'flex w-full flex-col gap-3.5 rounded-[20px] p-4', className)}
       {...props}>
       <div className="flex items-center gap-3">
         <span className="bg-foreground/[0.05] text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-xl">

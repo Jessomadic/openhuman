@@ -60,7 +60,7 @@ export function ContextBreakdown({
   return (
     <div
       data-slot="context-breakdown"
-      className={cn(paper, 'flex w-full max-w-sm flex-col gap-3 rounded-2xl p-4', className)}
+      className={cn(paper, 'flex w-full flex-col gap-3 rounded-2xl p-4', className)}
       {...props}>
       <div className="flex items-baseline justify-between">
         <span className="text-[13.5px] font-medium">{title}</span>

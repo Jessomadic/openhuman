@@ -58,7 +58,7 @@ export function ToolError({
   return (
     <div
       data-slot="tool-error"
-      className={cn(paper, 'flex w-full max-w-sm flex-col gap-3 rounded-2xl p-3.5', className)}
+      className={cn(paper, 'flex w-full flex-col gap-3 rounded-2xl p-3.5', className)}
       {...props}>
       <div className="flex items-center gap-2.5">
         <AlertCircleIcon className="size-3.5 shrink-0 text-red-500" />

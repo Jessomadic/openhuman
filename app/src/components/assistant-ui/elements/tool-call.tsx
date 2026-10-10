@@ -81,7 +81,7 @@ export function ToolCall({
       open={open}
       defaultOpen={defaultOpen}
       onOpenChange={onOpenChange}
-      className={cn('w-full max-w-sm', className)}
+      className={cn('w-full ', className)}
       {...props}>
       <CollapsibleTrigger
         disabled={!hasPanel}

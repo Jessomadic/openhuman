@@ -47,7 +47,7 @@ export function SubagentList({
   return (
     <div
       data-slot="subagent-list"
-      className={cn('flex w-full max-w-xs flex-col gap-2', className)}
+      className={cn('flex w-full flex-col gap-2', className)}
       {...props}>
       {agents.map((agent, index) => {
         const done = agent.done ?? index < completedCount;

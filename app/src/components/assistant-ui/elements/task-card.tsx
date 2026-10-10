@@ -114,7 +114,7 @@ export function TaskCard({
       data-state={state}
       className={cn(
         paper,
-        'flex w-full max-w-sm flex-col overflow-hidden rounded-2xl',
+        'flex w-full flex-col overflow-hidden rounded-2xl',
         (!dock || (state !== 'working' && state !== 'waiting')) && 'my-3',
         className
       )}

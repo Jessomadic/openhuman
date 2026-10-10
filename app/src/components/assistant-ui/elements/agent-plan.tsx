@@ -42,10 +42,7 @@ export function AgentPlan({
   const progress = pct(completed, total);
 
   return (
-    <div
-      data-slot="agent-plan"
-      className={cn('flex w-full max-w-sm flex-col gap-3', className)}
-      {...props}>
+    <div data-slot="agent-plan" className={cn('flex w-full flex-col gap-3', className)} {...props}>
       <div className="flex items-center justify-between">
         <span className="text-[13.5px] font-medium">{title}</span>
         <span className={cn(mono, 'text-muted-foreground tabular-nums')}>{countLabel}</span>

@@ -56,7 +56,7 @@ export function JobProgress({
   return (
     <div
       data-slot="job-progress"
-      className={cn(paper, 'flex w-full max-w-sm flex-col gap-3 rounded-2xl p-4', className)}
+      className={cn(paper, 'flex w-full flex-col gap-3 rounded-2xl p-4', className)}
       {...props}>
       <div className="flex items-center gap-2.5">
         {finished ? (

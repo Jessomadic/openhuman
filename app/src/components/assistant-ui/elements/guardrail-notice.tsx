@@ -37,7 +37,7 @@ export function GuardrailNotice({
   return (
     <div
       data-slot="guardrail-notice"
-      className={cn(paper, 'flex w-full max-w-sm flex-col gap-3 rounded-[20px] p-4', className)}
+      className={cn(paper, 'flex w-full flex-col gap-3 rounded-[20px] p-4', className)}
       {...props}>
       <div className="flex items-center gap-2.5">
         <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-amber-500/12 text-amber-600 dark:text-amber-400">

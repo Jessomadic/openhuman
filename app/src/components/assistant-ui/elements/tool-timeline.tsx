@@ -81,7 +81,7 @@ export function ToolTimeline({
       open={open}
       defaultOpen={defaultOpen}
       onOpenChange={onOpenChange}
-      className={cn('w-full max-w-sm', className)}
+      className={cn('w-full ', className)}
       {...props}>
       <CollapsibleTrigger className="group/trigger text-muted-foreground hover:text-foreground/90 flex items-center gap-1.5 rounded-md py-1 text-[13.5px] transition-colors outline-none">
         <ChevronRightIcon className={cn('size-3.5 shrink-0 opacity-60', openRotate)} />

@@ -77,7 +77,7 @@ export function SettingsPanel({
   return (
     <div
       data-slot="settings-panel"
-      className={cn(paper, 'flex w-full max-w-sm flex-col gap-4 rounded-[20px] p-4', className)}
+      className={cn(paper, 'flex w-full flex-col gap-4 rounded-[20px] p-4', className)}
       {...props}>
       <div className="flex flex-col gap-1.5">
         <span className={cn(mono, 'text-muted-foreground')}>{modelLabel}</span>

@@ -50,7 +50,7 @@ export function MessageQueue({
   return (
     <div
       data-slot="message-queue"
-      className={cn('flex w-full max-w-sm flex-col gap-2', className)}
+      className={cn('flex w-full flex-col gap-2', className)}
       {...props}>
       <div className={cn(paper, 'flex items-center gap-2.5 rounded-2xl p-3')}>
         <span className="relative flex size-2 shrink-0">
