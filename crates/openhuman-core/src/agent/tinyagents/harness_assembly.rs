@@ -31,7 +31,9 @@ use crate::agent::tinyagents::stop_hooks;
 use crate::agent::tinyagents::tools::EarlyExitHook;
 use crate::agent::tinyagents::turn_models::TurnModels;
 use crate::agent::tinyagents::turn_outcome::{HaltSummarySlot, ToolOutcomeSink};
-use crate::agent::tinyagents::turn_policy::{run_policy_for, REPEATED_TOOL_FAILURE_THRESHOLD};
+use crate::agent::tinyagents::turn_policy::{
+    run_policy_for_provider, REPEATED_TOOL_FAILURE_THRESHOLD,
+};
 use crate::agent::tinyagents::verify_before_finish;
 use tinyagents_harness::store::InMemoryStore as ToolResultArtifactIndexStore;
 
@@ -166,7 +168,11 @@ pub(super) fn assemble_turn_harness(
     // to a single attempt (see `run_policy_for`) — fallback and retry are
     // independent knobs, and only fallback is enabled here because `ReliableProvider`
     // (still wrapped) does not fail over across the registered tier routes.
-    let mut policy = run_policy_for(max_iterations, deterministic_cacheable);
+    let mut policy = run_policy_for_provider(
+        max_iterations,
+        deterministic_cacheable,
+        turn_models.is_local(),
+    );
     let route_fallback = routes::route_fallback_policy(model);
     policy.fallback = route_fallback.clone();
     // Tool discovery: the harness advertises its `tool_search` bridge over the
@@ -590,7 +596,14 @@ pub(super) fn assemble_turn_harness(
     );
     let is_subagent = subagent_scope.is_some();
     let agent_id = tool_policy.as_ref().map(|p| p.agent_definition_id.as_str());
-    verify_before_finish::install(&mut harness, is_subagent, agent_id, &wrap_up_fired);
+    let turn_wall_clock_ms = harness.policy().limits.max_wall_clock_ms;
+    verify_before_finish::install(
+        &mut harness,
+        is_subagent,
+        agent_id,
+        &wrap_up_fired,
+        turn_wall_clock_ms,
+    );
     // The rungs above all *tell* the turn to produce its deliverable; this one
     // looks, on the same scope as the requirements check.
     middleware::install_unmet_deliverable(&mut harness, is_subagent, agent_id);
