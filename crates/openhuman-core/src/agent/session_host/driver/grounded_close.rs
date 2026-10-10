@@ -31,12 +31,18 @@ pub(super) struct RepairUsage {
     pub(super) output_tokens: u64,
     pub(super) cached_input_tokens: u64,
     pub(super) charged_amount_usd: f64,
+    /// The newest repair call's own input/output: a repair runs after the
+    /// harness loop, so when one happened it is the turn's final call.
+    pub(super) last_call_input_tokens: u64,
+    pub(super) last_call_output_tokens: u64,
 }
 
 impl RepairUsage {
     fn record(&mut self, usage: Option<BilledUsage>) {
         self.model_calls += 1;
         if let Some(usage) = usage {
+            self.last_call_input_tokens = usage.input_tokens;
+            self.last_call_output_tokens = usage.output_tokens;
             self.input_tokens += usage.input_tokens;
             self.output_tokens += usage.output_tokens;
             self.cached_input_tokens += usage.cached_input_tokens();
