@@ -17,7 +17,10 @@ fn windows_description_names_cmd_and_its_equivalents_of_posix_commands() {
     for equivalent in ["`cd`", "`dir`", "`type`", "`findstr`", "`%VAR%`", "`&&`"] {
         assert!(desc.contains(equivalent), "missing {equivalent}: {desc}");
     }
-    assert!(desc.contains("powershell"), "names the PowerShell escape hatch: {desc}");
+    assert!(
+        desc.contains("powershell"),
+        "names the PowerShell escape hatch: {desc}"
+    );
     // No POSIX app-launch examples on Windows.
     assert!(!desc.contains("xdg-open"), "{desc}");
     assert!(!desc.contains("open -a"), "{desc}");
@@ -47,12 +50,18 @@ fn the_tool_describes_the_shell_this_host_actually_spawns() {
         test_runtime(),
         test_audit(),
     );
-    assert_eq!(tool.description(), shell_description(ShellFlavor::current()));
+    assert_eq!(
+        tool.description(),
+        shell_description(ShellFlavor::current())
+    );
     let command_desc = tool.parameters_schema()["properties"]["command"]["description"]
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(command_desc, command_param_description(ShellFlavor::current()));
+    assert_eq!(
+        command_desc,
+        command_param_description(ShellFlavor::current())
+    );
     assert!(command_param_description(ShellFlavor::Cmd).contains("cmd.exe"));
 }
 
@@ -132,11 +141,7 @@ fn sandboxed_calls_get_the_same_python_defaults() {
 async fn a_spawned_shell_sees_the_python_utf8_defaults() {
     // A developer's own setting wins, so expect it when present.
     let expected = std::env::var("PYTHONUTF8").unwrap_or_else(|_| "1".to_string());
-    let tool = ShellTool::new(
-        test_security_with_env_cmd(),
-        test_runtime(),
-        test_audit(),
-    );
+    let tool = ShellTool::new(test_security_with_env_cmd(), test_runtime(), test_audit());
     let command = if cfg!(windows) {
         "echo %PYTHONUTF8%"
     } else {

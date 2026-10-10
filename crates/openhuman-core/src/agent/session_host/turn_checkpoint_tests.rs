@@ -194,7 +194,10 @@ fn the_final_summary_of_a_halted_turn_gives_a_reason_and_names_the_tools() {
         out.starts_with("I stopped this turn early because the same step kept failing."),
         "lead missing: {out}"
     );
-    assert!(!out.contains("Stopping:"), "the stop note is not quoted: {out}");
+    assert!(
+        !out.contains("Stopping:"),
+        "the stop note is not quoted: {out}"
+    );
     assert!(
         out.contains("- `install_item` failed: no direct download"),
         "the tool and its error line follow: {out}"

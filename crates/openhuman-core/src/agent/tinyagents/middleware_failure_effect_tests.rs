@@ -121,7 +121,10 @@ fn the_effect_of_a_dispatcher_is_the_effect_of_its_target() {
     let list = serde_json::json!({"skill": "composio", "tool": "composio_list_tools", "args": {}});
     assert_eq!(call_effect(None, "use_skill", &list), CallEffect::ReadOnly);
     let send = serde_json::json!({"skill": "gmail", "tool": "gmail_send_email", "args": {}});
-    assert_eq!(call_effect(None, "use_skill", &send), CallEffect::SideEffecting);
+    assert_eq!(
+        call_effect(None, "use_skill", &send),
+        CallEffect::SideEffecting
+    );
     let fetch = serde_json::json!({"tool": "GMAIL_FETCH_EMAILS", "arguments": {}});
     assert_eq!(
         call_effect(None, "composio_execute", &fetch),
@@ -188,7 +191,14 @@ async fn a_read_only_use_skill_timeout_does_not_end_the_turn() {
     .await;
     assert_eq!(drain_pause_count(&handle), 0, "two retries are allowed");
     assert!(slot.lock().unwrap().is_none());
-    run_call(&mw, "skill-3", "use_skill", args, &harness_timeout("use_skill")).await;
+    run_call(
+        &mw,
+        "skill-3",
+        "use_skill",
+        args,
+        &harness_timeout("use_skill"),
+    )
+    .await;
     assert_eq!(drain_pause_count(&handle), 1, "the budget is still bounded");
     let summary = slot.lock().unwrap().clone().unwrap();
     assert!(summary.contains("transient"), "{summary}");

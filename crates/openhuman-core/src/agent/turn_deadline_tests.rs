@@ -13,7 +13,9 @@ fn default_deadlines_are_780s_840s_900s() {
 /// backstop an operator can configure.
 #[test]
 fn wind_down_precedes_hard_stop_precedes_backstop_for_every_backstop() {
-    for secs in [1_u64, 2, 5, 10, 30, 60, 120, 300, 599, 600, 601, 900, 1_200, 3_600, 86_400] {
+    for secs in [
+        1_u64, 2, 5, 10, 30, 60, 120, 300, 599, 600, 601, 900, 1_200, 3_600, 86_400,
+    ] {
         let deadline = TurnDeadline::starting_now(Duration::from_secs(secs));
         assert!(
             deadline.wind_down_after() < deadline.hard_stop_after(),
@@ -51,7 +53,10 @@ fn harness_wall_clock_is_always_clamped_below_the_backstop() {
     assert_eq!(unbounded, 840_000);
 
     // A configured ceiling that is already tighter is kept.
-    assert_eq!(deadline.clamp_wall_clock_ms(Some(10_000), now), Some(10_000));
+    assert_eq!(
+        deadline.clamp_wall_clock_ms(Some(10_000), now),
+        Some(10_000)
+    );
 }
 
 #[test]
@@ -80,8 +85,14 @@ fn should_wind_down_flips_at_the_wind_down_point() {
 #[test]
 fn parse_backstop_defaults_and_disables() {
     assert_eq!(parse_backstop(None), Some(Duration::from_secs(900)));
-    assert_eq!(parse_backstop(Some("garbage")), Some(Duration::from_secs(900)));
-    assert_eq!(parse_backstop(Some(" 120 ")), Some(Duration::from_secs(120)));
+    assert_eq!(
+        parse_backstop(Some("garbage")),
+        Some(Duration::from_secs(900))
+    );
+    assert_eq!(
+        parse_backstop(Some(" 120 ")),
+        Some(Duration::from_secs(120))
+    );
     assert_eq!(parse_backstop(Some("0")), None);
 }
 
@@ -92,5 +103,7 @@ async fn task_local_scope_is_visible_inside_and_absent_outside() {
     let seen = with_turn_deadline(Some(deadline), async { current() }).await;
     assert_eq!(seen, Some(deadline));
     assert!(current().is_none());
-    assert!(with_turn_deadline(None, async { current() }).await.is_none());
+    assert!(with_turn_deadline(None, async { current() })
+        .await
+        .is_none());
 }

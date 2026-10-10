@@ -15,7 +15,11 @@ fn item(toolkit: &str, connected: bool) -> crate::agent::prompts::ConnectedInteg
 
 #[test]
 fn only_connected_toolkits_seed_the_announced_set() {
-    let items = vec![item("gmail", true), item("notion", false), item("slack", false)];
+    let items = vec![
+        item("gmail", true),
+        item("notion", false),
+        item("slack", false),
+    ];
     let seeded = connected_toolkit_slugs(&items);
     assert_eq!(seeded, HashSet::from(["gmail".to_string()]));
 }
@@ -46,7 +50,11 @@ fn a_new_connection_is_announced_once_and_a_revoke_is_dropped() {
     let mut pending = Vec::new();
 
     // Notion becomes connected; gmail is revoked (still listed, not connected).
-    let current = vec![item("gmail", false), item("notion", true), item("slack", false)];
+    let current = vec![
+        item("gmail", false),
+        item("notion", true),
+        item("slack", false),
+    ];
     merge_integration_announcements(&mut announced, &mut pending, &current);
     assert_eq!(pending, vec!["notion".to_string()]);
     assert_eq!(announced, HashSet::from(["notion".to_string()]));

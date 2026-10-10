@@ -55,7 +55,8 @@ pub(crate) struct ToolEffectFacts {
 }
 
 /// Looks up the declarations of a registered tool by name, for these args.
-pub(crate) type ToolFactsLookup = Arc<dyn Fn(&str, &Value) -> Option<ToolEffectFacts> + Send + Sync>;
+pub(crate) type ToolFactsLookup =
+    Arc<dyn Fn(&str, &Value) -> Option<ToolEffectFacts> + Send + Sync>;
 
 /// The facts `tool` declares for a call with `args`.
 pub(crate) fn facts_for_tool(tool: &dyn Tool, args: &Value) -> ToolEffectFacts {
@@ -137,22 +138,83 @@ pub(crate) fn dispatch_target<'a>(tool: &str, args: &'a Value) -> Option<Dispatc
 
 /// Operation verbs that read without changing anything.
 const READING_VERBS: &[&str] = &[
-    "browse", "cat", "check", "count", "describe", "dig", "fetch", "find", "get", "grep",
-    "info", "inspect", "list", "lookup", "ls", "peek", "poll", "preview", "query", "read",
-    "recall", "retrieve", "search", "show", "stat", "status", "view", "whois",
+    "browse", "cat", "check", "count", "describe", "dig", "fetch", "find", "get", "grep", "info",
+    "inspect", "list", "lookup", "ls", "peek", "poll", "preview", "query", "read", "recall",
+    "retrieve", "search", "show", "stat", "status", "view", "whois",
 ];
 
 /// Operation verbs that change state. One of these anywhere in the name makes
 /// the call an action, even beside a reading verb.
 const MUTATING_VERBS: &[&str] = &[
-    "add", "apply", "approve", "archive", "authorize", "book", "bridge", "buy", "cancel",
-    "clear", "close", "commit", "connect", "copy", "create", "delete", "deploy", "disable",
-    "disconnect", "edit", "enable", "exec", "execute", "follow", "forward", "insert", "install",
-    "invite", "kill", "like", "mark", "merge", "mint", "modify", "move", "open", "patch", "pay",
-    "post", "publish", "purchase", "push", "put", "remove", "rename", "replace", "reply",
-    "reset", "restart", "run", "save", "schedule", "send", "set", "share", "sign", "star",
-    "start", "stop", "store", "submit", "swap", "transfer", "trash", "uninstall", "update",
-    "upload", "upsert", "write",
+    "add",
+    "apply",
+    "approve",
+    "archive",
+    "authorize",
+    "book",
+    "bridge",
+    "buy",
+    "cancel",
+    "clear",
+    "close",
+    "commit",
+    "connect",
+    "copy",
+    "create",
+    "delete",
+    "deploy",
+    "disable",
+    "disconnect",
+    "edit",
+    "enable",
+    "exec",
+    "execute",
+    "follow",
+    "forward",
+    "insert",
+    "install",
+    "invite",
+    "kill",
+    "like",
+    "mark",
+    "merge",
+    "mint",
+    "modify",
+    "move",
+    "open",
+    "patch",
+    "pay",
+    "post",
+    "publish",
+    "purchase",
+    "push",
+    "put",
+    "remove",
+    "rename",
+    "replace",
+    "reply",
+    "reset",
+    "restart",
+    "run",
+    "save",
+    "schedule",
+    "send",
+    "set",
+    "share",
+    "sign",
+    "star",
+    "start",
+    "stop",
+    "store",
+    "submit",
+    "swap",
+    "transfer",
+    "trash",
+    "uninstall",
+    "update",
+    "upload",
+    "upsert",
+    "write",
 ];
 
 /// The effect the operation verbs in `name` imply: `Unknown` when it carries
@@ -202,7 +264,11 @@ fn leaf_effect(facts: Option<ToolEffectFacts>, name: &str) -> CallEffect {
 /// A dispatcher is judged by its target, unless the dispatcher itself already
 /// declares an external effect for these arguments (`composio_execute` does
 /// for a mutating action slug).
-pub(crate) fn call_effect(lookup: Option<&ToolFactsLookup>, tool: &str, args: &Value) -> CallEffect {
+pub(crate) fn call_effect(
+    lookup: Option<&ToolFactsLookup>,
+    tool: &str,
+    args: &Value,
+) -> CallEffect {
     let facts = lookup.and_then(|lookup| lookup(tool, args));
     let Some(target) = dispatch_target(tool, args) else {
         return leaf_effect(facts, tool);

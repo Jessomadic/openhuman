@@ -483,7 +483,7 @@ async fn a_curated_orchestrator_sees_and_holds_every_juice_tool_in_handle_mode()
     // (`ToolScope::Named`) belt that lacked them was told to call tools it
     // could not dispatch.
     use crate::agent::session_host::types::OpenHumanSessionHost;
-    use crate::inference::tokenjuice::{RETRIEVE_TOOL_NAME, REPL_TOOL_NAMES};
+    use crate::inference::tokenjuice::{REPL_TOOL_NAMES, RETRIEVE_TOOL_NAME};
 
     let _ = crate::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins();
 
@@ -505,7 +505,10 @@ async fn a_curated_orchestrator_sees_and_holds_every_juice_tool_in_handle_mode()
     let registered: std::collections::HashSet<&str> =
         agent.tools().iter().map(|t| t.name()).collect();
     for name in REPL_TOOL_NAMES.iter().copied().chain([RETRIEVE_TOOL_NAME]) {
-        assert!(visible.contains(name), "{name} must be visible to the orchestrator");
+        assert!(
+            visible.contains(name),
+            "{name} must be visible to the orchestrator"
+        );
         assert!(
             registered.contains(name),
             "{name} must be registered so a call to it dispatches"

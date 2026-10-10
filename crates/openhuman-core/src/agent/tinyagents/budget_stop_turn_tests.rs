@@ -261,9 +261,19 @@ async fn deadline_wind_down_pauses_the_hosted_turn_inner() {
     );
     assert_eq!(tool_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(outcome.tool_calls, 1);
-    assert!(outcome.text.trim().is_empty(), "no final answer yet: the close writes it");
-    assert_eq!(outcome.tool_outcomes.len(), 1, "the completed round is kept");
-    assert!(!outcome.hit_cap, "a deadline wind-down is not an iteration cap");
+    assert!(
+        outcome.text.trim().is_empty(),
+        "no final answer yet: the close writes it"
+    );
+    assert_eq!(
+        outcome.tool_outcomes.len(),
+        1,
+        "the completed round is kept"
+    );
+    assert!(
+        !outcome.hit_cap,
+        "a deadline wind-down is not an iteration cap"
+    );
 }
 
 #[test]

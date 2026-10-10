@@ -357,7 +357,10 @@ mod harness_install {
             elapsed < Duration::from_secs(20),
             "the call is cut at its budget, not left to run: {elapsed:?}"
         );
-        assert!(!finished.load(Ordering::SeqCst), "the hung call never completed");
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "the hung call never completed"
+        );
         let transcript = format!("{:?}", run.messages);
         assert!(
             transcript.contains("hung_mcp_call") && transcript.contains("timed out after 1000 ms"),

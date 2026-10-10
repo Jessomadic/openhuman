@@ -291,7 +291,9 @@ async fn an_artifact_path_in_the_handle_slot_is_read_from_the_tool_results_dir()
     // The legacy relative pointer form resolves against the same dir.
     let relative = format!(
         "artifacts/tool-results/{}",
-        file.strip_prefix(dir_of(&file, 3)).unwrap().to_string_lossy()
+        file.strip_prefix(dir_of(&file, 3))
+            .unwrap()
+            .to_string_lossy()
     );
     let by_relative = tools[tool(&tools, "juice_find")]
         .execute(json!({ "handle": relative, "query": "needle" }))
@@ -317,7 +319,12 @@ async fn an_artifact_path_outside_the_tool_results_dir_is_refused() {
     let tools = tools_with_artifacts(dir.clone());
     let find = &tools[tool(&tools, "juice_find")];
 
-    let traversal = dir.join("sess1").join("..").join("..").join("..").join("secret.txt");
+    let traversal = dir
+        .join("sess1")
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("secret.txt");
     for bad in [
         secret.to_string_lossy().into_owned(),
         traversal.to_string_lossy().into_owned(),
@@ -333,7 +340,11 @@ async fn an_artifact_path_outside_the_tool_results_dir_is_refused() {
             !result_text(&res).contains("needle secret"),
             "{bad} leaked content"
         );
-        assert!(result_text(&res).contains("file_read"), "{}", result_text(&res));
+        assert!(
+            result_text(&res).contains("file_read"),
+            "{}",
+            result_text(&res)
+        );
     }
 }
 
@@ -366,10 +377,13 @@ fn an_oversized_artifact_is_refused_before_it_is_read() {
 #[tokio::test]
 async fn a_call_id_or_other_non_handle_gets_an_actionable_message() {
     let (_tmp, dir, _file) = artifacts_fixture();
-    for tools in [tools_with_artifacts(dir), repl_tools_with(
-        Arc::new(MemorySource(Arc::new(MemoryCcrStore::default()))),
-        ReplLimits::default(),
-    )] {
+    for tools in [
+        tools_with_artifacts(dir),
+        repl_tools_with(
+            Arc::new(MemorySource(Arc::new(MemoryCcrStore::default()))),
+            ReplLimits::default(),
+        ),
+    ] {
         let find = &tools[tool(&tools, "juice_find")];
         for bad in ["call_abc123", "toolu_01XyZ", "a b"] {
             let res = find

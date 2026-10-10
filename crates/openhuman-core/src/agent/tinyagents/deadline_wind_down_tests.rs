@@ -21,7 +21,10 @@ fn pauses_once_after_the_wind_down_point() {
     let now = Instant::now();
     let deadline = TurnDeadline::new(now - Duration::from_secs(781), Duration::from_secs(900));
     let mw = DeadlineWindDownMiddleware::new(handle(), deadline);
-    assert!(mw.maybe_pause("after_tool", now), "first checkpoint past wind-down pauses");
+    assert!(
+        mw.maybe_pause("after_tool", now),
+        "first checkpoint past wind-down pauses"
+    );
     assert!(mw.fired());
     assert!(
         !mw.maybe_pause("after_model", now),
@@ -34,8 +37,7 @@ fn pauses_once_after_the_wind_down_point() {
 /// bring it below the backstop.
 #[test]
 fn the_default_harness_ceiling_is_clamped_below_the_backstop() {
-    let backstop =
-        Duration::from_secs(crate::agent::turn_deadline::DEFAULT_TURN_BACKSTOP_SECS);
+    let backstop = Duration::from_secs(crate::agent::turn_deadline::DEFAULT_TURN_BACKSTOP_SECS);
     let default_ms = crate::agent::tinyagents::DEFAULT_AGENT_TURN_TIMEOUT_SECS * 1_000;
     assert!(
         default_ms > backstop.as_millis() as u64,
@@ -62,8 +64,14 @@ fn install_clamps_the_policy_and_adds_the_middleware_for_a_root_turn() {
         .limits
         .max_wall_clock_ms
         .expect("bounded wall clock");
-    assert!(clamped <= 840_000, "clamped to the hard stop, got {clamped}");
-    assert!(clamped > 830_000, "measured from the deadline start, got {clamped}");
+    assert!(
+        clamped <= 840_000,
+        "clamped to the hard stop, got {clamped}"
+    );
+    assert!(
+        clamped > 830_000,
+        "measured from the deadline start, got {clamped}"
+    );
 }
 
 #[test]

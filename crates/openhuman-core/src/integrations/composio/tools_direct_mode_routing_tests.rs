@@ -322,7 +322,10 @@ fn composio_connect_outlives_its_approval_park() {
     let bound = std::time::Duration::from_secs(DEFAULT_COMPOSIO_CONNECT_TIMEOUT_SECS);
     match composio_connect_tool_timeout(Some(bound)) {
         tinytools::ToolTimeout::Millis(ms) => {
-            assert!(ms > bound.as_millis() as u64, "budget {ms}ms must exceed the park bound");
+            assert!(
+                ms > bound.as_millis() as u64,
+                "budget {ms}ms must exceed the park bound"
+            );
         }
         other => panic!("expected an explicit budget, got {other:?}"),
     }

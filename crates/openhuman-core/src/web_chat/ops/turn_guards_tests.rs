@@ -51,7 +51,9 @@ async fn backstop_firing_yields_a_classified_turn_timeout_error() {
     })
     .await
     .expect_err("backstop fires");
-    assert!(super::super::super::web_errors::is_outer_backstop_timeout(&err));
+    assert!(super::super::super::web_errors::is_outer_backstop_timeout(
+        &err
+    ));
     let classified = super::super::super::web_errors::classify_inference_error(&err);
     assert_eq!(classified.error_type, "turn_timeout");
     assert!(!classified.message.trim().is_empty());

@@ -294,7 +294,10 @@ impl ModuleReplTool {
     /// The handle slot held a path: query the persisted artifact it names.
     async fn execute_on_artifact(&self, path: String, args: Value) -> anyhow::Result<ToolResult> {
         let Some(dir) = self.artifacts_dir.clone() else {
-            log::debug!("[tokenjuice][repl] {} artifact path with no workspace", self.name);
+            log::debug!(
+                "[tokenjuice][repl] {} artifact path with no workspace",
+                self.name
+            );
             return Ok(ToolResult::error(not_a_handle_message()));
         };
         let read = tokio::task::spawn_blocking(move || {

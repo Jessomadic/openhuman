@@ -110,7 +110,10 @@ async fn execute_tool_outlives_the_bus_default_timeout() {
         .clone()
         .call::<serde_json::Value>(names::methods::EXECUTE_TOOL, (web_answer_request(),))
         .await;
-    assert!(cut_off.is_err(), "the default deadline must fire: {cut_off:?}");
+    assert!(
+        cut_off.is_err(),
+        "the default deadline must fire: {cut_off:?}"
+    );
 
     let answered: serde_json::Value = call_execute_tool(proxy, web_answer_request())
         .await

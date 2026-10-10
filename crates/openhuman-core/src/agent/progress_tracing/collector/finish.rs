@@ -170,10 +170,7 @@ impl SpanCollector {
             .unwrap_or(fallback_end);
         let mut extra = BTreeMap::new();
         if matches!(kind, SpanKind::Tool | SpanKind::Subagent) {
-            extra.insert(
-                FORCE_CLOSED_ATTR.to_string(),
-                serde_json::Value::Bool(true),
-            );
+            extra.insert(FORCE_CLOSED_ATTR.to_string(), serde_json::Value::Bool(true));
             extra.insert(LEVEL_ATTR.to_string(), json_str("WARNING"));
             log::debug!(
                 "[agent-tracing] force-closed span name={} start={start} end={end} \

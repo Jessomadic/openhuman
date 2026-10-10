@@ -249,7 +249,16 @@ fn a_spaced_alias_is_rewritten_to_the_canonical_action_slug() {
     assert_eq!(canonical_action_slug("MICROSOFT_TEAMS_SEND_MESSAGE"), None);
     assert_eq!(canonical_action_slug("GMAIL_SEND_EMAIL"), None);
 
-    assert!(action_slug_matches("GOOGLEDRIVE_FIND_FILE", "GOOGLE_DRIVE_FIND_FILE"));
-    assert!(action_slug_matches("GOOGLEDRIVE_FIND_FILE", "googledrive_find_file"));
-    assert!(!action_slug_matches("GOOGLEDRIVE_FIND_FILE", "GOOGLE_DRIVE_LIST_FILES"));
+    assert!(action_slug_matches(
+        "GOOGLEDRIVE_FIND_FILE",
+        "GOOGLE_DRIVE_FIND_FILE"
+    ));
+    assert!(action_slug_matches(
+        "GOOGLEDRIVE_FIND_FILE",
+        "googledrive_find_file"
+    ));
+    assert!(!action_slug_matches(
+        "GOOGLEDRIVE_FIND_FILE",
+        "GOOGLE_DRIVE_LIST_FILES"
+    ));
 }

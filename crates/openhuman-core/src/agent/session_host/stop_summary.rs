@@ -105,7 +105,9 @@ impl StopReasonKind {
             Self::Authentication => "a service rejected my credentials",
             Self::Permission => "I don't have permission for a step this needs",
             Self::Policy => "a step this needs is blocked by your security settings",
-            Self::MissingProgram => "a program or feature this needs is not available on this device",
+            Self::MissingProgram => {
+                "a program or feature this needs is not available on this device"
+            }
             Self::NotFound => "something this needs could not be found",
             Self::InvalidCalls => "a tool kept rejecting my requests as invalid",
             Self::Unavailable => "a tool this needs is not available right now",

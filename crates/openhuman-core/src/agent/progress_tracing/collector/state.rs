@@ -203,7 +203,11 @@ impl SpanCollector {
     /// = the parent turn) was dispatched at `start_unix_ms`. Consumed by that
     /// call's generation span. Used by the journal projection, whose
     /// `ModelCompleted` carries the real request start.
-    pub(crate) fn set_next_call_start(&mut self, subagent_task_id: Option<&str>, start_unix_ms: u64) {
+    pub(crate) fn set_next_call_start(
+        &mut self,
+        subagent_task_id: Option<&str>,
+        start_unix_ms: u64,
+    ) {
         let clock = match subagent_task_id {
             None => Some(&mut self.call_clock),
             Some(id) => self
