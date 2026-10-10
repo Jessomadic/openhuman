@@ -81,16 +81,16 @@ export function ToolCall({
       open={open}
       defaultOpen={defaultOpen}
       onOpenChange={onOpenChange}
-      className={cn('w-full max-w-sm min-w-0', className)}
+      className={cn("w-full max-w-sm", className)}
       {...props}>
       <CollapsibleTrigger
         disabled={!hasPanel}
-        className="group/trigger text-foreground/55 hover:text-foreground/90 flex w-full min-w-0 items-center gap-2 rounded-md py-1 text-[13.5px] transition-colors outline-none">
+        className="group/trigger text-muted-foreground hover:text-foreground/90 flex w-full items-center gap-2 rounded-md py-1 text-[13.5px] transition-colors outline-none">
         <ChevronRightIcon
           className={cn('size-3.5 shrink-0 opacity-60', openRotate, !hasPanel && 'invisible')}
         />
         {icon}
-        <SwapLabel active={running ? 0 : 1} className="shrink-0 text-start">
+        <SwapLabel active={running ? 0 : 1} className="shrink-0 text-start whitespace-nowrap">
           <ShimmerLabel
             active={running && outcome !== 'awaiting'}
             className="relative inline-block leading-none">
@@ -108,7 +108,7 @@ export function ToolCall({
             {query}
           </span>
         ) : null}
-        <span className="ms-auto flex shrink-0 items-center justify-end gap-1.5">
+        <span className="bg-foreground/[0.06] text-foreground/70 min-w-0 truncate rounded-md px-1.5 py-0.5">
           {meta}
           {!running && outcome === 'success' ? (
             <CheckIcon className="fade-in zoom-in-90 animate-in size-3.5 text-emerald-500 duration-200" />
@@ -125,18 +125,18 @@ export function ToolCall({
             <div className={cn(field, 'mt-2 overflow-hidden rounded-2xl text-xs')}>
               {request != null ? (
                 <div className="px-3.5 pt-2.5 pb-2">
-                  <p className={cn(mono, 'text-foreground/35 mb-1')}>{requestLabel}</p>
-                  <div className="text-foreground/55 max-h-48 overflow-auto font-mono">
+                  <p className={cn(mono, "text-muted-foreground mb-1")}>{requestLabel}</p>
+                  <div className="bg-foreground/[0.06] mx-3.5 h-px">
                     {request}
                   </div>
                 </div>
               ) : null}
               {request != null && result != null ? (
-                <div className="bg-foreground/[0.06] mx-3.5 h-px" />
+                <div className="px-3.5 pt-2 pb-2.5" />
               ) : null}
               {result != null ? (
                 <div className="px-3.5 pt-2 pb-2.5">
-                  <p className={cn(mono, 'text-foreground/35 mb-1')}>{resultLabel}</p>
+                  <p className={cn(mono, "text-muted-foreground font-mono break-words")}>{resultLabel}</p>
                   <div className="text-foreground/90 max-h-64 overflow-auto">{result}</div>
                 </div>
               ) : null}

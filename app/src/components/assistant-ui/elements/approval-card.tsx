@@ -101,7 +101,7 @@ export function ApprovalCard({
         </span>
         <div className="flex flex-col">
           <p className="text-[13.5px] font-medium">{title}</p>
-          <p className="text-foreground/45 text-xs">{subtitle}</p>
+          <p className="text-muted-foreground text-xs">{subtitle}</p>
           {expiry}
         </div>
       </div>
@@ -110,7 +110,7 @@ export function ApprovalCard({
         {command}
       </div>
 
-      <div className="flex h-8 items-center justify-end gap-2">
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-4 text-xs">
         {state === 'request' ? (
           <>
             {onDeny && (
@@ -154,15 +154,15 @@ export function ApprovalCard({
         ) : (
           <div
             key={state}
-            className="fade-in animate-in text-foreground/55 flex items-center gap-2 text-xs duration-300">
+            className="flex min-h-8 flex-wrap items-center justify-end gap-2">
             {state === 'running' ? (
               <>
-                <Loader2Icon className="text-foreground/45 size-3.5 animate-spin" />
+                <Loader2Icon className="text-muted-foreground size-3.5 animate-spin motion-reduce:animate-none" />
                 {runningLabel}
               </>
             ) : state === 'denied' ? (
               <>
-                <XIcon className="text-foreground/45 size-3.5" />
+                <XIcon className="text-muted-foreground size-3.5" />
                 {deniedLabel}
               </>
             ) : (

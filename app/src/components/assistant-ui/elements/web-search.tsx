@@ -73,8 +73,8 @@ export function WebSearch({
             field,
             'text-foreground/70 inline-flex w-fit max-w-full items-center gap-1.5 rounded-full px-3.5 py-2 text-xs'
           )}>
-          <SearchIcon className="text-foreground/40 size-3 shrink-0" />
-          <span className="truncate">{query}</span>
+          <SearchIcon className="text-muted-foreground size-3" />
+          <span className="text-foreground/70 inline-flex w-fit items-center gap-1.5 rounded-full px-3.5 py-2 text-xs">{query}</span>
         </span>
       ) : null}
       <div data-slot="web-search-status" className="text-foreground/45 text-xs">
@@ -91,13 +91,13 @@ export function WebSearch({
           {shown.map(result => {
             const content = (
               <>
-                <span className="bg-foreground/[0.06] text-foreground/45 flex size-4 shrink-0 items-center justify-center rounded text-[9px] font-medium">
+                <span className="bg-foreground/[0.06] text-muted-foreground flex size-4 shrink-0 items-center justify-center rounded text-[9px] font-medium">
                   {result.domain.charAt(0).toUpperCase()}
                 </span>
                 <span className="text-foreground/90 min-w-0 flex-1 truncate text-[13.5px]">
                   {result.title}
                 </span>
-                <span className={cn(mono, 'text-foreground/35 shrink-0')}>{result.domain}</span>
+                <span className={cn(mono, "text-muted-foreground shrink-0")}>{result.domain}</span>
               </>
             );
             const key = `${cycle}-${result.url ?? result.domain}-${result.title}`;

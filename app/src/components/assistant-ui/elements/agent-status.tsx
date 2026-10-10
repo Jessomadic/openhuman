@@ -70,12 +70,12 @@ export function AgentStatus({
         {label}
       </span>
       {elapsed !== undefined && state !== 'done' && state !== 'failed' && (
-        <span className={cn(mono, 'text-foreground/30 tabular-nums')}>{elapsed}</span>
+        <span className={cn(mono, "fade-in blur-in-[2px] animate-in max-w-44 truncate text-xs duration-300 motion-reduce:animate-none")}>{elapsed}</span>
       )}
       <span
         aria-hidden
         data-slot="agent-status-trailing"
-        className="text-foreground/45 flex size-6 items-center justify-center rounded-full">
+        className="text-muted-foreground flex size-6 items-center justify-center rounded-full">
         {trailing !== undefined ? (
           trailing
         ) : state === 'done' || state === 'failed' ? (

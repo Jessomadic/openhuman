@@ -435,8 +435,8 @@ const ThreadRoot: FC<{
       {...dropHandlers}
       style={{
         ['--thread-max-width' as string]: '44rem',
-        ['--composer-bg' as string]: 'var(--color-card)',
-        ['--composer-radius' as string]: '1.5rem',
+        ['--composer-bg' as string]: 'color-mix(in oklab, var(--color-muted) 30%, transparent)',
+        ['--composer-radius' as string]: '1rem',
         ['--composer-padding' as string]: '8px',
       }}>
       <ThreadPrimitive.Viewport
@@ -477,7 +477,7 @@ const ThreadRoot: FC<{
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
-              'aui-thread-viewport-footer relative z-10 flex flex-col gap-4 overflow-visible bg-transparent pb-4 md:pb-6',
+              "aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6",
               !isEmpty && 'sticky bottom-0 mt-auto rounded-t-(--composer-radius)'
             )}>
             <ThreadScrollToBottom />
@@ -565,7 +565,7 @@ const ThreadScrollToBottom: FC = () => {
 const ThreadWelcome: FC = () => {
   const { t } = useT();
   return (
-    <div className="aui-thread-welcome-root mb-6 flex flex-col items-center px-4 text-center">
+    <div className="aui-thread-welcome-root mb-6 flex flex-col px-2">
       <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-2xl font-medium tracking-tight duration-200">
         {t('chat.newWindowPrompt', 'How can I help you today?')}
       </h1>
@@ -575,7 +575,7 @@ const ThreadWelcome: FC = () => {
 
 const ThreadSuggestions: FC = () => {
   return (
-    <div className="aui-thread-welcome-suggestions flex w-full flex-wrap items-center justify-center gap-2 px-4">
+    <div className="aui-thread-welcome-suggestions flex w-full flex-col">
       <ThreadPrimitive.Suggestions>{() => <ThreadSuggestionItem />}</ThreadPrimitive.Suggestions>
     </div>
   );
@@ -588,8 +588,8 @@ const ThreadSuggestionItem: FC = () => {
         <Button
           variant="ghost"
           className="aui-thread-welcome-suggestion text-foreground hover:bg-muted border-border/60 h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap transition-colors">
-          <SuggestionPrimitive.Title className="aui-thread-welcome-suggestion-text-1" />
-          <SuggestionPrimitive.Description className="aui-thread-welcome-suggestion-text-2 empty:hidden" />
+          <SuggestionPrimitive.Title className="aui-thread-welcome-suggestion-text-1 text-foreground" />
+          <SuggestionPrimitive.Description className="aui-thread-welcome-suggestion-text-2 text-muted-foreground empty:hidden" />
         </Button>
       </SuggestionPrimitive.Trigger>
     </div>
@@ -708,69 +708,7 @@ const Composer: FC<{
             data-slot="aui_composer-shell"
             data-dragging={onComposerFiles && isDraggingFiles ? 'true' : undefined}
             onPasteCapture={handlePasteCapture}
-            // Keyed to `content-faint` rather than `line`/`line-strong`, which
-            // sat too close to the composer's own surface to read as an edge at
-            // all; `content-faint` is a real step along the grey ramp in both
-            // themes and the alpha then pulls it back.
-            //
-            // The border is deliberately fainter than the content card's edge
-            // (0.65 in `index.css`) because it is not carrying the definition
-            // alone: `shadow-soft` lifts the composer off the transcript, and a
-            // lifted surface needs less outline than a flat one to read as
-            // separate. Border and shadow together at low strength read calmer
-            // than either at full — a hard 0.65 line under a shadow reads as
-            // two competing edges.
-            //
-            // Two roles, kept apart: the SHADOW is constant and the BORDER is
-            // what moves.
-            //
-            // The shadow is an explicit near-black pair rather than
-            // `shadow-soft`/`shadow-medium`. Those tokens are black at 0.08
-            // alpha, which is a diffuse haze — on the themed chrome behind this
-            // composer it reads as a smudge rather than a cast shadow.
-            //
-            // Both layers are pushed DOWN rather than spread evenly, because an
-            // even shadow reads as a glow: it implies light from everywhere,
-            // which is no light at all, and the composer ends up looking fuzzy
-            // instead of raised. The offsets (6px, 22px) exceed each layer's
-            // negative spread (-4px, -16px), so the cast clears the box on the
-            // bottom edge and is pulled in at the top — the asymmetry is what
-            // says "lit from above".
-            //
-            //   0 8px  12px -4px  / 0.18  — contact: tight, near the edge
-            //   0 30px 44px -16px / 0.24  — cast: far, wide, and the stronger
-            //
-            // Both halved from 0.34 / 0.48: at those strengths the composer
-            // read as hovering well above the page, and the cast crowded the
-            // last message. Half keeps the lit-from-above asymmetry while the
-            // surface sits closer to the transcript.
-            //
-            // The far layer carrying more alpha than the near one is
-            // deliberate and is what gives depth; the usual instinct is the
-            // reverse, which flattens it back out.
-            //
-            // `animate-composer-shadow` then orbits those offsets clockwise on
-            // a slow loop (`composerShadowOrbit`, `index.css`), as though the
-            // light above the composer circles the room. The static values here
-            // are the orbit's 25% stop, so the animation starts from roughly
-            // where the unanimated composer sits rather than jumping on load. The static `shadow-[…]` above is
-            // not redundant: it is what `motion-reduce:animate-none` falls back
-            // to, so the composer keeps its elevation when the OS asks for less
-            // motion and merely stops moving. Keyframes override the utility
-            // while the animation runs, which is why the two can coexist.
-            //
-            // Focus is now carried entirely by the border — 0.35 → 0.90 on the
-            // same token, so the edge sharpens rather than changing colour —
-            // and `transition` names border-color alone. Animating the shadow
-            // as well meant two things moving at once for a single event; with
-            // the elevation fixed, the composer stays put and only its outline
-            // responds. `duration-200 ease-out` is the settle, and
-            // `motion-reduce` drops it for anyone who asked the OS for less
-            // motion — the cue still lands, just instantly.
-            //
-            // `border-ring` on drag is untouched — that state is meant to break
-            // the pattern.
-            className="border-content-faint/35 focus-within:border-content-faint/90 data-[dragging=true]:border-ring shadow-[0_8px_12px_-4px_rgb(0_0_0/0.09),0_30px_44px_-16px_rgb(0_0_0/0.12)] animate-composer-shadow motion-reduce:animate-none flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] duration-200 ease-out motion-reduce:transition-none data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]">
+            className="border-foreground/10 focus-within:border-foreground/25 data-[dragging=true]:border-ring flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]">
             {/* Renders only while a quote is set; dismissing it clears the quote. */}
             <ComposerQuotePreview />
             {HostComposerAttachments ? <HostComposerAttachments /> : <ComposerAttachments />}
@@ -903,7 +841,7 @@ const ComposerAction: FC<{
     !!ComposerIdleAction && composerText.trim().length === 0 && !hasComposerAttachments;
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-      <div className="flex min-w-0 items-center gap-1">
+      <div className="flex items-center gap-1.5">
         {HostComposerAddAttachment ? <HostComposerAddAttachment /> : <ComposerAddAttachment />}
         <ChatSettingsPanel model={model} onModelChange={onModelChange} />
         <ComposerExtrasSlot />
@@ -943,7 +881,7 @@ const ComposerAction: FC<{
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="aui-composer-dictate text-muted-foreground hover:text-foreground size-7 rounded-full"
+                className="aui-composer-dictate text-destructive size-7 rounded-full"
                 aria-label={t('assistantUi.thread.startVoiceInput', 'Start voice input')}>
                 <MicIcon className="aui-composer-dictate-icon size-4" />
               </TooltipIconButton>
@@ -957,7 +895,7 @@ const ComposerAction: FC<{
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="aui-composer-stop-dictation text-destructive size-7 rounded-full"
+                className="aui-composer-stop-dictation size-7 rounded-full"
                 aria-label={t('assistantUi.thread.stopVoiceInput', 'Stop voice input')}>
                 <SquareIcon className="aui-composer-stop-dictation-icon size-3.5 animate-pulse fill-current" />
               </TooltipIconButton>
@@ -1215,7 +1153,7 @@ const AssistantMessage: FC = () => {
       data-slot="aui_assistant-message-root"
       data-role="assistant"
       data-testid="agent-message"
-      className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 pb-7.5 duration-150">
+      className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 pb-7.5 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto]">
       {/*
        * One vertical rhythm for the whole message, rather than each part
        * bringing its own margin. Measured before this change the gaps ran
@@ -1232,7 +1170,7 @@ const AssistantMessage: FC = () => {
        */}
       <div
         data-slot="aui_assistant-message-content"
-        className="text-foreground [&>*+*]:mt-3 [&_[data-slot=reasoning-root]]:mb-0 px-2 leading-relaxed wrap-break-word">
+        className="text-foreground px-2 leading-relaxed wrap-break-word">
         <MessagePrimitive.GroupedParts
           groupBy={groupPartByType({
             reasoning: ['group-activity'],
@@ -1362,7 +1300,7 @@ const AssistantActionBar: FC = () => {
         <TooltipIconButton
           tooltip={t('chat.message.goodResponse')}
           data-testid="assistant-feedback-positive"
-          className="data-[submitted=true]:text-primary-600 dark:data-[submitted=true]:text-primary-400">
+          className="data-[submitted=true]:bg-accent data-[submitted=true]:text-accent-foreground">
           <ThumbsUpIcon />
         </TooltipIconButton>
       </ActionBarPrimitive.FeedbackPositive>
@@ -1370,7 +1308,7 @@ const AssistantActionBar: FC = () => {
         <TooltipIconButton
           tooltip={t('chat.message.badResponse')}
           data-testid="assistant-feedback-negative"
-          className="data-[submitted=true]:text-coral-600 dark:data-[submitted=true]:text-coral-400">
+          className="data-[submitted=true]:bg-accent data-[submitted=true]:text-accent-foreground">
           <ThumbsDownIcon />
         </TooltipIconButton>
       </ActionBarPrimitive.FeedbackNegative>
@@ -1411,9 +1349,9 @@ const AssistantActionBar: FC = () => {
           side="bottom"
           align="start"
           sideOffset={6}
-          className="aui-action-bar-more-content bg-popover text-popover-foreground data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:animate-out data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 min-w-32 overflow-hidden rounded-xl border p-1.5">
+          className="aui-action-bar-more-content bg-popover text-popover-foreground data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:animate-out data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 min-w-[8rem] overflow-hidden rounded-xl border p-1.5">
           <ActionBarPrimitive.ExportMarkdown asChild>
-            <ActionBarMorePrimitive.Item className="aui-action-bar-more-item hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-hidden select-none">
+            <ActionBarMorePrimitive.Item className="aui-action-bar-more-item hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none">
               <DownloadIcon className="size-4" />
               {t('assistantUi.thread.exportAsMarkdown', 'Export as Markdown')}
             </ActionBarMorePrimitive.Item>
@@ -1479,12 +1417,12 @@ const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
-      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [&:where(>*)]:col-start-2"
+      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
       data-role="user">
       <UserMessageAttachments />
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content peer bg-muted text-foreground rounded-xl px-4 py-2 wrap-break-word empty:hidden">
+        <div className="aui-user-message-content peer bg-muted text-foreground rounded-(--composer-radius) px-4 py-2 wrap-break-word empty:hidden">
           {/* `Text: DirectiveText` because the composer can put directive syntax
               into a user message without anyone opting in. The `/` popover is
               built from `unstable_useSlashCommandAdapter`, which returns an
@@ -1499,14 +1437,14 @@ const UserMessage: FC = () => {
             components={{ Text: DirectiveText, File: UserFilePart, Image: UserImagePart }}
           />
         </div>
-        <div className="aui-user-action-bar-wrapper absolute inset-s-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
+        <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
           <UserActionBar />
         </div>
       </div>
 
       <BranchPicker
         data-slot="aui_user-branch-picker"
-        className="col-span-full col-start-1 row-start-3 -me-1 justify-end"
+        className="col-span-full col-start-1 -me-1 justify-end"
       />
     </MessagePrimitive.Root>
   );
@@ -1567,7 +1505,7 @@ const EditComposer: FC = () => {
   const { t } = useT();
   const discardedReplies = useAuiState(selectDiscardedReplies);
   return (
-    <MessagePrimitive.Root data-slot="aui_edit-composer-wrapper" className="flex flex-col px-2">
+    <MessagePrimitive.Root data-slot="aui_edit-composer-wrapper" className="flex flex-col px-2 [contain-intrinsic-size:auto_200px] [content-visibility:auto]">
       <ComposerPrimitive.Root
         data-slot="edit-message"
         className="bg-background border-border/60 ms-auto flex w-full flex-col gap-3 rounded-2xl border p-3.5">
@@ -1575,10 +1513,10 @@ const EditComposer: FC = () => {
           rows={2}
           autoFocus
           aria-label={t('conversations.assistantUi.edit.ariaLabel')}
-          className="bg-foreground/[0.04] text-foreground/90 min-h-16 resize-none rounded-xl px-3 py-2.5 text-sm leading-relaxed outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="text-foreground min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base outline-none"
         />
         {discardedReplies > 0 && (
-          <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+          <div className="mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
             <AlertTriangleIcon aria-hidden className="size-3.5 shrink-0" />
             <span className="font-mono text-[11px] tabular-nums">
               {t(
@@ -1591,12 +1529,12 @@ const EditComposer: FC = () => {
         )}
         <div className="flex items-center justify-end gap-2">
           <ComposerPrimitive.Cancel asChild>
-            <Button variant="ghost" size="sm" className="rounded-full">
+            <Button variant="ghost" size="sm" className="h-8 px-3">
               {t('common.cancel')}
             </Button>
           </ComposerPrimitive.Cancel>
           <ComposerPrimitive.Send asChild>
-            <Button size="sm" className="rounded-full">
+            <Button size="sm" className="h-8 px-3">
               {t('chat.elicitation.send')}
             </Button>
           </ComposerPrimitive.Send>

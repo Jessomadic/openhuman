@@ -260,13 +260,13 @@ export function ReasoningPanel({
       data-testid={testId}
       open={isOpen}
       onOpenChange={handleOpenChange}
-      className={cn('w-full', className)}>
+      className={cn("w-full max-w-sm", className)}>
       <CollapsibleTrigger
         disabled={shown.length === 0}
-        className="group/trigger text-foreground/55 hover:text-foreground/90 flex items-center gap-1.5 py-1 text-[13.5px] transition-[color,scale] outline-none active:scale-[0.98] disabled:pointer-events-none">
+        className="group/trigger text-muted-foreground hover:text-foreground/90 flex items-center gap-1.5 py-1 text-[13.5px] transition-[color,scale] outline-none active:scale-[0.98]">
         {label}
         {shown.length > 0 && (
-          <ChevronDownIcon className="size-3.5 shrink-0 opacity-60 transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[state=open]/trigger:rotate-180 motion-reduce:transition-none" />
+          <ChevronDownIcon className="size-3.5 shrink-0 opacity-60 transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-open/trigger:rotate-180 group-data-panel-open/trigger:rotate-180 motion-reduce:transition-none" />
         )}
       </CollapsibleTrigger>
       <CollapsibleContent

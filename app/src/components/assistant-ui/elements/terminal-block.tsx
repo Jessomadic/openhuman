@@ -54,7 +54,7 @@ export function TerminalBlock({
       <div className="flex items-center justify-between gap-3 px-4 pt-3 pb-1.5">
         <span
           className={cn(
-            'min-w-0 break-all',
+            "min-w-0 break-words",
             ink ? 'text-background/90 dark:text-foreground/90' : 'text-foreground/90'
           )}>
           {command}
@@ -69,7 +69,7 @@ export function TerminalBlock({
             <span
               className={cn(
                 mono,
-                ink ? 'text-background/40 dark:text-foreground/40' : 'text-foreground/40'
+                ink ? "text-background/40 dark:text-muted-foreground" : "text-muted-foreground"
               )}>
               {exitLabel}
             </span>
@@ -77,8 +77,8 @@ export function TerminalBlock({
         ) : (
           <Loader2Icon
             className={cn(
-              'size-3 shrink-0 animate-spin motion-reduce:animate-none',
-              ink ? 'text-background/35 dark:text-foreground/35' : 'text-foreground/35'
+              "size-3 animate-spin motion-reduce:animate-none",
+              ink ? "text-background/35 dark:text-muted-foreground" : "text-muted-foreground"
             )}
           />
         )}

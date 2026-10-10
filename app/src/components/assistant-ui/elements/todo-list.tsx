@@ -50,9 +50,9 @@ export function TodoList({
       data-slot="todo-list"
       className={cn('flex w-full max-w-sm flex-col gap-3', className)}
       {...props}>
-      <div className="flex items-baseline justify-between">
+      <div className="flex items-start justify-between gap-3">
         <span className="text-[13.5px] font-medium">{title}</span>
-        <span className={cn(mono, 'text-foreground/35 tabular-nums')}>
+        <span className={cn(mono, "text-muted-foreground shrink-0 whitespace-nowrap tabular-nums")}>
           {revision === undefined
             ? `${done}/${items.length}`
             : `${done}/${items.length} · rev ${revision}`}

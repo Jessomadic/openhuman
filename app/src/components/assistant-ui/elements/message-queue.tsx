@@ -58,13 +58,13 @@ export function MessageQueue({
           <span className="relative inline-flex size-2 rounded-full bg-blue-500 dark:bg-blue-400" />
         </span>
         <span className="text-foreground/90 min-w-0 flex-1 truncate text-[13.5px]">{running}</span>
-        <span className={cn(mono, 'text-foreground/35 shrink-0')}>{runningLabel}</span>
+        <span className={cn(mono, "text-muted-foreground shrink-0")}>{runningLabel}</span>
       </div>
 
       {queuedCount > 0 && (
         <div className="flex items-baseline justify-between px-1">
-          <span className={cn(mono, 'text-foreground/35')}>{queuedLabel(queuedCount)}</span>
-          <span className={cn(mono, 'text-foreground/35')}>{pendingHint}</span>
+          <span className={cn(mono, "text-muted-foreground")}>{queuedLabel(queuedCount)}</span>
+          <span className={cn(mono, "text-muted-foreground")}>{pendingHint}</span>
         </div>
       )}
 

@@ -44,8 +44,8 @@ export function ErrorState({
           className
         )}
         {...props}>
-        <RefreshCwIcon className="text-foreground/45 size-3.5 shrink-0 animate-spin motion-reduce:animate-none" />
-        <ShimmerLabel className="text-foreground/55 relative inline-block">
+        <RefreshCwIcon className="text-muted-foreground size-3.5 shrink-0 animate-spin motion-reduce:animate-none" />
+        <ShimmerLabel className="text-muted-foreground relative inline-block">
           {retryingLabel}
         </ShimmerLabel>
       </div>
@@ -65,7 +65,7 @@ export function ErrorState({
       <CircleAlertIcon className="mt-0.5 size-4 shrink-0 text-red-500/80" />
       <div>
         <p className="font-medium text-red-600 dark:text-red-400">{title}</p>
-        <p className="mt-0.5 whitespace-pre-wrap text-[13px] leading-snug text-red-600/60 dark:text-red-400/60">
+        <p className="mt-0.5 text-[13px] leading-snug text-red-600/60 dark:text-red-400/60">
           {detail}
         </p>
       </div>

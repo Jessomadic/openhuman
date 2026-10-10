@@ -2,7 +2,6 @@ import {
   ThreadListItem,
   ThreadListNew,
   ThreadListRoot,
-  ThreadListSearch,
 } from '@/components/assistant-ui/thread-list';
 import {
   AssistantRuntimeProvider,
@@ -142,13 +141,10 @@ export function ThreadList(props: ThreadListProps) {
 function ThreadListView() {
   const props = useContext(ThreadListHostContext)!;
   const { t } = useT();
-  const [search, setSearch] = useState('');
   const threadIds = useAuiState(s => s.threads.threadIds);
   const filtered = threadIds.flatMap(id => {
     const thread = props.threads.find(item => item.id === id);
-    return thread && props.resolveTitle(id).toLowerCase().includes(search.trim().toLowerCase())
-      ? [thread]
-      : [];
+    return thread ? [thread] : [];
   });
   const groups = groupThreads(filtered, new Date(), props.isPinned ?? isThreadPinned);
   return (
@@ -188,7 +184,7 @@ function ThreadListView() {
         ))}
         {groups.length === 0 && (
           <p className="text-muted-foreground px-2.5 py-4 text-center text-xs">
-            {t(search ? 'assistantUi.threadList.noThreadsFound' : 'chat.noThreads')}
+            {t('chat.noThreads')}
           </p>
         )}
       </div>

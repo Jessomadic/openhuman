@@ -47,14 +47,14 @@ export function TaskStateIcon({ state, className }: { state: TaskCardState; clas
     );
   }
   if (state === 'cancelled') {
-    return <Ban aria-hidden className={cn('text-foreground/35 size-3.5 shrink-0', className)} />;
+    return <Ban aria-hidden className={cn("text-muted-foreground size-3.5 shrink-0", className)} />;
   }
   if (state === 'working') {
     return (
       <Loader2Icon
         aria-hidden
         className={cn(
-          'text-foreground/35 size-3.5 shrink-0 animate-spin motion-reduce:animate-none',
+          "text-muted-foreground size-3.5 shrink-0 animate-spin motion-reduce:animate-none",
           className
         )}
       />
@@ -121,16 +121,16 @@ export function TaskCard({
         <span className="sr-only">{t(`conversations.taskCard.state.${state}`)}</span>
         <span className="min-w-0 flex-1 truncate text-[13.5px]">{label}</span>
         {meta !== undefined && (
-          <span className={cn(mono, 'text-foreground/35 max-w-24 shrink-0 truncate')}>{meta}</span>
+          <span className={cn(mono, "text-muted-foreground max-w-24 shrink-0 truncate")}>{meta}</span>
         )}
         {elapsed !== undefined && (
-          <span className={cn(mono, 'text-foreground/30 shrink-0 tabular-nums')}>{elapsed}</span>
+          <span className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}>{elapsed}</span>
         )}
         {hasTranscript && (
           <ChevronRightIcon
             aria-hidden
             className={cn(
-              'text-foreground/25 size-3 shrink-0 transition-transform duration-200 motion-reduce:transition-none',
+              "text-muted-foreground size-3 shrink-0 transition-transform duration-200 motion-reduce:transition-none",
               isOpen && 'rotate-90'
             )}
           />

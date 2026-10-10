@@ -268,7 +268,7 @@ function ContextDisplayContent({
           />
         </div>
         {segments.length > 0 && (
-          <div className="mt-3 grid gap-1.5">
+          <div className="flex items-baseline justify-between gap-6">
             {segments.map(segment => (
               <div key={segment.label} className="flex items-baseline justify-between gap-6">
                 <span className="text-muted-foreground">{segment.label}</span>
@@ -303,7 +303,7 @@ function RingVisual() {
         r={RING_RADIUS}
         fill="none"
         strokeWidth={RING_STROKE}
-        className="stroke-muted"
+        className="stroke-border"
       />
       <circle
         cx={RING_SIZE / 2}

@@ -300,7 +300,7 @@ const defaultComponents = memoizeMarkdownComponents({
     if (source) return <CitationMarker index={citationIndex} source={source} />;
     return (
       <a
-        className={cn('aui-md-a text-primary hover:text-primary/80 no-underline', className)}
+        className={cn("aui-md-a text-primary hover:text-primary/80 underline underline-offset-2", className)}
         href={href}
         {...props}>
         {children}
@@ -341,7 +341,7 @@ const defaultComponents = memoizeMarkdownComponents({
   table: ({ className, ...props }) => (
     <table
       className={cn(
-        'aui-md-table my-3 w-full border-separate border-spacing-0 overflow-y-auto',
+        "aui-md-table w-full border-separate border-spacing-0",
         className
       )}
       {...props}

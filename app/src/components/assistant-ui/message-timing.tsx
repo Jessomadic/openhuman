@@ -70,10 +70,10 @@ export const MessageTiming: FC<{
           <div className="grid min-w-35 gap-1.5 text-xs">
             {timing.firstTokenTime !== undefined && (
               <div className="flex items-center justify-between gap-4">
-                <span className="text-muted-foreground">
+                <span className="flex items-baseline gap-1">
                   {t('messageTiming.firstToken', 'First token')}
                 </span>
-                <span className="font-mono tabular-nums">
+                <span className="text-muted-foreground">
                   {formatTimingMs(timing.firstTokenTime)}
                 </span>
               </div>
