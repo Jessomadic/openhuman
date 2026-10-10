@@ -11,15 +11,17 @@
 //! lifetime, avoiding the N-prompt problem where dev-signed macOS builds
 //! block on each individual keychain entry.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use crate::security::keyring::adapter;
 use crate::security::keyring::backend::KeyringBackend;
 use crate::security::keyring::crypto::{self, KEY_LEN};
 use crate::security::keyring::error::KeyringError;
 use crate::security::keyring::file_store;
 use crate::security::keyring::store::BackendKind;
+use tinystoragedrivers::secrets::EncryptedFileSecrets;
+use zeroize::Zeroizing;
 
 const KEYCHAIN_SERVICE: &str = "openhuman";
 const KEYCHAIN_MASTER_KEY_USERNAME: &str = "app:master_key";
@@ -53,13 +55,13 @@ static KEYCHAIN_UNAVAILABLE: OnceLock<()> = OnceLock::new();
 // ── Public API for core startup ──────────────────────────────────────────────
 
 /// Initialize the keyring subsystem: set the workspace directory and load
-/// the master encryption key (whenever encrypted storage is selected) — from
+/// the master encryption key (staging/production only) — from
 /// [`MASTER_KEY_ENV`] or [`MASTER_KEY_FILE_ENV`] when an operator set one,
 /// otherwise from the OS keychain.
 ///
 /// Call this once at core startup before any keyring operations. In dev
-/// environments that explicitly select the plain file backend, the master key
-/// is not loaded. The result is cached process-wide; subsequent calls are
+/// environments the master key is not loaded (the plain file backend is
+/// used instead). The result is cached process-wide; subsequent calls are
 /// no-ops. Which source supplied the key is logged at `info`; the key never
 /// is.
 ///
@@ -414,14 +416,23 @@ fn master_key() -> Option<&'static [u8; KEY_LEN]> {
 
 // ── Backend ──────────────────────────────────────────────────────────────────
 
-/// Every secret in one ChaCha20-Poly1305 file.
+/// Every secret in one ChaCha20-Poly1305 file: an adapter over
+/// `tinystoragedrivers`' [`EncryptedFileSecrets`] (the `SecretStore` port),
+/// keeping the file format (`secrets.enc`: one `nonce ‖ ciphertext ‖ tag` blob
+/// over a JSON object of strings) and the `secrets.enc.lock` advisory lock
+/// byte-for-byte, so a workspace written by either side reads on the other.
 ///
-/// Mutations are a read → decrypt → modify → encrypt → write cycle over the
-/// whole set, guarded by the cross-process advisory lock in
-/// [`file_store::lock_for_write`]. An in-process mutex would not do: more than
-/// one process routinely addresses the same workspace (a desktop core and a
-/// second process embedding the same core), and the later writer's snapshot —
-/// read before the earlier writer landed — silently drops the earlier secret.
+/// What stays here, because it is a desktop policy and not a storage format:
+///
+/// - the master key (env, else OS keychain; see [`init_master_key`]);
+/// - the one-time import of a legacy plaintext `dev-keychain.json`;
+/// - **corruption recovery**. The driver fails closed on a file that does not
+///   decrypt or parse and leaves it untouched, which is right for a server
+///   that has an operator. A desktop has none: failing closed would wedge
+///   every `set` (so sign-in) forever. This adapter keeps today's behaviour
+///   instead: log, move the bytes aside as `secrets.enc.corrupt.<ts>` (never
+///   deleted, so the secrets stay recoverable with the right key) and carry
+///   on with an empty store. See [`adapter::recover_corrupt_file`].
 pub struct EncryptedFileBackend {
     path: PathBuf,
     workspace_dir: PathBuf,
@@ -435,95 +446,42 @@ impl EncryptedFileBackend {
         }
     }
 
-    fn read_map(&self, key: &[u8; KEY_LEN]) -> Result<HashMap<String, String>, KeyringError> {
-        self.read_map_with_cleanup(key, |map| self.cleanup_matching_legacy_files(map))
+    fn store(&self, key: &[u8; KEY_LEN]) -> EncryptedFileSecrets {
+        EncryptedFileSecrets::at_path(self.path.clone(), Zeroizing::new(*key))
     }
 
-    fn read_map_with_cleanup(
-        &self,
-        key: &[u8; KEY_LEN],
-        cleanup: impl FnOnce(&HashMap<String, String>) -> Result<(), KeyringError>,
-    ) -> Result<HashMap<String, String>, KeyringError> {
-        if !self.path.exists() {
-            return self.migrate_legacy_dev_keychain(key);
-        }
-
-        let blob = std::fs::read(&self.path).map_err(|e| KeyringError::MigrationReadFailed {
-            path: self.path.display().to_string(),
-            source: e,
-        })?;
-
-        if blob.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        match crypto::chacha20_decrypt(key, &blob) {
-            Ok(plaintext) => match serde_json::from_slice::<HashMap<String, String>>(&plaintext) {
-                Ok(map) => {
-                    if let Err(error) = cleanup(&map) {
-                        match error {
-                            KeyringError::MigrationDeleteFailed { .. } => {
-                                // The encrypted copy is valid. Keep serving it
-                                // while leaving the plaintext source for a
-                                // later cleanup attempt or manual recovery.
-                                log::warn!(
-                                    "[keyring:encrypted_file] could not remove verified legacy copy: {error}"
-                                );
-                            }
-                            _ => return Err(error),
-                        }
-                    }
-                    Ok(map)
-                }
-                Err(e) => {
-                    log::warn!(
-                        "[keyring:encrypted_file] decrypted data is not valid JSON: {e}; \
-                         treating as corrupt"
-                    );
-                    self.handle_corruption();
-                    Ok(HashMap::new())
-                }
-            },
-            Err(e) => {
-                log::error!(
-                    "[keyring:encrypted_file] decryption failed: {e}; master key may have \
-                     changed or file is corrupt"
-                );
-                self.handle_corruption();
-                Ok(HashMap::new())
+    /// Run one driver call, recovering once from a corrupt file.
+    fn run<T, F, Fut>(&self, key: &[u8; KEY_LEN], op: F) -> Result<T, KeyringError>
+    where
+        T: Send + 'static,
+        F: Fn(EncryptedFileSecrets) -> Fut,
+        Fut: std::future::Future<Output = tinystoragedrivers::Result<T>> + Send + 'static,
+    {
+        self.import_legacy_dev_keychain(key)?;
+        match crate::storage::block_on(op(self.store(key))) {
+            Err(error) if adapter::is_corruption(&error) => {
+                adapter::recover_corrupt_file(&self.path, key, &error)?;
+                crate::storage::block_on(op(self.store(key))).map_err(adapter::backend_error)
             }
+            result => result.map_err(adapter::backend_error),
         }
     }
 
-    fn write_map(
-        &self,
-        key: &[u8; KEY_LEN],
-        map: &HashMap<String, String>,
-    ) -> Result<(), KeyringError> {
-        let json = serde_json::to_vec(map)
-            .map_err(|e| KeyringError::Backend(format!("failed to serialize secrets: {e}")))?;
-
-        let blob = crypto::chacha20_encrypt(key, &json)
-            .map_err(|e| KeyringError::Backend(format!("encryption failed: {e}")))?;
-
-        file_store::write_atomic(&self.path, &blob)
-    }
-
-    fn migrate_legacy_dev_keychain(
-        &self,
-        key: &[u8; KEY_LEN],
-    ) -> Result<HashMap<String, String>, KeyringError> {
+    /// Import `dev-keychain.json` into a missing `secrets.enc`, once.
+    fn import_legacy_dev_keychain(&self, key: &[u8; KEY_LEN]) -> Result<(), KeyringError> {
         let legacy_path = self.workspace_dir.join(LEGACY_DEV_KEYCHAIN);
         if !legacy_path.exists() {
-            return Ok(HashMap::new());
+            return Ok(());
         }
-        // The plaintext backend uses this same sidecar lock. Keep it across
-        // the read, encrypted write, verification, and source removal so a
-        // concurrent plaintext writer cannot lose an update during migration.
+        // Use the same lock order as migration callers: encrypted destination
+        // first, then legacy source. The plaintext backend takes only the
+        // second lock, so its writers cannot race this read-and-remove window.
+        let _guard = file_store::lock_for_write(&self.path)?;
         let _legacy_guard = file_store::lock_for_write(&legacy_path)?;
         if !legacy_path.exists() {
-            return Ok(HashMap::new());
+            return Ok(());
         }
+
         let metadata = std::fs::symlink_metadata(&legacy_path).map_err(|source| {
             KeyringError::MigrationReadFailed {
                 path: legacy_path.display().to_string(),
@@ -546,8 +504,20 @@ impl EncryptedFileBackend {
             source: e,
         })?;
 
-        let map: HashMap<String, String> = if bytes.is_empty() {
-            HashMap::new()
+        // A legacy file can remain after a previous publication/cleanup error.
+        // It must not make an otherwise valid encrypted store unavailable.
+        if self.path.exists() {
+            if let Ok(legacy) = serde_json::from_slice::<
+                std::collections::BTreeMap<String, String>,
+            >(&bytes)
+            {
+                self.remove_legacy_if_encrypted_copy_matches(key, &legacy_path, &legacy)?;
+            }
+            return Ok(());
+        }
+
+        let map: std::collections::BTreeMap<String, String> = if bytes.is_empty() {
+            Default::default()
         } else {
             serde_json::from_slice(&bytes).map_err(|e| {
                 KeyringError::Backend(format!(
@@ -556,194 +526,101 @@ impl EncryptedFileBackend {
             })?
         };
 
-        self.write_map(key, &map)?;
-        self.verify_migrated_map(key, &map)?;
+        let json = Zeroizing::new(
+            serde_json::to_vec(&map)
+                .map_err(|e| KeyringError::Backend(format!("failed to serialize secrets: {e}")))?,
+        );
+        {
+            let blob = crypto::chacha20_encrypt(key, &json)
+                .map_err(|e| KeyringError::Backend(format!("encryption failed: {e}")))?;
+            file_store::write_atomic(&self.path, &blob)?;
+        }
 
-        std::fs::remove_file(&legacy_path).map_err(|source| {
-            KeyringError::MigrationDeleteFailed {
-                path: legacy_path.display().to_string(),
-                source,
-            }
-        })?;
+        self.remove_legacy_if_encrypted_copy_matches(key, &legacy_path, &map)?;
         log::info!(
             "[keyring:encrypted_file] legacy {LEGACY_DEV_KEYCHAIN} migrated \
-             ({} entries), verified, and removed",
+             ({} entries), verified, durably published, and removed",
             map.len()
         );
-        if let Err(e) = self.cleanup_matching_legacy_file(
-            &legacy_path.with_extension("json.migrated"),
-            &map,
-            false,
-        ) {
-            log::warn!("[keyring:encrypted_file] could not clean up older legacy copy: {e}");
-        }
-
-        Ok(map)
-    }
-
-    /// Read the encrypted file back without the normal corruption quarantine.
-    /// A failed verification must leave the plaintext source available to retry.
-    fn verify_migrated_map(
-        &self,
-        key: &[u8; KEY_LEN],
-        expected: &HashMap<String, String>,
-    ) -> Result<(), KeyringError> {
-        let blob = std::fs::read(&self.path).map_err(|e| {
-            KeyringError::Backend(format!("cannot read encrypted migration result: {e}"))
-        })?;
-        let plaintext = crypto::chacha20_decrypt(key, &blob)
-            .map_err(|e| KeyringError::Backend(format!("cannot decrypt migration result: {e}")))?;
-        let actual: HashMap<String, String> = serde_json::from_slice(&plaintext).map_err(|e| {
-            KeyringError::Backend(format!("cannot parse decrypted migration result: {e}"))
-        })?;
-        if &actual != expected {
-            return Err(KeyringError::Backend(
-                "encrypted migration result differs from plaintext source".into(),
-            ));
-        }
         Ok(())
     }
 
-    /// Remove an old plaintext copy only when every entry is present with the
-    /// same value in the decrypted store. A changed or invalid copy may hold
-    /// data needed for recovery and is left in place for manual inspection.
-    fn cleanup_matching_legacy_file(
+    /// Remove the plaintext source only after the published encrypted copy is
+    /// durable and decrypts to a map containing every legacy entry unchanged.
+    /// If publication succeeded but its directory sync failed, the next call
+    /// rechecks the same file and retries the durability step before cleanup.
+    fn remove_legacy_if_encrypted_copy_matches(
         &self,
-        path: &Path,
-        encrypted: &HashMap<String, String>,
-        strict: bool,
+        key: &[u8; KEY_LEN],
+        legacy_path: &Path,
+        legacy: &std::collections::BTreeMap<String, String>,
     ) -> Result<(), KeyringError> {
-        self.cleanup_matching_legacy_file_with_sync(
-            path,
-            encrypted,
-            strict,
-            file_store::sync_parent_dir,
-        )
-    }
-
-    fn cleanup_matching_legacy_file_with_sync(
-        &self,
-        path: &Path,
-        encrypted: &HashMap<String, String>,
-        strict: bool,
-        sync_encrypted_parent: impl FnOnce(&Path) -> Result<(), KeyringError>,
-    ) -> Result<(), KeyringError> {
-        if !path.exists() {
-            return Ok(());
-        }
-        let _guard = file_store::lock_for_write(path)?;
-        let metadata = match std::fs::symlink_metadata(path) {
-            Ok(metadata) => metadata,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        let blob = match std::fs::read(&self.path) {
+            Ok(blob) => blob,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(source) => {
                 return Err(KeyringError::MigrationReadFailed {
-                    path: path.display().to_string(),
+                    path: self.path.display().to_string(),
                     source,
                 });
             }
         };
-        if !metadata.file_type().is_file() {
-            if strict {
-                return Err(KeyringError::Backend(format!(
-                    "legacy {LEGACY_DEV_KEYCHAIN} is not a regular file; preserving it for recovery"
-                )));
-            }
-            log::warn!("[keyring:encrypted_file] legacy path {} is not a regular file; leaving it untouched", path.display());
-            return Ok(());
-        }
-        let bytes = std::fs::read(path).map_err(|source| KeyringError::MigrationReadFailed {
-            path: path.display().to_string(),
-            source,
-        })?;
-        let legacy: HashMap<String, String> = match serde_json::from_slice(&bytes) {
-            Ok(map) => map,
-            Err(e) => {
-                if strict {
-                    return Err(KeyringError::Backend(format!(
-                        "legacy {LEGACY_DEV_KEYCHAIN} is invalid JSON; preserving it for recovery: {e}"
-                    )));
-                }
-                log::warn!("[keyring:encrypted_file] legacy copy {} is invalid JSON ({e}); leaving it for recovery", path.display());
-                return Ok(());
-            }
+        let plaintext = match crypto::chacha20_decrypt(key, &blob) {
+            Ok(plaintext) => plaintext,
+            Err(_) => return Ok(()),
         };
+        let encrypted: std::collections::HashMap<String, String> =
+            match serde_json::from_slice(&plaintext) {
+                Ok(encrypted) => encrypted,
+                Err(_) => return Ok(()),
+            };
         if !legacy
             .iter()
-            .all(|(key, value)| encrypted.get(key) == Some(value))
+            .all(|(name, value)| encrypted.get(name) == Some(value))
         {
-            if strict {
-                return Err(KeyringError::Backend(format!(
-                    "legacy {LEGACY_DEV_KEYCHAIN} differs from encrypted secrets; preserving it for recovery"
-                )));
-            }
-            log::warn!("[keyring:encrypted_file] legacy copy {} differs from encrypted secrets; leaving it for recovery", path.display());
             return Ok(());
         }
-        // A previous write may have renamed secrets.enc successfully and then
-        // failed its directory sync. Recheck durability before deleting any
-        // surviving plaintext copy on a later read.
-        sync_encrypted_parent(&self.path)?;
-        std::fs::remove_file(path).map_err(|source| KeyringError::MigrationDeleteFailed {
-            path: path.display().to_string(),
-            source,
-        })?;
-        log::info!(
-            "[keyring:encrypted_file] removed verified legacy plaintext copy {}",
-            path.display()
-        );
-        Ok(())
-    }
 
-    fn cleanup_matching_legacy_files(
-        &self,
-        encrypted: &HashMap<String, String>,
-    ) -> Result<(), KeyringError> {
-        let legacy_path = self.workspace_dir.join(LEGACY_DEV_KEYCHAIN);
-        self.cleanup_matching_legacy_file(&legacy_path, encrypted, true)?;
-        if let Err(e) = self.cleanup_matching_legacy_file(
-            &legacy_path.with_extension("json.migrated"),
-            encrypted,
-            false,
-        ) {
-            log::warn!("[keyring:encrypted_file] could not clean up older legacy copy: {e}");
+        file_store::sync_parent_dir(&self.path)?;
+        match std::fs::remove_file(legacy_path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(KeyringError::MigrationDeleteFailed {
+                path: legacy_path.display().to_string(),
+                source,
+            }),
         }
-        Ok(())
-    }
-
-    /// Move an undecryptable / unparseable secrets file aside so the next call
-    /// starts fresh without destroying the bytes.
-    fn handle_corruption(&self) {
-        file_store::quarantine_corrupt(&self.path, "enc");
     }
 
     /// [`KeyringBackend::get`] under an explicit master key.
-    fn get_with_key(
+    pub(super) fn get_with_key(
         &self,
         key: &[u8; KEY_LEN],
         namespaced_key: &str,
     ) -> Result<Option<String>, KeyringError> {
-        // `read_map` can mutate the filesystem: it migrates a missing file and
-        // quarantines corrupt ciphertext. Hold the same lock as writers for
-        // either case so a delayed quarantine cannot rename a replacement a
-        // concurrent `set` just published.
-        let _guard = file_store::lock_for_write(&self.path)?;
-        let map = self.read_map(key)?;
-        Ok(map.get(namespaced_key).cloned())
+        use tinystoragedrivers::secrets::SecretStore as _;
+        let name = namespaced_key.to_string();
+        let value = self.run(key, move |store| {
+            let name = name.clone();
+            async move { store.get(&name).await }
+        })?;
+        adapter::utf8(namespaced_key, value)
     }
 
     /// [`KeyringBackend::set`] under an explicit master key.
-    fn set_with_key(
+    pub(super) fn set_with_key(
         &self,
         key: &[u8; KEY_LEN],
         namespaced_key: &str,
         value: &str,
     ) -> Result<(), KeyringError> {
-        // Held across the read as well as the write: taking it around the write
-        // alone would still let a stale map overwrite a concurrent one.
-        let _guard = file_store::lock_for_write(&self.path)?;
-        let mut map = self.read_map(key)?;
-        map.insert(namespaced_key.to_string(), value.to_string());
-        self.write_map(key, &map)
+        use tinystoragedrivers::secrets::SecretStore as _;
+        let name = namespaced_key.to_string();
+        let value = Zeroizing::new(value.as_bytes().to_vec());
+        self.run(key, move |store| {
+            let (name, value) = (name.clone(), value.clone());
+            async move { store.set(&name, &value).await }
+        })
     }
 }
 
@@ -765,15 +642,15 @@ impl KeyringBackend for EncryptedFileBackend {
     }
 
     fn delete(&self, namespaced_key: &str) -> Result<(), KeyringError> {
+        use tinystoragedrivers::secrets::SecretStore as _;
         let Some(key) = master_key() else {
             return Ok(());
         };
-        let _guard = file_store::lock_for_write(&self.path)?;
-        let mut map = self.read_map(key)?;
-        if map.remove(namespaced_key).is_some() {
-            self.write_map(key, &map)?;
-        }
-        Ok(())
+        let name = namespaced_key.to_string();
+        self.run(key, move |store| {
+            let name = name.clone();
+            async move { store.delete(&name).await.map(|_| ()) }
+        })
     }
 
     fn name(&self) -> &'static str {
@@ -784,3 +661,7 @@ impl KeyringBackend for EncryptedFileBackend {
 #[cfg(test)]
 #[path = "encrypted_file_backend_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "encrypted_file_backend_fixture_tests.rs"]
+mod fixture_tests;

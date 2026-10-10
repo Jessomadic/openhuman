@@ -27,6 +27,9 @@ const ACQUIRE_ATTEMPTS: usize = 16;
 /// Leases kept as documents. See the module docs.
 pub struct DocumentLeases {
     docs: Arc<dyn DocumentStore>,
+    /// The scope `docs` is bound to, when known ([`Self::cluster`]); a
+    /// fencing driver reads the lease record from there.
+    scope: Option<Scope>,
     node: String,
     endpoint: Option<String>,
     ttl_ms: u64,
@@ -62,6 +65,7 @@ impl DocumentLeases {
     ) -> Self {
         Self {
             docs,
+            scope: None,
             node: node.into(),
             endpoint,
             // A sub-millisecond TTL rounds up so a grant never expires at
@@ -84,13 +88,18 @@ impl DocumentLeases {
         endpoint: Option<String>,
         ttl: Duration,
     ) -> Result<Self, StorageError> {
-        let scoped = backend.for_scope(&Scope::new(CLUSTER_SCOPE)?)?;
-        Ok(Self::new(
-            Arc::clone(scoped.documents()),
-            node,
-            endpoint,
-            ttl,
-        ))
+        let scope = Scope::new(CLUSTER_SCOPE)?;
+        let scoped = backend.for_scope(&scope)?;
+        Ok(Self::new(Arc::clone(scoped.documents()), node, endpoint, ttl).in_scope(scope))
+    }
+
+    /// Records that the document store this was built over is bound to
+    /// `scope`, so storage fences can name the lease record
+    /// ([`LeaseStore::record_scope`]).
+    #[must_use]
+    pub fn in_scope(mut self, scope: Scope) -> Self {
+        self.scope = Some(scope);
+        self
     }
 
     /// This node's id.
@@ -335,6 +344,10 @@ impl LeaseStore for DocumentLeases {
         validate_key(key)?;
         self.declare().await?;
         Ok(self.read(key).await?.map(|(_, record)| record))
+    }
+
+    fn record_scope(&self) -> Option<Scope> {
+        self.scope.clone()
     }
 }
 

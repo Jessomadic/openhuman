@@ -89,16 +89,54 @@ impl Docs {
         for session in sessions {
             let mut doc = serde_json::to_value(session)?;
             doc["created_at"] = Value::from(session.created_at.as_str());
-            writes.push((session.subagent_session_id.clone(), doc));
+            let updated = chrono::DateTime::parse_from_rfc3339(&session.updated_at).ok();
+            writes.push((session.subagent_session_id.clone(), doc, updated));
         }
         log::debug!("[subagent_sessions] document save count={}", writes.len());
         self.0.run(|docs| async move {
-            for (id, doc) in writes {
-                docs.put(SESSIONS, &id, doc, Precondition::None).await?;
+            for (id, doc, updated) in writes {
+                write_if_newer(&docs, &id, doc, updated).await?;
             }
             Ok(())
         })
     }
+}
+
+/// Writes one session unless the stored copy is at least as new, under
+/// compare-and-swap. A caller holds a snapshot of the whole list, so a
+/// session it did not change is older than (or equal to) what another core may
+/// have stored since, and must not be put back.
+async fn write_if_newer(
+    docs: &std::sync::Arc<dyn crate::storage::DocumentStore>,
+    id: &str,
+    doc: Value,
+    updated: Option<chrono::DateTime<chrono::FixedOffset>>,
+) -> Result<(), crate::storage::StorageError> {
+    use tinystoragedrivers::ErrorKind;
+    for _ in 0..crate::storage::documents::CAS_ATTEMPTS {
+        let precondition = match docs.get(SESSIONS, id).await? {
+            None => Precondition::Absent,
+            Some(stored) => {
+                let stored_at = stored
+                    .doc
+                    .get("updatedAt")
+                    .and_then(Value::as_str)
+                    .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok());
+                if matches!((stored_at, updated), (Some(have), Some(ours)) if have >= ours) {
+                    return Ok(());
+                }
+                stored.unchanged()
+            }
+        };
+        match docs.put(SESSIONS, id, doc.clone(), precondition).await {
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == ErrorKind::Conflict => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(crate::storage::StorageError::conflict(format!(
+        "{SESSIONS}/{id} kept changing"
+    )))
 }
 
 #[cfg(test)]

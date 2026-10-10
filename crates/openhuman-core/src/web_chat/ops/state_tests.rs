@@ -67,3 +67,23 @@ async fn two_profiles_on_the_same_thread_id_hold_two_keys() {
     // The desktop keeps the bare id.
     assert_eq!(key_in(&crate::core::runtime::Tenant::default(), "t1"), "t1");
 }
+
+#[tokio::test]
+async fn a_user_cancel_under_the_fence_placeholder_id_keeps_the_callers_client() {
+    let token = tokio_util::sync::CancellationToken::new();
+    track_parallel_turn_for_test("fence-thread", "fence-req", token.clone()).await;
+    let mut events = crate::web_chat::subscribe_web_channel_events();
+
+    crate::web_chat::ops::channel_ops::cancel_chat_scoped("profile-fence", "fence-thread", None)
+        .await
+        .unwrap();
+
+    assert!(token.is_cancelled());
+    let mut seen = None;
+    while let Ok(event) = events.try_recv() {
+        if event.event == "chat_cancelled" && event.request_id == "fence-req" {
+            seen = Some(event.client_id);
+        }
+    }
+    assert_eq!(seen.as_deref(), Some("profile-fence"));
+}

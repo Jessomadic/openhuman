@@ -20,17 +20,19 @@
 //! per-thread tables resolve that user's state.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::layout::{self, ProfileLayout};
 use super::lease::{self as profile_lease, OpenError};
+use super::lifecycle::ProfileLocks;
+use super::recovery::{recover_session_store, recover_workspace};
 use super::registry::ProfileRegistry;
-use super::types::{ProfileId, ProfileMeta, ProfileSummary, LAYOUT_VERSION};
+use super::types::{ProfileId, ProfileMeta, ProfileSummary};
 use crate::config::Config;
 use crate::core::runtime::{ContextOverlay, CoreContext, DomainSet, SaasConfig};
-use crate::storage::lease::{LeaseError, LeaseGrant, LeaseStore};
+use crate::storage::fence::{FenceRegistry, LeaseFence};
+use crate::storage::lease::{LeaseGrant, LeaseStore};
 use crate::storage::StorageBackend;
 use crate::tools::toolpacks::ToolGroups;
 
@@ -40,7 +42,7 @@ pub struct Profile {
     pub layout: ProfileLayout,
     pub config: Config,
     context: Arc<CoreContext>,
-    fenced: AtomicBool,
+    fence: Arc<LeaseFence>,
 }
 
 impl std::fmt::Debug for Profile {
@@ -60,11 +62,16 @@ impl Profile {
 
     /// Whether this node lost the profile's lease: no new work may start.
     pub fn is_fenced(&self) -> bool {
-        self.fenced.load(Ordering::SeqCst)
+        self.fence.is_fenced()
+    }
+
+    /// The fence guarding this profile's storage writes ([`super::fence`]).
+    pub fn lease_fence(&self) -> &Arc<LeaseFence> {
+        &self.fence
     }
 }
 
-struct Slot {
+pub(super) struct Slot {
     state: Arc<Profile>,
     last_used: Instant,
     grant: LeaseGrant,
@@ -72,16 +79,22 @@ struct Slot {
 
 /// The open profiles of one SaaS process.
 pub struct ProfileHost {
-    saas: SaasConfig,
-    operator: Arc<CoreContext>,
-    node: String,
-    open: Mutex<HashMap<ProfileId, Slot>>,
+    pub(super) saas: SaasConfig,
+    pub(super) operator: Arc<CoreContext>,
+    pub(super) node: String,
+    pub(super) open: Mutex<HashMap<ProfileId, Slot>>,
     /// Held across every operation that takes or gives back a lease (open,
-    /// eviction, release, deprovision), so no two of them interleave on one
-    /// profile. Lookups of an open profile never wait for it.
-    gate: tokio::sync::Mutex<()>,
-    leases: Arc<dyn LeaseStore>,
-    registry: ProfileRegistry,
+    /// eviction, release, deprovision), so no two of them interleave and
+    /// the slot count stays exact. Lookups of an open profile never wait
+    /// for it. Taken after the profile's own lifecycle lock, never before.
+    pub(super) gate: tokio::sync::Mutex<()>,
+    /// One lock per profile, held for the whole of each lifecycle operation
+    /// on it (provision, open, credential changes, deprovision); see
+    /// [`super::lifecycle`].
+    pub(super) lifecycle: ProfileLocks,
+    pub(super) leases: Arc<dyn LeaseStore>,
+    pub(super) fences: Arc<FenceRegistry>,
+    pub(super) registry: ProfileRegistry,
 }
 
 impl std::fmt::Debug for ProfileHost {
@@ -142,9 +155,18 @@ impl ProfileHost {
             node,
             open: Mutex::new(HashMap::new()),
             gate: tokio::sync::Mutex::new(()),
+            lifecycle: ProfileLocks::default(),
             leases,
+            fences: crate::storage::fence::registry(),
             registry,
         })
+    }
+
+    /// This host registering its fences in `fences` instead of the process
+    /// registry (tests, which must not share one).
+    pub fn with_fences(mut self, fences: Arc<FenceRegistry>) -> Self {
+        self.fences = fences;
+        self
     }
 
     /// The operator's settings this host runs with.
@@ -161,104 +183,13 @@ impl ProfileHost {
         self.leases.as_ref()
     }
 
+    pub(crate) fn fences(&self) -> &FenceRegistry {
+        &self.fences
+    }
+
     /// Where profile `id`'s state lives, provisioned or not.
     pub fn layout_of(&self, id: &ProfileId) -> ProfileLayout {
         ProfileLayout::new(&self.saas.root, id)
-    }
-
-    /// Create profile `id`'s directories and record it. Returns whether it
-    /// was new.
-    pub async fn provision(&self, id: &ProfileId) -> Result<bool, String> {
-        let _gate = self.gate.lock().await;
-        if self.registry.get(id).await?.is_some() {
-            log::debug!("[profiles] provision profile={id}: already provisioned");
-            return Ok(false);
-        }
-        create_dirs(&self.layout_of(id))?;
-        let meta = ProfileMeta {
-            profile_id: id.clone(),
-            created_at: unix_now(),
-            layout_version: LAYOUT_VERSION,
-        };
-        let created = self.registry.create(&meta).await?;
-        log::info!("[profiles] provisioned profile={id} created={created}");
-        Ok(created)
-    }
-
-    /// Close profile `id` and archive its state under `<root>/deprovisioned/`.
-    /// Nothing is deleted. Returns whether there was such a profile.
-    ///
-    /// A profile still in use here, or hosted by another node, is not
-    /// archived from under it: deprovisioning fails and can be retried (on
-    /// the other node, or after `profiles.release` there).
-    pub async fn deprovision(&self, id: &ProfileId) -> Result<bool, String> {
-        let _gate = self.gate.lock().await;
-        let held = {
-            let open = self.lock();
-            match open.get(id) {
-                Some(slot) if in_use(slot) => {
-                    return Err(format!("profile {id} is in use; try again shortly"))
-                }
-                Some(slot) => Some(slot.grant.clone()),
-                None => None,
-            }
-        };
-        let layout = self.layout_of(id);
-        let recorded = self.registry.get(id).await?.is_some();
-        if !recorded && !layout.dir.exists() {
-            return Ok(false);
-        }
-        let grant = match held {
-            Some(grant) => grant,
-            None => match self
-                .leases
-                .acquire(id.as_str(), profile_lease::now_ms())
-                .await
-            {
-                Ok(grant) => grant,
-                Err(LeaseError::Held(record)) => {
-                    return Err(format!(
-                        "profile {id} is hosted by node {}; release it there first",
-                        record.owner
-                    ))
-                }
-                Err(error) => return Err(format!("profile {id}: {error}")),
-            },
-        };
-        self.lock().remove(id);
-        // Credential secrets live in the process keyring under the profile id,
-        // not only in the profile's directory, so archiving the directory alone
-        // would let a re-provisioned profile pick the old credential back up.
-        let config = layout::profile_config(&layout, id);
-        let cleared = CoreContext::scope(self.records_context(id), async {
-            super::credentials::clear(&config)
-        })
-        .await;
-        if let Err(e) = cleared {
-            log::warn!("[profiles] clearing credentials before archiving failed: {e}");
-            // Keep the profile so cleanup can be retried; archiving now would
-            // leave the secret for a re-provisioned profile to inherit. It is
-            // closed here, so give its lease back for the retry to take.
-            profile_lease::release_all(self.leases(), vec![(id.clone(), grant)]).await;
-            return Err(format!("clearing credentials before archiving: {e}"));
-        }
-        if layout.dir.exists() {
-            let archive = layout::archive_dir(&self.saas.root);
-            std::fs::create_dir_all(&archive)
-                .map_err(|e| format!("creating {}: {e}", archive.display()))?;
-            // Unique even when one user is deprovisioned twice in a second.
-            let dest = archive.join(format!(
-                "{id}-{}-{}",
-                unix_now(),
-                uuid::Uuid::new_v4().simple()
-            ));
-            std::fs::rename(&layout.dir, &dest)
-                .map_err(|e| format!("archiving {}: {e}", layout.dir.display()))?;
-        }
-        self.registry.remove(id).await?;
-        profile_lease::release_all(self.leases(), vec![(id.clone(), grant)]).await;
-        log::info!("[profiles] deprovisioned profile={id} (archived)");
-        Ok(true)
     }
 
     /// A context acting for profile `id` without opening it: its forced
@@ -293,10 +224,11 @@ impl ProfileHost {
             // holds the gate rather than waiting for it.
             if let Ok(_gate) = self.gate.try_lock() {
                 let closed = self.sweep_idle_locked(&mut self.lock(), Instant::now());
-                profile_lease::release_all(self.leases(), closed).await;
+                profile_lease::release_all(self, closed).await;
             }
             return Ok(state);
         }
+        let _profile = self.lifecycle.lock(id).await;
         let _gate = self.gate.lock().await;
         if let Some(state) = self.touch(id) {
             return Ok(state);
@@ -315,7 +247,7 @@ impl ProfileHost {
             let closed = self.evict_locked(&mut open, Instant::now());
             (closed, open.len() >= self.saas.max_profiles_open.max(1))
         };
-        profile_lease::release_all(self.leases(), closed).await;
+        profile_lease::release_all(self, closed).await;
         if full {
             return Err(OpenError::Full {
                 max: self.saas.max_profiles_open,
@@ -330,9 +262,28 @@ impl ProfileHost {
                 log::debug!("[profiles] lease of profile={id} refused: {error}");
                 OpenError::from(error)
             })?;
+        // Read the registry again now that the lease is ours: a node that
+        // deprovisioned the profile held its lease until the record was
+        // gone, so an open that read the record before that must not
+        // recreate the archived directory.
+        match self.registry.get(id).await {
+            Ok(Some(_)) => {}
+            outcome => {
+                profile_lease::release_all(self, vec![(id.clone(), grant)]).await;
+                return Err(match outcome {
+                    Err(error) => OpenError::Storage(error),
+                    _ => {
+                        log::info!(
+                            "[profiles] open profile={id}: deprovisioned meanwhile; not reopening"
+                        );
+                        OpenError::NotProvisioned(id.clone())
+                    }
+                });
+            }
+        }
         let layout = self.layout_of(id);
         if let Err(error) = create_dirs(&layout) {
-            profile_lease::release_all(self.leases(), vec![(id.clone(), grant)]).await;
+            profile_lease::release_all(self, vec![(id.clone(), grant)]).await;
             return Err(OpenError::Storage(error));
         }
         let config = layout::profile_config(&layout, id);
@@ -343,6 +294,19 @@ impl ProfileHost {
                 .profile(id.as_str())
                 .agent_policy(profile_policy(&config)),
         );
+        let fence = super::fence::for_grant(
+            Arc::clone(&self.leases),
+            &self.node,
+            id,
+            &grant,
+            self.saas.lease_ttl(),
+        );
+        // Registered before recovery so its writes are already guarded.
+        // Once fenced, it refuses writes for as long as work on this context
+        // could still issue them.
+        let anchor: Arc<dyn std::any::Any + Send + Sync> = context.clone();
+        fence.anchor_to(Arc::downgrade(&anchor));
+        self.fences.register(Arc::clone(&fence));
         if grant.previous_unclean {
             log::info!(
                 "[profiles] profile={id} taken over from a holder that never released it (epoch {}); recovering",
@@ -352,12 +316,18 @@ impl ProfileHost {
             recover_session_store(id, &context);
         }
         crate::platform::cost::seed_tenant_tracker(&context, &config);
+        // Results a previous process finished but never delivered. The owner
+        // table that routes them is process-local and empty after a restart,
+        // so recover them in this profile's scope (on every open): the drains then run as this profile, on its tables alone.
+        CoreContext::sync_scope(Arc::clone(&context), || {
+            crate::agent::orchestration::background_delivery::recover_on_open(&layout.workspace_dir)
+        });
         let state = Arc::new(Profile {
             id: id.clone(),
             layout,
             config,
             context,
-            fenced: AtomicBool::new(false),
+            fence,
         });
         let mut open = self.lock();
         open.insert(
@@ -374,6 +344,18 @@ impl ProfileHost {
             open.len()
         );
         Ok(state)
+    }
+
+    /// Close `id` here if nothing uses it, in the same step as the check, so
+    /// no request can pick it up in between. Returns its grant when it was
+    /// open; refuses when it is in use.
+    pub(super) fn close_if_idle(&self, id: &ProfileId) -> Result<Option<LeaseGrant>, String> {
+        let mut open = self.lock();
+        match open.get(id) {
+            None => Ok(None),
+            Some(slot) if in_use(slot) => Err(format!("profile {id} is in use; try again shortly")),
+            Some(_) => Ok(open.remove(id).map(|slot| slot.grant)),
+        }
     }
 
     /// The open state of `id`, its last use bumped.
@@ -434,25 +416,21 @@ impl ProfileHost {
     pub async fn evict_idle(&self) {
         let _gate = self.gate.lock().await;
         let closed = self.evict_locked(&mut self.lock(), Instant::now());
-        profile_lease::release_all(self.leases(), closed).await;
+        profile_lease::release_all(self, closed).await;
     }
 
     /// Close profile `id` here and release its lease, so another node can
     /// host it at once. Returns whether it was open here. A profile in use
     /// is not released from under its work.
     pub async fn release(&self, id: &ProfileId) -> Result<bool, String> {
+        // Lifecycle lock before the gate, as every lifecycle operation does.
+        let _profile = self.lifecycle.lock(id).await;
         let _gate = self.gate.lock().await;
-        let grant = {
-            let mut open = self.lock();
-            match open.get(id) {
-                None => return Ok(false),
-                Some(slot) if in_use(slot) => {
-                    return Err(format!("profile {id} is in use; try again shortly"))
-                }
-                Some(_) => open.remove(id).map(|slot| slot.grant),
-            }
+        let Some(grant) = self.close_if_idle(id)? else {
+            return Ok(false);
         };
-        let grant = grant.expect("checked above");
+        // Retire the fence before the lease goes back, as `release_all` does.
+        self.fences.retire(id.as_str(), grant.epoch);
         self.leases.release(grant).await.map_err(|error| {
             log::warn!("[profiles] releasing profile={id} failed: {error}");
             format!("releasing profile {id}: {error}")
@@ -482,7 +460,7 @@ impl ProfileHost {
             closed.len(),
             self.open_count()
         );
-        profile_lease::release_all(self.leases(), closed).await;
+        profile_lease::release_all(self, closed).await;
     }
 
     /// The current grant of every open profile.
@@ -498,6 +476,7 @@ impl ProfileHost {
     pub(crate) fn store_grant(&self, id: &ProfileId, old: &LeaseGrant, renewed: LeaseGrant) {
         if let Some(slot) = self.lock().get_mut(id) {
             if slot.grant == *old {
+                slot.state.fence.renewed(renewed.expires_at_ms);
                 slot.grant = renewed;
             }
         }
@@ -518,7 +497,7 @@ impl ProfileHost {
             log::debug!("[profiles] fence profile={id}: already closed or re-opened");
             return;
         };
-        state.fenced.store(true, Ordering::SeqCst);
+        state.fence.fence();
         log::warn!(
             "[profiles] fenced profile={id} node={} ({why}); stopping its turns",
             self.node
@@ -587,7 +566,7 @@ fn in_use(slot: &Slot) -> bool {
     Arc::strong_count(&slot.state) > 1 || slot.state.context.tenant_in_use()
 }
 
-fn create_dirs(layout: &ProfileLayout) -> Result<(), String> {
+pub(super) fn create_dirs(layout: &ProfileLayout) -> Result<(), String> {
     for dir in [&layout.workspace_dir, &layout.sandbox_dir] {
         std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     }
@@ -605,54 +584,6 @@ fn profile_policy(config: &Config) -> Arc<crate::security::SecurityPolicy> {
         )
         .with_privacy_mode(config.privacy.mode),
     )
-}
-
-/// Settle what a previous holder left in profile `id`'s workspace: turns that
-/// were mid-flight become interrupted and run-ledger rows left running are
-/// closed. The sweep a single-user core runs at boot, run when a profile's
-/// lease is taken over from a holder that never released it. Failures are
-/// logged; the profile still opens.
-pub(crate) fn recover_workspace(id: &ProfileId, workspace_dir: &std::path::Path) {
-    let now = chrono::Utc::now().to_rfc3339();
-    match tinyagents_session::turn_state::store::mark_all_interrupted(
-        workspace_dir.to_path_buf(),
-        &now,
-    ) {
-        Ok(0) => {}
-        Ok(turns) => log::info!("[profiles] profile={id} recovered {turns} interrupted turn(s)"),
-        Err(error) => log::warn!("[profiles] profile={id} turn recovery failed: {error}"),
-    }
-    match tinyagents_session::run_ledger::interrupt_orphaned_agent_runs(workspace_dir) {
-        Ok(0) => {}
-        Ok(runs) => log::info!("[profiles] profile={id} settled {runs} orphaned run(s)"),
-        Err(error) => log::warn!("[profiles] profile={id} run recovery failed: {error:#}"),
-    }
-}
-
-/// [`recover_workspace`] for turn states kept in a storage-backed session
-/// store, which the workspace sweep cannot see: the profile's default
-/// session key is swept through the installed provider.
-fn recover_session_store(id: &ProfileId, context: &Arc<CoreContext>) {
-    let Some(provider) = crate::agent::session_store::installed() else {
-        return;
-    };
-    if provider.workspace_dir().is_some() {
-        // File-backed: the workspace sweep already covered it.
-        return;
-    }
-    let key = crate::core::runtime::session_key(&crate::core::runtime::Tenant::of(context));
-    let now = chrono::Utc::now().to_rfc3339();
-    match provider
-        .for_agent(&key)
-        .turn_states
-        .mark_all_interrupted(&now)
-    {
-        Ok(0) => {}
-        Ok(turns) => {
-            log::info!("[profiles] profile={id} recovered {turns} interrupted stored turn(s)");
-        }
-        Err(error) => log::warn!("[profiles] profile={id} stored turn recovery failed: {error}"),
-    }
 }
 
 static HOST: OnceLock<Arc<ProfileHost>> = OnceLock::new();
@@ -690,10 +621,13 @@ pub fn ensure_hosted() -> Result<(), String> {
     else {
         return Ok(());
     };
+    // The latch, and the grant's expiry by this node's clock: a node whose
+    // renewals stopped landing refuses new work before anyone can take over.
+    let now = profile_lease::now_ms();
     let hosted = ProfileId::parse(&profile)
         .ok()
         .and_then(|id| host.get(&id))
-        .is_some_and(|state| !state.is_fenced());
+        .is_some_and(|state| state.fence.check_local(now).is_ok());
     if hosted {
         Ok(())
     } else {
@@ -702,7 +636,7 @@ pub fn ensure_hosted() -> Result<(), String> {
     }
 }
 
-fn unix_now() -> u64 {
+pub(super) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

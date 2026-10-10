@@ -18,6 +18,7 @@
 pub mod agent_teams;
 pub(crate) mod background_completions;
 pub(crate) mod background_delivery;
+pub(crate) mod busy_guard;
 pub mod command_center;
 pub(crate) mod completion_notice;
 pub(crate) mod completion_owners;

@@ -140,6 +140,16 @@ pub(crate) async fn tick_live_agents(dispatcher: &mut JobDispatcher) {
     }
 }
 
+/// One pass over the live agents' due jobs, run to completion: what the
+/// scheduler loop does after each operator tick, for hosts and end-to-end
+/// tests that drive the agent pass without owning the loop's interval.
+pub async fn run_live_agent_pass(max_concurrent: usize) {
+    tracing::debug!(max_concurrent, "[cron:scheduler] live agent pass begin");
+    let mut dispatcher = JobDispatcher::new(max_concurrent.max(1));
+    tick_live_agents(&mut dispatcher).await;
+    dispatcher.drain().await;
+}
+
 /// Whether an agent can have jobs to poll: with a storage backend its jobs
 /// live in the backend under its scope (`crate::storage`), so there is always
 /// something to ask; without one, only once its own `jobs.db` exists.

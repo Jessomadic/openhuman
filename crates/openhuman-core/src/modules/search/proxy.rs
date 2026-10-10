@@ -13,6 +13,37 @@ use tinysearch_bus::{names, ExecuteToolRequest, ExecuteToolResponse, ListToolsRe
 use super::{module_config, MODULE_ID};
 use crate::config::Config;
 
+/// Bus deadline for one `ExecuteTool` call.
+///
+/// The bus default ([`tinybus::connection::DEFAULT_TIMEOUT`], 30 s) is sized
+/// for control calls. `web_answer_tool` waits on a provider to search *and*
+/// synthesize an answer, and `web_search_tool` can fall back across providers
+/// one after another; both routinely exceeded 30 s in production and came back
+/// as a bus timeout although the module was still working. 90 s stays under
+/// the harness's own default tool deadline
+/// ([`crate::tools::timeout::DEFAULT_TIMEOUT_SECS`], 120 s), so the module's
+/// answer, not the harness kill, decides the result. This is the floor; a
+/// larger configured tool budget extends it (see [`execute_tool_timeout_for`]).
+pub(super) const EXECUTE_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Headroom left between the bus deadline and the harness's tool deadline so
+/// the module's own answer (or its bus error) reaches the harness first.
+const EXECUTE_TOOL_HEADROOM_SECS: u64 = 30;
+
+/// Bus deadline for `ExecuteTool` under a harness tool budget of
+/// `tool_budget_secs`: the budget minus [`EXECUTE_TOOL_HEADROOM_SECS`], never
+/// below [`EXECUTE_TOOL_TIMEOUT`]. A user who raises the action timeout (for a
+/// slow provider) gets a search call that can use it; at the 120 s default
+/// this is exactly the 90 s floor. Below the floor the harness deadline is the
+/// tighter bound anyway.
+pub(super) fn execute_tool_timeout_for(tool_budget_secs: u64) -> std::time::Duration {
+    std::time::Duration::from_secs(
+        tool_budget_secs
+            .saturating_sub(EXECUTE_TOOL_HEADROOM_SECS)
+            .max(EXECUTE_TOOL_TIMEOUT.as_secs()),
+    )
+}
+
 fn last_config() -> &'static tokio::sync::Mutex<Option<u64>> {
     static LAST: OnceLock<tokio::sync::Mutex<Option<u64>>> = OnceLock::new();
     LAST.get_or_init(|| tokio::sync::Mutex::new(None))
@@ -148,20 +179,34 @@ pub async fn execute_tool(
     let current = current_config(config).await?;
     let tool = request.name.clone();
     with_module_lock(|| async {
-        proxy(&current)
-            .await?
-            // Keys travel only in the private module configuration; a call
-            // carries the model's arguments, which are not secrets. An
-            // ordinary call also works with a developer override, which is
-            // never attested.
-            .call(names::methods::EXECUTE_TOOL, (request,))
-            .await
-            .map_err(|error| {
-                tracing::debug!(tool = %tool, "[modules][search] ExecuteTool failed");
-                format!("search ExecuteTool failed: {error}")
-            })
+        let proxy = proxy(&current).await?;
+        // Keys travel only in the private module configuration; a call
+        // carries the model's arguments, which are not secrets. An ordinary
+        // call also works with a developer override, which is never attested.
+        call_execute_tool(proxy, request).await.map_err(|error| {
+            tracing::debug!(tool = %tool, "[modules][search] ExecuteTool failed");
+            format!("search ExecuteTool failed: {error}")
+        })
     })
     .await
+}
+
+/// `ExecuteTool` through `proxy`, under a deadline derived from the effective
+/// tool budget ([`execute_tool_timeout_for`]) rather than the bus default.
+pub(super) async fn call_execute_tool<R: serde::de::DeserializeOwned>(
+    proxy: tinybus::Proxy,
+    request: ExecuteToolRequest,
+) -> tinybus::Result<R> {
+    let timeout = execute_tool_timeout_for(crate::tools::timeout::tool_execution_timeout_secs());
+    tracing::debug!(
+        tool = %request.name,
+        timeout_secs = timeout.as_secs(),
+        "[modules][search] ExecuteTool"
+    );
+    proxy
+        .with_timeout(timeout)
+        .call(names::methods::EXECUTE_TOOL, (request,))
+        .await
 }
 
 #[cfg(test)]

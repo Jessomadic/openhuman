@@ -17,6 +17,12 @@ pub trait RuntimeAdapter: Send + Sync {
     fn memory_budget(&self) -> u64 {
         0
     }
+    /// The shell family [`Self::build_shell_command`] runs commands under, so
+    /// what the `shell` tool tells the model matches what actually executes.
+    /// Defaults to the host's own shell.
+    fn shell_flavor(&self) -> platform_shell::ShellFlavor {
+        platform_shell::ShellFlavor::current()
+    }
     fn build_shell_command(
         &self,
         command: &str,
@@ -156,6 +162,12 @@ impl RuntimeAdapter for DockerRuntime {
 
     fn memory_budget(&self) -> u64 {
         self.config.memory_limit_mb.unwrap_or(0)
+    }
+
+    /// Commands run under `sh -lc` inside the container on every host,
+    /// including Windows, so the model must be told POSIX, not cmd.exe.
+    fn shell_flavor(&self) -> platform_shell::ShellFlavor {
+        platform_shell::ShellFlavor::Posix
     }
 
     fn build_shell_command(
