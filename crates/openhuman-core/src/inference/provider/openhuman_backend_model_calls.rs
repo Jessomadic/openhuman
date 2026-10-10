@@ -83,7 +83,14 @@ impl ChatModel<()> for OpenHumanBackendModel {
             // `{"error":…}` payload; it never reaches the `Err` arm (#6724).
             Ok(stream) => Ok(stream.map_items(|item| {
                 observe_in_band_failure(&item);
-                item
+                match item {
+                    tinyinference_llm::model::ModelStreamItem::Completed(response) => {
+                        tinyinference_llm::model::ModelStreamItem::Completed(
+                            project_managed_usage(response),
+                        )
+                    }
+                    other => other,
+                }
             })),
             Err(e) => {
                 log_managed_dispatch_error(&e, "stream");
