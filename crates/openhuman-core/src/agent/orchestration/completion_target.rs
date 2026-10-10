@@ -7,7 +7,6 @@
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]
 use tinyagents_tasks::CompletionStore;
