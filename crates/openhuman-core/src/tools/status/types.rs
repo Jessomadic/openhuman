@@ -72,6 +72,15 @@ pub enum ToolFailureClass {
     /// catalog skill with no direct download cannot be installed automatically
     /// (#6277).
     Unsupported,
+    /// The model called a real tool with arguments that do not match its
+    /// schema. Nothing ran; the model gets the expected schema back and can
+    /// correct the call. Classified from the harness's own validation answer,
+    /// never from the schema text it echoes.
+    InvalidArguments,
+    /// A command ran and exited non-zero (or was killed by a signal). The
+    /// tool worked; the program it ran reported failure, and its stdout/stderr
+    /// is data for the model, not a verdict about OpenHuman.
+    CommandFailed,
     /// Could not be classified into any of the above.
     Unknown,
 }
@@ -160,9 +169,10 @@ impl ToolFailureClass {
             ToolFailureClass::MissingPermission
             | ToolFailureClass::MissingApp
             | ToolFailureClass::BadCredentials => FailureCategory::NeedsUserConfirmation,
-            ToolFailureClass::NotFound | ToolFailureClass::Unsupported => {
-                FailureCategory::Permanent
-            }
+            ToolFailureClass::NotFound
+            | ToolFailureClass::Unsupported
+            | ToolFailureClass::InvalidArguments
+            | ToolFailureClass::CommandFailed => FailureCategory::Permanent,
         }
     }
 }
