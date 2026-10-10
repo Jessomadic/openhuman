@@ -157,4 +157,4 @@ systemd-run --user --scope -p MemoryMax=2G -p MemorySwapMax=0 -p CPUQuota=200% -
 Use `50` or `100` for the other sizes and repeat each command in a fresh scope.
 The JSON output records process RSS, bootstrap/turn timings, cgroup limits,
 peak memory, and OOM counters. The raw runs are checked in as
-[`docs/benchmarks/medulla-embed-linux.json`](https://github.com/tinyhumansai/openhuman/blob/main/docs/benchmarks/medulla-embed-linux.json).
+[`docs/benchmarks/medulla-embed-linux.json`](../../docs/benchmarks/medulla-embed-linux.json).
