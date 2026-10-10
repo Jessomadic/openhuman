@@ -336,6 +336,13 @@ function useThreadFileDrop() {
 const EMPTY_COMPONENTS: ThreadComponents = {};
 
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
+// Composer callbacks can change on background refreshes. Keep message renderers
+// in a separate context so that change does not invalidate the full transcript.
+type MessageComponents = Pick<
+  ThreadComponents,
+  'AssistantMessage' | 'ToolFallback' | 'ActivityGroup' | 'SourceGroup' | 'MessageTasks'
+>;
+const MessageComponentsContext = createContext<MessageComponents>(EMPTY_COMPONENTS);
 
 const NO_SLASH_COMMANDS: readonly Unstable_SlashCommand[] = [];
 const SlashCommandsContext = createContext<readonly Unstable_SlashCommand[]>(NO_SLASH_COMMANDS);
@@ -388,20 +395,38 @@ export const Thread: FC<ThreadProps> = ({
   slashCommands = NO_SLASH_COMMANDS,
 }) => {
   const isEmpty = useAuiState(isNewChatView);
+  const messageComponents = useMemo<MessageComponents>(
+    () => ({
+      AssistantMessage: components.AssistantMessage,
+      ToolFallback: components.ToolFallback,
+      ActivityGroup: components.ActivityGroup,
+      SourceGroup: components.SourceGroup,
+      MessageTasks: components.MessageTasks,
+    }),
+    [
+      components.AssistantMessage,
+      components.ToolFallback,
+      components.ActivityGroup,
+      components.SourceGroup,
+      components.MessageTasks,
+    ]
+  );
 
   return (
     <ThreadComponentsContext.Provider value={components}>
-      <SlashCommandsContext.Provider value={slashCommands}>
-        <ThreadRoot
-          isEmpty={isEmpty}
-          model={model}
-          onModelChange={onModelChange}
-          loadError={loadError}
-          onEscape={onEscape}
-          onRecallLastPrompt={onRecallLastPrompt}
-          composerPlaceholder={composerPlaceholder}
-        />
-      </SlashCommandsContext.Provider>
+      <MessageComponentsContext.Provider value={messageComponents}>
+        <SlashCommandsContext.Provider value={slashCommands}>
+          <ThreadRoot
+            isEmpty={isEmpty}
+            model={model}
+            onModelChange={onModelChange}
+            loadError={loadError}
+            onEscape={onEscape}
+            onRecallLastPrompt={onRecallLastPrompt}
+            composerPlaceholder={composerPlaceholder}
+          />
+        </SlashCommandsContext.Provider>
+      </MessageComponentsContext.Provider>
     </ThreadComponentsContext.Provider>
   );
 };
@@ -551,7 +576,7 @@ const TranscriptFooterSlot: FC = () => {
 
 const ThreadMessage: FC = () => {
   const { AssistantMessage: AssistantMessageComponent = AssistantMessage } =
-    useContext(ThreadComponentsContext);
+    useContext(MessageComponentsContext);
   const role = useAuiState(s => s.message.role);
   const isEditing = useAuiState(s => s.message.composer.isEditing);
 
@@ -1128,7 +1153,7 @@ const AssistantMessage: FC = () => {
     ActivityGroup = DefaultActivityGroup,
     SourceGroup,
     MessageTasks,
-  } = useContext(ThreadComponentsContext);
+  } = useContext(MessageComponentsContext);
   const stopped = useAuiState(isStoppedRun);
 
   const ACTION_BAR_PT = 'pt-1.5';
