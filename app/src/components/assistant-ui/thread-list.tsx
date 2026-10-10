@@ -200,8 +200,8 @@ const ThreadListItemGroups: FC<{ searchQuery?: string }> = ({ searchQuery = '' }
 
 export const ThreadListNew = forwardRef<
   HTMLButtonElement,
-  ComponentPropsWithoutRef<typeof Button> & { labelClassName?: string }
->(({ className, labelClassName, children, ...props }, ref) => {
+  ComponentPropsWithoutRef<typeof Button> & { labelClassName?: string; label?: string }
+>(({ className, labelClassName, label, children, ...props }, ref) => {
   const { t } = useT();
   return (
     <ThreadListPrimitive.New
@@ -223,7 +223,7 @@ export const ThreadListNew = forwardRef<
           <span
             data-slot="aui_thread-list-new-label"
             className={cn('whitespace-nowrap', labelClassName)}>
-            {t('assistantUi.threadList.newThread', 'New Thread')}
+            {label ?? t('assistantUi.threadList.newThread', 'New Thread')}
           </span>
         </>
       )}

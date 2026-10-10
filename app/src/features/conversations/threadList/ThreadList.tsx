@@ -63,10 +63,10 @@ function ThreadRow() {
         {
           'data-testid': `thread-row-${id}`,
           'data-analytics-id': 'chat-sidebar-thread-row',
-        // Re-selecting the active thread still synchronizes OpenHuman's route.
-        onClick: () => {
-          if (host.selectedThreadId === id) host.onSelectThread(id);
-        },
+          // Re-selecting the active thread still synchronizes OpenHuman's route.
+          onClick: () => {
+            if (host.selectedThreadId === id) host.onSelectThread(id);
+          },
           title: thread.actionDir
             ? t('chat.sidebar.workingFolder').replace('{folder}', folderBasename(thread.actionDir))
             : undefined,
@@ -158,9 +158,9 @@ function ThreadListView() {
           data-testid="new-thread-button"
           data-analytics-id="chat-sidebar-new-thread"
           className="w-full"
-          title={t('chat.newThreadShortcut')}>
-          {t('chat.newConversation')}
-        </ThreadListNew>
+          title={t('chat.newThreadShortcut')}
+          label={t('chat.newConversation')}
+        />
         {props.threads.length > 0 && <ThreadListSearch value={search} onValueChange={setSearch} />}
       </div>
       <div

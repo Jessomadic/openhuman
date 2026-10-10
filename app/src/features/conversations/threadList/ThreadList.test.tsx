@@ -104,17 +104,14 @@ describe('ThreadList', () => {
     expect(screen.queryByTestId('thread-pin-t1')).not.toBeInTheDocument();
   });
 
-  it('shows unread only for idle threads and shimmers running ones', () => {
+  it('shows unread only for idle threads and shimmers running titles without a loader', () => {
     renderList({ unreadThreadIds: new Set(['t1', 't2']), isThreadRunning: id => id === 't2' });
     expect(screen.getByTestId('thread-unread-t1')).toBeInTheDocument();
     expect(screen.queryByTestId('thread-unread-t2')).not.toBeInTheDocument();
     const running = within(screen.getByTestId('thread-row-t2')).getByText('Plan trip');
     expect(running).toHaveAttribute('data-running', 'true');
-    expect(
-      screen
-        .getByTestId('thread-row-t2')
-        .querySelector('[data-slot="aui_thread-list-item-running"]')
-    ).toBeInTheDocument();
+    expect(running).toHaveClass('shimmer', 'motion-reduce:animate-none');
+    expect(screen.getByTestId('thread-row-t2').querySelector('[data-slot="aui_thread-list-item-running"]')).toBeNull();
   });
 
   it('creates and switches conversations through the runtime adapter', async () => {
