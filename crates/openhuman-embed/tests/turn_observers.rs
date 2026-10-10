@@ -33,11 +33,12 @@ fn terminal_errors_and_inputs_are_private_unless_content_is_requested() {
         )
         .await;
         assert!(result.is_err());
-        let records = observer.0.lock().unwrap();
-        assert_eq!(records.len(), 1);
-        assert!(!records[0].contains("SECRET"));
-        assert!(records[0].contains("Provider"));
-        drop(records);
+        {
+            let records = observer.0.lock().unwrap();
+            assert_eq!(records.len(), 1);
+            assert!(!records[0].contains("SECRET"));
+            assert!(records[0].contains("Provider"));
+        }
         observe_turn(
             observer.clone(),
             TraceContent::Include,
