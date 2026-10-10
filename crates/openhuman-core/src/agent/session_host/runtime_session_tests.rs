@@ -52,6 +52,55 @@ async fn committed_progress_uses_each_turns_receipt_sender() {
     drop(first);
 }
 
+/// A turn the harness stopped early (here: the failure breaker) still commits
+/// through `after_commit`. The stop the driver recorded on the turn's sidecar
+/// must ride on `TurnCompleted`, or the trace closes the turn as a clean
+/// completion and nobody can find it.
+#[tokio::test]
+async fn committed_progress_carries_the_sidecar_stop_on_turn_completed() {
+    use crate::agent::progress::AgentProgress;
+    use crate::agent::turn_stop::{TurnStop, TurnStopKind};
+    use tinyagents_runtime::{
+        CommitReceipt, ResumeMode, SessionTurnOutcome, TranscriptTurnOptions,
+    };
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let mut context = crate::agent::tinyagents::host::OpenHumanRunContext::new();
+    context.progress = Some(tx);
+    context.session_sidecar.lock().unwrap().stop = Some(TurnStop::breaker(
+        "Stopping after 2 attempt(s): failure class `uncertain_side_effect` still blocks \
+         operation `web_answer_tool` on `x`. Resolve this blocker before retrying.",
+    ));
+    let receipt = CommitReceipt {
+        outcome: SessionTurnOutcome {
+            history: Vec::new(),
+            output: Some("I stopped this turn early".into()),
+            interrupted: false,
+        },
+        options: TranscriptTurnOptions {
+            request_id: None,
+            thread_id: None,
+            stream: true,
+            resume: ResumeMode::Never,
+            context,
+        },
+        transcript: None,
+    };
+
+    assert!(super::progress::send_receipt_progress(&receipt, "q", "a", 3).await);
+    let mut completed = None;
+    while let Ok(event) = rx.try_recv() {
+        if let AgentProgress::TurnCompleted { stop, .. } = event {
+            completed = Some(stop);
+        }
+    }
+    let stop = completed
+        .expect("TurnCompleted delivered")
+        .expect("TurnCompleted carries the stop");
+    assert_eq!(stop.kind, TurnStopKind::Breaker);
+    assert_eq!(stop.operation.as_deref(), Some("web_answer_tool"));
+}
+
 #[test]
 fn clearing_progress_releases_warm_prelude_sender() {
     let tmp = tempfile::tempdir().expect("tempdir");
