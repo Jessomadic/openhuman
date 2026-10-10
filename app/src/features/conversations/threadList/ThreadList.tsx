@@ -6,6 +6,7 @@ import {
 } from '@/components/assistant-ui/thread-list';
 import {
   AssistantRuntimeProvider,
+  type ThreadMessageLike,
   ThreadListItemMorePrimitive,
   ThreadListPrimitive,
   useAuiState,
@@ -42,7 +43,7 @@ interface ThreadListProps {
 }
 
 const ThreadListHostContext = createContext<ThreadListProps | null>(null);
-const EMPTY_MESSAGES = [];
+const EMPTY_MESSAGES: readonly ThreadMessageLike[] = [];
 
 /** Registry row plus OpenHuman's working folder, unread indicator and pin action. */
 function ThreadRow() {

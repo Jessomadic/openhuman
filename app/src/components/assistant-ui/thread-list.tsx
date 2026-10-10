@@ -297,7 +297,7 @@ export const ThreadListItem: FC<{
               className="text-muted-foreground me-1.5 size-3.5 shrink-0 animate-spin"
             />
           )}
-          <span data-slot="aui_thread-list-item-title" className="min-w-0 flex-1 truncate">
+          <span data-slot="aui_thread-list-item-title" data-running={isRunning ? 'true' : undefined} aria-busy={isRunning || undefined} className="min-w-0 flex-1 truncate">
             <ThreadListItemPrimitive.Title fallback={t('chat.untitledThread')} />
           </span>
           {trailing}

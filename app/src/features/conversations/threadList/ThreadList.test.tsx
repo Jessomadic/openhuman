@@ -1,5 +1,7 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import userEvent from '@testing-library/user-event';
 
 import type { Thread } from '../../../types/thread';
 import { PINNED_THREAD_LABEL } from './groupThreads';
@@ -77,13 +79,15 @@ describe('ThreadList', () => {
     expect(screen.queryByTestId('thread-row-t2')).not.toBeInTheDocument();
   });
 
-  it('toggles a pin without selecting the row', () => {
+  it('toggles a pin through the registry menu without selecting the row', async () => {
     const onTogglePin = vi.fn();
     const onSelectThread = vi.fn();
     renderList({ onTogglePin, onSelectThread });
-    fireEvent.click(screen.getByTestId('thread-pin-t1'));
+    await userEvent.click(within(screen.getByTestId('thread-row-t1').parentElement!).getByRole('button', { name: 'assistantUi.threadList.moreOptions' }));
+    await userEvent.click(await screen.findByTestId('thread-pin-t1'));
     expect(onTogglePin).toHaveBeenCalledWith(expect.objectContaining({ id: 't1' }), true);
-    fireEvent.click(screen.getByTestId('thread-pin-t3'));
+    await userEvent.click(within(screen.getByTestId('thread-row-t3').parentElement!).getByRole('button', { name: 'assistantUi.threadList.moreOptions' }));
+    await userEvent.click(await screen.findByTestId('thread-pin-t3'));
     expect(onTogglePin).toHaveBeenCalledWith(expect.objectContaining({ id: 't3' }), false);
     expect(onSelectThread).not.toHaveBeenCalled();
   });
@@ -99,7 +103,32 @@ describe('ThreadList', () => {
     expect(screen.queryByTestId('thread-unread-t2')).not.toBeInTheDocument();
     const running = within(screen.getByTestId('thread-row-t2')).getByText('Plan trip');
     expect(running).toHaveAttribute('data-running', 'true');
-    expect(running.className).toContain('shimmer');
+    expect(screen.getByTestId('thread-row-t2').querySelector('[data-slot="aui_thread-list-item-running"]')).toBeInTheDocument();
+  });
+
+  it('creates and switches conversations through the runtime adapter', async () => {
+    const onCreateThread = vi.fn();
+    const onSelectThread = vi.fn();
+    renderList({ onCreateThread, onSelectThread });
+    await userEvent.click(screen.getByTestId('new-thread-button'));
+    await userEvent.click(screen.getByTestId('thread-row-t2'));
+    await waitFor(() => expect(onCreateThread).toHaveBeenCalledTimes(1));
+    expect(onSelectThread).toHaveBeenCalledWith('t2');
+  });
+
+  it('renames in place with the registry editor and keeps deletion behind the host confirmation', async () => {
+    const onRenameThread = vi.fn(async () => {});
+    const onRequestDelete = vi.fn();
+    renderList({ onRenameThread, onRequestDelete });
+    await userEvent.click(within(screen.getByTestId('thread-row-t1').parentElement!).getByRole('button', { name: 'assistantUi.threadList.moreOptions' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'assistantUi.threadList.rename' }));
+    const input = screen.getByTestId('thread-title-input-t1');
+    fireEvent.change(input, { target: { value: 'Updated title' } });
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(onRenameThread).toHaveBeenCalledWith('t1', 'Updated title'));
+    await userEvent.click(within(screen.getByTestId('thread-row-t1').parentElement!).getByRole('button', { name: 'assistantUi.threadList.moreOptions' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'common.delete' }));
+    expect(onRequestDelete).toHaveBeenCalledWith(expect.objectContaining({ id: 't1' }));
   });
 
   it('puts the working folder name in the row tooltip', () => {
