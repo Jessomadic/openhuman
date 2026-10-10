@@ -31,6 +31,7 @@ function renderUsage(
   usage: {
     lastTurnInputTokens: number;
     lastTurnOutputTokens: number;
+    lastTurnContextTokens?: number;
     contextWindow: number;
     subAgents?: Array<{
       agentId: string;
