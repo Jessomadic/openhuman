@@ -458,10 +458,7 @@ const Conversations = ({
   const rustChat = useRustChat();
   // Inline thread-title rename in the sidebar thread list — keyed by the
   // thread id being edited (null = none) so any row can rename in place.
-  const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
-  const [editTitleValue, setEditTitleValue] = useState('');
-  const editTitleInputRef = useRef<HTMLInputElement>(null);
-  const ignoreNextTitleBlurRef = useRef(false);
+
 
   const {
     isAtLimit,
@@ -757,45 +754,6 @@ const Conversations = ({
       debug('[chat] create thread failed: %O', error);
       setSendError(chatSendError('create_thread_failed', t('chat.createThreadFailed')));
     }
-  };
-
-  const handleStartEditTitle = (threadId: string) => {
-    const thr = threads.find(t => t.id === threadId);
-    debug('[chat] thread rename: start thread=%s', threadId);
-    setEditTitleValue(thr?.title ?? '');
-    ignoreNextTitleBlurRef.current = true;
-    setEditingThreadId(threadId);
-    const scheduleSelect = window.requestAnimationFrame ?? window.setTimeout;
-    scheduleSelect(() => {
-      editTitleInputRef.current?.select();
-      ignoreNextTitleBlurRef.current = false;
-    });
-  };
-
-  const handleCommitTitle = (threadId: string) => {
-    const trimmed = editTitleValue.trim();
-    setEditingThreadId(null);
-    // Title length only — never log the title text itself (may carry PII).
-    if (!threadId || !trimmed) {
-      debug('[chat] thread rename: commit skipped thread=%s empty=%s', threadId, !trimmed);
-      return;
-    }
-    const currentTitle = threads.find(t => t.id === threadId)?.title?.trim();
-    if (trimmed === currentTitle) {
-      debug('[chat] thread rename: commit skipped thread=%s (unchanged)', threadId);
-      return;
-    }
-    debug('[chat] thread rename: commit thread=%s len=%d', threadId, trimmed.length);
-    void dispatch(updateThreadTitle({ threadId, title: trimmed }))
-      .unwrap()
-      .then(() => debug('[chat] thread rename: committed thread=%s', threadId))
-      .catch(err =>
-        debug(
-          '[chat] thread rename: failed thread=%s err=%s',
-          threadId,
-          err instanceof Error ? err.message : String(err)
-        )
-      );
   };
 
   // Seed the composer footer with the selected thread's persisted token/cost
@@ -1940,7 +1898,7 @@ const Conversations = ({
     <ThreadList
       threads={sortedThreads}
       selectedThreadId={selectedThreadId ?? null}
-      onCreateThread={() => void handleCreateNewThread()}
+      onCreateThread={() => handleCreateNewThread()}
       onSelectThread={id => {
         threadSelectionIntentRef.current += 1;
         dispatch(setSelectedThread(id));
@@ -1974,22 +1932,8 @@ const Conversations = ({
           onCancel: () => {},
         })
       }
-      editingThreadId={editingThreadId}
-      editTitleValue={editTitleValue}
-      editTitleInputRef={editTitleInputRef}
-      onEditTitleValueChange={setEditTitleValue}
-      onStartEditTitle={handleStartEditTitle}
-      onCommitTitle={handleCommitTitle}
-      onCancelEditTitle={() => {
-        ignoreNextTitleBlurRef.current = true;
-        setEditingThreadId(null);
-      }}
-      onBlurTitle={id => {
-        if (ignoreNextTitleBlurRef.current) {
-          ignoreNextTitleBlurRef.current = false;
-          return;
-        }
-        handleCommitTitle(id);
+      onRenameThread={async (threadId, title) => {
+        await dispatch(updateThreadTitle({ threadId, title })).unwrap();
       }}
     />
   );

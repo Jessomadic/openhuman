@@ -26,11 +26,17 @@ const idle: TodoItem[] = [
 ];
 
 function toggle() {
-  return screen.getByRole('button', { name: 'conversations.todos.title' });
+  return screen.getByRole('button', { name: 'conversations.runMode.plan' });
 }
 
 describe('PinnedTodoCard', () => {
   beforeEach(() => store.clear());
+
+  it('renders the live progress using the assistant-ui agent plan', () => {
+    const { container } = render(<PinnedTodoCard threadId="t1" items={active} />);
+    expect(container.querySelector('[data-slot="agent-plan"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="todo-progress-card"]')).toBeNull();
+  });
 
   it('opens while a step is active and stays collapsed otherwise', async () => {
     const { rerender } = render(<PinnedTodoCard threadId="t1" items={active} />);
