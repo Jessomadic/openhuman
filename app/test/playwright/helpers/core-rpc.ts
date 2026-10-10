@@ -14,6 +14,16 @@ interface JsonRpcFailure {
   error: { message?: string; code?: number; data?: unknown };
 }
 
+class CoreRpcError extends Error {
+  readonly code: number | undefined;
+
+  constructor(method: string, error: JsonRpcFailure['error']) {
+    super(`RPC ${method} failed: ${error.message || 'unknown error'}`);
+    this.name = 'CoreRpcError';
+    this.code = error.code;
+  }
+}
+
 function buildBypassJwt(userId: string): string {
   const payload = Buffer.from(
     JSON.stringify({ sub: userId, userId, exp: Math.floor(Date.now() / 1000) + 3600 })
@@ -37,7 +47,7 @@ export async function callCoreRpc<T>(
 
   const payload = (await response.json()) as JsonRpcSuccess<T> & JsonRpcFailure;
   if (payload.error) {
-    throw new Error(`RPC ${method} failed: ${payload.error.message || 'unknown error'}`);
+    throw new CoreRpcError(method, payload.error);
   }
   return payload.result;
 }
@@ -261,7 +271,11 @@ export async function waitForAppReady(page: Page): Promise<void> {
       return result.snapshot ?? null;
     } catch (error) {
       // Some slim or older cores do not expose this optional status method.
-      if (error instanceof Error && /(?:unknown method|method not found)/i.test(error.message)) {
+      if (
+        error instanceof Error &&
+        ((error as CoreRpcError).code === -32601 ||
+          /(?:unknown method|method not found)/i.test(error.message))
+      ) {
         return null;
       }
       throw error;
@@ -269,6 +283,7 @@ export async function waitForAppReady(page: Page): Promise<void> {
   };
   const init = await readInitStatus();
   if (init?.overall === 'done' || init?.overall === 'idle') return;
+  if (init?.overall && init.overall !== 'running' && init.overall !== 'failed') return;
   if (init?.overall === 'running' || init?.overall === 'failed') {
     const alreadyDismissed = await page.evaluate(
       startedAt =>
@@ -279,18 +294,19 @@ export async function waitForAppReady(page: Page): Promise<void> {
   }
 
   const dialog = page.getByTestId('harness-init-dialog');
-  const backgroundButton = page.getByTestId('harness-init-background');
-  const continueButton = page.getByTestId('harness-init-continue-anyway');
+  const actionButton = dialog
+    .getByTestId(/harness-init-(background|continue-anyway)/)
+    .filter({ visible: true })
+    .first();
   const action: { value: 'background' | 'continue' | 'terminal' } = { value: 'terminal' };
   await expect
     .poll(
       async () => {
-        if (await continueButton.isVisible().catch(() => false)) {
-          action.value = 'continue';
-          return true;
-        }
-        if (await backgroundButton.isVisible().catch(() => false)) {
-          action.value = 'background';
+        if (await actionButton.isVisible().catch(() => false)) {
+          action.value =
+            (await actionButton.getAttribute('data-testid')) === 'harness-init-background'
+              ? 'background'
+              : 'continue';
           return true;
         }
         const current = await readInitStatus();
@@ -308,8 +324,7 @@ export async function waitForAppReady(page: Page): Promise<void> {
     )
     .toBe(true);
   if (action.value === 'background' || action.value === 'continue') {
-    const button = action.value === 'background' ? backgroundButton : continueButton;
-    await button.click();
+    await actionButton.click();
     await expect(dialog).toBeHidden({ timeout: 5_000 });
   }
 }

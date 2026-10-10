@@ -620,7 +620,7 @@ const threadSlice = createSlice({
         const selectionWasSuperseded =
           currentIntentVersion !==
           (action.payload.selectionIntentVersionAtRequest ?? currentIntentVersion);
-        if (selectionWasSuperseded && !state.selectedThreadId && state.threads.length === 0) {
+        if (selectionWasSuperseded && !state.selectedThreadId) {
           return;
         }
         const supersedingThread =

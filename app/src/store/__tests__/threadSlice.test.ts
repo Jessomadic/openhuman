@@ -228,6 +228,28 @@ describe('threadSlice loadThreads thunk', () => {
     expect(store.getState().thread.selectedThreadId).toBeNull();
   });
 
+  it('does not restore a cleared stale thread from an older list response', async () => {
+    const store = createStore();
+    mockedThreadApi.getThreads.mockResolvedValueOnce({
+      threads: [makeThread({ id: 't-1' }), makeThread({ id: 't-2' })],
+      count: 2,
+    });
+    await store.dispatch(loadThreads());
+    store.dispatch(setSelectedThread('t-1'));
+
+    let resolveThreads!: (value: { threads: Thread[]; count: number }) => void;
+    mockedThreadApi.getThreads.mockImplementationOnce(
+      () => new Promise(resolve => (resolveThreads = resolve))
+    );
+    const request = store.dispatch(loadThreads());
+    store.dispatch(clearStaleThread('t-1'));
+    resolveThreads({ threads: [makeThread({ id: 't-1' }), makeThread({ id: 't-2' })], count: 2 });
+    await request;
+
+    expect(store.getState().thread.threads.map(thread => thread.id)).toEqual(['t-2']);
+    expect(store.getState().thread.selectedThreadId).toBeNull();
+  });
+
   it('sets isLoadingThreads while pending and stores threads on fulfilled', async () => {
     const store = createStore();
     const payload = { threads: [makeThread({ id: 'a' })], count: 1 };
