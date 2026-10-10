@@ -45,6 +45,7 @@ use tinybus::SubscriptionHandle;
 use super::background_completions;
 use super::completion_notice::build_undelivered_notice;
 use super::completion_owners;
+use crate::core::runtime::tenant::{self, Tenant};
 use crate::core::runtime::CoreContext;
 
 /// Coalesce completions landing within this window into one delivery turn.
@@ -55,37 +56,80 @@ const DEBOUNCE: Duration = Duration::from_secs(3);
 const RECOVERY_DELAY: Duration = Duration::from_secs(15);
 
 /// Sessions with a user turn currently in flight — delivery defers while busy.
+/// Keyed by [`tenant::profile_key`] of the session id: in SaaS two profiles can
+/// run the same (caller-chosen) session id, and one profile's turn must not
+/// hold back, or be mistaken for, the other's. Desktop keys are the bare id.
 fn busy() -> &'static Mutex<HashSet<String>> {
     static BUSY: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     BUSY.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 /// Threads whose delivery turn is in flight — prevents two concurrent turns.
+/// Keyed by [`tenant::profile_key`] of the thread id, for the same reason.
 fn delivering() -> &'static Mutex<HashSet<String>> {
     static D: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     D.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-/// Is any in-flight turn running on `thread_id`?
+/// The calling task's profile, as the tenant its busy/slot keys carry.
+fn caller() -> Tenant {
+    tenant::current_tenant_or_isolated("background_delivery").profile_only()
+}
+
+/// The session id of a busy key, when the key belongs to `me`.
+fn session_of<'k>(key: &'k str, me: &Tenant) -> Option<&'k str> {
+    tenant::split_key(key)
+        .filter(|(owner, _)| owner == me)
+        .map(|(_, session)| session)
+}
+
+/// Mark a user turn on `session_id` as in flight, for the calling profile.
+/// Called by the turn loop itself, inside the turn's scope, because the bus
+/// subscriber runs off-task and could not tell which profile a session
+/// belongs to.
+pub(crate) fn note_turn_started(session_id: &str) {
+    let key = tenant::profile_key(session_id);
+    busy()
+        .lock()
+        .expect("background_delivery busy poisoned")
+        .insert(key);
+}
+
+/// The calling profile's turn on `session_id` ended (completed or failed).
+pub(crate) fn note_turn_ended(session_id: &str) {
+    let key = tenant::profile_key(session_id);
+    busy()
+        .lock()
+        .expect("background_delivery busy poisoned")
+        .remove(&key);
+}
+
+/// Is any in-flight turn of the calling profile running on `thread_id`?
 fn is_busy(thread_id: &str) -> bool {
+    let me = caller();
     busy()
         .lock()
         .expect("background_delivery busy poisoned")
         .iter()
+        .filter_map(|key| session_of(key, &me))
         .any(|session| {
             background_completions::thread_for_session(session).as_deref() == Some(thread_id)
         })
 }
 
-/// Forget every in-flight turn on `thread_id`. A turn that is cancelled
-/// cooperatively (Stop) can end without `AgentTurnCompleted` or `AgentError`, and
-/// its session would otherwise stay "busy" and defer this thread's deliveries
-/// until restart. Returns how many sessions were cleared.
+/// Forget every in-flight turn of the calling profile on `thread_id`. A turn
+/// that is cancelled cooperatively (Stop) can end without `AgentTurnCompleted`
+/// or `AgentError`, and its session would otherwise stay "busy" and defer this
+/// thread's deliveries until restart. Another profile's turn on a thread with
+/// the same id is left alone. Returns how many sessions were cleared.
 pub(crate) fn clear_busy_for_thread(thread_id: &str) -> usize {
+    let me = caller();
     let mut busy = busy().lock().expect("background_delivery busy poisoned");
     let before = busy.len();
-    busy.retain(|session| {
-        background_completions::thread_for_session(session).as_deref() != Some(thread_id)
+    busy.retain(|key| {
+        session_of(key, &me).is_none_or(|session| {
+            background_completions::thread_for_session(session).as_deref() != Some(thread_id)
+        })
     });
     let cleared = before - busy.len();
     if cleared > 0 {
@@ -111,21 +155,9 @@ impl EventHandler<DomainEvent> for BackgroundDeliveryHandler {
     }
 
     async fn handle(&self, event: &DomainEvent) {
-        match event {
-            DomainEvent::AgentTurnStarted { session_id, .. } => {
-                busy()
-                    .lock()
-                    .expect("busy poisoned")
-                    .insert(session_id.clone());
-            }
-            // A failed turn may not emit AgentTurnCompleted — clear busy so
-            // delivery isn't stuck.
-            DomainEvent::AgentTurnCompleted { session_id, .. }
-            | DomainEvent::AgentError { session_id, .. } => {
-                busy().lock().expect("busy poisoned").remove(session_id);
-            }
-            _ => {}
-        }
+        // Busy state is not tracked here: this runs off-task, with no tenant
+        // scope, so it cannot tell whose session an event names. The turn loop
+        // marks it in scope (`note_turn_started` / `note_turn_ended`).
         let saas = crate::core::runtime::is_saas();
         for drain in drain_schedule_in(saas, event, completion_owners::context_for_profile) {
             match drain.owner {
@@ -517,11 +549,12 @@ where
     retry_after
 }
 
-/// The per-thread delivery slot, plus the lease on the batch being delivered.
+/// The per-thread (per profile) delivery slot, plus the lease on the batch being delivered.
 /// Dropping it frees both: `release` on an already-settled record is a no-op,
 /// so a settled batch is untouched and an abandoned one is claimable again.
 struct DeliverySlot {
-    thread_id: String,
+    /// [`tenant::profile_key`] of the thread id.
+    key: String,
     router: Arc<CompletionRouter>,
     held: Vec<String>,
 }
@@ -529,12 +562,13 @@ struct DeliverySlot {
 impl DeliverySlot {
     /// `None` when a delivery is already in flight for the thread.
     fn claim(thread_id: &str, router: Arc<CompletionRouter>) -> Option<Self> {
+        let key = tenant::profile_key(thread_id);
         let mut d = delivering().lock().expect("delivering poisoned");
-        if !d.insert(thread_id.to_string()) {
+        if !d.insert(key.clone()) {
             return None;
         }
         Some(Self {
-            thread_id: thread_id.to_string(),
+            key,
             router,
             held: Vec::new(),
         })
@@ -551,7 +585,7 @@ impl Drop for DeliverySlot {
             self.router.release(&self.held);
         }
         if let Ok(mut d) = delivering().lock() {
-            d.remove(&self.thread_id);
+            d.remove(&self.key);
         }
     }
 }
