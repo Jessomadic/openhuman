@@ -16,7 +16,7 @@ import { ChatConversationMap } from '../aui/ChatConversationMap';
 import { ComposerTriggers } from '../aui/ComposerTriggers';
 import { ContextUsage } from '../aui/ContextUsage';
 import { InterruptedTurnNotice } from '../aui/InterruptedTurnNotice';
-import { TurnTaskCards, TurnTaskProvider } from '../aui/TurnTaskCards';
+import { ActiveTurnTaskCards, TurnTaskCards, TurnTaskProvider } from '../aui/TurnTaskCards';
 import { ChatSources } from './aui/ChatSources';
 import { ChatToolFallback } from './ChatToolParts';
 
