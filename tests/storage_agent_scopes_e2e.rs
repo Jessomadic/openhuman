@@ -117,7 +117,9 @@ async fn two_agents_keep_cron_and_flows_apart(case: Case) {
         assert!(cron::get_job(&config, &alpha_job.id).is_err());
         assert!(flow_names(&config).await.is_empty(), "B sees A's flow");
         assert!(
-            flows::ops::flows_get(&config, &alpha_flow.id).await.is_err(),
+            flows::ops::flows_get(&config, &alpha_flow.id)
+                .await
+                .is_err(),
             "B can read A's flow by id"
         );
     })
@@ -169,7 +171,10 @@ async fn two_agents_keep_cron_and_flows_apart(case: Case) {
     // Background visits see the agents' jobs under their own ids.
     let visited = for_each_scope("e2e", || async { job_names(&config) }).await;
     assert!(
-        visited.contains(&(Some("agent-alpha".to_string()), vec!["alpha-job".to_string()])),
+        visited.contains(&(
+            Some("agent-alpha".to_string()),
+            vec!["alpha-job".to_string()]
+        )),
         "{visited:?}"
     );
     assert!(
@@ -206,9 +211,14 @@ async fn no_acting_agent_falls_back_to_the_local_scope(case: Case) {
     assert!(storage::scope_from(None, true).is_err());
 
     add_due_job(&config, "operator-job");
-    flows::ops::flows_create(&config, "operator-flow".to_string(), flow_graph("op"), false)
-        .await
-        .unwrap();
+    flows::ops::flows_create(
+        &config,
+        "operator-flow".to_string(),
+        flow_graph("op"),
+        false,
+    )
+    .await
+    .unwrap();
     assert_eq!(job_names(&config), vec!["operator-job".to_string()]);
     assert_eq!(flow_names(&config).await, vec!["operator-flow".to_string()]);
 

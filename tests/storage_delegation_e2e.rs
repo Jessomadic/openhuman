@@ -134,8 +134,10 @@ async fn the_delegation_checkpointer_resumes_and_keeps_scopes_apart(case: Case) 
     if case.driver.is_durable() {
         let url = case.url.clone();
         let reopened =
-            openhuman_core::storage::block_on(async move { openhuman_core::storage::open(&url).await })
-                .unwrap();
+            openhuman_core::storage::block_on(
+                async move { openhuman_core::storage::open(&url).await },
+            )
+            .unwrap();
         openhuman_core::storage::install(reopened);
         CoreContext::scope(Arc::clone(&alpha), async {
             let checkpointer = open_delegation_checkpointer(&config).unwrap();
