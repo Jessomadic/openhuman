@@ -1,5 +1,4 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Thread } from '../../../types/thread';
@@ -45,14 +44,7 @@ function renderList(props: Partial<Parameters<typeof ThreadList>[0]> = {}) {
       onSelectThread={vi.fn()}
       resolveTitle={id => titles.get(id) ?? id}
       onRequestDelete={vi.fn()}
-      editingThreadId={null}
-      editTitleValue=""
-      editTitleInputRef={createRef<HTMLInputElement>()}
-      onEditTitleValueChange={vi.fn()}
-      onStartEditTitle={vi.fn()}
-      onCommitTitle={vi.fn()}
-      onCancelEditTitle={vi.fn()}
-      onBlurTitle={vi.fn()}
+      onRenameThread={vi.fn(async () => {})}
       {...props}
     />
   );
@@ -77,9 +69,12 @@ describe('ThreadList', () => {
     expect(within(sections[0]).getByTestId('thread-row-t3')).toBeInTheDocument();
   });
 
-  it('has no search box of its own (search lives in the global palette)', () => {
+  it('uses the assistant-ui thread-list search to filter rows', () => {
     renderList();
-    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument();
+    const search = screen.getByRole('searchbox');
+    fireEvent.change(search, { target: { value: 'gmail' } });
+    expect(screen.getByTestId('thread-row-t1')).toBeInTheDocument();
+    expect(screen.queryByTestId('thread-row-t2')).not.toBeInTheDocument();
   });
 
   it('toggles a pin without selecting the row', () => {
