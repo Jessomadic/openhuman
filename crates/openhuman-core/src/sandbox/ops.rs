@@ -93,13 +93,9 @@ pub(crate) async fn resolve_command_policy(
     if crate::core::runtime::is_saas() {
         return crate::profiles::tools::sandbox_policy(action_dir, state_dir);
     }
-    let config = match crate::config::ops::load_config_with_timeout().await {
-        Ok(config) => config,
-        Err(error) => {
-            tracing::warn!(%error, "[sandbox] using default configuration for command policy");
-            crate::config::Config::default()
-        }
-    };
+    let config = crate::config::ops::load_config_with_timeout()
+        .await
+        .map_err(|error| format!("Cannot read sandbox configuration: {error}"))?;
     let mut policy = resolve_sandbox_policy(
         SandboxMode::Sandboxed,
         action_dir,
