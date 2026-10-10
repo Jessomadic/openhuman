@@ -112,11 +112,13 @@ test("compare reports added and stale sites", () => {
 });
 
 test("every allowlisted path carries a reason and known rules", () => {
-  for (const [file, entry] of ALLOW) {
+  for (const [file, entries] of ALLOW) {
     assert.ok(file.startsWith(`${SRC}/`), file);
-    assert.ok(entry.reason.length > 20, file);
-    assert.ok(["sqlite-open", "json-write"].includes(entry.rule));
-    assert.ok(entry.site.length > 5, file);
+    for (const entry of entries) {
+      assert.ok(entry.reason.length > 20, file);
+      assert.ok(["sqlite-open", "json-write"].includes(entry.rule));
+      assert.ok(entry.site.length > 5, file);
+    }
   }
   const state = `${SRC}/config/workspace/state.rs`;
   const [site] = scan(state, "let conn = Connection::open(db_path)?;");
@@ -214,5 +216,15 @@ test("a call split across lines is still found", () => {
       ["sqlite-open", 1],
       ["json-write", 3],
     ],
+  );
+});
+
+test("a verbatim copy of an allowlisted line is still a finding", () => {
+  const file = `${SRC}/security/approval/store.rs`;
+  const line = "let conn = Connection::open(&db_path).with_context(|| {";
+  const kept = withoutAllowed(file, scan(file, `${line}\n});\n${line}\n});\n`));
+  assert.deepEqual(
+    kept.map((f) => [f.line, f.occurrence]),
+    [[3, 2]],
   );
 });

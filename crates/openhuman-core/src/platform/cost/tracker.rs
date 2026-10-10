@@ -492,6 +492,7 @@ impl CostStorage {
         F: FnMut(CostRecord),
     {
         if let Some(docs) = super::tracker_documents::current()? {
+            self.import_legacy_once(&docs)?;
             for record in docs.all()? {
                 if !is_legacy_host_duplicate(&record) {
                     on_record(record);
@@ -536,6 +537,17 @@ impl CostStorage {
         }
 
         Ok(())
+    }
+
+    /// The workspace's JSONL ledger predates the backend and belongs to the
+    /// single-user (`local`) scope; import it into that scope once.
+    /// Once per process for the backend instance (see
+    /// `CostDocs::import_legacy_once`).
+    fn import_legacy_once(&self, docs: &super::tracker_documents::CostDocs) -> Result<()> {
+        if crate::storage::current_scope().ok() != Some(crate::storage::Scope::local()) {
+            return Ok(());
+        }
+        docs.import_legacy_once(&self.path)
     }
 
     fn rebuild_aggregates(&mut self, day: NaiveDate, year: i32, month: u32) -> Result<()> {
@@ -595,6 +607,9 @@ impl CostStorage {
         // are not kept for a document ledger, whose scope changes per call;
         // `get_aggregated_costs` recomputes them from the scope's records.
         if let Some(docs) = super::tracker_documents::current()? {
+            // The legacy ledger goes in before the first document, so history
+            // is never split across the two.
+            self.import_legacy_once(&docs)?;
             return docs.add(&record);
         }
 
