@@ -216,6 +216,9 @@ fn last_turn_usage_reports_the_same_holistic_totals_as_transcript_billing() {
     assert_eq!(usage.cached_input_tokens, 4);
     assert!((usage.cost_usd - 0.005).abs() < f64::EPSILON);
     assert_eq!(usage.context_window, 128_000);
+    // The gauge numerator is the root's final call alone: neither the turn's
+    // summed spend nor the child's tokens, which ran in their own window.
+    assert_eq!(usage.context_tokens, 11);
     assert_eq!(usage.subagents.len(), 1, "detail breakdown is retained");
 }
 
