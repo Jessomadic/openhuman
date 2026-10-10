@@ -613,6 +613,9 @@ impl CostStorage {
         // are not kept for a document ledger, whose scope changes per call;
         // `get_aggregated_costs` recomputes them from the scope's records.
         if let Some(docs) = super::tracker_documents::current()? {
+            // The legacy ledger goes in before the first document, so history
+            // is never split across the two.
+            self.import_legacy_once(&docs)?;
             return docs.add(&record);
         }
 

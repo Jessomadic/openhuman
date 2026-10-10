@@ -69,29 +69,30 @@ fn scopes_do_not_see_each_others_artifacts() {
 }
 
 #[test]
-fn the_legacy_files_are_imported_once_into_an_empty_collection() {
+fn the_legacy_files_are_imported_once_and_a_delete_sticks() {
     let dir = tempfile::tempdir().unwrap();
     let a = dir.path().join("a");
     std::fs::create_dir_all(&a).unwrap();
-    std::fs::write(
-        a.join("meta.json"),
-        serde_json::to_string(&meta("a", 1, Some("t"))).unwrap(),
-    )
-    .unwrap();
+    std::fs::write(a.join("meta.json"), serde_json::to_string(&meta("a", 1, Some("t"))).unwrap())
+        .unwrap();
     std::fs::write(a.join("args.json"), r#"{"x":2}"#).unwrap();
     let bad = dir.path().join("bad");
     std::fs::create_dir_all(&bad).unwrap();
     std::fs::write(bad.join("meta.json"), "{nope").unwrap();
 
     let docs = docs_in(&MemoryStorage::new(), "local");
+    // A record created before the import is not overwritten.
+    let mut existing = meta("a", 1, Some("t"));
+    existing.title = "kept".into();
+    docs.put_meta(&existing).unwrap();
     assert_eq!(docs.import_legacy(dir.path()).unwrap(), 1);
-    assert_eq!(
-        docs.get_meta("a").unwrap().unwrap().thread_id.as_deref(),
-        Some("t")
-    );
+    assert_eq!(docs.get_meta("a").unwrap().unwrap().title, "kept");
     assert_eq!(docs.get_args("a").unwrap().unwrap()["x"], 2);
-    // A non-empty collection is not imported over.
+
+    // Deleted afterwards, it is not imported again by a later run.
+    assert!(docs.delete("a").unwrap());
     assert_eq!(docs.import_legacy(dir.path()).unwrap(), 0);
+    assert!(docs.get_meta("a").unwrap().is_none());
     assert_eq!(docs.import_legacy(&dir.path().join("none")).unwrap(), 0);
 }
 

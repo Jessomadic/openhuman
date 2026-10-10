@@ -88,6 +88,15 @@ impl Docs {
         })
     }
 
+    /// Writes the record only when none exists (an import must not overwrite
+    /// a record created since).
+    fn put_meta_if_absent(&self, meta: &ArtifactMeta) -> Result<()> {
+        if self.get_meta(&meta.id)?.is_some() {
+            return Ok(());
+        }
+        self.put_meta(meta)
+    }
+
     pub(super) fn get_meta(&self, id: &str) -> Result<Option<ArtifactMeta>> {
         let id = id.to_string();
         let stored = self
@@ -152,10 +161,13 @@ impl Docs {
         })
     }
 
-    /// Imports the workspace's legacy `meta.json` / `args.json` files when the
-    /// collection is still empty. Returns how many records were imported.
+    /// Imports the workspace's legacy `meta.json` / `args.json` files, once.
+    /// A marker file next to them is written only after every record went in,
+    /// so a failed import is retried and a record deleted afterwards is not
+    /// brought back by a restart. The files themselves are left in place.
     pub(super) fn import_legacy(&self, artifacts_dir: &Path) -> Result<usize> {
-        if !self.list_meta()?.is_empty() {
+        let marker = artifacts_dir.join(IMPORTED_MARKER);
+        if marker.exists() {
             return Ok(0);
         }
         let Ok(entries) = std::fs::read_dir(artifacts_dir) else {
@@ -173,19 +185,26 @@ impl Docs {
                 );
                 continue;
             };
-            self.put_meta(&meta)?;
+            self.put_meta_if_absent(&meta)?;
             if let Some(args) = std::fs::read_to_string(entry.path().join("args.json"))
                 .ok()
                 .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
             {
-                self.put_args(&meta.id, &args)?;
+                if self.get_args(&meta.id)?.is_none() {
+                    self.put_args(&meta.id, &args)?;
+                }
             }
             imported += 1;
         }
+        std::fs::write(&marker, b"legacy artifact records were imported into the storage backend\n")
+            .with_context(|| format!("write {}", marker.display()))?;
         log::debug!("[artifacts] legacy import: imported={imported}");
         Ok(imported)
     }
 }
+
+/// Written beside the legacy records once they are in the backend.
+const IMPORTED_MARKER: &str = ".imported-to-storage";
 
 /// Runs a document-store call off the async worker (the port is reached
 /// through a blocking bridge).
@@ -206,28 +225,20 @@ pub(super) async fn documents(workspace_dir: &Path) -> Result<Option<Docs>, Stri
     let Some(docs) = current().map_err(|e| format!("[artifacts] storage: {e:#}"))? else {
         return Ok(None);
     };
-    // Once per scope and workspace: the import only matters the first time.
+    // Once per process and workspace; the marker file makes it once overall.
+    // Serialized, and recorded only after the import succeeded.
     static IMPORTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-    let scope = crate::storage::current_scope().map_err(|e| format!("[artifacts] storage: {e}"))?;
-    let key = format!("{scope}|{}", workspace_dir.display());
-    let first = {
-        let mut seen = IMPORTED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if seen.contains(&key) {
-            false
-        } else {
+    let key = workspace_dir.display().to_string();
+    let legacy = workspace_dir.join("artifacts");
+    on_docs(docs.clone(), move |docs| {
+        let mut seen = IMPORTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !seen.contains(&key) {
+            docs.import_legacy(&legacy)?;
             seen.push(key);
-            true
         }
-    };
-    if first {
-        let legacy = workspace_dir.join("artifacts");
-        on_docs(docs.clone(), move |docs| {
-            docs.import_legacy(&legacy).map(|_| ())
-        })
-        .await?;
-    }
+        Ok(())
+    })
+    .await?;
     Ok(Some(docs))
 }
 
