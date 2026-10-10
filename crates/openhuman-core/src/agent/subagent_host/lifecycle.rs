@@ -1311,7 +1311,7 @@ fn map_lifecycle_error(error: SubagentError) -> SubagentRunError {
 /// That `Usage` can only say whether a charge is present, so a present one is
 /// read as charged and an absent one as unknown (it was sent as absent).
 fn cost_source_of(
-    charged: Option<&tinyinference_llm::usage::ChargedAmount>,
+    charged: Option<&ChargedAmount>,
 ) -> crate::agent::cost::CostSource {
     match charged {
         Some(_) => crate::agent::cost::CostSource::Charged,

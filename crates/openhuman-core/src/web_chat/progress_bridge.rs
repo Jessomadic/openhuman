@@ -1185,7 +1185,11 @@ pub(crate) fn spawn_progress_bridge(
                                     input_tokens,
                                     output_tokens,
                                     cached_input_tokens,
-                                    cost_usd: total_usd,
+                                    // A live rollup of the known spend so far;
+                                    // the turn's final figure (or `null`)
+                                    // arrives on `chat_done`.
+                                    cost_usd: Some(total_usd),
+                                    cost_source: crate::agent::cost::CostSource::Charged,
                                     context_window: 0,
                                     context_tokens: 0,
                                     subagents: Vec::new(),
