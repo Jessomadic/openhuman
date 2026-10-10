@@ -59,7 +59,7 @@ pub use authorize::ComposioAuthorizeTool;
 #[cfg(test)]
 use connect::{
     composio_connect_tool_timeout, connection_is_active, parse_composio_connect_timeout,
-    ComposioConnectTool, DEFAULT_COMPOSIO_CONNECT_TIMEOUT_SECS,
+    remaining_park_bound, ComposioConnectTool, DEFAULT_COMPOSIO_CONNECT_TIMEOUT_SECS,
 };
 pub use list_connections::ComposioListConnectionsTool;
 pub use list_toolkits::ComposioListToolkitsTool;

@@ -64,13 +64,6 @@
   },
   {
     "rule": "bare-spawn",
-    "path": "crates/openhuman-core/src/agent/orchestration/tools/spawn_async_subagent_execute.rs",
-    "line": 424,
-    "text": "let join = tokio::spawn(crate::agent::turn_origin::propagate(",
-    "occurrence": 1
-  },
-  {
-    "rule": "bare-spawn",
     "path": "crates/openhuman-core/src/agent/session_host/runtime_session.rs",
     "line": 723,
     "text": "tokio::spawn(async move {",

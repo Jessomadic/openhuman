@@ -458,3 +458,38 @@ async fn compressed_output_footers_only_name_tools_that_exist() {
     }
     assert!(seen > 0, "the footers must name at least one tool");
 }
+
+/// A workspace reached through a symlinked component (macOS `/var` ->
+/// `/private/var`) still accepts the canonical absolute `artifact_path` the
+/// store hands out, while the canonical containment check keeps refusing
+/// anything outside the tool-results dir.
+#[cfg(unix)]
+#[test]
+fn a_canonical_artifact_path_is_accepted_when_the_workspace_is_a_symlink() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir_all(&real).unwrap();
+    let alias = tmp.path().join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+    let dir = crate::security::policy::tool_result_artifacts_dir(&alias);
+    let file = dir.join("sess1").join("shell").join("call_abc123.txt");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, log_body()).unwrap();
+    let canonical_file = std::fs::canonicalize(&file).unwrap();
+    assert!(
+        !canonical_file.starts_with(&dir),
+        "fixture must differ lexically"
+    );
+
+    let ok = read_tool_result_artifact(&dir, &canonical_file.to_string_lossy(), 1 << 20)
+        .expect("canonical artifact path must be readable");
+    assert!(ok.contains("needle in the middle"));
+
+    let secret = real.join("secret.txt");
+    std::fs::write(&secret, "needle secret").unwrap();
+    let canonical_secret = std::fs::canonicalize(&secret).unwrap();
+    let err =
+        read_tool_result_artifact(&dir, &canonical_secret.to_string_lossy(), 1 << 20).unwrap_err();
+    assert!(!err.contains("needle secret"), "{err}");
+}

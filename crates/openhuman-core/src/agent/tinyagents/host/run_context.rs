@@ -87,8 +87,19 @@ pub struct LastTurnUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
-    pub cost_usd: f64,
+    /// The turn's cost including children, or `None` when any call's cost is
+    /// unknown (no reported charge and no catalogued price). Never a guess.
+    pub cost_usd: Option<f64>,
+    /// Whether `cost_usd` is entirely provider-charged or includes a catalog
+    /// estimate (`Unknown` exactly when `cost_usd` is `None`).
+    pub cost_source: crate::agent::cost::CostSource,
     pub context_window: u64,
+    /// Tokens the root agent's context held after the turn's final model call
+    /// (that call's input plus its reply): the numerator of the context-window
+    /// gauge. The token fields above are the turn's spend, summed over every
+    /// call, and may exceed the window many times over on a long tool loop.
+    /// Sub-agents are excluded, as each runs in its own window.
+    pub context_tokens: u64,
     pub subagents: Vec<SubagentUsageEntry>,
     /// Reasoning/thinking tokens the turn's own model calls spent. Reported
     /// only for a turn run with a response-shape scope (library agent turns,
@@ -108,7 +119,14 @@ pub(crate) struct SessionTurnSidecar {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
-    pub cost_usd: f64,
+    /// The turn's own cost (sub-agents excluded): every call's reported
+    /// charge, else catalog estimate, else unknown.
+    pub cost: crate::agent::cost::CostTally,
+    /// Input and output tokens of the turn's final model call. The totals
+    /// above sum every call of the turn (its spend); these are the context the
+    /// model last held, the numerator of the context-window gauge.
+    pub last_call_input_tokens: u64,
+    pub last_call_output_tokens: u64,
     /// The selected model's context window for this exact request.  The
     /// provider response's generic usage cannot represent this host datum.
     pub context_window: u64,
@@ -125,6 +143,13 @@ pub(crate) struct SessionTurnSidecar {
     /// subtracts it from its own start to log how long the durable commit
     /// took (`[session-runtime] post-commit`).
     pub driver_finished_at: Option<std::time::Instant>,
+    /// Set by the deadline wind-down middleware when it paused this turn
+    /// (`tinyagents::deadline_wind_down`).
+    pub wind_down: bool,
+    /// How the turn was stopped early, if it was (breaker, wind-down,
+    /// iteration cap). The driver classifies it; `after_commit` carries it on
+    /// `TurnCompleted` so the trace shows a stopped turn at `WARNING`.
+    pub stop: Option<crate::agent::turn_stop::TurnStop>,
 }
 
 /// Immutable inputs to the host's pre-dispatch policy.

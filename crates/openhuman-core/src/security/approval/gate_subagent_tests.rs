@@ -230,3 +230,70 @@ async fn an_expired_park_tells_the_model_nobody_answered() {
         "{reason}"
     );
 }
+
+/// Two async sub-agents parked on the same parent thread: the thread route
+/// holds only the newest, but each park must stay recoverable for replay so a
+/// rejoining client can rebuild both cards, and answering one must leave the
+/// other addressable.
+#[tokio::test]
+async fn every_detached_park_on_a_thread_stays_recoverable() {
+    let _env = EnvVarGuard::locked_unset_async("OPENHUMAN_APPROVAL_TTL_SECS").await;
+    let (gate, _dir) = test_gate();
+    let gate = Arc::new(gate);
+
+    let mut handles = Vec::new();
+    for tool in [
+        "media_generate_image_multi_a",
+        "media_generate_video_multi_b",
+    ] {
+        let g = gate.clone();
+        handles.push(tokio::spawn(async move {
+            turn_origin::with_origin(
+                async_subagent_origin("thread-multi"),
+                g.intercept(tool, "generate media", serde_json::json!({})),
+            )
+            .await
+        }));
+        // Park them one after another so the second overwrites the thread route.
+        for _ in 0..200 {
+            if gate
+                .list_pending()
+                .unwrap()
+                .iter()
+                .any(|row| row.tool_name == tool)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    let parked = gate.parked_requests_for_thread("thread-multi");
+    let tools: Vec<_> = parked.iter().map(|row| row.tool_name.as_str()).collect();
+    assert_eq!(
+        tools,
+        vec![
+            "media_generate_image_multi_a",
+            "media_generate_video_multi_b"
+        ],
+        "both parks must be replayable, oldest first"
+    );
+    assert!(gate
+        .parked_requests_for_thread("thread-unrelated")
+        .is_empty());
+
+    // Answer the newer one; the older one is still parked and still listed.
+    decide_parked(&gate, &parked[1].request_id, ApprovalDecision::Deny);
+    let remaining = gate.parked_requests_for_thread("thread-multi");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].request_id, parked[0].request_id);
+
+    decide_parked(&gate, &parked[0].request_id, ApprovalDecision::ApproveOnce);
+    let first = handles.remove(0).await.unwrap();
+    assert!(matches!(first, GateOutcome::Allow));
+    assert!(matches!(
+        handles.remove(0).await.unwrap(),
+        GateOutcome::Deny { .. }
+    ));
+    assert!(gate.parked_requests_for_thread("thread-multi").is_empty());
+}

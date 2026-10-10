@@ -153,6 +153,18 @@ fn profiles_prefix_their_keys() {
 }
 
 #[test]
+fn a_profiles_session_keys_share_its_prefix_and_no_other_does() {
+    let prefix = session_key_prefix("alice");
+    assert_eq!(prefix, "alice~");
+    assert!(session_key(&tenant(Some("alice"), None)).starts_with(&prefix));
+    assert!(session_key(&tenant(Some("alice"), Some("sub-1"))).starts_with(&prefix));
+    assert!(!session_key(&tenant(Some("alice2"), None)).starts_with(&prefix));
+    // An unprofiled agent's `~` is escaped, so it cannot pose as a profile.
+    assert!(!session_key(&tenant(None, Some("alice~x"))).starts_with(&prefix));
+    assert_eq!(session_key_prefix("a~b"), "a%7Eb~");
+}
+
+#[test]
 fn an_unprofiled_agent_never_collides_with_a_profiled_one() {
     assert_ne!(
         session_key(&tenant(None, Some("a~b"))),

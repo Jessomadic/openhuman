@@ -91,3 +91,25 @@ fn install_leaves_children_and_unbounded_turns_alone() {
     assert!(install_for(&mut plain, Some(&h), None, false).is_none());
     assert_eq!(plain.policy().limits.max_wall_clock_ms, before);
 }
+
+/// The wind-down pause is how the turn ended, so it must reach the session
+/// sidecar the driver classifies the turn's stop from. Before, the middleware
+/// only paused, and a wound-down turn was traced as a clean completion.
+#[test]
+fn a_wind_down_pause_is_recorded_on_the_turn_sidecar() {
+    let mut harness: AgentHarness<(), OpenHumanRunContext> = AgentHarness::new();
+    harness.with_policy(crate::agent::tinyagents::run_policy_for(200, false));
+    let now = Instant::now();
+    let mut run_context = OpenHumanRunContext::new();
+    run_context.turn_deadline = Some(TurnDeadline::new(
+        now - Duration::from_secs(781),
+        Duration::from_secs(900),
+    ));
+    let mw = install(&mut harness, &Some(handle()), &run_context, &None).expect("installed");
+    assert!(!run_context.session_sidecar.lock().unwrap().wind_down);
+    assert!(mw.maybe_pause("after_tool", Instant::now()));
+    assert!(
+        run_context.session_sidecar.lock().unwrap().wind_down,
+        "the pause must be visible to the driver"
+    );
+}
