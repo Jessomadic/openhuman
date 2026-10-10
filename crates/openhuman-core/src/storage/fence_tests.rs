@@ -105,7 +105,7 @@ async fn a_released_or_missing_record_supersedes_the_fence() {
         Err(FenceError::Superseded { stored: Some(1), .. })
     ));
 
-    let other = LeaseFence::new(a, "nobody", "node-a", 1, u64::MAX, 0, scopes());
+    let other = LeaseFence::new(Arc::clone(&a), "nobody", "node-a", 1, u64::MAX, 0, scopes());
     assert_eq!(
         other.check(1).await,
         Err(FenceError::Superseded {
@@ -113,6 +113,14 @@ async fn a_released_or_missing_record_supersedes_the_fence() {
             stored: None
         })
     );
+
+    // A fence never keeps its node's lease store alive; once the store is
+    // gone, the check fails closed.
+    let orphan = LeaseFence::new(a, "alice", "node-a", 2, u64::MAX, 0, scopes());
+    assert!(matches!(
+        orphan.check(1).await,
+        Err(FenceError::Unverified(_))
+    ));
 }
 
 #[derive(Debug)]
