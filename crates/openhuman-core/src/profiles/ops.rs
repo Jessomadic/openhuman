@@ -160,9 +160,7 @@ pub(crate) async fn clear_credential_on(
     profile_id: &str,
 ) -> Result<Outcome<CredentialResult>, String> {
     let profile_id = ProfileId::parse(profile_id)?;
-    let removed = host
-        .with_records(&profile_id, credentials::clear)
-        .await?;
+    let removed = host.with_records(&profile_id, credentials::clear).await?;
     log::info!("[profiles] credential cleared removed={removed}");
     let log = if removed {
         "credential cleared"

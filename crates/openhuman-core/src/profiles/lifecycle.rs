@@ -209,7 +209,11 @@ impl ProfileHost {
 
     /// Take `id`'s lease for a lifecycle change, refusing when another node
     /// holds it.
-    async fn acquire_for_lifecycle(&self, id: &ProfileId, what: &str) -> Result<LeaseGrant, String> {
+    async fn acquire_for_lifecycle(
+        &self,
+        id: &ProfileId,
+        what: &str,
+    ) -> Result<LeaseGrant, String> {
         match self
             .leases
             .acquire(id.as_str(), profile_lease::now_ms())

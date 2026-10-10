@@ -137,7 +137,10 @@ async fn releasing_a_key_whose_directory_moved_away_drops_the_stale_holding() {
     let key_dir = local_dir(dir.path(), "moved");
     std::fs::rename(&key_dir, dir.path().join("archived")).unwrap();
     a.release(grant).await.unwrap();
-    assert!(!key_dir.exists(), "releasing must not recreate the directory");
+    assert!(
+        !key_dir.exists(),
+        "releasing must not recreate the directory"
+    );
 
     // A fresh directory: `a` takes the real lock again instead of answering
     // from a holding on the archived file, so `b` is held out.

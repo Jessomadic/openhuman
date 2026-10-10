@@ -254,7 +254,9 @@ impl ProfileHost {
                 return Err(match outcome {
                     Err(error) => OpenError::Storage(error),
                     _ => {
-                        log::info!("[profiles] open profile={id}: deprovisioned meanwhile; not reopening");
+                        log::info!(
+                            "[profiles] open profile={id}: deprovisioned meanwhile; not reopening"
+                        );
                         OpenError::NotProvisioned(id.clone())
                     }
                 });
