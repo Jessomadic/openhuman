@@ -42,17 +42,18 @@ pub(crate) async fn lock() -> MutexGuard<'static, ()> {
 /// The file exists but cannot be read or does not parse as `T`.
 pub(crate) async fn load<T>(path: &Path) -> Result<T, String>
 where
-    T: DeserializeOwned + Default,
+    T: DeserializeOwned + Default + Send + 'static,
 {
     if let Some(docs) =
         super::file_store_documents::current().map_err(|e| format!("[composio:store] {e:#}"))?
     {
-        return docs.load(path).map_err(|error| {
-            format!(
-                "[composio:store] reading {} failed: {error:#}",
-                path.display()
-            )
-        });
+        // The document port is reached through a blocking bridge; keep it off
+        // the async worker, under the caller's context.
+        let owned = path.to_path_buf();
+        return crate::core::runtime::spawn_blocking_scoped(move || docs.load(&owned))
+            .await
+            .map_err(|error| format!("[composio:store] reading {} failed: {error}", path.display()))?
+            .map_err(|error| format!("[composio:store] reading {} failed: {error:#}", path.display()));
     }
     let bytes = match tokio::fs::read(path).await {
         Ok(bytes) => bytes,
@@ -95,7 +96,7 @@ where
         super::file_store_documents::current().map_err(|e| format!("[composio:store] {e:#}"))?
     {
         let owned = path.to_path_buf();
-        return tokio::task::spawn_blocking(move || docs.update(&owned, change))
+        return crate::core::runtime::spawn_blocking_scoped(move || docs.update(&owned, change))
             .await
             .map_err(|error| {
                 format!(
@@ -131,12 +132,13 @@ where
     if let Some(docs) =
         super::file_store_documents::current().map_err(|e| format!("[composio:store] {e:#}"))?
     {
-        return docs.save(path, value).map_err(|error| {
-            format!(
-                "[composio:store] writing {} failed: {error:#}",
-                path.display()
-            )
-        });
+        let owned = path.to_path_buf();
+        let value = serde_json::to_value(value)
+            .map_err(|error| format!("[composio:store] serializing failed: {error}"))?;
+        return crate::core::runtime::spawn_blocking_scoped(move || docs.save(&owned, &value))
+            .await
+            .map_err(|error| format!("[composio:store] writing {} failed: {error}", path.display()))?
+            .map_err(|error| format!("[composio:store] writing {} failed: {error:#}", path.display()));
     }
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| format!("[composio:store] serializing failed: {error}"))?;
