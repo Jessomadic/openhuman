@@ -54,6 +54,7 @@ async fn chat_done_carries_timing_when_a_snapshot_is_supplied() {
         cached_input_tokens: 0,
         cost_usd: 0.01,
         context_window: 8000,
+        context_tokens: 60,
         subagents: Vec::new(),
         reasoning_tokens: 0,
     };
