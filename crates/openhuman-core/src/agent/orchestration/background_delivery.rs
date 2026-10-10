@@ -55,10 +55,8 @@ const DEBOUNCE: Duration = Duration::from_secs(3);
 /// delivery turn, so providers and the session store are up first.
 const RECOVERY_DELAY: Duration = Duration::from_secs(15);
 
-/// Sessions with a user turn currently in flight — delivery defers while busy.
-/// Keyed by [`tenant::profile_key`] of the session id: in SaaS two profiles can
-/// run the same (caller-chosen) session id, and one profile's turn must not
-/// hold back, or be mistaken for, the other's. Desktop keys are the bare id.
+/// Sessions with a user turn in flight — delivery defers while busy. Keyed by
+/// [`tenant::profile_key`]: two SaaS profiles can share a session id (desktop: bare id).
 fn busy() -> &'static Mutex<HashSet<String>> {
     static BUSY: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     BUSY.get_or_init(|| Mutex::new(HashSet::new()))
@@ -83,11 +81,9 @@ fn session_of<'k>(key: &'k str, me: &Tenant) -> Option<&'k str> {
         .map(|(_, session)| session)
 }
 
-/// A user turn in flight on a session, for the calling profile; the session
-/// counts as busy until this is dropped. Taken by the turn loop itself, inside
-/// the turn's scope, because the bus subscriber runs off-task and could not
-/// tell which profile a session id belongs to. The key is computed once, so
-/// dropping it anywhere (a cancelled turn) clears the right entry.
+/// A user turn in flight on a session for the calling profile, busy until dropped.
+/// The turn loop takes it in scope (the bus subscriber runs off-task and cannot
+/// tell whose session it is); the key is fixed, so a cancelled turn clears it.
 pub(crate) struct TurnBusy {
     key: String,
 }
@@ -162,9 +158,7 @@ impl EventHandler<DomainEvent> for BackgroundDeliveryHandler {
     }
 
     async fn handle(&self, event: &DomainEvent) {
-        // Busy state is not tracked here: this runs off-task, with no tenant
-        // scope, so it cannot tell whose session an event names. The turn loop
-        // marks it in scope (`note_turn_started` / `note_turn_ended`).
+        // Busy state is not tracked here (off-task, no tenant): see `TurnBusy`.
         let saas = crate::core::runtime::is_saas();
         // Opening a profile is async (it may take its lease), so resolve the
         // owning profiles' contexts first and hand the sync scheduler a lookup.
@@ -586,7 +580,7 @@ where
     retry_after
 }
 
-/// The per-thread (per profile) delivery slot, plus the lease on the batch being delivered.
+/// The per-thread (per profile) delivery slot, plus the batch lease.
 /// Dropping it frees both: `release` on an already-settled record is a no-op,
 /// so a settled batch is untouched and an abandoned one is claimable again.
 struct DeliverySlot {
