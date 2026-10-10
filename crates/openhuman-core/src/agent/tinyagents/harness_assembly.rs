@@ -194,6 +194,9 @@ pub(super) fn assemble_turn_harness(
         "[models] assembling turn harness with SDK retry/fallback policy"
     );
     harness.with_policy(policy);
+    // Per-tool deadlines (`ToolTimeout` policies) are enforced only when the
+    // host installs the shared settings; see `install_harness_tool_timeouts`.
+    crate::tools::timeout::install_harness_tool_timeouts(&mut harness);
     // Deterministic internal runs (summarizer/triage/memory-scoring style) may
     // reuse a prior identical model response; attach an in-memory response cache
     // so the agent loop can short-circuit a recurring provider call and emit

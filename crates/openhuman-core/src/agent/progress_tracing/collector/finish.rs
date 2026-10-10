@@ -47,16 +47,13 @@ impl SpanCollector {
                 self.apply_turn_outcome(outcome.unwrap_or(TurnOutcome::Incomplete), end);
             }
         }
-        // Children before parents: spans are appended in open order, so a
-        // reverse sweep closes a tool before the iteration/subagent above it
-        // and the parent's end is final by the time a child reads it... except
-        // that a parent still open here has no end yet; it is bounded by the
-        // last activity, as is the child.
+        // A span still open is bounded by its parent's end when the parent
+        // already closed (a tool under a finished iteration ran no later than
+        // the next model call), else by the last event seen.
         let open: Vec<usize> = (0..self.spans.len())
-            .rev()
             .filter(|&idx| self.spans[idx].end_unix_ms.is_none())
             .collect();
-        let fallback_end = self.last_activity_unix_ms.min(end).max(1);
+        let fallback_end = self.last_activity_unix_ms.min(end);
         for idx in open {
             self.force_close(idx, fallback_end);
         }
@@ -170,7 +167,6 @@ impl SpanCollector {
         };
         let end = parent_end
             .filter(|end| *end >= start)
-            .map(|end| end.min(fallback_end.max(start)))
             .unwrap_or(fallback_end);
         let mut extra = BTreeMap::new();
         if matches!(kind, SpanKind::Tool | SpanKind::Subagent) {
