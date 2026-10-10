@@ -17,9 +17,9 @@ Everything below was measured on Apple Silicon macOS with a `--release` build an
 
 | N agents | Marginal KiB/agent | Settled MiB | Idle CPU ms/10s | Threads | FDs |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 50 | 1,985 | 223 | 3 | 71 | 420 |
-| 100 | 1,866 | 356 | 3 | 123 | 820 |
-| 500 | 1,770 | 1,393 | 3 | 211 | 3,220 |
+| 50 | 221.65 MiB | 3.757 MiB | 192.94 MiB | 420 ms | 360 ms |
+| 100 | 372.51 MiB | 3.389 MiB | 352.93 MiB | 954 ms | 840 ms |
+| 500 | 1,504.13 MiB | 2.941 MiB | 1,572.43 MiB | 5,056 ms | 4,829 ms |
 
 500 agents fit in one process at roughly 1.77 MiB marginal cost each. Idle CPU stays flat as N grows, which matters because an agent that is not mid-turn should not spend cycles. Thread count grows by about 0.35 per agent. Watch that line before pushing past 500 in production.
 
@@ -118,29 +118,30 @@ were measured at each size; the table gives medians. RSS is sampled after every
 agent completes one concurrent turn, with all agent handles retained. Marginal
 RSS is `(RSS after turns - RSS after Runtime::build) / N`, without allocator
 trimming. The cgroup peak includes the HTTP mock and the Python measurement
-wrapper. RSS and cgroup accounting differ because shared file pages may be
+wrapper. Mock request recording is disabled, so retained HTTP request history
+is excluded. RSS and cgroup accounting differ because shared file pages may be
 charged outside the new cgroup.
 
 | Concurrent agents | Process RSS after turns | Marginal RSS/agent | Cgroup peak | Fleet wall time | Turn p95 |
 | --- | --- | --- | --- | --- | --- |
-| 50 | 217.73 MiB | 3.760 MiB | 200.27 MiB | 535 ms | 477 ms |
-| 100 | 371.67 MiB | 3.385 MiB | 354.22 MiB | 960 ms | 834 ms |
-| 500 | 1,481.53 MiB | 2.897 MiB | 1,550.87 MiB | 5,019 ms | 4,757 ms |
+| 50 | 221.65 MiB | 3.757 MiB | 192.94 MiB | 420 ms | 360 ms |
+| 100 | 372.51 MiB | 3.389 MiB | 352.93 MiB | 954 ms | 840 ms |
+| 500 | 1,504.13 MiB | 2.941 MiB | 1,572.43 MiB | 5,056 ms | 4,829 ms |
 
 The 100- and 500-agent results are within twice the earlier macOS/mock
 1.77 MiB figure (3.54 MiB). The 50-agent result misses that target slightly:
-its three runs used 3.659–3.838 MiB per agent. These are different hosts and
+its three runs used 3.665–3.783 MiB per agent. These are different hosts and
 harness entry points, so the table is a capacity measurement rather than a
 controlled comparison of the platforms.
 
-Runtime boot took 256–302 ms. The first turn in each fresh process took
-16.9–74.3 ms, before launching the concurrent fleet. Both are within twice the
+Runtime boot took 256–262 ms. The first turn in each fresh process took
+14.9–23.8 ms, before launching the concurrent fleet. Both are within twice the
 earlier 476 ms bootstrap and 102 ms first-turn figures. “First turn” includes
 session/model/tool initialization, but excludes compiling and loading the
 executable; the OS page cache was warm.
 
 A separate 500-agent run with **swap disabled** (`MemorySwapMax=0`) completed
-in 5,087 ms, with 2.875 MiB marginal RSS per agent and a 1,586.80 MiB cgroup
+in 5,070 ms, with 2.936 MiB marginal RSS per agent and a 1,570.99 MiB cgroup
 peak. Every run recorded zero `max`, `oom`, and `oom_kill` memory events.
 This does not establish capacity for real providers, tool subprocesses, MCP
 servers, or 1,000 simultaneously active turns. Measure those workloads before
