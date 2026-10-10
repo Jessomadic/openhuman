@@ -107,7 +107,7 @@ describe('ThreadList', () => {
     expect(screen.queryByTestId('thread-unread-t2')).not.toBeInTheDocument();
     const running = within(screen.getByTestId('thread-row-t2')).getByText('Plan trip');
     expect(running).toHaveAttribute('data-running', 'true');
-    expect(running).toHaveClass('shimmer', 'motion-reduce:animate-none');
+    expect(running).not.toHaveClass('shimmer');
     expect(
       screen
         .getByTestId('thread-row-t2')

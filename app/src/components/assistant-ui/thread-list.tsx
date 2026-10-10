@@ -297,17 +297,20 @@ export const ThreadListItem: FC<{
             data-slot="aui_thread-list-item-title"
             data-running={isRunning ? 'true' : undefined}
             aria-busy={isRunning || undefined}
-            className={cn(
-              'min-w-0 flex-1 truncate',
-              isRunning && 'shimmer motion-reduce:animate-none'
-            )}>
+            className="min-w-0 flex-1 truncate">
             <ThreadListItemPrimitive.Title fallback={t('chat.untitledThread')} />
           </span>
           {trailing}
           {isRunning && (
             <>
-              <Loader2Icon data-slot="aui_thread-list-item-running" aria-hidden className="ms-2 size-3.5 shrink-0 animate-spin motion-reduce:animate-none text-muted-foreground" />
-              <span className="sr-only">{t('conversations.backgroundTasks.statusRunning', 'Running')}</span>
+              <Loader2Icon
+                data-slot="aui_thread-list-item-running"
+                aria-hidden
+                className="ms-2 size-3.5 shrink-0 animate-spin motion-reduce:animate-none text-muted-foreground"
+              />
+              <span className="sr-only">
+                {t('conversations.backgroundTasks.statusRunning', 'Running')}
+              </span>
             </>
           )}
         </ThreadListItemPrimitive.Trigger>
