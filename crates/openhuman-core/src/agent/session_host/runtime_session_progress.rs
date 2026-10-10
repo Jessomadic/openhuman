@@ -18,9 +18,26 @@ pub(super) async fn send_receipt_progress(
     output: &str,
     iterations: u32,
 ) -> bool {
+    // How the driver says the turn ended: a turn the harness stopped early
+    // (breaker, wind-down, iteration cap) still commits, so the stop rides on
+    // the terminal event for the trace collector to close it at WARNING.
+    let stop = receipt
+        .options
+        .context
+        .session_sidecar
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .stop
+        .clone();
+    if let Some(stop) = &stop {
+        log::debug!(
+            "[agent_session] committed turn was stopped early; carrying it on TurnCompleted {}",
+            stop.status_message()
+        );
+    }
     match receipt.options.context.progress.as_ref() {
         Some(progress) => {
-            send_committed_turn_progress(progress, input, output, iterations, None).await
+            send_committed_turn_progress(progress, input, output, iterations, stop).await
         }
         None => false,
     }
