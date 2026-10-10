@@ -979,6 +979,7 @@
 /* Composer cards share the input's width, including cards inside decks.
    Keep these overrides local: gallery cards and popovers retain their sizing. */
 .chat-composer-surfaces > *,
+.aui-thread-root :is([data-slot='task-card'], [data-slot='subagent-list']),
 .chat-composer-surfaces
   :is(
     [data-slot='approval-card'],
