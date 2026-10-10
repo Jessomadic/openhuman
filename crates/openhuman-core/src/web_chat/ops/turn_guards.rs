@@ -53,12 +53,14 @@ where
 {
     match deadline {
         // Scope the deadline on the task so the session turn hands it to the
-        // harness (`agent::turn_deadline`), which winds down before `d`.
+        // harness (`agent::turn_deadline`), which winds down before `d`. The
+        // turn future is boxed: it is very large, and the scope wrapper would
+        // otherwise hold it inline a second time and overflow the worker stack.
         Some(d) => match tokio::time::timeout(
             d,
             crate::agent::turn_deadline::with_turn_deadline(
                 Some(crate::agent::turn_deadline::TurnDeadline::starting_now(d)),
-                fut,
+                Box::pin(fut),
             ),
         )
         .await
