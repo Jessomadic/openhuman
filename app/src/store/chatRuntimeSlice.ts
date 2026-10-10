@@ -2822,7 +2822,10 @@ const chatRuntimeSlice = createSlice({
         lastTurnInputTokens: nonNeg(p.lastTurnInputTokens),
         lastTurnOutputTokens: nonNeg(p.lastTurnOutputTokens),
         contextWindow: nonNeg(p.contextWindow),
-        lastTurnContextUsed: nonNeg(p.lastTurnInputTokens) + nonNeg(p.lastTurnOutputTokens),
+        lastTurnContextUsed:
+          nonNeg(p.lastTurnContextTokens) > 0
+            ? nonNeg(p.lastTurnContextTokens)
+            : nonNeg(p.lastTurnInputTokens) + nonNeg(p.lastTurnOutputTokens),
         subAgents,
       };
     },
