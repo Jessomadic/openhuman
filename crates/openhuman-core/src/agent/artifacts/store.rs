@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use super::files::{self, FileRoots};
-use super::store_documents::{self, Docs};
+use super::store_documents::{self, documents, on_docs, page_of};
 use super::types::{ArtifactMeta, ArtifactStatus};
 
 const ARTIFACTS_SUBDIR: &str = "artifacts";
@@ -22,52 +22,6 @@ tokio::task_local! {
     /// appending a second card (#3162). Unset for all normal
     /// generation paths, in which case a fresh UUID is minted.
     pub static REGENERATE_TARGET_ID: String;
-}
-
-/// Runs a document-store call off the async worker (the port is reached
-/// through a blocking bridge).
-async fn on_docs<T: Send + 'static>(
-    docs: Docs,
-    f: impl FnOnce(Docs) -> anyhow::Result<T> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(move || f(docs))
-        .await
-        .map_err(|e| format!("[artifacts] storage task failed: {e}"))?
-        .map_err(|e| format!("[artifacts] storage: {e:#}"))
-}
-
-/// The document store for this call, when a storage backend is configured.
-/// The first call that finds it empty imports the workspace's legacy
-/// `meta.json` / `args.json` files.
-async fn documents(workspace_dir: &Path) -> Result<Option<Docs>, String> {
-    let Some(docs) =
-        store_documents::current().map_err(|e| format!("[artifacts] storage: {e:#}"))?
-    else {
-        return Ok(None);
-    };
-    // Once per scope and workspace: the import only matters the first time.
-    static IMPORTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-    let scope = crate::storage::current_scope().map_err(|e| format!("[artifacts] storage: {e}"))?;
-    let key = format!("{scope}|{}", workspace_dir.display());
-    let first = {
-        let mut seen = IMPORTED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if seen.contains(&key) {
-            false
-        } else {
-            seen.push(key);
-            true
-        }
-    };
-    if first {
-        let legacy = workspace_dir.join(ARTIFACTS_SUBDIR);
-        on_docs(docs.clone(), move |docs| {
-            docs.import_legacy(&legacy).map(|_| ())
-        })
-        .await?;
-    }
-    Ok(Some(docs))
 }
 
 /// Returns the artifacts root directory, creating it if it doesn't exist.
@@ -277,33 +231,6 @@ pub(crate) async fn list_artifacts(
     }
 
     Ok(page_of(all, offset, limit, thread_id))
-}
-
-/// Sorts newest first, applies the thread filter and then the page.
-fn page_of(
-    mut all: Vec<ArtifactMeta>,
-    offset: usize,
-    limit: usize,
-    thread_id: Option<&str>,
-) -> (Vec<ArtifactMeta>, usize) {
-    // Sort descending by created_at (newest first)
-    all.sort_by_key(|item| std::cmp::Reverse(item.created_at));
-
-    // Apply thread filter BEFORE pagination so `total` reflects the
-    // per-thread count the UI surfaces, and so a small page doesn't get
-    // silently emptied by filtering after the slice (#3226).
-    if let Some(tid) = thread_id {
-        all.retain(|m| m.thread_id.as_deref() == Some(tid));
-    }
-
-    let total = all.len();
-    let page = all.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
-
-    log::debug!(
-        "[artifacts] list_artifacts: total={total} returning {} items",
-        page.len()
-    );
-    (page, total)
 }
 
 /// Retrieve a single artifact by ID.

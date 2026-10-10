@@ -187,6 +187,77 @@ impl Docs {
     }
 }
 
+/// Runs a document-store call off the async worker (the port is reached
+/// through a blocking bridge).
+pub(super) async fn on_docs<T: Send + 'static>(
+    docs: Docs,
+    f: impl FnOnce(Docs) -> anyhow::Result<T> + Send + 'static,
+) -> Result<T, String> {
+    crate::core::runtime::spawn_blocking_scoped(move || f(docs))
+        .await
+        .map_err(|e| format!("[artifacts] storage task failed: {e}"))?
+        .map_err(|e| format!("[artifacts] storage: {e:#}"))
+}
+
+/// The document store for this call, when a storage backend is configured.
+/// The first call that finds it empty imports the workspace's legacy
+/// `meta.json` / `args.json` files.
+pub(super) async fn documents(workspace_dir: &Path) -> Result<Option<Docs>, String> {
+    let Some(docs) = current().map_err(|e| format!("[artifacts] storage: {e:#}"))? else {
+        return Ok(None);
+    };
+    // Once per scope and workspace: the import only matters the first time.
+    static IMPORTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let scope = crate::storage::current_scope().map_err(|e| format!("[artifacts] storage: {e}"))?;
+    let key = format!("{scope}|{}", workspace_dir.display());
+    let first = {
+        let mut seen = IMPORTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if seen.contains(&key) {
+            false
+        } else {
+            seen.push(key);
+            true
+        }
+    };
+    if first {
+        let legacy = workspace_dir.join("artifacts");
+        on_docs(docs.clone(), move |docs| {
+            docs.import_legacy(&legacy).map(|_| ())
+        })
+        .await?;
+    }
+    Ok(Some(docs))
+}
+
+/// Sorts newest first, applies the thread filter and then the page.
+pub(super) fn page_of(
+    mut all: Vec<ArtifactMeta>,
+    offset: usize,
+    limit: usize,
+    thread_id: Option<&str>,
+) -> (Vec<ArtifactMeta>, usize) {
+    // Sort descending by created_at (newest first)
+    all.sort_by_key(|item| std::cmp::Reverse(item.created_at));
+
+    // Apply thread filter BEFORE pagination so `total` reflects the
+    // per-thread count the UI surfaces, and so a small page doesn't get
+    // silently emptied by filtering after the slice (#3226).
+    if let Some(tid) = thread_id {
+        all.retain(|m| m.thread_id.as_deref() == Some(tid));
+    }
+
+    let total = all.len();
+    let page = all.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
+
+    log::debug!(
+        "[artifacts] list_artifacts: total={total} returning {} items",
+        page.len()
+    );
+    (page, total)
+}
+
 #[cfg(test)]
 #[path = "store_documents_tests.rs"]
 mod tests;

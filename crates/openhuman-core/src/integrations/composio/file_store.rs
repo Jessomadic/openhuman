@@ -52,8 +52,18 @@ where
         let owned = path.to_path_buf();
         return crate::core::runtime::spawn_blocking_scoped(move || docs.load(&owned))
             .await
-            .map_err(|error| format!("[composio:store] reading {} failed: {error}", path.display()))?
-            .map_err(|error| format!("[composio:store] reading {} failed: {error:#}", path.display()));
+            .map_err(|error| {
+                format!(
+                    "[composio:store] reading {} failed: {error}",
+                    path.display()
+                )
+            })?
+            .map_err(|error| {
+                format!(
+                    "[composio:store] reading {} failed: {error:#}",
+                    path.display()
+                )
+            });
     }
     let bytes = match tokio::fs::read(path).await {
         Ok(bytes) => bytes,
@@ -137,8 +147,18 @@ where
             .map_err(|error| format!("[composio:store] serializing failed: {error}"))?;
         return crate::core::runtime::spawn_blocking_scoped(move || docs.save(&owned, &value))
             .await
-            .map_err(|error| format!("[composio:store] writing {} failed: {error}", path.display()))?
-            .map_err(|error| format!("[composio:store] writing {} failed: {error:#}", path.display()));
+            .map_err(|error| {
+                format!(
+                    "[composio:store] writing {} failed: {error}",
+                    path.display()
+                )
+            })?
+            .map_err(|error| {
+                format!(
+                    "[composio:store] writing {} failed: {error:#}",
+                    path.display()
+                )
+            });
     }
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| format!("[composio:store] serializing failed: {error}"))?;
