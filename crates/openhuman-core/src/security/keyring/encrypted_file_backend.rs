@@ -544,7 +544,7 @@ impl EncryptedFileBackend {
     }
 
     /// [`KeyringBackend::get`] under an explicit master key.
-    fn get_with_key(
+    pub(super) fn get_with_key(
         &self,
         key: &[u8; KEY_LEN],
         namespaced_key: &str,
@@ -559,7 +559,7 @@ impl EncryptedFileBackend {
     }
 
     /// [`KeyringBackend::set`] under an explicit master key.
-    fn set_with_key(
+    pub(super) fn set_with_key(
         &self,
         key: &[u8; KEY_LEN],
         namespaced_key: &str,

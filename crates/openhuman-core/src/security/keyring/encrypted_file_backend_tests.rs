@@ -483,23 +483,3 @@ fn init_once_caches_a_loaded_key_and_a_keychain_outage_as_ok() {
         Ok(())
     );
 }
-
-#[test]
-fn zz_generate_fixtures_tmp() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/security/keyring/fixtures");
-    std::fs::create_dir_all(&dir).unwrap();
-    let key = [0x42u8; KEY_LEN];
-    let tmp = tempfile::TempDir::new().unwrap();
-    let b = EncryptedFileBackend::new(tmp.path());
-    b.set_with_key(&key, "user-1:session_token", "tok-abc-123").unwrap();
-    b.set_with_key(&key, "user-1:api_key", "sk-fixture-\u{00e9}\u{4e2d}").unwrap();
-    b.set_with_key(&key, "user-2:session_token", "tok-other").unwrap();
-    std::fs::copy(tmp.path().join("secrets.enc"), dir.join("secrets.enc")).unwrap();
-    let store_dir = tempfile::TempDir::new().unwrap();
-    std::fs::write(store_dir.path().join(".secret_key"), crypto::hex_encode(&key)).unwrap();
-    let enc = |p: &str| {
-        tinystoragedrivers::secrets::crypto::encrypt_enc2(&key, p.as_bytes()).unwrap()
-    };
-    let values = format!("{}\n{}\n", enc("sk-test-fixture-value"), enc("pa\u{00df}word \u{1f511}"));
-    std::fs::write(dir.join("enc2_values.txt"), values).unwrap();
-}
