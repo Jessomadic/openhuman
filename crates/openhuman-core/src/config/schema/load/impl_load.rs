@@ -9,7 +9,7 @@ use super::migrate::{
     migrate_cloud_provider_slugs, migrate_legacy_inference_url, migrate_legacy_memory_backend,
     migrate_search_settings,
 };
-use super::secrets::{decrypt_config_secrets, encrypt_config_secrets};
+use super::secrets::{decrypt_config_secrets, decrypt_config_secrets_strict, encrypt_config_secrets};
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -525,6 +525,12 @@ impl Config {
         // Where the text lives is the source's business: the file (atomic
         // replace with a `.bak`) or, on a shared backend, the config document.
         let source = super::source::for_config(&self.config_path)?;
+        self.save_to(source.as_ref()).await
+    }
+
+    /// Save into `source`. The loader also uses it to rewrite the local
+    /// bootstrap file when a document-backed load recovered it.
+    pub(super) async fn save_to(&self, source: &dyn super::source::ConfigSource) -> Result<()> {
         let mut config_to_save = self.clone();
         super::super::cli_overrides::restore_persisted_inference_fields(&mut config_to_save);
         // A document source seals the whole body under the scope's data key;
@@ -539,7 +545,7 @@ impl Config {
                 .parent()
                 .context("Config path must have a parent directory")?
                 .to_path_buf();
-            decrypt_config_secrets(&mut config_to_save, &openhuman_dir)?;
+            decrypt_config_secrets_strict(&mut config_to_save, &openhuman_dir)?;
         } else {
             encrypt_config_secrets(&mut config_to_save)?;
         }
