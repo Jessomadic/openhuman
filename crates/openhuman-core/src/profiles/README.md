@@ -26,11 +26,11 @@ Two hosts drive it:
 ```text
 <root>/users/<profile-id>/          the desktop's users/<id> shape (config::schema::ProfileLayout)
   profile.toml                      ProfileMeta (only without a storage backend)
-  .lease, .lease.json               the file-lock lease (only without a storage backend)
   config.toml                       the profile's config_path (never read in SaaS)
   auth-profiles.json                its credential (unless secrets live in the backend)
   workspace/                        threads, sessions, memory, cron, cost and run ledgers
   sandbox/                          action_dir: the only place its tools may act
+<root>/users/<sha256(id)>/.lease    the file-lock lease and its record (only without a storage backend)
 <root>/deprovisioned/<id>-<secs>-<uuid>/   an archived profile
 <root>/operator/                    the operator plane's own state (operator_dir overrides it)
 <root>/service.token                the gateway bearer (service_token_file overrides it)
@@ -120,8 +120,9 @@ profile's lease (`storage::lease`) before it opens it:
   (`storage::driver_has_cross_process_cas`: SQLite, MongoDB); the boot guard
   refuses anything else.
 - **Without one** it uses `LocalLeases`: an exclusive `flock` on
-  `<root>/users/<id>/.lease`, which keeps two processes on one root apart and
-  drops when its holder dies.
+  `<root>/users/<sha256(id)>/.lease` (outside the profile's own directory,
+  so archiving it leaves the lease in place), which keeps two processes on
+  one root apart and drops when its holder dies.
 
 What the lease drives:
 
@@ -143,6 +144,18 @@ What the lease drives:
   in-flight turns are stopped (`web_chat::cancel_all_turns` under its
   context) and it is closed. `ensure_hosted` refuses new turns for a profile
   this node no longer hosts.
+- **Write fencing.** Opening a profile registers a lease fence
+  (`storage::fence`, built by `profiles::fence`) for its grant. Every write
+  through the storage ports to the profile's scope or one of its session
+  scopes is refused with a typed `FenceError` when the fence is latched, when
+  the grant has run out by this node's clock less a skew margin (a sixth of
+  the TTL), or when the stored lease record no longer names this node at this
+  epoch (which latches it). A takeover therefore stops the old holder's next
+  write, before its heartbeat notices. `ensure_hosted` refuses new turns on
+  the latch or a locally expired grant, and the background loop checks the
+  fence against the record before a profile's jobs and drops them if it
+  latches mid-run. A latched fence keeps refusing for as long as the fenced
+  profile's context is alive; a clean release retires it.
 - **In use.** A profile is in use while anyone holds its `Profile` (a gateway
   request, a `ProfileHandle`) or a turn still runs on its context
   (`CoreContext::tenant_in_use`). A profile in use is never evicted, released
@@ -155,6 +168,35 @@ What the lease drives:
 - **Node ids** (`node_id`, else `OPENHUMAN_NODE_ID`, else random per process)
   must be unique among live nodes. A stable one lets a restarted node take its
   own profiles back at once instead of waiting out their leases.
+
+## Lifecycle
+
+Provisioning, opening, credential changes (`profiles.set_credential` /
+`clear_credential`) and deprovisioning of one profile never interleave
+(`lifecycle.rs`):
+
+- **In one process**, each takes the profile's own lock (`ProfileLocks`, one
+  async mutex per profile id, forgotten once nobody holds or waits for it),
+  then the host's gate where it touches open profiles or leases. Different
+  profiles do not wait for each other's lock; lookups of an open profile take
+  neither. A credential change waits for an archive in flight and then finds
+  the profile gone, so a late credential never lands in the keyring slot a
+  re-provisioned profile would inherit.
+- **Deprovisioning** closes the profile in the same step that finds it idle,
+  so no request picks it up in between, and holds its lease from before the
+  credential is cleared until the directory is archived and the record
+  removed. It gives the lease back on every failure.
+- **Provisioning a new profile** lays it out under its lease and refuses
+  while another node holds it.
+- **Opening** reads the registry again once it holds the lease: an open that
+  raced a deprovision on another node answers `NotProvisioned` instead of
+  recreating the archived directory.
+
+Credential changes take no lease: the profile is normally hosted by some node
+while the gateway installs a credential, and must not be refused for it. So
+across nodes they are not ordered against a deprovision running elsewhere.
+That only matters when secrets live in the storage backend; per-node
+keyrings (see [Known limits](#known-limits)) never share a slot across nodes.
 
 ## Chat interfaces: one thread each
 
@@ -191,13 +233,36 @@ A profile holds one thread per conversation, whatever interface it came in on:
     and would answer `org:<id>` or a minted local root instead.
   - The autonomy policy is on and supervised, with no auto-approval, no tool
     installation and no trusted roots.
-- **`session_agent` stays the profile id.** The default agent was meant to run
-  with no `session_agent`, as on the desktop. That needs every site that keys
-  on the acting agent to key on the tenant instead; the approval gate's thread
-  routes, the MCP host, skill homes, origin delivery and the transcript
-  fallback still read `agent_scope::current_agent_id()`, so a profile without
-  an agent id would share their keys with every other profile. Until those
-  move to `current_tenant`, the profile id doubles as the agent id.
+- **The isolation boundary is the profile's `CoreContext`.** It carries the
+  forced config, its own security policy (`agent_policy`, never the
+  operator's), `profile = <profile id>` (the tenant key: storage scope,
+  `/events`, cost, per-thread tables, via `core::runtime::current_tenant`)
+  and the user families (threads, channels for web chat, memory), narrowed
+  further by `surface::USER_METHODS`. Work for a user runs under it, which is
+  what the config loader, the session store and the per-thread caches key on.
+- **The default agent has no `session_agent`.** As on the desktop, a
+  profile's default agent runs with no agent id: its state sits at the root
+  of the profile's own workspace, and its session-store key is
+  `<profile>~default` (`core::runtime::session_key`). Every seam that must
+  keep users apart keys on the tenant, never on the agent id alone:
+  - the approval gate's thread routes (`approval::gate::thread_route_key`:
+    the `tenant_key` of the thread under a profile);
+  - the MCP host (a profile's host lives at its workspace root; a profile
+    never falls back to the process default or a lone open host, and a SaaS
+    task with no scope gets none);
+  - skill homes (`<workspace>/agents/default/` for a profile's default agent;
+    never the operator's `~/.openhuman`, and nothing without a scope);
+  - origin delivery and the transcript fallback (the profile's workspace
+    root, the same place its file-backed session store writes);
+  - web chat keys, in-flight turns, completion owners, event stamps
+    (`WebChannelEvent::profile`), storage scopes and the cost ledger, which
+    already keyed on the profile.
+
+  What still reads the agent id (`agent_scope::current_agent_id`,
+  `CoreContext::session_agent`) is genuinely per agent: `agent_scope_dir` (an
+  embedded agent's subdirectory of a workspace), the cost ledger's
+  `session_agent` column, owner records for embedded agents (devices, cron
+  completions, flows) and log fields.
 - **No ambient fallback.** Tenant-keyed code reads `current_tenant()`, never
   `CoreContext::current()` or `.session_agent()`; `pnpm saas:ambient`
   ratchets the reads that remain (`ambient-context`), alongside bare spawns,
@@ -309,6 +374,9 @@ set.
 | `types.rs` | `ProfileId` and `ProfileIdMode`, `ProfileMeta`, and the operator-plane result types |
 | `layout.rs` | The SaaS side of the shared `ProfileLayout`, archived profiles, and `profile_config`: the forced paths, memory binding (pinned to the legacy layout) and autonomy policy |
 | `host.rs` | `ProfileHost`: provisioning, lazy open behind the lease, LRU and idle eviction (never of a profile in use), release, fencing, each profile's derived `CoreContext` and policy, `current()`, `ensure_hosted()` |
+| `lifecycle.rs` | Provisioning, deprovisioning and credential changes, and `ProfileLocks`: the per-profile lock that keeps one profile's lifecycle operations from interleaving (see [Lifecycle](#lifecycle)) |
+| `fence.rs` | The profile's lease fence: the scopes its grant guards (its own scope and every `<profile>~<agent>` session scope), the skew margin, and how the host registers, renews, latches and retires it |
+| `recovery.rs` | Workspace and session-store recovery after an unclean takeover |
 | `lease.rs` | The profile lease as the host uses it: `OpenError`, the lease store choice (`DocumentLeases` over a backend, else `LocalLeases`), and the heartbeat that renews every open profile's lease and fences the ones lost |
 | `registry.rs` | `ProfileRegistry`: which profiles are provisioned, in the backend's `cluster` scope or as `profile.toml` files |
 | `gateway.rs` | Which context a gateway request runs under: the operator plane, or the profile of the user named in `X-OpenHuman-User`, after the signature check; the typed refusal (`409` holder) |
@@ -332,10 +400,23 @@ channel threads, `409`) and `crates/openhuman-embed/tests/saas_profiles.rs`
   completions and the sandbox stay as files under `users/<id>/workspace`, so a
   multi-node deployment needs `<root>` on a shared read-write-many volume and
   a remote memory engine. Moving those onto the storage ports is a follow-up.
-- Storage writes carry no epoch fence, so a node that is partitioned but still
-  running could write after its lease expired. The mitigations are a TTL much
-  longer than the renew interval, the fence check before each turn, and
-  stopping turns when the lease is lost.
+- On drivers with `Capability::Fencing` (memory, SQLite, file, MongoDB
+  replica sets) the driver re-checks the lease record atomically with each
+  write, so a takeover cuts off a paused holder's writes at storage. Where it
+  cannot (MongoDB without transactions, MongoDB blobs, named databases) the
+  host check and the write are two operations: a holder paused for longer
+  than the skew margin right after a passing check can still land one write
+  after a takeover (see `storage/README.md`).
+- Only writes through the storage ports are fenced. Files a profile writes
+  directly under `<root>/users/<id>/` (the memory job queue, the classic
+  on-disk stores) are not; on a shared volume, stopping turns and jobs on
+  fence is the mitigation.
+- A node that re-opens a profile after being fenced registers a new fence;
+  work left over from its older grant is stopped by turn cancellation, not by
+  the fence.
+- With file leases (no backend) nothing goes through the ports, and the
+  `flock` cannot be lost while the process lives, so the fence only backs the
+  latch checks.
 - Each node keeps its own operator keyring (`operator_dir`), so a credential
   installed through one node is only readable there unless secrets live in
   the storage backend.

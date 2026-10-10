@@ -140,9 +140,8 @@ struct OpenHumanTurnToolSurface {
     agent_definition_name: String,
 }
 
-/// Per-session product observations that were formerly scattered across the
-/// legacy `core_turn` loop. Generic history, raw transcript data and prefix
-/// state intentionally do not appear here.
+/// Per-session product observations formerly scattered across the legacy
+/// `core_turn` loop. Generic history, raw transcript and prefix state are not here.
 #[derive(Default)]
 struct OpenHumanTurnPreludeMutable {
     last_memory_context: Option<String>,
@@ -164,10 +163,11 @@ struct OpenHumanTurnPreludeMutable {
     connected_integrations: Vec<crate::agent::prompts::ConnectedIntegration>,
     connected_integrations_initialized: bool,
     connected_integrations_authoritative: bool,
-    /// Integration action declarations this thread was already sent,
-    /// restored by the tinyagents session on resume. Rebuilt into deferred
-    /// executors whenever the live integrations list does not supply them
-    /// (see `recorded_tools`).
+    /// A cold hydration seeded the announced sets; later ones diff instead.
+    integration_announcements_seeded: bool,
+    /// Integration action declarations this thread was already sent, restored by
+    /// the tinyagents session on resume. Rebuilt into deferred executors whenever
+    /// the live integrations list does not supply them (see `recorded_tools`).
     recorded_integration_actions: Vec<tinytools::ToolSpec>,
     workflows: Vec<crate::skills::Workflow>,
     composio_events: Option<tinybus::events::EventReceiver<crate::core::events::DomainEvent>>,
@@ -816,18 +816,20 @@ pub(super) fn holistic_last_turn_usage(
     let cached_input_tokens = tokens(sidecar.cached_input_tokens, |usage| {
         usage.cached_input_tokens
     });
-    let cost_usd = sidecar
-        .subagents
-        .iter()
-        .fold(sidecar.cost_usd, |total, entry| {
-            total + entry.usage.charged_amount_usd
-        });
+    let mut cost = sidecar.cost;
+    for entry in &sidecar.subagents {
+        cost.merge(entry.usage.cost());
+    }
     crate::agent::tinyagents::host::LastTurnUsage {
         input_tokens,
         output_tokens,
         cached_input_tokens,
-        cost_usd,
+        cost_usd: cost.usd(),
+        cost_source: cost.source,
         context_window: sidecar.context_window,
+        context_tokens: sidecar
+            .last_call_input_tokens
+            .saturating_add(sidecar.last_call_output_tokens),
         subagents: sidecar.subagents.clone(),
         // The session does not count these; a library turn that asked for a
         // final-response report fills them in (`response_shape`).
@@ -1052,9 +1054,9 @@ impl OpenHumanSessionHost {
                     pending_skill_retraction: self.pending_skill_retraction.clone(),
                     connected_integrations: self.connected_integrations.clone(),
                     connected_integrations_initialized: self.connected_integrations_initialized,
-                    // Builder-provided integrations have not been verified by
-                    // this session's current authorization refresh.
+                    // Builder-provided integrations are not yet verified this session.
                     connected_integrations_authoritative: false,
+                    integration_announcements_seeded: false,
                     recorded_integration_actions: Vec::new(),
                     workflows: self.workflows.clone(),
                     composio_events: None,

@@ -77,6 +77,15 @@ pub mod server;
 #[cfg(feature = "session-store")]
 pub mod session_store;
 
+/// Serializes tests that touch the process-global storage backend slot.
+///
+/// `session_store` tests install a backend for a moment; any test that
+/// stores a credential meanwhile would route it to storage secrets (which
+/// need a master key CI does not have). Both take this lock.
+#[cfg(test)]
+pub(crate) static STORAGE_SLOT_TEST_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
 pub use crate::core_host::core::unwrap_rpc;
 #[cfg(feature = "http-client")]
 pub use client::{bearer_header, post_json_rpc, redact_url_for_log, HttpRpcResponse};

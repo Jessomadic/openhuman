@@ -62,4 +62,4 @@ pub use context::{ContextOverlay, CoreContext};
 pub use mode::{current_mode, is_saas, Mode};
 pub use saas::SaasConfig;
 pub use spawn::{spawn_blocking_scoped, spawn_scoped};
-pub use tenant::{current_tenant, session_key, tenant_key, NoTenant, Tenant};
+pub use tenant::{current_tenant, session_key, session_key_prefix, tenant_key, NoTenant, Tenant};

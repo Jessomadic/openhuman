@@ -72,3 +72,56 @@ fn a_pending_announcement_for_a_revoked_toolkit_is_withdrawn() {
     assert!(pending.is_empty());
     assert!(announced.is_empty());
 }
+
+#[test]
+fn a_toolkit_connected_between_a_stale_and_an_authoritative_hydration_is_announced() {
+    let mut state = super::super::OpenHumanTurnPreludeMutable::default();
+
+    // Turn 1: the backend is unreachable, the stale snapshot has gmail only.
+    apply_cold_hydration(
+        &mut state,
+        vec![item("gmail", true), item("notion", false)],
+        false,
+        HashSet::from(["mcp_a".to_string()]),
+    );
+    assert!(!state.connected_integrations_initialized);
+    assert_eq!(
+        state.announced_integrations,
+        HashSet::from(["gmail".into()])
+    );
+    assert!(state.pending_integration_announcement.is_empty());
+
+    // Turn 2: the live fetch succeeds and notion is now connected, as is a
+    // new MCP server. Both are news to the model and must be queued.
+    apply_cold_hydration(
+        &mut state,
+        vec![item("gmail", true), item("notion", true)],
+        true,
+        HashSet::from(["mcp_a".to_string(), "mcp_b".to_string()]),
+    );
+    assert!(state.connected_integrations_initialized);
+    assert!(state.connected_integrations_authoritative);
+    assert_eq!(
+        state.pending_integration_announcement,
+        vec!["notion".to_string()]
+    );
+    assert_eq!(state.pending_mcp_announcement, vec!["mcp_b".to_string()]);
+    assert_eq!(state.connected_integrations.len(), 2);
+}
+
+#[test]
+fn the_first_hydration_seeds_without_announcing() {
+    let mut state = super::super::OpenHumanTurnPreludeMutable::default();
+    apply_cold_hydration(
+        &mut state,
+        vec![item("gmail", true)],
+        true,
+        HashSet::from(["mcp_a".to_string()]),
+    );
+    assert_eq!(
+        state.announced_integrations,
+        HashSet::from(["gmail".into()])
+    );
+    assert!(state.pending_integration_announcement.is_empty());
+    assert!(state.pending_mcp_announcement.is_empty());
+}

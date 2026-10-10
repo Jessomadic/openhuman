@@ -135,11 +135,8 @@ impl ApprovalGate {
                 let _ = tx.send(ApprovalDecision::Deny);
             }
             let route = self.take_request_route(&decided.request_id);
-            if let Some(thread_id) = route.as_ref().and_then(|r| r.thread_id.as_deref()) {
-                self.clear_thread_route_if_owned(
-                    &thread_route_key(Some(agent), thread_id),
-                    &decided.request_id,
-                );
+            if let Some(thread_key) = route.as_ref().and_then(|r| r.thread_key.as_deref()) {
+                self.clear_thread_route_if_owned(thread_key, &decided.request_id);
             }
             BUS.publish(DomainEvent::ApprovalDecided {
                 request_id: decided.request_id.clone(),
@@ -309,19 +306,31 @@ impl ApprovalGate {
     }
 
     /// The request_id of the approval currently parked on `thread_id` by the
-    /// ambient context's agent, if any. Used by the web channel to route an
-    /// inbound yes/no reply to a decision.
+    /// ambient tenant (SaaS profile and/or embedded agent), if any. Used by
+    /// the web channel to route an inbound yes/no reply to a decision.
     pub fn pending_for_thread(&self, thread_id: &str) -> Option<String> {
-        let agent = crate::core::runtime::agent_scope::current_agent_id();
-        self.pending_for_agent_thread(agent.as_deref(), thread_id)
+        self.pending_for_tenant_thread(&super::gate::current_route_tenant(), thread_id)
     }
 
     /// The request_id `agent` (`None`: the process) has parked on
-    /// `thread_id`, if any.
+    /// `thread_id` outside any SaaS profile, if any.
     pub fn pending_for_agent_thread(&self, agent: Option<&str>, thread_id: &str) -> Option<String> {
+        let tenant = crate::core::runtime::Tenant {
+            profile: None,
+            agent: agent.map(str::to_owned),
+        };
+        self.pending_for_tenant_thread(&tenant, thread_id)
+    }
+
+    /// The request_id `tenant` has parked on `thread_id`, if any.
+    pub fn pending_for_tenant_thread(
+        &self,
+        tenant: &crate::core::runtime::Tenant,
+        thread_id: &str,
+    ) -> Option<String> {
         self.thread_to_request
             .lock()
-            .get(&thread_route_key(agent, thread_id))
+            .get(&thread_route_key(tenant, thread_id))
             .cloned()
     }
 
@@ -367,6 +376,50 @@ impl ApprovalGate {
         self.pending_for_thread(thread_id)
             .is_some_and(|current| current == request_id)
             .then_some(row)
+    }
+
+    /// Every approval still parked on `thread_id` by the ambient context's
+    /// agent, oldest first.
+    ///
+    /// [`Self::parked_request_for_thread`] follows the single thread route,
+    /// which holds only the newest park. Several async-delegated sub-agents can
+    /// park on the same parent thread at once; each keeps its own waiter and
+    /// [`RequestRoute`], so replay reads those instead and a rejoining client
+    /// can rebuild every card, not only the last one raised.
+    pub fn parked_requests_for_thread(&self, thread_id: &str) -> Vec<PendingApproval> {
+        let agent = crate::core::runtime::agent_scope::current_agent_id();
+        let parked_here = |route: &RequestRoute| {
+            route.thread_id.as_deref() == Some(thread_id)
+                && route.agent_id.as_deref() == agent.as_deref()
+        };
+        let ids: std::collections::HashSet<String> = self
+            .request_routes
+            .lock()
+            .iter()
+            .filter(|(_, route)| parked_here(route))
+            .map(|(id, _)| id.clone())
+            .collect();
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let mut rows: Vec<PendingApproval> = match self.list_pending() {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|row| ids.contains(&row.request_id))
+                .collect(),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "[approval::gate] parked_requests_for_thread: store read failed"
+                );
+                return Vec::new();
+            }
+        };
+        // Re-check after the unlocked store read, as `parked_request_for_thread`
+        // does: a request decided in between must not be replayed.
+        let routes = self.request_routes.lock();
+        rows.retain(|row| routes.get(&row.request_id).is_some_and(parked_here));
+        rows
     }
 
     /// Whether the parked `request_id` was routed to its chat thread from a

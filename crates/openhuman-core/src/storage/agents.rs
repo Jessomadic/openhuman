@@ -174,9 +174,12 @@ pub fn context_for(agent: &str) -> Option<Arc<CoreContext>> {
 }
 
 /// Runs `fut` in the `local` scope: under the process default context when
-/// the caller is acting for an agent, as-is otherwise.
+/// the caller is an embedded agent outside any SaaS profile, as-is otherwise.
+/// A SaaS profile (or a SaaS task with no scope) never switches to the
+/// process default context, which is the operator's.
 async fn in_local<F: Future>(fut: F) -> F::Output {
-    let acting = CoreContext::current().is_some_and(|context| context.session_agent().is_some());
+    let acting = crate::core::runtime::current_tenant()
+        .is_ok_and(|tenant| tenant.profile.is_none() && tenant.agent.is_some());
     match CoreContext::default_context() {
         Some(default) if acting => CoreContext::scope(default, fut).await,
         _ => fut.await,

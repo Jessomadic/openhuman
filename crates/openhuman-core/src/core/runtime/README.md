@@ -193,7 +193,8 @@ plane, and a user's scope only the reviewed `USER_METHODS`.
 `saas::build` installs the process's `profiles::ProfileHost`. Each open
 profile (`<root>/users/<profile-id>/`, the desktop's user layout) runs under a
 context derived from the operator's, with its own forced config, policy,
-`profile` and `session_agent`, behind a lease that keeps it on one process
+`profile` (its default agent has no `session_agent`, as on the desktop),
+behind a lease that keeps it on one process
 (see `profiles/README.md`). `saas::build` also starts the lease heartbeat.
 
 Three guards keep SaaS work from falling back to process-wide state:

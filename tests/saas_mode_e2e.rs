@@ -15,6 +15,8 @@ use support::*;
 
 #[path = "saas_mode/cluster.rs"]
 mod cluster;
+#[path = "saas_mode/hashed_ids.rs"]
+mod hashed_ids;
 #[path = "saas_mode/memory.rs"]
 mod memory;
 #[path = "saas_mode/mock_memory.rs"]
@@ -395,28 +397,17 @@ fn chat_events_reach_only_the_user_whose_turn_produced_them() {
     let d = deployment(true);
     // Point the backend at a closed port so the turn fails fast — the failure
     // is itself an event on the owner's stream, without any real inference.
-    let port = free_port();
-    let child = core_command(&d, &["--port", &port.to_string()])
-        .env("BACKEND_URL", "http://127.0.0.1:9")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn openhuman-core");
-    let server = Server(child);
-    let base = format!("http://127.0.0.1:{port}");
+    let (server, base) = spawn_core(|port| {
+        let mut cmd = core_command(&d, &["--port", &port.to_string()]);
+        cmd.env("BACKEND_URL", "http://127.0.0.1:9")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        cmd
+    });
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !client
-        .get(format!("{base}/health"))
-        .send()
-        .is_ok_and(|r| r.status().is_success())
-    {
-        assert!(Instant::now() < deadline, "SaaS core never became healthy");
-        std::thread::sleep(Duration::from_millis(250));
-    }
     provision(&client, &base, "alice");
     provision(&client, &base, "bob");
 
@@ -539,29 +530,18 @@ fn a_users_turn_reaches_inference_with_their_own_credential() {
     // what counts.
     let d = deployment(true);
     let (backend, requests) = recording_backend();
-    let port = free_port();
-    let child = core_command(&d, &["--port", &port.to_string()])
-        .env("BACKEND_URL", format!("http://127.0.0.1:{backend}"))
-        .env("RUST_LOG", "debug")
-        .stdout(std::fs::File::create(d.tmp.path().join("core.log")).unwrap())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn openhuman-core");
-    let server = Server(child);
-    let base = format!("http://127.0.0.1:{port}");
+    let (server, base) = spawn_core(|port| {
+        let mut cmd = core_command(&d, &["--port", &port.to_string()]);
+        cmd.env("BACKEND_URL", format!("http://127.0.0.1:{backend}"))
+            .env("RUST_LOG", "debug")
+            .stdout(std::fs::File::create(d.tmp.path().join("core.log")).unwrap())
+            .stderr(Stdio::null());
+        cmd
+    });
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !client
-        .get(format!("{base}/health"))
-        .send()
-        .is_ok_and(|r| r.status().is_success())
-    {
-        assert!(Instant::now() < deadline, "SaaS core never became healthy");
-        std::thread::sleep(Duration::from_millis(250));
-    }
     let alice = provision(&client, &base, "alice");
     let (_, body) = rpc_with(
         &client,
@@ -783,4 +763,35 @@ fn a_profile_holds_web_and_relayed_channel_threads() {
         "no relayed thread in the operator workspace: {operator_threads}"
     );
     drop(server);
+}
+
+/// `--port` is a preference: a core that finds it taken listens elsewhere.
+/// The harness must notice that another core answers on the port, or the test
+/// drives that core's deployment and checks its own (an empty `users/`).
+#[test]
+fn a_core_on_a_taken_port_is_not_mistaken_for_ours() {
+    let first = deployment(true);
+    let (mut first_server, base, client) = start(&first);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    assert_eq!(
+        wait_until_serving(&client, &base, &mut first_server, deadline),
+        Ok(Serving::Ours)
+    );
+
+    let second = deployment(true);
+    let port = base.rsplit(':').next().unwrap().to_string();
+    let child = core_command(&second, &["--port", &port])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn openhuman-core");
+    let mut second_server = Server(child);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    assert_eq!(
+        wait_until_serving(&client, &base, &mut second_server, deadline),
+        Ok(Serving::Taken(Some(u64::from(first_server.0.id())))),
+        "the first core still answers on its port"
+    );
+    drop(second_server);
+    drop(first_server);
 }

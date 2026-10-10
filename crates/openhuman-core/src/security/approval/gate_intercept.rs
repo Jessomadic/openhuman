@@ -440,10 +440,13 @@ impl ApprovalGate {
 
         let request_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now();
-        let agent_id = crate::core::runtime::agent_scope::current_agent_id();
+        // Routes key on the tenant (profile and agent), so two SaaS profiles'
+        // default agents, which carry no agent id, never share one.
+        let route_tenant = super::gate::current_route_tenant();
+        let agent_id = route_tenant.agent.clone();
         let thread_key = chat_thread_id
             .as_deref()
-            .map(|thread_id| thread_route_key(agent_id.as_deref(), thread_id));
+            .map(|thread_id| thread_route_key(&route_tenant, thread_id));
         // Resolve the clamped park TTL up front so the persisted `expires_at`
         // and the actual wait below (see `resolve_park_ttl` further down)
         // use the same value — see `Self::resolve_park_ttl` and the
@@ -522,6 +525,7 @@ impl ApprovalGate {
                 tool_call_id: tool_call_id.map(str::to_string),
                 forced,
                 agent_id: agent_id.clone(),
+                thread_key: thread_key.clone(),
                 detached,
             },
         );
