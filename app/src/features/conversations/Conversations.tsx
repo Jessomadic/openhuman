@@ -2023,7 +2023,7 @@ const Conversations = ({
                 : formatTokens(threadGoal.tokens_used)}
             </span>
           }
-          className="mb-2 self-start"
+          className="mb-2 w-full [&>span:nth-of-type(3)]:max-w-none [&>span:nth-of-type(3)]:flex-1"
         />
       )}
       {selectedThreadId && liveTodos && liveTodos.length > 0 && (
@@ -2263,7 +2263,7 @@ const Conversations = ({
     ) : null;
 
   const assistantComposerHeader = (
-    <>
+    <div className="chat-composer-surfaces flex w-full min-w-0 flex-col empty:hidden">
       {/* Turn gates first: a parked plan review and a drafted workflow both
           block progress until the user decides, so they sit above the transient
           attach error and the queued-followup strip. `ComposerHeader` is the
@@ -2298,7 +2298,7 @@ const Conversations = ({
           input; renders only while the thread has no messages, since the
           core fixes the folder at the first send. */}
       <ThreadWorkspaceChip threadId={selectedThreadId ?? null} />
-    </>
+    </div>
   );
 
   // Left-hand controls in the assistant-ui composer toolbar.

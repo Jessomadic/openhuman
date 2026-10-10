@@ -64,16 +64,19 @@ export function TodoList({
 }
 
 /** The step rows, shared by every todo surface. */
-export function TodoItems({ items }: { items: readonly TodoItem[] }) {
+export function TodoItems({ items, compact = false }: { items: readonly TodoItem[]; compact?: boolean }) {
   return (
-    <ul className="flex flex-col gap-1">
+    <ul className={cn('flex flex-col', compact ? 'gap-0.5' : 'gap-1')}>
       {items.map(item => (
         <li
           key={item.id}
           data-testid="todo-item"
           data-status={item.status}
-          className="fade-in slide-in-from-bottom-1 animate-in fill-mode-both flex items-start gap-2.5 py-0.5 text-[13.5px] duration-300">
-          <span aria-hidden className="flex size-4 h-5 shrink-0 items-center justify-center">
+          className={cn(
+            'fade-in slide-in-from-bottom-1 animate-in fill-mode-both flex items-start duration-300',
+            compact ? 'gap-2 py-0 text-xs' : 'gap-2.5 py-0.5 text-[13.5px]'
+          )}>
+          <span aria-hidden className={cn('flex size-4 shrink-0 items-center justify-center', compact ? 'h-4' : 'h-5')}>
             {item.status === 'done' ? (
               <span className="border-foreground/20 bg-foreground/[0.06] flex size-3.5 items-center justify-center rounded-[5px] border">
                 <CheckIcon className="text-foreground/45 size-2.5" />
@@ -89,7 +92,7 @@ export function TodoItems({ items }: { items: readonly TodoItem[] }) {
             )}
           </span>
           <span className="sr-only">{item.status}</span>
-          <div className="min-w-0 flex-1 leading-5 break-words">
+          <div className={cn('min-w-0 flex-1 break-words', compact ? 'leading-4' : 'leading-5')}>
             <span
               className={cn(
                 item.status === 'done' && 'text-foreground/35 line-through decoration-[1.5px]',
@@ -191,7 +194,7 @@ export function TodoProgressCard({
       data-todo-completed={progress.done}
       data-todo-total={progress.total}
       className={cn(
-        'border-border/60 bg-background/60 flex w-full max-w-md flex-col overflow-hidden rounded-xl border',
+        'flex w-full max-w-none flex-col overflow-hidden rounded-lg bg-transparent backdrop-blur-md',
         className
       )}
       {...props}>
@@ -201,9 +204,9 @@ export function TodoProgressCard({
         aria-label={title}
         data-analytics-id="chat-todo-progress-toggle"
         onClick={() => onOpenChange(!open)}
-        className="hover:bg-foreground/[0.03] flex items-center gap-2 px-3 py-1.5 text-start transition-colors">
+        className="hover:bg-foreground/[0.03] flex items-center gap-2 px-2 py-1 text-start transition-colors">
         <ProgressMarker progress={progress} />
-        <span className="text-foreground/80 min-w-0 flex-1 truncate text-[13px]">
+        <span className="text-foreground/80 min-w-0 flex-1 truncate text-xs">
           {open ? title : (progress.current?.text ?? title)}
         </span>
         <span
@@ -229,8 +232,8 @@ export function TodoProgressCard({
       <div
         data-slot="todo-progress-steps"
         hidden={!open}
-        className="border-border/60 max-h-[min(300px,48dvh)] overflow-y-auto border-t px-3 py-2">
-        <TodoItems items={items} />
+        className="max-h-[min(160px,24dvh)] overflow-y-auto px-2 pt-0.5 pb-1">
+        <TodoItems items={items} compact />
       </div>
     </div>
   );
