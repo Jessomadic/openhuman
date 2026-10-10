@@ -87,7 +87,10 @@ pub struct HeldBy {
     pub owner: String,
     /// Where the holder can be reached, when it advertises an endpoint.
     pub endpoint: Option<String>,
-    /// Milliseconds until its lease lapses unless renewed.
+    /// A polling hint in milliseconds: the time until its lease lapses unless
+    /// renewed, capped at 60 seconds (a lease that never expires, such as a
+    /// file lock, reports the cap). Retry after this, not necessarily after
+    /// expiry.
     pub retry_after_ms: u64,
 }
 
@@ -121,11 +124,14 @@ impl GatewayRefusal {
                     record.owner,
                     record.epoch
                 );
+                // A file-lock lease never expires (`u64::MAX`), so the raw
+                // value is no retry hint (and overflows a JSON consumer's
+                // safe integers); cap it.
                 Self {
                     status: 409,
                     message: PROFILE_HELD.to_string(),
                     held_by: Some(HeldBy {
-                        retry_after_ms: record.retry_after_ms(now_ms),
+                        retry_after_ms: record.retry_after_ms(now_ms).min(MAX_RETRY_AFTER_MS),
                         owner: record.owner,
                         endpoint: record.endpoint,
                     }),
@@ -134,6 +140,9 @@ impl GatewayRefusal {
         }
     }
 }
+
+/// The longest `retry_after_ms` a `409` reports.
+const MAX_RETRY_AFTER_MS: u64 = 60_000;
 
 /// Where a gateway request runs.
 #[derive(Debug)]
