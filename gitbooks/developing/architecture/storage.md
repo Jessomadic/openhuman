@@ -50,7 +50,7 @@ The host opens the configured backend before the core boots and installs it with
 
 ## Scopes
 
-Every record lives in a scope, and two scopes on one backend never see each other's data. A single-user install scopes by **agent id**, and a SaaS host scopes by **profile** (the tenant). `storage::scope_for_agent` and `storage::scope_for_profile` are the single mappings, and the session store uses the same ones, so every domain agrees.
+Every record lives in a scope, and two scopes on one backend never see each other's data. A single-user install scopes by **agent id**, and a SaaS host scopes by **profile** (the tenant). `storage::scope_for_agent` and `storage::scope_for_profile` are the single mappings, and the session store uses the same ones, so every domain agrees. An agent's scope is its id when that is a valid scope name, else `sha256:<hex digest of the id>` (TinyAgents' `DriverSessionStores::scope_for`). A profile's scope is `profile:<id>`, or `profile-sha256:<hex digest of the id>` when that is not a valid scope name. The prefixes keep the two kinds of key from colliding, and `local` is the literal operator scope.
 
 `storage::current_scope()` resolves the scope of the current call from the task's tenant (`storage::scope_from(profile, agent, saas)`), in this order:
 
@@ -64,7 +64,7 @@ A backend decides how it enforces the scope. SQLite and the file driver keep eac
 
 ### Background work
 
-Background work runs under the process default context, which names no agent, and on its own would only see `local`. `storage::agents` closes the gap. Agents are known when they are live (`AgentContextRegistry`) or when an earlier process recorded their id in the `local` scope (`storage_agents`). `for_each_scope` runs a step once for `local` and once under each known agent. The cron scheduler's agent pass (`cron::scheduler::tick_live_agents`) runs each live agent's due jobs under that agent's own context, so their results are recorded in the agent's own scope. A recorded agent that is not live waits until it is live again, because its jobs need its host tools and prompt.
+Background work runs under the process default context, which names no agent, and on its own would only see `local`. `storage::agents` closes the gap. Agents are known when they are live (`AgentContextRegistry`) or when an earlier process recorded their id in the `local` scope (`storage_agents`). `for_each_scope` runs a step once for `local` and once under each known agent. The cron scheduler's agent pass (`cron::scheduler::tick_live_agents`, driven in tests through the public `cron::scheduler::run_live_agent_pass`) runs each live agent's due jobs under that agent's own context, so their results are recorded in the agent's own scope. A recorded agent that is not live waits until it is live again, because its jobs need its host tools and prompt.
 
 On a shared backend (MongoDB) other processes may write the same records, so boot-time recovery such as the orphaned-run sweep is skipped (`storage::installed_is_shared`).
 

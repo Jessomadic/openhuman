@@ -146,6 +146,27 @@ async fn the_file_backend_keeps_agents_apart() {
     driver_backed_store_keeps_agents_apart(url, "file").await;
 }
 
+/// Whether every seed host of a MongoDB URL is exactly the local machine
+/// (`localhost`, `127.0.0.1` or `::1`); a prefix match would accept
+/// `127.0.0.1.example.com`. Same rule as the root suites' helper
+/// (`tests/support/storage_drivers.rs`).
+#[cfg(feature = "storage-mongodb")]
+fn is_loopback_mongo_url(url: &str) -> bool {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?']).next().unwrap_or_default();
+    let hosts = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    !hosts.is_empty()
+        && !url.starts_with("mongodb+srv://")
+        && hosts.split(',').all(|host| {
+            let name = if let Some(v6) = host.strip_prefix('[') {
+                v6.split(']').next().unwrap_or_default()
+            } else {
+                host.rsplit_once(':').map_or(host, |(name, _)| name)
+            };
+            matches!(name, "localhost" | "127.0.0.1" | "::1")
+        })
+}
+
 /// Runs against `TSD_MONGO_URL` (a throwaway local replica set, as the
 /// `Storage (MongoDB)` workflow starts) in a database of its own; skipped
 /// when it is unset or names a host other than this machine.
@@ -159,13 +180,7 @@ async fn the_mongodb_backend_keeps_agents_apart() {
         eprintln!("skipped mongodb: TSD_MONGO_URL is not set");
         return;
     };
-    let rest = base.split_once("://").map_or(base.as_str(), |(_, r)| r);
-    let host = rest.split(['/', '?']).next().unwrap_or_default();
-    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
-    if !(host.starts_with("127.0.0.1")
-        || host.starts_with("localhost")
-        || host.starts_with("[::1]"))
-    {
+    if !is_loopback_mongo_url(&base) {
         eprintln!("skipped mongodb: TSD_MONGO_URL must name a local server");
         return;
     }

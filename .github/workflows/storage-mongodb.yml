@@ -72,8 +72,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Consumed by scripts/ci-cancel-aware.sh's cancellation watchdog.
-  GH_TOKEN: ${{ github.token }}
   CI_IMAGE: ghcr.io/tinyhumansai/openhuman_ci:latest
   # The replica set start-mongo-replset.sh brings up (published on 27017).
   # directConnection: the member advertises `localhost`, not a resolvable name.
@@ -98,6 +96,14 @@ jobs:
       - name: Check out submodules
         run: bash scripts/ci/checkout-submodules.sh
 
+      - name: Verify the replica-set script was checked out
+        run: |
+          script=vendor/tinyagents/vendor/tinystoragedrivers/.github/scripts/start-mongo-replset.sh
+          if [ ! -f "$script" ]; then
+            echo "::error::$script is missing: scripts/ci/checkout-submodules.sh did not populate vendor/tinyagents/vendor/tinystoragedrivers"
+            exit 1
+          fi
+
       - name: Start a MongoDB replica set
         # tinystoragedrivers' own script: GitHub service containers cannot pass
         # `--replSet` to mongod, and a replica set is what lets the driver
@@ -115,6 +121,10 @@ jobs:
             storage-mongodb-${{ runner.os }}-
 
       - name: Test the storage targets and the session store with the MongoDB driver
+        env:
+          # Consumed by scripts/ci-cancel-aware.sh's cancellation watchdog;
+          # only this step needs it, not the submodule script above.
+          GH_TOKEN: ${{ github.token }}
         # Runs in the CI image (toolchain, mold, system libraries) on the host
         # network, so 127.0.0.1:27017 reaches the replica set above.
         run: |
