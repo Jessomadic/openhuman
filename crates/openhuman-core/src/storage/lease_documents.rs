@@ -27,6 +27,9 @@ const ACQUIRE_ATTEMPTS: usize = 16;
 /// Leases kept as documents. See the module docs.
 pub struct DocumentLeases {
     docs: Arc<dyn DocumentStore>,
+    /// The scope `docs` is bound to, when known ([`Self::cluster`]); a
+    /// fencing driver reads the lease record from there.
+    scope: Option<Scope>,
     node: String,
     endpoint: Option<String>,
     ttl_ms: u64,
@@ -34,6 +37,9 @@ pub struct DocumentLeases {
     /// re-entrant and lets a restarted node (same id, fresh instance) see its
     /// own leftover record as unclean.
     held: Mutex<HashMap<String, u64>>,
+    /// Serializes `acquire` on this instance so an older completion cannot
+    /// overwrite newer held state.
+    acquire_gate: tokio::sync::Mutex<()>,
     declared: tokio::sync::OnceCell<()>,
 }
 
@@ -59,12 +65,14 @@ impl DocumentLeases {
     ) -> Self {
         Self {
             docs,
+            scope: None,
             node: node.into(),
             endpoint,
             // A sub-millisecond TTL rounds up so a grant never expires at
             // the instant it is issued.
             ttl_ms: u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX).max(1),
             held: Mutex::new(HashMap::new()),
+            acquire_gate: tokio::sync::Mutex::new(()),
             declared: tokio::sync::OnceCell::new(),
         }
     }
@@ -80,13 +88,18 @@ impl DocumentLeases {
         endpoint: Option<String>,
         ttl: Duration,
     ) -> Result<Self, StorageError> {
-        let scoped = backend.for_scope(&Scope::new(CLUSTER_SCOPE)?)?;
-        Ok(Self::new(
-            Arc::clone(scoped.documents()),
-            node,
-            endpoint,
-            ttl,
-        ))
+        let scope = Scope::new(CLUSTER_SCOPE)?;
+        let scoped = backend.for_scope(&scope)?;
+        Ok(Self::new(Arc::clone(scoped.documents()), node, endpoint, ttl).in_scope(scope))
+    }
+
+    /// Records that the document store this was built over is bound to
+    /// `scope`, so storage fences can name the lease record
+    /// ([`LeaseStore::record_scope`]).
+    #[must_use]
+    pub fn in_scope(mut self, scope: Scope) -> Self {
+        self.scope = Some(scope);
+        self
     }
 
     /// This node's id.
@@ -216,6 +229,7 @@ impl LeaseStore for DocumentLeases {
     async fn acquire(&self, key: &str, now_ms: u64) -> Result<LeaseGrant, LeaseError> {
         validate_key(key)?;
         self.declare().await?;
+        let _gate = self.acquire_gate.lock().await;
         let expires_at_ms = now_ms.saturating_add(self.ttl_ms);
         for attempt in 0..ACQUIRE_ATTEMPTS {
             let found = self.read(key).await?;
@@ -330,6 +344,10 @@ impl LeaseStore for DocumentLeases {
         validate_key(key)?;
         self.declare().await?;
         Ok(self.read(key).await?.map(|(_, record)| record))
+    }
+
+    fn record_scope(&self) -> Option<Scope> {
+        self.scope.clone()
     }
 }
 

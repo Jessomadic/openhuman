@@ -1,27 +1,6 @@
 [
   {
     "rule": "json-write",
-    "path": "crates/openhuman-core/src/agent/artifacts/files.rs",
-    "line": 141,
-    "text": "match tokio::fs::OpenOptions::new()",
-    "occurrence": 1
-  },
-  {
-    "rule": "json-write",
-    "path": "crates/openhuman-core/src/agent/artifacts/store.rs",
-    "line": 122,
-    "text": "tokio::fs::write(&tmp_path, json).await.map_err(|e| {",
-    "occurrence": 1
-  },
-  {
-    "rule": "json-write",
-    "path": "crates/openhuman-core/src/agent/artifacts/store.rs",
-    "line": 295,
-    "text": "tokio::fs::write(&args_path, json)",
-    "occurrence": 1
-  },
-  {
-    "rule": "json-write",
     "path": "crates/openhuman-core/src/agent/attachments/legacy.rs",
     "line": 143,
     "text": "let mut file = tokio::fs::OpenOptions::new()",
@@ -169,8 +148,8 @@
   },
   {
     "rule": "json-write",
-    "path": "crates/openhuman-core/src/config/schema/load/impl_load.rs",
-    "line": 505,
+    "path": "crates/openhuman-core/src/config/schema/load/source/file.rs",
+    "line": 82,
     "text": "let mut temp_file = OpenOptions::new()",
     "occurrence": 1
   },
@@ -344,6 +323,13 @@
   },
   {
     "rule": "json-write",
+    "path": "crates/openhuman-core/src/profiles/registry.rs",
+    "line": 141,
+    "text": "std::fs::write(&layout.meta_path, raw)",
+    "occurrence": 1
+  },
+  {
+    "rule": "json-write",
     "path": "crates/openhuman-core/src/runtime/python_server/kompress.rs",
     "line": 150,
     "text": "tokio::fs::write(",
@@ -487,13 +473,6 @@
     "path": "crates/openhuman-core/src/tools/impl/presentation/mod.rs",
     "line": 328,
     "text": "if let Err(err) = tokio::fs::write(&output_path, &bytes).await {",
-    "occurrence": 1
-  },
-  {
-    "rule": "json-write",
-    "path": "crates/openhuman-core/src/user_agents/host.rs",
-    "line": 126,
-    "text": "std::fs::write(&layout.meta_path, raw)",
     "occurrence": 1
   },
   {

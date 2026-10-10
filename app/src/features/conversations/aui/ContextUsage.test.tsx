@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { callCoreRpc } from '../../../services/coreRpcClient';
 import chatRuntimeReducer, { hydrateThreadUsage } from '../../../store/chatRuntimeSlice';
-import { contextBreakdownSegments, ContextUsage } from './ContextUsage';
+import { contextBreakdownSegments, ContextUsage, formatCost } from './ContextUsage';
 
 vi.mock('../../../services/coreRpcClient', () => ({ callCoreRpc: vi.fn() }));
 
@@ -31,6 +31,7 @@ function renderUsage(
   usage: {
     lastTurnInputTokens: number;
     lastTurnOutputTokens: number;
+    lastTurnContextTokens?: number;
     contextWindow: number;
     subAgents?: Array<{
       agentId: string;
@@ -73,6 +74,22 @@ describe('ContextUsage', () => {
     expect(trigger).toHaveTextContent('25%');
   });
 
+  it('fills the ring from the last call of a many-call turn, not its summed spend', () => {
+    // 5.7M input summed over 72 calls would pin the ring at 100% of a 1M
+    // window; the final request held ~100k.
+    renderUsage(
+      {},
+      {
+        lastTurnInputTokens: 5_710_657,
+        lastTurnOutputTokens: 30_790,
+        lastTurnContextTokens: 100_000,
+        contextWindow: 1_000_000,
+      }
+    );
+
+    expect(screen.getByTestId('composer-context-usage')).toHaveTextContent('10%');
+  });
+
   it("prefers the selected model's window over the one the last turn reported", () => {
     renderUsage({ modelContextWindow: 100_000 });
 
@@ -102,7 +119,7 @@ describe('ContextUsage', () => {
     await waitFor(() => expect(popover).toHaveTextContent('Tool schemas'));
     expect(popover).not.toHaveTextContent('Tool usage');
     expect(popover).not.toHaveTextContent('Thinking tokens');
-    expect(popover).toHaveTextContent('Output');
+    expect(popover).not.toHaveTextContent('Output');
     expect(popover).toHaveTextContent('Your input');
     expect(popover).toHaveTextContent('System prompt');
     // Individual system-prompt headings are folded into one stable bucket.
@@ -212,8 +229,40 @@ describe('contextBreakdownSegments', () => {
     expect(segments.map(s => [s.label, s.tokens])).toEqual([
       ['System prompt', 30],
       ['Tool schemas', 100],
-      ['Output', 0],
       ['Your input', 0],
     ]);
+  });
+
+  it('partitions the final-call context, not the turn’s summed input', () => {
+    const segments = contextBreakdownSegments(
+      {
+        sections: [
+          { label: '## Rules', bytes: 40_000, est_tokens: 10_000 },
+          { label: 'tools', bytes: 80_000, est_tokens: 20_000 },
+        ],
+        total_est_tokens: 30_000,
+        context_window: 1_000_000,
+      },
+      t,
+      { lastTurnContextUsed: 100_000 }
+    );
+
+    // 100k context = 10k prompt + 20k schemas + 70k of conversation. The
+    // turn-wide output total is excluded because earlier replies may be gone.
+    expect(segments.map(s => [s.label, s.tokens])).toEqual([
+      ['System prompt', 10_000],
+      ['Tool schemas', 20_000],
+      ['Your input', 70_000],
+    ]);
+    expect(segments.reduce((sum, s) => sum + s.tokens, 0)).toBe(100_000);
+  });
+});
+
+describe('formatCost', () => {
+  it('shows a charge as is, marks an estimate, and shows no price when unknown', () => {
+    expect(formatCost(0.2986, 'charged')).toBe('$0.2986');
+    expect(formatCost(4.25, 'charged')).toBe('$4.25');
+    expect(formatCost(0.05, 'estimated')).toBe('≈ $0.0500');
+    expect(formatCost(4.25, 'unknown')).toBe('—');
   });
 });

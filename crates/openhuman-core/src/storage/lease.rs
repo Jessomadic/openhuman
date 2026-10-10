@@ -9,7 +9,7 @@
 //!   only by compare-and-swap, so it is correct across processes on a driver
 //!   with cross-process CAS ([`super::driver_has_cross_process_cas`]).
 //! - [`LocalLeases`] is for hosts without a backend: an exclusive `flock` on
-//!   `<root>/<key>/.lease`, which the OS drops when the holder dies.
+//!   `<root>/<sha256(key) hex>/.lease`, which the OS drops when the holder dies.
 //!
 //! No wall clock is read here: every operation takes `now_ms`, so behaviour
 //! is a function of its inputs and the tests are deterministic.
@@ -25,8 +25,8 @@
 //!   stop the previous holder: resources a lease protects must reject writes
 //!   carrying an epoch below the current one, and a holder must stop work
 //!   before `expires_at_ms` minus the maximum clock skew between nodes (each
-//!   node supplies its own `now_ms`). Nothing in this module checks epochs at
-//!   the protected resource. An epoch at `u64::MAX` cannot be advanced, so a
+//!   node supplies its own `now_ms`). This module does not check epochs at
+//!   the protected resource; [`super::fence`] does, for storage-port writes. An epoch at `u64::MAX` cannot be advanced, so a
 //!   takeover of it fails with a storage error instead of repeating it.
 //! - **renew** extends a grant by compare-and-swap on the version it holds.
 //!   Any write since (a takeover, a release) makes it [`LeaseError::Lost`].
@@ -166,6 +166,16 @@ pub trait LeaseStore: Send + Sync {
     ///
     /// [`LeaseError::Storage`].
     async fn holder(&self, key: &str) -> Result<Option<LeaseRecord>, LeaseError>;
+
+    /// The storage scope whose [`LEASE_COLLECTION`] holds this store's
+    /// records (document id = key), when they live in the storage ports at
+    /// all. A storage driver with fencing can then check a write against the
+    /// record in the same atomic step ([`super::fence::LeaseFence::driver_fence`]).
+    /// `None` (the default) for stores that keep records elsewhere, such as
+    /// file locks.
+    fn record_scope(&self) -> Option<tinystoragedrivers::Scope> {
+        None
+    }
 }
 
 /// Rejects keys that could escape a directory or a document id: empty,

@@ -22,7 +22,6 @@
 //! [`super::completion_notice`].
 
 use std::collections::{HashMap, HashSet, VecDeque};
-
 // Keys of `HostState`'s thread and session maps: per profile (see `profile_key`).
 use crate::core::runtime::tenant::profile_key as key;
 use std::path::{Path, PathBuf};
@@ -38,6 +37,7 @@ use tinyagents_tasks::{
 use super::completion_notice::BackgroundCompletionFormatter;
 pub(crate) use super::completion_notice::{BackgroundAgentOutcome, AWAITING_INPUT_LABEL};
 pub(crate) use super::completion_target::CompletionTarget;
+pub(crate) use super::completion_target::{claim_recovery, forget_recovery};
 #[cfg(test)]
 pub(crate) use super::completion_target::{
     forget_workspace_for_test, install_store_for_test, TestWorkspace,
@@ -208,15 +208,6 @@ pub(crate) fn workspace_for_thread(thread_id: &str) -> Option<PathBuf> {
     state().thread_workspaces.get(&key(thread_id)).cloned()
 }
 
-/// Claim `workspace_dir`'s boot recovery for this process. `true` exactly once
-/// per workspace, so the host can scan every workspace it opens (the bootstrap
-/// one, then any other a spawn later opens) without rescanning.
-pub(crate) fn claim_recovery(workspace_dir: &Path) -> bool {
-    state()
-        .recovered_workspaces
-        .insert(workspace_dir.to_path_buf())
-}
-
 /// Remember that `session_id` is a turn on `thread_id`.
 pub(crate) fn note_session_thread(session_id: &str, thread_id: &str) {
     let session_key = key(session_id);
@@ -327,6 +318,7 @@ pub(crate) async fn record_outcome(
     }
     note_thread_workspace(&thread_id, workspace_dir);
     note_session_thread(parent_session, &thread_id);
+    super::completion_owners::note(&[&task_id, parent_session]); // owner, for off-task delivery
 
     let record = CompletionRecord::new(
         task_id.clone(),

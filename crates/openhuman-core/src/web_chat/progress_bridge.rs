@@ -1084,7 +1084,7 @@ pub(crate) fn spawn_progress_bridge(
                         },
                     );
                 }
-                AgentProgress::TurnCompleted { iterations } => {
+                AgentProgress::TurnCompleted { iterations, .. } => {
                     parent_completed = true;
                     timing.done(iterations, MIN_INTERIM_NARRATION_CHARS, &request_id);
                     if let Ok(mut guard) = timing_snapshot_for_task.lock() {
@@ -1185,8 +1185,13 @@ pub(crate) fn spawn_progress_bridge(
                                     input_tokens,
                                     output_tokens,
                                     cached_input_tokens,
-                                    cost_usd: total_usd,
+                                    // A live rollup of the known spend so far;
+                                    // the turn's final figure (or `null`)
+                                    // arrives on `chat_done`.
+                                    cost_usd: Some(total_usd),
+                                    cost_source: crate::agent::cost::CostSource::Charged,
                                     context_window: 0,
+                                    context_tokens: 0,
                                     subagents: Vec::new(),
                                 }),
                                 ..Default::default()
@@ -1211,7 +1216,7 @@ pub(crate) fn spawn_progress_bridge(
                     // stay on the cumulative TurnCostUpdated rollup.
                     log::debug!(
                         "[web_channel][bridge] model_call_completed model={model} iter={iteration} \
-                         in={input_tokens} out={output_tokens} cost_usd={cost_usd:.6} request_id={request_id}"
+                         in={input_tokens} out={output_tokens} cost_usd={cost_usd:?} request_id={request_id}"
                     );
                 }
             }
