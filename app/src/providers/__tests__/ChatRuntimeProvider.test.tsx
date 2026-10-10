@@ -3078,7 +3078,6 @@ describe('ChatRuntimeProvider — detached sub-agent approvals', () => {
       listeners.onApprovalDecided?.({
         thread_id: 't-sub',
         request_id: 'appr-sub',
-        tool_name: 'media_generate_image',
         message: 'approve_once',
       });
     });

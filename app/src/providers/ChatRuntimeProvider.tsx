@@ -1460,11 +1460,12 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
           // for a DIFFERENT thread's request arrives.
           if (!event.thread_id) return;
           // A detached card (an async sub-agent's) has no turn end of its own
-          // to clear it, so any decision for exactly that request — made on
-          // another client, or by a typed reply — removes it here. Matching on
-          // `request_id` keeps a different thread's or a newer request's card.
+          // to clear it, so any resolution of exactly that request — a decision
+          // made on another client or by a typed reply, an expiry, a cancel —
+          // removes it here. Matching on `request_id` keeps a different
+          // thread's or a newer request's card.
           const held = store.getState().chatRuntime.pendingApprovalByThread[event.thread_id];
-          if (held?.detached && held.requestId === event.request_id && !event.resolution) {
+          if (held?.detached && held.requestId === event.request_id) {
             dispatch(
               clearPendingApprovalIfRequest({
                 threadId: event.thread_id,
