@@ -28,10 +28,10 @@ use super::layout::{self, ProfileLayout};
 use super::lease::{self as profile_lease, OpenError};
 use super::lifecycle::ProfileLocks;
 use super::registry::ProfileRegistry;
-use super::types::{ProfileId, ProfileMeta, ProfileSummary, LAYOUT_VERSION};
+use super::types::{ProfileId, ProfileMeta, ProfileSummary};
 use crate::config::Config;
 use crate::core::runtime::{ContextOverlay, CoreContext, DomainSet, SaasConfig};
-use crate::storage::lease::{LeaseError, LeaseGrant, LeaseStore};
+use crate::storage::lease::{LeaseGrant, LeaseStore};
 use crate::storage::StorageBackend;
 use crate::tools::toolpacks::ToolGroups;
 
