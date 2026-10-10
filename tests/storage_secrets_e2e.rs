@@ -16,16 +16,27 @@ mod storage_drivers;
 
 use storage_drivers::Case;
 
+/// The workspace every case shares. The process keyring caches the backend it
+/// first resolves (a `dev-keychain.json` under the workspace in effect then),
+/// so a later case in the same process must find it in the same place. The
+/// credential files live in a directory of each case's own.
+fn keyring_workspace() -> &'static std::path::Path {
+    static WORKSPACE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    WORKSPACE
+        .get_or_init(|| tempfile::tempdir().unwrap())
+        .path()
+}
+
 fn a_configured_backend_holds_keyring_and_credential_secrets(case: Case) {
-    let workspace = tempfile::tempdir().unwrap();
+    let workspace = keyring_workspace();
     // Keep any process-backend fallback inside the temp workspace, and give
     // the storage secrets a master key without touching an OS keychain.
-    std::env::set_var("OPENHUMAN_WORKSPACE", workspace.path());
+    std::env::set_var("OPENHUMAN_WORKSPACE", workspace);
     std::env::set_var("OPENHUMAN_KEYRING_BACKEND", "file");
     std::env::set_var("OPENHUMAN_KEYRING_MASTER_KEY", "11".repeat(32));
 
     // Credentials written before any backend existed (the classic files).
-    let state = workspace.path().join("state");
+    let state = case.data_dir.path().join("state");
     AuthProfilesStore::new(&state, false)
         .upsert_profile(
             AuthProfile::new_token("legacy", "default", "sk-legacy".to_string()),
@@ -42,7 +53,7 @@ fn a_configured_backend_holds_keyring_and_credential_secrets(case: Case) {
     let before: std::collections::HashMap<&str, Option<Vec<u8>>> =
         ["secrets.enc", "dev-keychain.json"]
             .into_iter()
-            .map(|f| (f, std::fs::read(workspace.path().join(f)).ok()))
+            .map(|f| (f, std::fs::read(workspace.join(f)).ok()))
             .collect();
 
     case.install();
@@ -94,11 +105,11 @@ fn a_configured_backend_holds_keyring_and_credential_secrets(case: Case) {
     // `secrets.enc` was not touched, and nothing of the storage-side secret
     // reached the process keychain file.
     assert_eq!(
-        std::fs::read(workspace.path().join("secrets.enc")).ok(),
+        std::fs::read(workspace.join("secrets.enc")).ok(),
         before.get("secrets.enc").cloned().flatten(),
         "secrets.enc unchanged"
     );
-    let dev = std::fs::read_to_string(workspace.path().join("dev-keychain.json")).unwrap();
+    let dev = std::fs::read_to_string(workspace.join("dev-keychain.json")).unwrap();
     assert!(!dev.contains("user-1") && !dev.contains("tok-123"), "{dev}");
 
     // Without a backend the files are back in use.
