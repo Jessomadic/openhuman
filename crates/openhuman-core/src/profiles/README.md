@@ -84,19 +84,33 @@ Changing the mode may re-map users onto different profiles.
 - **The isolation boundary is the profile's `CoreContext`.** It carries the
   forced config, its own security policy (`agent_policy`, never the
   operator's), `profile = <profile id>` (the tenant key: storage scope,
-  `/events`, cost, per-thread tables, via `core::runtime::current_tenant`) and
-  `session_agent = <profile id>`, and the user families (threads, channels for
-  web chat, memory), narrowed further by `surface::USER_METHODS`. Work for a
-  user runs under it, which is what the config loader, the session store and
-  the per-thread caches key on.
-- **`session_agent` stays the profile id.** The plan was for the default agent
-  to run with no `session_agent`, as on the desktop. That needs every site
-  that keys on the acting agent to key on the tenant instead; the approval
-  gate's thread routes, the MCP host, skill homes, origin delivery and the
-  transcript fallback still read `agent_scope::current_agent_id()`, so a
-  profile without an agent id would share their keys with every other
-  profile. Until those move to `current_tenant`, the profile id doubles as the
-  agent id.
+  `/events`, cost, per-thread tables, via `core::runtime::current_tenant`)
+  and the user families (threads, channels for web chat, memory), narrowed
+  further by `surface::USER_METHODS`. Work for a user runs under it, which is
+  what the config loader, the session store and the per-thread caches key on.
+- **The default agent has no `session_agent`.** As on the desktop, a
+  profile's default agent runs with no agent id: its state sits at the root
+  of the profile's own workspace, and its session-store key is
+  `<profile>~default` (`core::runtime::session_key`). Every seam that must
+  keep users apart keys on the tenant, never on the agent id alone:
+  - the approval gate's thread routes (`approval::gate::thread_route_key`:
+    the `tenant_key` of the thread under a profile);
+  - the MCP host (a profile's host lives at its workspace root; a profile
+    never falls back to the process default or a lone open host, and a SaaS
+    task with no scope gets none);
+  - skill homes (`<workspace>/agents/default/` for a profile's default agent;
+    never the operator's `~/.openhuman`, and nothing without a scope);
+  - origin delivery and the transcript fallback (the profile's workspace
+    root, the same place its file-backed session store writes);
+  - web chat keys, in-flight turns, completion owners, event stamps
+    (`WebChannelEvent::profile`), storage scopes and the cost ledger, which
+    already keyed on the profile.
+
+  What still reads the agent id (`agent_scope::current_agent_id`,
+  `CoreContext::session_agent`) is genuinely per agent: `agent_scope_dir` (an
+  embedded agent's subdirectory of a workspace), the cost ledger's
+  `session_agent` column, owner records for embedded agents (devices, cron
+  completions, flows) and log fields.
 - **Host tools are opt-in and confined.** A user's context has no `Platform`
   family, so shell and file tools are absent unless the operator lists their
   group in `tool_allowlist`:
@@ -169,14 +183,14 @@ or echoes a credential.
   `channel:`, `proactive:` and `subagent:` are refused.
 - **Web chat.** `channel.web_chat`, `web_cancel` and the `web_queue_*` methods
   are open, along with the turn-starting thread methods. Every `WebChannelEvent` is
-  stamped with the publishing context's `session_agent` (the profile id) (`WebChannelEvent::agent`, never
+  stamped with the publishing context's profile (`WebChannelEvent::profile`, never
   serialized). A user's `GET /events?client_id=` stream runs under that user's
   gateway scope and carries only events stamped with that user's profile. Two
   users on the same client id never see each other's turns. An unstamped event
   belongs to no user. The operator has no chat stream, and browser bind tokens
   are not accepted in SaaS.
 - **Per-profile keys.** The web chat session cache, the in-flight turns and the
-  parallel (forked) turns are keyed by `session_agent` (the profile id) and id, so caller-chosen thread
+  parallel (forked) turns are keyed by the tenant (`tenant_key`: the profile) and id, so caller-chosen thread
   and request ids never collide across users.
 - **Deprovisioning** also clears the profile's credential, which lives in the
   process keyring under the profile id. Otherwise a re-provisioned user would
