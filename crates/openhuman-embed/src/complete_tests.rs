@@ -104,10 +104,10 @@ async fn truncated_json_is_reported_not_parsed() {
     let server = server_replying(body("{\"prime\":", "length")).await;
     let request = CompletionRequest::new("m", vec![ChatMessage::user("x")])
         .response_format(ResponseFormat::JsonObject);
-    let response = completer(&server).complete(request).await.unwrap();
-    assert_eq!(response.finish_reason.as_deref(), Some("length"));
-    assert_eq!(response.structured, None);
-    assert_eq!(response.text, "{\"prime\":");
+    let error = completer(&server).complete(request).await.unwrap_err();
+    assert!(
+        matches!(error, CoreError::StructuredOutput { failure, .. } if failure.reason == crate::structured::StructuredFailureReason::Truncated)
+    );
 }
 
 #[tokio::test]
@@ -203,9 +203,10 @@ async fn json_object_format_rejects_a_non_object_reply() {
     let server = server_replying(body("[1,2]", "stop")).await;
     let request = CompletionRequest::new("m", vec![ChatMessage::user("x")])
         .response_format(ResponseFormat::JsonObject);
-    let response = completer(&server).complete(request).await.unwrap();
-    assert_eq!(response.text, "[1,2]");
-    assert_eq!(response.structured, None);
+    let error = completer(&server).complete(request).await.unwrap_err();
+    assert!(
+        matches!(error, CoreError::StructuredOutput { failure, .. } if failure.reason == crate::structured::StructuredFailureReason::SchemaMismatch)
+    );
 }
 
 #[tokio::test]

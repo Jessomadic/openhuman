@@ -285,3 +285,6 @@ impl std::fmt::Debug for Core {
         f.debug_struct("Core").finish_non_exhaustive()
     }
 }
+
+/// Strict structured output failure metadata.
+pub mod structured;

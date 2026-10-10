@@ -173,6 +173,9 @@ impl ResponseFormat {
 /// One stateless model call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompletionRequest {
+    /// Extra structured repair attempts, bounded to three; defaults to zero.
+    #[serde(default)]
+    pub structured_retries: u8,
     /// Model id on the route's endpoint. Required and sent verbatim.
     pub model: String,
     /// Conversation, in order.
@@ -200,11 +203,18 @@ impl CompletionRequest {
         Self {
             model: model.into(),
             messages,
+            structured_retries: 0,
             response_format: None,
             max_tokens: None,
             temperature: None,
             provider_options: Value::Null,
         }
+    }
+
+    /// Allow at most three extra attempts to repair invalid structured output.
+    pub fn structured_retries(mut self, attempts: u8) -> Self {
+        self.structured_retries = attempts;
+        self
     }
 
     /// Set the output shape.
@@ -348,7 +358,7 @@ impl CompletionResponse {
 
 /// Parse a JSON reply, tolerating one surrounding Markdown code fence — a
 /// common habit of models without native structured output.
-fn parse_json_reply(text: &str) -> Option<Value> {
+pub(crate) fn parse_json_reply(text: &str) -> Option<Value> {
     let trimmed = text.trim();
     if let Ok(value) = serde_json::from_str(trimmed) {
         return Some(value);
@@ -452,7 +462,7 @@ impl Completer {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, CoreError> {
         let started = Instant::now();
-        let result = self.dispatch(request.clone()).await;
+        let result = self.validated_dispatch(request.clone()).await;
         if let Some(observer) = &self.observer {
             observer.on_complete(&CompletionTrace {
                 request: &request,
@@ -461,6 +471,47 @@ impl Completer {
             });
         }
         result
+    }
+
+    async fn validated_dispatch(
+        &self,
+        mut request: CompletionRequest,
+    ) -> Result<CompletionResponse, CoreError> {
+        use crate::structured::{
+            accumulate, StructuredFailureReason, StructuredOutputFailure, Validator,
+        };
+        let initial_failure = |reason| CoreError::StructuredOutput {
+            method: COMPLETE,
+            failure: StructuredOutputFailure {
+                attempts: 0,
+                reason,
+                finish_reason: None,
+                answered_model: None,
+                usage: None,
+            },
+        };
+        if request.structured_retries > 3 {
+            return Err(initial_failure(StructuredFailureReason::RetryLimit));
+        }
+        let validator =
+            Validator::new(request.response_format.as_ref()).map_err(initial_failure)?;
+        let mut usage = None;
+        for attempt in 0..=request.structured_retries {
+            let mut response = self.dispatch(request.clone()).await?;
+            accumulate(&mut usage, response.usage.as_ref());
+            match validator.validate(&response.text, response.finish_reason.as_deref()) {
+                Ok(value) => { response.structured = value; response.usage = usage; return Ok(response); }
+                Err(reason) if attempt == request.structured_retries => return Err(CoreError::StructuredOutput {
+                    method: COMPLETE, failure: StructuredOutputFailure { attempts: u16::from(attempt)+1,
+                        reason, finish_reason: response.finish_reason, answered_model: response.answered_model, usage,
+                    },
+                }),
+                Err(reason) => request.messages.push(ChatMessage::user(format!(
+                    "The answer failed structured validation ({reason:?}). Return a complete answer matching the requested schema."
+                ))),
+            }
+        }
+        unreachable!("bounded attempt loop always returns")
     }
 
     async fn dispatch(&self, request: CompletionRequest) -> Result<CompletionResponse, CoreError> {

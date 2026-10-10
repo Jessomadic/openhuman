@@ -256,6 +256,7 @@ pub struct Turn {
     seed: Option<Vec<(String, String)>>,
     meter: Option<Box<dyn FnOnce(Option<LastTurnUsage>) + Send>>,
     response_format: Option<crate::complete::ResponseFormat>,
+    structured_retries: u8,
     max_tokens: Option<u32>,
     untrusted_input: bool,
 }
@@ -271,6 +272,7 @@ impl Turn {
             seed: None,
             meter: None,
             response_format: None,
+            structured_retries: 0,
             max_tokens: None,
             untrusted_input: false,
         }
@@ -375,11 +377,14 @@ impl Turn {
     ///
     /// Applied to each call of the tool loop, so a provider that honours
     /// structured outputs keeps calling tools and shapes its final answer.
-    /// With a JSON format the parsed answer comes back in
-    /// [`TurnOutcome::structured`]. Only a runtime-owned
-    /// [`Agent`](crate::Agent) can honour it; a caller-built runtime's
-    /// orchestrator refuses the turn.
+    /// Allow up to three extra attempts to repair invalid structured output.
     #[must_use]
+    pub fn structured_retries(mut self, attempts: u8) -> Self {
+        self.structured_retries = attempts;
+        self
+    }
+
+    /// Set the requested structured output shape.
     pub fn response_format(mut self, format: crate::complete::ResponseFormat) -> Self {
         self.response_format = Some(format);
         self
@@ -527,6 +532,19 @@ impl Turn {
             .response_format
             .as_ref()
             .is_some_and(crate::complete::ResponseFormat::wants_json);
+        let validator =
+            crate::structured::Validator::new(self.response_format.as_ref()).map_err(|reason| {
+                CoreError::StructuredOutput {
+                    method: AGENT_CHAT,
+                    failure: crate::structured::StructuredOutputFailure {
+                        attempts: 0,
+                        reason,
+                        finish_reason: None,
+                        answered_model: None,
+                        usage: None,
+                    },
+                }
+            })?;
         let options = AgentTurnOptions {
             shape: openhuman_core::agent::tinyagents::response_shape::ResponseShapeScope::new(
                 openhuman_core::agent::tinyagents::response_shape::ResponseShape {
@@ -535,6 +553,8 @@ impl Turn {
                         .take()
                         .map(crate::complete::ResponseFormat::into_wire),
                     max_output_tokens: self.max_tokens,
+                    validator: wants_json.then(|| std::sync::Arc::new(validator) as std::sync::Arc<dyn openhuman_core::agent::tinyagents::response_shape::ResponseValidator>),
+                    structured_retries: self.structured_retries,
                 },
             ),
             untrusted_input: self.untrusted_input,
@@ -565,6 +585,7 @@ impl Turn {
             // variant classification are logged; the error itself propagates
             // to the caller untouched.
             let tag = match err {
+                crate::error::CoreError::StructuredOutput { .. } => "structured_output",
                 crate::error::CoreError::Domain { .. } => "domain",
                 crate::error::CoreError::Unavailable { .. } => "unavailable",
                 crate::error::CoreError::Rpc { .. } => "rpc",
@@ -619,6 +640,18 @@ impl Turn {
     /// Refuse the per-turn options the target cannot honour, before anything
     /// is dispatched.
     fn validate_turn_options(&self) -> Result<(), CoreError> {
+        if self.structured_retries > 3 {
+            return Err(CoreError::StructuredOutput {
+                method: AGENT_CHAT,
+                failure: crate::structured::StructuredOutputFailure {
+                    attempts: 0,
+                    reason: crate::structured::StructuredFailureReason::RetryLimit,
+                    finish_reason: None,
+                    answered_model: None,
+                    usage: None,
+                },
+            });
+        }
         let refuse = |message: &str, kind: &str| {
             Err(CoreError::Domain {
                 method: AGENT_CHAT,
@@ -631,7 +664,10 @@ impl Turn {
         let host_only = match &self.target {
             TurnTarget::Agent(agent) => agent.host_only,
             TurnTarget::Runtime(_) => {
-                if self.response_format.is_some() || self.max_tokens.is_some() {
+                if self.response_format.is_some()
+                    || self.max_tokens.is_some()
+                    || self.structured_retries != 0
+                {
                     return refuse(
                         "response_format and max_tokens need a runtime-owned Agent",
                         "turn_shape_unsupported",
@@ -766,6 +802,36 @@ async fn dispatch(
                         .as_mut()
                     {
                         spent.reasoning_tokens = report.reasoning_tokens;
+                    }
+                    if outcome.is_err() && report.structured_failed {
+                        use crate::structured::{
+                            StructuredFailureReason as Reason, StructuredOutputFailure,
+                        };
+                        let reason = match report.validation_error.as_deref() {
+                            Some("Truncated") => Reason::Truncated,
+                            Some("SchemaMismatch") => Reason::SchemaMismatch,
+                            _ => Reason::InvalidJson,
+                        };
+                        return Err(CoreError::StructuredOutput {
+                            method: AGENT_CHAT,
+                            failure: StructuredOutputFailure {
+                                attempts: report.structured_attempts,
+                                reason,
+                                finish_reason: report.finish_reason,
+                                answered_model: report.answered_model,
+                                usage: usage
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .as_ref()
+                                    .map(|spent| crate::complete::CompletionUsage {
+                                        input_tokens: spent.input_tokens,
+                                        output_tokens: spent.output_tokens,
+                                        cached_tokens: spent.cached_input_tokens,
+                                        reasoning_tokens: spent.reasoning_tokens,
+                                        cost_usd: spent.cost_usd,
+                                    }),
+                            },
+                        });
                     }
                     outcome
                         .map(|outcome| (outcome.value, Some(report)))

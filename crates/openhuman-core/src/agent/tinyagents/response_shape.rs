@@ -24,17 +24,44 @@ use tinyinference_llm::model::{ModelRequest, ModelResponse, ResponseFormat};
 use crate::agent::tinyagents::host::OpenHumanRunContext;
 
 /// What a host asks of every model call in one turn.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Clone, Default)]
 pub struct ResponseShape {
+    /// Host validation of the original terminal text, before any repair.
+    pub validator: Option<Arc<dyn ResponseValidator>>,
+    /// Bounded number of output repair attempts.
+    pub structured_retries: u8,
     /// Sent as `response_format` on every call of the turn's tool loop.
     pub response_format: Option<ResponseFormat>,
     /// Replaces the turn's per-call output cap.
     pub max_output_tokens: Option<u32>,
 }
 
+/// Validates terminal provider text without retrieving external resources.
+pub trait ResponseValidator: Send + Sync {
+    /// Returns a safe classification, never response content.
+    fn validate(&self, text: &str, finish_reason: Option<&str>) -> Result<(), String>;
+}
+
+impl std::fmt::Debug for ResponseShape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResponseShape")
+            .field("response_format", &self.response_format)
+            .field("max_output_tokens", &self.max_output_tokens)
+            .field("validator", &self.validator.is_some())
+            .field("structured_retries", &self.structured_retries)
+            .finish()
+    }
+}
+
 /// What the turn's final model call reported.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FinalResponse {
+    /// Strict validation classification of the last terminal answer.
+    pub validation_error: Option<String>,
+    /// Number of terminal answer attempts (excluding tool calls).
+    pub structured_attempts: u16,
+    /// Whether the harness ended with a structured validation error.
+    pub structured_failed: bool,
     /// The provider's finish reason for the last call (`stop`, `length`, ...).
     pub finish_reason: Option<String>,
     /// The model the provider says answered the last call.
@@ -94,6 +121,20 @@ pub(super) fn install(harness: &mut AgentHarness<(), OpenHumanRunContext>, root:
             scope.shape.response_format.is_some(),
             scope.shape.max_output_tokens
         );
+        if scope.shape.validator.is_some() {
+            let mut policy = harness.policy().clone();
+            // The generic loop owns bounded repair. Its extraction schema is
+            // permissive because the host validator applies the complete schema.
+            policy.default_response_format = Some(ResponseFormat::JsonSchema {
+                name: "host_answer".into(),
+                schema: serde_json::json!({}),
+            });
+            policy.output_retry.max_attempts = scope.shape.structured_retries;
+            policy.output_retry.message_template =
+                "Return complete JSON matching the requested schema.".into();
+            harness.with_policy(policy);
+            harness.with_output_validator(Arc::new(StrictValidator(Arc::clone(&scope))));
+        }
         harness.push_middleware(Arc::new(ResponseShapeMiddleware(scope)));
     }
 }
@@ -129,7 +170,59 @@ impl Middleware<(), OpenHumanRunContext> for ResponseShapeMiddleware {
         response: &mut ModelResponse,
     ) -> TaResult<()> {
         record(&self.0, response);
+        if response.tool_calls().is_empty() {
+            if let Some(validator) = &self.0.shape.validator {
+                let error = validator
+                    .validate(&response.text(), response.finish_reason.as_deref())
+                    .err();
+                let mut report = self
+                    .0
+                    .report
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                report.structured_attempts = report.structured_attempts.saturating_add(1);
+                report.validation_error = error;
+            }
+        }
         Ok(())
+    }
+    async fn on_error(
+        &self,
+        _ctx: &mut RunContext<OpenHumanRunContext>,
+        error: &tinyagents_harness::error::TinyAgentsError,
+    ) -> TaResult<()> {
+        if matches!(
+            error,
+            tinyagents_harness::error::TinyAgentsError::StructuredOutput(_)
+        ) {
+            self.0
+                .report
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .structured_failed = true;
+        }
+        Ok(())
+    }
+    fn is_observer(&self) -> bool {
+        true
+    }
+}
+
+struct StrictValidator(Arc<ResponseShapeScope>);
+#[async_trait]
+impl tinyagents_harness::structured::OutputValidator<(), OpenHumanRunContext> for StrictValidator {
+    async fn validate(
+        &self,
+        _ctx: &mut RunContext<OpenHumanRunContext>,
+        _state: &(),
+        _output: &serde_json::Value,
+    ) -> TaResult<()> {
+        match self.0.report().validation_error {
+            Some(reason) => Err(tinyagents_harness::error::TinyAgentsError::ModelRetry(
+                reason,
+            )),
+            None => Ok(()),
+        }
     }
 }
 

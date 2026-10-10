@@ -258,3 +258,94 @@ fn untrusted_input_passes_the_prompt_guard_only_on_a_host_only_agent() {
         .expect("test task");
     });
 }
+
+#[test]
+fn terminal_schema_validation_retries_without_accepting_a_wrong_type() {
+    let _guard = RUNTIME_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    runtime().block_on(async {
+        tokio::spawn(async {
+            let backend = stub_backend().await;
+            let provider = provider(vec![
+                completion(
+                    json!({"role":"assistant","content":"{\"verdict\":123}"}),
+                    "stop",
+                    "fixture",
+                    0,
+                ),
+                completion(
+                    json!({"role":"assistant","content":"{\"verdict\":\"reject\"}"}),
+                    "stop",
+                    "fixture",
+                    0,
+                ),
+            ])
+            .await;
+            let runtime = build_runtime(&backend).await;
+            let agent = runtime
+                .agent(reviewer(
+                    "strict-repair",
+                    &provider,
+                    Arc::new(AtomicUsize::new(0)),
+                ))
+                .unwrap();
+            let outcome = agent
+                .turn("Review this diff.")
+                .response_format(review_schema())
+                .structured_retries(1)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(outcome.structured, Some(json!({"verdict":"reject"})));
+            assert_eq!(chat_requests(&provider).await.len(), 2);
+        })
+        .await
+        .unwrap();
+    });
+}
+
+#[test]
+fn a_complete_json_value_with_a_length_finish_is_not_a_valid_review() {
+    let _guard = RUNTIME_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    runtime().block_on(async {
+        tokio::spawn(async {
+            let backend = stub_backend().await;
+            let provider = provider(vec![completion(
+                json!({"role":"assistant","content":"{\"verdict\":\"approve\"}"}),
+                "length",
+                "fixture",
+                0,
+            )])
+            .await;
+            let runtime = build_runtime(&backend).await;
+            let agent = runtime
+                .agent(reviewer(
+                    "strict-length",
+                    &provider,
+                    Arc::new(AtomicUsize::new(0)),
+                ))
+                .unwrap();
+            let error = agent
+                .turn("Review this diff.")
+                .response_format(review_schema())
+                .send()
+                .await
+                .unwrap_err();
+            let CoreError::StructuredOutput { failure, .. } = error else {
+                panic!("typed failure");
+            };
+            assert_eq!(
+                failure.reason,
+                openhuman_embed::structured::StructuredFailureReason::Truncated
+            );
+            assert_eq!(failure.attempts, 1);
+            assert!(failure.usage.is_some());
+            assert_eq!(chat_requests(&provider).await.len(), 1);
+        })
+        .await
+        .unwrap();
+    });
+}

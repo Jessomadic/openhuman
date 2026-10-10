@@ -26,6 +26,15 @@ use openhuman_core::core::StructuredRpcError;
 /// Error returned by every typed facade call.
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
+    /// Requested JSON failed strict validation after bounded repair.
+    #[error("{method}: {failure}")]
+    StructuredOutput {
+        /// Operation that refused the answer.
+        method: &'static str,
+        /// Safe accounting and classification metadata.
+        failure: crate::structured::StructuredOutputFailure,
+    },
+
     /// The domain returned a structured error envelope.
     #[error("{method}: {message}")]
     Domain {
@@ -160,7 +169,8 @@ impl CoreError {
     /// The RPC method this error came from.
     pub fn method(&self) -> &'static str {
         match self {
-            CoreError::Domain { method, .. }
+            CoreError::StructuredOutput { method, .. }
+            | CoreError::Domain { method, .. }
             | CoreError::Unavailable { method }
             | CoreError::Rpc { method, .. }
             | CoreError::Encode { method, .. }
