@@ -6,8 +6,8 @@
 use super::*;
 
 use crate::agent::turn_stop::TurnStop;
-use tinyagents_harness::observability::trace_export::SpanStatus;
 use tinyagents_harness::observability::trace_export::otlp::otlp_requests;
+use tinyagents_harness::observability::trace_export::SpanStatus;
 
 const BREAKER_NOTE: &str = "Stopping after 2 attempt(s): failure class \
     `uncertain_side_effect` still blocks operation `web_answer_tool` on \

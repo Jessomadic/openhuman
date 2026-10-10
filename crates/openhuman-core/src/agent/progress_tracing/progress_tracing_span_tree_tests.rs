@@ -1,8 +1,8 @@
 use super::*;
 
 use crate::agent::progress_tracing::export::export_spans;
-use tinyagents_harness::observability::trace_export::SpanKind;
 use tinyagents_harness::observability::trace_export::serialize::SpanEnvelope;
+use tinyagents_harness::observability::trace_export::SpanKind;
 // ── config ────────────────────────────────────────────────────────────────
 
 #[test]
@@ -431,11 +431,10 @@ fn finish_seals_all_open_spans_idempotently() {
     assert!(c.spans().iter().all(|s| s.end_unix_ms.is_some()));
     // idempotent.
     c.finish(200);
-    assert!(
-        c.spans()
-            .iter()
-            .all(|s| s.end_unix_ms == Some(s.end_unix_ms.unwrap()))
-    );
+    assert!(c
+        .spans()
+        .iter()
+        .all(|s| s.end_unix_ms == Some(s.end_unix_ms.unwrap())));
 }
 
 #[test]

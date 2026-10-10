@@ -135,24 +135,20 @@ async fn an_unregistered_tool_is_denied_not_allowed() {
         .await
         .unwrap();
     assert!(!decision.is_allowed());
-    assert!(
-        decision
-            .denial_reason()
-            .expect("denial reason")
-            .contains("definitely_not_a_tool")
-    );
+    assert!(decision
+        .denial_reason()
+        .expect("denial reason")
+        .contains("definitely_not_a_tool"));
 }
 
 #[tokio::test]
 async fn an_empty_registry_denies_everything() {
     let gate = OpenHumanSecurityGate::new(policy(AutonomyLevel::Full), Vec::new());
-    assert!(
-        !gate
-            .authorize_tool(&req("read_file", json!({})))
-            .await
-            .unwrap()
-            .is_allowed()
-    );
+    assert!(!gate
+        .authorize_tool(&req("read_file", json!({})))
+        .await
+        .unwrap()
+        .is_allowed());
 }
 
 #[tokio::test]
@@ -184,12 +180,10 @@ async fn a_write_shell_command_is_blocked_outright_in_read_only() {
         .await
         .unwrap();
     assert!(!decision.is_allowed());
-    assert!(
-        decision
-            .denial_reason()
-            .expect("denial reason")
-            .contains(crate::security::POLICY_BLOCKED_MARKER)
-    );
+    assert!(decision
+        .denial_reason()
+        .expect("denial reason")
+        .contains(crate::security::POLICY_BLOCKED_MARKER));
 }
 
 #[tokio::test]
@@ -543,12 +537,10 @@ async fn a_nested_call_is_refused_even_for_a_read_only_tool() {
         .await
         .unwrap();
     assert!(!decision.is_allowed());
-    assert!(
-        decision
-            .denial_reason()
-            .expect("denial reason")
-            .contains("may not call other tools")
-    );
+    assert!(decision
+        .denial_reason()
+        .expect("denial reason")
+        .contains("may not call other tools"));
 }
 
 #[tokio::test]

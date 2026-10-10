@@ -3,8 +3,8 @@
 
 use super::*;
 
-use tinyagents_harness::observability::trace_export::SpanKind;
 use tinyagents_harness::observability::trace_export::otlp::otlp_requests;
+use tinyagents_harness::observability::trace_export::SpanKind;
 
 fn iteration(iteration: u32) -> AgentProgress {
     AgentProgress::IterationStarted {
@@ -90,16 +90,12 @@ fn unary_call_carries_no_first_token_attributes() {
         (completed(1), 2_500),
     ]);
     let generation = generations(c.spans())[0];
-    assert!(
-        !generation
-            .attributes
-            .contains_key("gen_ai.response.first_token_unix_ms")
-    );
-    assert!(
-        !generation
-            .attributes
-            .contains_key("gen_ai.response.time_to_first_text_ms")
-    );
+    assert!(!generation
+        .attributes
+        .contains_key("gen_ai.response.first_token_unix_ms"));
+    assert!(!generation
+        .attributes
+        .contains_key("gen_ai.response.time_to_first_text_ms"));
 }
 
 #[test]

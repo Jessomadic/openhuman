@@ -42,13 +42,11 @@ async fn composes_a_non_empty_prompt_carrying_the_agent_id() {
 async fn preamble_is_empty_and_not_an_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let composer = OpenHumanContextComposer::new(config_in(dir.path()));
-    assert!(
-        composer
-            .preamble(&request())
-            .await
-            .expect("preamble succeeds")
-            .is_empty()
-    );
+    assert!(composer
+        .preamble(&request())
+        .await
+        .expect("preamble succeeds")
+        .is_empty());
 }
 
 #[tokio::test]

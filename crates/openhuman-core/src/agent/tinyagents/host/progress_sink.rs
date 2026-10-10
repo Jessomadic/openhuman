@@ -99,13 +99,13 @@
 //!   forwarded.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::Sender;
 
 use tinyagents_harness::host::{ProgressEvent, ProgressSink};
 

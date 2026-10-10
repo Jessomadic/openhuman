@@ -16,7 +16,7 @@ use crate::agent::harness::definition::AgentDefinitionRegistry;
 use crate::agent::orchestration::tools::dispatch::{incomplete_stop, stopped_subagent_result};
 use crate::agent::progress::AgentProgress;
 use crate::agent::subagent_host::{
-    SubagentRunOptions, SubagentRunOutcome, SubagentRunStatus, run_subagent_with_parent,
+    run_subagent_with_parent, SubagentRunOptions, SubagentRunOutcome, SubagentRunStatus,
 };
 use crate::threads::store::{self as conversations, ConversationMessage, CreateConversationThread};
 use async_trait::async_trait;

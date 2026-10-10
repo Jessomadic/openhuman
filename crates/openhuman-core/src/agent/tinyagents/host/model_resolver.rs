@@ -67,9 +67,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use tinyagents_harness::Result as TaResult;
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::host::{ModelResolveRequest, ModelResolver};
+use tinyagents_harness::Result as TaResult;
 use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStream};
 
 use crate::config::Config;

@@ -69,8 +69,8 @@ use tinyagents_harness::host::{ContextComposer, TurnContextRequest};
 use tinyinference_llm::message::Message;
 
 use crate::agent::prompts::{
-    AgentsMdContent, ConnectedIntegration, PromptContext, PromptTool, SystemPromptBuilder,
-    ToolCallFormat, load_agents_md_layers, render_connected_identities,
+    load_agents_md_layers, render_connected_identities, AgentsMdContent, ConnectedIntegration,
+    PromptContext, PromptTool, SystemPromptBuilder, ToolCallFormat,
 };
 use crate::config::{Config, DEFAULT_MODEL};
 use crate::skills::Workflow;

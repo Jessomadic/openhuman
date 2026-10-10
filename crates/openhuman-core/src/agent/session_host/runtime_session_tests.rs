@@ -249,14 +249,12 @@ fn connected_mcp_actions_enter_search_and_leave_on_disconnect() {
         .clear();
     prelude.refresh_delegation_tool_surface().unwrap();
     assert!(!prelude.synthesized_tool_names_for_test().contains(&action));
-    assert!(
-        !prelude
-            .tool_surface
-            .lock()
-            .expect("tool surface")
-            .deferred_tool_names
-            .contains(&action)
-    );
+    assert!(!prelude
+        .tool_surface
+        .lock()
+        .expect("tool surface")
+        .deferred_tool_names
+        .contains(&action));
 }
 
 #[cfg(feature = "modules")]
@@ -286,12 +284,10 @@ async fn desktop_browser_setting_keeps_deferred_tools_in_fresh_and_resumed_surfa
             .expect("desktop orchestrator");
     for name in ["browser", "browser_open"] {
         assert!(host.deferred_tool_names_for_test().contains(name), "{name}");
-        assert!(
-            !host
-                .visible_tool_specs_arc()
-                .iter()
-                .any(|spec| spec.name == name)
-        );
+        assert!(!host
+            .visible_tool_specs_arc()
+            .iter()
+            .any(|spec| spec.name == name));
     }
     host.ensure_runtime_session().expect("runtime session");
     let prelude = host
@@ -363,11 +359,9 @@ async fn a_resumed_orchestrator_keeps_the_integration_actions_it_was_sent() {
 
     // Fresh process: no integrations known, so no actions are synthesised.
     prelude.refresh_delegation_tool_surface().unwrap();
-    assert!(
-        !prelude
-            .synthesized_tool_names_for_test()
-            .contains("GMAIL_SEND_EMAIL")
-    );
+    assert!(!prelude
+        .synthesized_tool_names_for_test()
+        .contains("GMAIL_SEND_EMAIL"));
 
     // Resume hands back what the thread was sent.
     let recorded = ToolSnapshot::new(vec![
@@ -600,18 +594,14 @@ async fn newly_connected_action_cannot_shadow_a_permanent_source() {
         mutable.connected_integrations_authoritative = true;
     }
     let error = prelude.refresh_delegation_tool_surface().unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("collision with synthesized tool")
-    );
+    assert!(error
+        .to_string()
+        .contains("collision with synthesized tool"));
     let surface = prelude.tool_surface.lock().unwrap();
     assert!(Arc::ptr_eq(&surface.visible_tool_specs, &before));
     assert_eq!(surface.tools[0].description(), "host-owned action");
-    assert!(
-        !surface
-            .synthesized_tools
-            .iter()
-            .any(|tool| tool.name() == "GMAIL_SEND_EMAIL")
-    );
+    assert!(!surface
+        .synthesized_tools
+        .iter()
+        .any(|tool| tool.name() == "GMAIL_SEND_EMAIL"));
 }

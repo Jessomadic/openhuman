@@ -85,13 +85,11 @@ fn scan_runs_parses_header_footer_and_status() {
     assert_eq!(all[0].duration_ms, None);
     assert_eq!(all[1].status, "DONE");
     assert_eq!(all[1].duration_ms, Some(617236));
-    assert!(
-        all[1]
-            .finished
-            .as_deref()
-            .unwrap()
-            .starts_with("2026-05-28T08:01:30")
-    );
+    assert!(all[1]
+        .finished
+        .as_deref()
+        .unwrap()
+        .starts_with("2026-05-28T08:01:30"));
 
     // Filter by workflow_id
     let only_pr = scan_runs(tmp.path(), Some("pr-review-shepherd"), 10);
@@ -247,21 +245,17 @@ fn read_terminal_outcome_requires_finished_line() {
 
 #[test]
 fn noisy_events_are_skipped_steps_are_kept() {
-    assert!(
-        format_event(&AgentProgress::TextDelta {
-            delta: "hi".into(),
-            iteration: 1
-        })
-        .is_none()
-    );
+    assert!(format_event(&AgentProgress::TextDelta {
+        delta: "hi".into(),
+        iteration: 1
+    })
+    .is_none());
     // Content (prompt/reply) rides its own event and is never logged here.
-    assert!(
-        format_event(&AgentProgress::TurnContent {
-            input: Some("secret prompt".into()),
-            output: Some("secret reply".into()),
-        })
-        .is_none()
-    );
+    assert!(format_event(&AgentProgress::TurnContent {
+        input: Some("secret prompt".into()),
+        output: Some("secret reply".into()),
+    })
+    .is_none());
     let line = format_event(&AgentProgress::ToolCallStarted {
         call_id: "c1".into(),
         tool_name: "memory_search".into(),

@@ -121,13 +121,11 @@ async fn a_worker_parent_authorizes_nothing() {
         synthetic("a_worker", AgentTier::Worker, &[]),
     ]);
 
-    assert!(
-        registry
-            .delegates_for("leaf")
-            .await
-            .expect("delegates")
-            .is_empty()
-    );
+    assert!(registry
+        .delegates_for("leaf")
+        .await
+        .expect("delegates")
+        .is_empty());
     // The *declared* list is still reported on the definition — declared
     // and authorized are different questions.
     let def = registry
@@ -295,11 +293,9 @@ fn named_discovery_scope_authorizes_only_registered_deferred_tools() {
     let without_discovery = registry_of(vec![def.clone()])
         .with_deferred_tools(Arc::new(vec!["browser_open".into()]))
         .project(&def);
-    assert!(
-        !without_discovery
-            .tools
-            .contains(&"browser_open".to_string())
-    );
+    assert!(!without_discovery
+        .tools
+        .contains(&"browser_open".to_string()));
 }
 
 /// A wildcard scope carrying a denylist must be materialised against the
@@ -406,12 +402,10 @@ fn the_projection_carries_the_definition_rule_layer() {
 
     let mut open = synthetic("open", AgentTier::Worker, &[]);
     open.disallowed_tools.clear();
-    assert!(
-        registry_of(vec![open.clone()])
-            .project(&open)
-            .tool_rules
-            .is_none()
-    );
+    assert!(registry_of(vec![open.clone()])
+        .project(&open)
+        .tool_rules
+        .is_none());
 }
 
 // ── config-backed custom agents ───────────────────────────────────────
@@ -502,13 +496,11 @@ async fn an_empty_catalogue_misses_everything_without_erroring() {
     let registry = registry_of(Vec::new());
     assert_eq!(registry.resolve("anything").await.expect("resolve"), None);
     assert!(registry.list().await.expect("list").is_empty());
-    assert!(
-        registry
-            .delegates_for("anything")
-            .await
-            .expect("delegates")
-            .is_empty()
-    );
+    assert!(registry
+        .delegates_for("anything")
+        .await
+        .expect("delegates")
+        .is_empty());
 }
 
 /// The defect behind #6404 / #6392 / #6393, at the layer that caused it.

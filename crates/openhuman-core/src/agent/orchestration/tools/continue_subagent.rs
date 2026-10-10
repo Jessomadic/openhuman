@@ -12,8 +12,8 @@ use crate::agent::harness::definition::AgentDefinitionRegistry;
 use crate::agent::orchestration::tools::dispatch::{incomplete_stop, stopped_subagent_result};
 use crate::agent::progress::AgentProgress;
 use crate::agent::subagent_host::{
-    SubagentRunOptions, SubagentRunStatus, continue_subagent, continue_subagent_with_parent,
-    load_subagent_checkpoint,
+    continue_subagent, continue_subagent_with_parent, load_subagent_checkpoint, SubagentRunOptions,
+    SubagentRunStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;

@@ -183,14 +183,12 @@ fn single_synthetic_delta_at_completion_records_no_ttft() {
         (simple_call("gpt-6.1-sol"), 9_000),
     ]);
     let g = generations(c.spans())[0];
-    assert!(
-        !g.attributes
-            .contains_key("gen_ai.response.first_token_unix_ms")
-    );
-    assert!(
-        !g.attributes
-            .contains_key("gen_ai.response.time_to_first_token_ms")
-    );
+    assert!(!g
+        .attributes
+        .contains_key("gen_ai.response.first_token_unix_ms"));
+    assert!(!g
+        .attributes
+        .contains_key("gen_ai.response.time_to_first_token_ms"));
     assert_eq!(
         g.attributes["gen_ai.response.streamed"],
         serde_json::json!(false)
@@ -309,14 +307,12 @@ fn turn_without_completion_is_an_error() {
         exported_attr(c.spans(), "agent.turn", "langfuse.observation.level").as_deref(),
         Some("ERROR")
     );
-    assert!(
-        exported_attr(
-            c.spans(),
-            "agent.turn",
-            "langfuse.observation.status_message"
-        )
-        .is_some()
-    );
+    assert!(exported_attr(
+        c.spans(),
+        "agent.turn",
+        "langfuse.observation.status_message"
+    )
+    .is_some());
 }
 
 #[test]
@@ -336,12 +332,10 @@ fn failed_turn_message_is_content_gated() {
     let mut captured = collect_with_capture(&[(AgentProgress::TurnStarted, 1_000)]);
     captured.finish_with_outcome(2_000, Some(failed()));
     let turn = find(captured.spans(), "agent.turn");
-    assert!(
-        turn.attributes["error.message"]
-            .as_str()
-            .unwrap()
-            .contains("provider rejected")
-    );
+    assert!(turn.attributes["error.message"]
+        .as_str()
+        .unwrap()
+        .contains("provider rejected"));
 }
 
 #[test]
@@ -474,10 +468,9 @@ fn unpriced_model_placeholder_cost_is_not_recorded() {
         g.attributes["gen_ai.cost.source"],
         serde_json::json!("unpriced")
     );
-    assert!(
-        !g.attributes
-            .contains_key("gen_ai.pricing.input_per_mtok_usd")
-    );
+    assert!(!g
+        .attributes
+        .contains_key("gen_ai.pricing.input_per_mtok_usd"));
     assert_eq!(
         exported_attr(
             c.spans(),
