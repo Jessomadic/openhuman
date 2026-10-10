@@ -924,9 +924,7 @@ const ThreadMessage: FC = () => {
 
 const ThreadScrollToBottom: FC<{ onJump: () => void }> = ({ onJump }) => {
   const { t } = useT();
-  return (
-    <ScrollAnchor label={t('chat.message.scrollToBottom')} onJump={onJump} />
-  );
+  return <ScrollAnchor label={t('chat.message.scrollToBottom')} onJump={onJump} />;
 };
 
 const ThreadWelcome: FC = () => {
