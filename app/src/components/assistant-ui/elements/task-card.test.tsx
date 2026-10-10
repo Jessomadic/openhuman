@@ -6,7 +6,7 @@ import { TaskCard } from './task-card';
 
 vi.mock('@/lib/i18n/I18nContext', () => ({ useT: () => ({ t: (key: string) => key }) }));
 describe('task card conversation placement', () => {
-  it('sticks active work to the bottom and releases completed work', () => {
+  it('keeps active work at the conversation end and releases completed work', () => {
     const { container, rerender } = render(
       <TaskCardDockProvider>
         <div data-testid="original">
@@ -15,10 +15,7 @@ describe('task card conversation placement', () => {
         <TaskCardDock />
       </TaskCardDockProvider>
     );
-    expect(container.querySelector('[data-slot=task-card-dock]')).toHaveClass(
-      'sticky',
-      'bottom-(--task-card-bottom,0px)'
-    );
+    expect(container.querySelector('[data-slot=task-card-dock]')).not.toHaveClass('sticky', 'fixed', 'absolute');
     expect(container.querySelector('[data-slot=task-card]')?.parentElement).toHaveAttribute(
       'data-slot',
       'task-card-dock'

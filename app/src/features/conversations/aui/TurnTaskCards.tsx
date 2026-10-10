@@ -1,3 +1,4 @@
+import { useAppSelector } from '../../../store/hooks';
 import { useAuiState } from '@assistant-ui/react';
 import { createContext, type PropsWithChildren, useContext, useEffect, useState } from 'react';
 
@@ -81,7 +82,12 @@ function TurnTaskCard({ task }: { task: TurnTask }) {
   const threadId = useAuiThreadId();
   const done = taskFinished(task);
   const [open, setOpen] = useDisclosure(`task:${threadId}:${task.anchor}`, !done);
-  const state = taskState(task);
+  const running = useAppSelector(s => Boolean(threadId && (
+    s.thread.activeThreadIds[threadId] || s.chatRuntime.pendingSendThreadIds[threadId] ||
+    s.chatRuntime.inferenceTurnLifecycleByThread[threadId] === 'started' ||
+    s.chatRuntime.inferenceTurnLifecycleByThread[threadId] === 'streaming'
+  )));
+  const state = taskState(task, running);
   return (
     <TaskCard
       data-testid="todo-checklist"

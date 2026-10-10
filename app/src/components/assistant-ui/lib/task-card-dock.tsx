@@ -19,7 +19,7 @@ export function TaskCardDock({ children }: PropsWithChildren) {
     <div
       ref={setTarget}
       data-slot="task-card-dock"
-      className="sticky bottom-(--task-card-bottom,0px) z-10 flex max-h-[50dvh] flex-col gap-3 overflow-y-auto py-3 empty:hidden [&>[data-slot=task-card]]:max-w-none">
+      className="flex flex-col gap-3 py-3 empty:hidden [&>[data-slot=task-card]]:max-w-none">
       {children}
     </div>
   );

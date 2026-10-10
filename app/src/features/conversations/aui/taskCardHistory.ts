@@ -11,10 +11,10 @@ export const taskFinished = (task: TurnTask) =>
   (!task.goal || task.goal.status === 'complete') &&
   task.todos.every(item => item.status === 'completed');
 
-export const taskState = (task: TurnTask): 'done' | 'working' | 'waiting' =>
+export const taskState = (task: TurnTask, running = true): 'done' | 'working' | 'waiting' =>
   taskFinished(task)
     ? 'done'
-    : task.goal?.status === 'active' || task.todos.some(item => item.status === 'in_progress')
+    : running && task.goal?.status !== 'paused' && task.goal?.status !== 'budget_limited' && (task.goal?.status === 'active' || task.todos.some(item => item.status === 'in_progress'))
       ? 'working'
       : 'waiting';
 
