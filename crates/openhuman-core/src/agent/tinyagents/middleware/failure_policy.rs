@@ -208,7 +208,10 @@ pub(super) fn classified_recovery_policy(
         .trim_start()
         .starts_with(crate::tools::status::TASK_FAILED_MARKER)
     {
-        let class = crate::tools::status::classify(error, false).class;
+        // Classify the headline only: the task report appended after the
+        // blank line is page and planner text, not the call's verdict.
+        let headline = error.split("\n\n").next().unwrap_or(error);
+        let class = crate::tools::status::classify(headline, false).class;
         return Some(match class {
             Class::ServiceUnavailable | Class::ModelConnection => ("transient", 2),
             _ => ("task_failed", 1),
