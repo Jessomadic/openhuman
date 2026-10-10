@@ -20,6 +20,12 @@ use openhuman_core::cron::{self, Schedule};
 use openhuman_core::storage::agents::{find_owner, for_each_scope, within_agent};
 use openhuman_core::HostKind;
 
+#[macro_use]
+#[path = "support/storage_drivers.rs"]
+mod storage_drivers;
+
+use storage_drivers::Case;
+
 fn job_names(config: &Config) -> Vec<String> {
     cron::list_jobs(config)
         .unwrap()
@@ -28,8 +34,7 @@ fn job_names(config: &Config) -> Vec<String> {
         .collect()
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn background_work_visits_every_agent_scope() {
+async fn background_work_visits_every_agent_scope(case: Case) {
     let workspace = tempfile::tempdir().unwrap();
     let config = Config {
         workspace_dir: workspace.path().join("workspace"),
@@ -43,7 +48,7 @@ async fn background_work_visits_every_agent_scope() {
         .build()
         .await
         .unwrap();
-    openhuman_core::storage::install(Arc::new(openhuman_core::storage::MemoryStorage::new()));
+    case.install();
 
     let agent = CoreContext::current().unwrap().derive_with(
         ContextOverlay::new(config.clone(), DomainSet::none(), Default::default())
@@ -103,3 +108,5 @@ async fn background_work_visits_every_agent_scope() {
     );
     assert!(recorded.contains(&(None, Vec::new())), "{recorded:?}");
 }
+
+driver_cases!(async background_work_visits_every_agent_scope);
