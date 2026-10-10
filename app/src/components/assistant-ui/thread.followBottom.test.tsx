@@ -18,7 +18,7 @@ import chatRuntimeReducer from '@/store/chatRuntimeSlice';
 import threadReducer, { loadThreadMessages } from '@/store/threadSlice';
 import type { ThreadMessage } from '@/types/thread';
 import { configureStore } from '@reduxjs/toolkit';
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { act } from 'react';
 import { Provider } from 'react-redux';
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
@@ -131,6 +131,40 @@ function renderThread() {
 }
 
 describe('useFollowBottom', () => {
+  it('offers a labelled scroll anchor away from the bottom and jumps instantly', () => {
+    const { viewport } = renderThread();
+    setGeometry(viewport, 500, 1000);
+    act(() => viewport.dispatchEvent(new Event('scroll')));
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeDisabled();
+
+    setGeometry(viewport, 100, 1000);
+    readerScrolls(viewport);
+    const anchor = screen.getByRole('button', { name: 'Scroll to bottom' });
+    expect(anchor).toBeEnabled();
+    expect(anchor).toHaveTextContent('Scroll to bottom');
+    scrollToSpy.mockClear();
+    fireEvent.click(anchor);
+    expect(scrollToSpy).toHaveBeenCalledWith({ top: 1000, behavior: 'instant' });
+  });
+
+  it('resumes following after clicking the scroll anchor', () => {
+    const { viewport } = renderThread();
+    setGeometry(viewport, 500, 1000);
+    act(() => viewport.dispatchEvent(new Event('scroll')));
+    setGeometry(viewport, 100, 1000);
+    readerScrolls(viewport);
+    scrollToSpy.mockImplementation(function (this: HTMLElement, options: ScrollToOptions) {
+      this.scrollTop = Math.min(options.top ?? 0, this.scrollHeight - this.clientHeight);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Scroll to bottom' }));
+    act(() => viewport.dispatchEvent(new Event('scroll')));
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeDisabled();
+    scrollToSpy.mockClear();
+    setGeometry(viewport, 500, 1400);
+    growContent();
+    expect(followedBottom(viewport)).toBe(true);
+  });
+
   it('follows content growth for a reader at the bottom', () => {
     const { viewport } = renderThread();
     setGeometry(viewport, 500, 1000);
