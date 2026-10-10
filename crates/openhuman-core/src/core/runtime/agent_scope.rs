@@ -178,6 +178,11 @@ pub fn agent_scope_dir(config: &crate::config::Config) -> PathBuf {
 }
 
 /// The agent id of the ambient context, when it was derived for one.
+///
+/// Genuinely per-agent only: a SaaS profile's default agent has none, so this
+/// is never a tenant key. Tables and stores that must keep tenants apart key
+/// on [`current_tenant`](super::current_tenant) instead; the remaining callers
+/// only log it.
 pub fn current_agent_id() -> Option<String> {
     CoreContext::current().and_then(|ctx| ctx.session_agent().map(str::to_owned))
 }

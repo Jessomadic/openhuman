@@ -12,8 +12,9 @@
 //! and inspects them through the `profiles.*` controllers ([`schemas`]).
 //!
 //! The isolation boundary is the profile's own [`CoreContext`]: its config,
-//! workspace, `profile` (the tenant key) and `session_agent` (both set to the
-//! profile id). Work for one user runs under that context, which is what the
+//! workspace and `profile` (the tenant key, set to the profile id); its
+//! default agent runs with no `session_agent`, as on the desktop. Work for
+//! one user runs under that context, which is what the
 //! config loader, the session store and the per-thread caches key on.
 //!
 //! One process hosts a profile at a time: opening one takes its lease
@@ -24,11 +25,14 @@
 
 pub mod background;
 pub mod credentials;
+pub mod fence;
 pub mod gateway;
 pub mod host;
 pub mod layout;
 pub mod lease;
+pub mod lifecycle;
 pub mod ops;
+mod recovery;
 pub mod registry;
 pub mod schemas;
 pub mod surface;

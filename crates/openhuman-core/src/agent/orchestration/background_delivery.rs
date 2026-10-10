@@ -43,8 +43,12 @@ use tinybus::EventHandler;
 use tinybus::SubscriptionHandle;
 
 use super::background_completions;
+use super::busy_guard::is_busy;
+#[cfg(test)]
+use super::busy_guard::{busy, clear_busy_for_thread, TurnBusy};
 use super::completion_notice::build_undelivered_notice;
 use super::completion_owners;
+use crate::core::runtime::tenant;
 use crate::core::runtime::CoreContext;
 
 /// Coalesce completions landing within this window into one delivery turn.
@@ -54,46 +58,11 @@ const DEBOUNCE: Duration = Duration::from_secs(3);
 /// delivery turn, so providers and the session store are up first.
 const RECOVERY_DELAY: Duration = Duration::from_secs(15);
 
-/// Sessions with a user turn currently in flight — delivery defers while busy.
-fn busy() -> &'static Mutex<HashSet<String>> {
-    static BUSY: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    BUSY.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
 /// Threads whose delivery turn is in flight — prevents two concurrent turns.
+/// Keyed by [`tenant::profile_key`] of the thread id, for the same reason.
 fn delivering() -> &'static Mutex<HashSet<String>> {
     static D: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     D.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
-/// Is any in-flight turn running on `thread_id`?
-fn is_busy(thread_id: &str) -> bool {
-    busy()
-        .lock()
-        .expect("background_delivery busy poisoned")
-        .iter()
-        .any(|session| {
-            background_completions::thread_for_session(session).as_deref() == Some(thread_id)
-        })
-}
-
-/// Forget every in-flight turn on `thread_id`. A turn that is cancelled
-/// cooperatively (Stop) can end without `AgentTurnCompleted` or `AgentError`, and
-/// its session would otherwise stay "busy" and defer this thread's deliveries
-/// until restart. Returns how many sessions were cleared.
-pub(crate) fn clear_busy_for_thread(thread_id: &str) -> usize {
-    let mut busy = busy().lock().expect("background_delivery busy poisoned");
-    let before = busy.len();
-    busy.retain(|session| {
-        background_completions::thread_for_session(session).as_deref() != Some(thread_id)
-    });
-    let cleared = before - busy.len();
-    if cleared > 0 {
-        log::debug!(
-            "[background_delivery] cleared {cleared} stale busy session(s) thread_id={thread_id}"
-        );
-    }
-    cleared
 }
 
 /// Ask for a delivery attempt on `thread_id` soon (after a Stop cleared a stale
@@ -111,21 +80,7 @@ impl EventHandler<DomainEvent> for BackgroundDeliveryHandler {
     }
 
     async fn handle(&self, event: &DomainEvent) {
-        match event {
-            DomainEvent::AgentTurnStarted { session_id, .. } => {
-                busy()
-                    .lock()
-                    .expect("busy poisoned")
-                    .insert(session_id.clone());
-            }
-            // A failed turn may not emit AgentTurnCompleted — clear busy so
-            // delivery isn't stuck.
-            DomainEvent::AgentTurnCompleted { session_id, .. }
-            | DomainEvent::AgentError { session_id, .. } => {
-                busy().lock().expect("busy poisoned").remove(session_id);
-            }
-            _ => {}
-        }
+        // Busy state is not tracked here (off-task, no tenant): see `TurnBusy`.
         let saas = crate::core::runtime::is_saas();
         // Opening a profile is async (it may take its lease), so resolve the
         // owning profiles' contexts first and hand the sync scheduler a lookup.
@@ -200,7 +155,7 @@ fn drain_target(event: &DomainEvent) -> Option<(&String, Option<&String>, Durati
             task_id,
             ..
         } => Some((parent_session, Some(task_id), DEBOUNCE)),
-        _ => return None,
+        _ => None,
     }
 }
 
@@ -279,6 +234,17 @@ pub(super) fn drain_schedule_in(
 
 /// Schedule a debounced delivery attempt for a thread.
 fn schedule_delivery(thread_id: String, delay: Duration) {
+    schedule_delivery_inner(thread_id, delay, false);
+}
+
+/// Poll interval and ceiling while a recovered drain waits for a busy thread.
+const RECOVERY_BUSY_POLL: Duration = Duration::from_secs(5);
+const RECOVERY_BUSY_POLLS: u32 = 360;
+
+/// `wait_idle`: after the delay, keep waiting while the thread's user turn is in
+/// flight instead of giving up. A recovered record has no owner noted (the table
+/// is process-local), so the turn's completion event would not wake the drain.
+fn schedule_delivery_inner(thread_id: String, delay: Duration, wait_idle: bool) {
     #[cfg(test)]
     scheduled_for_test()
         .lock()
@@ -288,6 +254,23 @@ fn schedule_delivery(thread_id: String, delay: Duration) {
     // delayed task must run under the profile that scheduled it.
     crate::core::runtime::spawn_scoped(async move {
         tokio::time::sleep(delay).await;
+        if wait_idle {
+            let mut polls = 0;
+            while is_busy(&thread_id) && polls < RECOVERY_BUSY_POLLS {
+                polls += 1;
+                tokio::time::sleep(RECOVERY_BUSY_POLL).await;
+            }
+            if is_busy(&thread_id) {
+                // Still running past the ceiling: leave the record pending and
+                // wait again rather than overlap the user's turn.
+                log::debug!(
+                    "[background_delivery] recovered drain still busy; waiting again \
+                     thread_id={thread_id}"
+                );
+                schedule_delivery_inner(thread_id, RECOVERY_BUSY_POLL, true);
+                return;
+            }
+        }
         try_deliver(thread_id).await;
     });
 }
@@ -323,9 +306,24 @@ pub(crate) fn recover_on_boot(workspace_dir: &Path) -> usize {
             "[background_delivery] scheduling redelivery of undelivered completions after restart \
              thread_id={thread_id}"
         );
-        schedule_delivery(thread_id.clone(), RECOVERY_DELAY);
+        schedule_delivery_inner(thread_id.clone(), RECOVERY_DELAY, true);
     }
     threads.len()
+}
+
+/// Recovery for a profile that was just opened: forget the workspace's earlier
+/// claim (a profile released and re-leased may have results another node left
+/// pending since), then recover. Duplicate drains are harmless: delivery is
+/// lease-claimed.
+pub(crate) fn recover_on_open(workspace_dir: &Path) -> usize {
+    background_completions::forget_recovery(workspace_dir);
+    let scheduled = recover_on_boot(workspace_dir);
+    if scheduled == 0 {
+        // Nothing pending: do not keep this profile's log handle cached for a
+        // workspace that may never complete anything on this node.
+        background_completions::forget_recovery(workspace_dir);
+    }
+    scheduled
 }
 
 /// Claim everything ready for a thread **right now** (sync, testable): `None`
@@ -547,11 +545,12 @@ where
     retry_after
 }
 
-/// The per-thread delivery slot, plus the lease on the batch being delivered.
+/// The per-thread (per profile) delivery slot, plus the batch lease.
 /// Dropping it frees both: `release` on an already-settled record is a no-op,
 /// so a settled batch is untouched and an abandoned one is claimable again.
 struct DeliverySlot {
-    thread_id: String,
+    /// [`tenant::profile_key`] of the thread id.
+    key: String,
     router: Arc<CompletionRouter>,
     held: Vec<String>,
 }
@@ -559,12 +558,13 @@ struct DeliverySlot {
 impl DeliverySlot {
     /// `None` when a delivery is already in flight for the thread.
     fn claim(thread_id: &str, router: Arc<CompletionRouter>) -> Option<Self> {
+        let key = tenant::profile_key(thread_id);
         let mut d = delivering().lock().expect("delivering poisoned");
-        if !d.insert(thread_id.to_string()) {
+        if !d.insert(key.clone()) {
             return None;
         }
         Some(Self {
-            thread_id: thread_id.to_string(),
+            key,
             router,
             held: Vec::new(),
         })
@@ -581,7 +581,7 @@ impl Drop for DeliverySlot {
             self.router.release(&self.held);
         }
         if let Ok(mut d) = delivering().lock() {
-            d.remove(&self.thread_id);
+            d.remove(&self.key);
         }
     }
 }
@@ -706,3 +706,7 @@ pub(crate) fn register_background_delivery() {
 #[cfg(test)]
 #[path = "background_delivery_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "background_delivery_slots_tests.rs"]
+mod slots_tests;

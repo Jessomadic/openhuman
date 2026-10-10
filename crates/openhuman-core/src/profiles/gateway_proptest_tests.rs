@@ -219,7 +219,8 @@ proptest! {
             Ok(profile) => {
                 let expected = ProfileId::for_user(&user, mode).unwrap();
                 prop_assert_eq!(&profile.id, &expected, "{:?} landed on another profile", user);
-                prop_assert_eq!(profile.context().session_agent(), Some(expected.as_str()));
+                prop_assert_eq!(profile.context().profile(), Some(expected.as_str()));
+                prop_assert_eq!(profile.context().session_agent(), None);
                 prop_assert!(PROVISIONED.contains(&user.as_str()), "{:?} opened", user);
                 prop_assert!(is_valid_for(&user, header.as_deref().unwrap_or("")));
             }

@@ -138,7 +138,7 @@ existing single-tenant call sites keep working unmodified.
 
 `runtime/mode.rs` holds the process mode. `SingleUser` is today's
 behaviour and the default: the desktop app, the CLI and embedders. `Saas`
-serves many users from one process, one agent per user, behind a trusted
+serves many users from one process, one profile per user, behind a trusted
 gateway that authenticates them. The mode belongs to the process, not to any
 user's `Config`. The first SaaS boot locks it (`lock_mode`), and from then on
 `CoreContext::init_with_config` refuses every non-SaaS core. Code asks
@@ -146,7 +146,13 @@ user's `Config`. The first SaaS boot locks it (`lock_mode`), and from then on
 
 `openhuman-core run --mode saas --saas-config <file>` (or
 `OPENHUMAN_MODE=saas`, which can raise the mode but never lower it) boots
-through `runtime/saas.rs`:
+through `runtime/saas.rs`. So does `openhuman_embed::ProfileRuntime`, which
+runs the same `saas::build` in-process without serving a port (it writes a
+random service token when none exists, since no gateway presents it). Either
+way the lock is one-way: once it is built, no `Runtime::builder()` or other
+non-SaaS core can boot in that process, and neither can a second SaaS core.
+
+`saas::build`:
 
 - `SaasConfig` is the **operator's** file. It sets `root`,
   `service_token_file` (defaults to `<root>/service.token`), `tool_allowlist`
@@ -187,7 +193,8 @@ plane, and a user's scope only the reviewed `USER_METHODS`.
 `saas::build` installs the process's `profiles::ProfileHost`. Each open
 profile (`<root>/users/<profile-id>/`, the desktop's user layout) runs under a
 context derived from the operator's, with its own forced config, policy,
-`profile` and `session_agent`, behind a lease that keeps it on one process
+`profile` (its default agent has no `session_agent`, as on the desktop),
+behind a lease that keeps it on one process
 (see `profiles/README.md`). `saas::build` also starts the lease heartbeat.
 
 Three guards keep SaaS work from falling back to process-wide state:

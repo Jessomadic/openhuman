@@ -19,7 +19,7 @@ use anyhow::{anyhow, Result};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::json;
-use tinystoragedrivers::{CollectionSpec, Precondition};
+use tinystoragedrivers::{CollectionSpec, ErrorKind, Precondition, StorageError};
 
 use crate::storage::documents::Repo;
 
@@ -70,6 +70,59 @@ impl Docs {
             Some(value) => Ok(serde_json::from_value(value)?),
             None => Ok(T::default()),
         }
+    }
+
+    /// Read-modify-write of the value for the file `path` names, under
+    /// compare-and-swap so two cores sharing the scope never lose each other's
+    /// change. `change` returns its result and whether it changed the value
+    /// (an unchanged value is not written); it is retried on a conflict, so it
+    /// must be repeatable.
+    pub(super) fn update<T, R>(
+        &self,
+        path: &Path,
+        change: impl Fn(&mut T) -> (R, bool) + Send + 'static,
+    ) -> Result<R>
+    where
+        T: DeserializeOwned + Serialize + Default + Send + 'static,
+        R: Send + 'static,
+    {
+        let id = id_of(path)?;
+        self.0.run(|docs| async move {
+            for _ in 0..crate::storage::documents::CAS_ATTEMPTS {
+                let stored = docs.get(STATE, &id).await?;
+                let (mut value, precondition) = match &stored {
+                    Some(stored) => (
+                        stored
+                            .doc
+                            .get("value")
+                            .cloned()
+                            .map(serde_json::from_value)
+                            .transpose()
+                            .map_err(|e| StorageError::invalid_input(e.to_string()))?
+                            .unwrap_or_default(),
+                        stored.unchanged(),
+                    ),
+                    None => (T::default(), Precondition::Absent),
+                };
+                let (result, changed) = change(&mut value);
+                if !changed {
+                    return Ok(result);
+                }
+                let doc = json!({
+                    "value": serde_json::to_value(&value)
+                        .map_err(|e| StorageError::invalid_input(e.to_string()))?
+                });
+                match docs.put(STATE, &id, doc, precondition).await {
+                    Ok(_) => return Ok(result),
+                    Err(error) if error.kind() == ErrorKind::Conflict => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(StorageError::conflict(format!(
+                "{STATE}/{id} kept changing under {} attempts",
+                crate::storage::documents::CAS_ATTEMPTS
+            )))
+        })
     }
 
     pub(super) fn save<T: Serialize>(&self, path: &Path, value: &T) -> Result<()> {

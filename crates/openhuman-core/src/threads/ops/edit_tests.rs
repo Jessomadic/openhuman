@@ -51,6 +51,7 @@ fn turn_usage() -> TurnUsage {
             cached_input: 0,
             context_window: 1_000_000,
             cost_usd: 0.0,
+            ..Default::default()
         },
         ts: "2026-09-24T00:00:01Z".into(),
         reasoning_content: None,
