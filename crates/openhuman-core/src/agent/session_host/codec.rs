@@ -164,7 +164,6 @@ impl TranscriptCodec<OpenHumanRunContext> for OpenHumanTranscriptCodec {
                 cost_usd: sidecar.cost_usd,
                 last_call_input: sidecar.last_call_input_tokens,
                 last_call_output: sidecar.last_call_output_tokens,
-                ..Default::default()
             },
             ts: chrono::Utc::now().to_rfc3339(),
             reasoning_content: None,
