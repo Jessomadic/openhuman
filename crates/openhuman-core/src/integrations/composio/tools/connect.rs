@@ -98,7 +98,11 @@ pub(super) fn remaining_park_bound(
     park_bound: Option<std::time::Duration>,
     pre_gate: std::time::Duration,
 ) -> Option<std::time::Duration> {
-    park_bound.map(|bound| bound.saturating_sub(pre_gate).max(COMPOSIO_CONNECT_MIN_PARK))
+    park_bound.map(|bound| {
+        bound
+            .saturating_sub(pre_gate)
+            .max(COMPOSIO_CONNECT_MIN_PARK)
+    })
 }
 
 /// Pure core of [`composio_connect_timeout`], kept env-free so it is

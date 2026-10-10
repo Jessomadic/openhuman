@@ -85,7 +85,10 @@ fn a_toolkit_connected_between_a_stale_and_an_authoritative_hydration_is_announc
         HashSet::from(["mcp_a".to_string()]),
     );
     assert!(!state.connected_integrations_initialized);
-    assert_eq!(state.announced_integrations, HashSet::from(["gmail".into()]));
+    assert_eq!(
+        state.announced_integrations,
+        HashSet::from(["gmail".into()])
+    );
     assert!(state.pending_integration_announcement.is_empty());
 
     // Turn 2: the live fetch succeeds and notion is now connected, as is a
@@ -98,7 +101,10 @@ fn a_toolkit_connected_between_a_stale_and_an_authoritative_hydration_is_announc
     );
     assert!(state.connected_integrations_initialized);
     assert!(state.connected_integrations_authoritative);
-    assert_eq!(state.pending_integration_announcement, vec!["notion".to_string()]);
+    assert_eq!(
+        state.pending_integration_announcement,
+        vec!["notion".to_string()]
+    );
     assert_eq!(state.pending_mcp_announcement, vec!["mcp_b".to_string()]);
     assert_eq!(state.connected_integrations.len(), 2);
 }
@@ -112,7 +118,10 @@ fn the_first_hydration_seeds_without_announcing() {
         true,
         HashSet::from(["mcp_a".to_string()]),
     );
-    assert_eq!(state.announced_integrations, HashSet::from(["gmail".into()]));
+    assert_eq!(
+        state.announced_integrations,
+        HashSet::from(["gmail".into()])
+    );
     assert!(state.pending_integration_announcement.is_empty());
     assert!(state.pending_mcp_announcement.is_empty());
 }

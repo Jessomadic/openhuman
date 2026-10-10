@@ -197,8 +197,7 @@ pub(super) async fn call_execute_tool<R: serde::de::DeserializeOwned>(
     proxy: tinybus::Proxy,
     request: ExecuteToolRequest,
 ) -> tinybus::Result<R> {
-    let timeout =
-        execute_tool_timeout_for(crate::tools::timeout::tool_execution_timeout_secs());
+    let timeout = execute_tool_timeout_for(crate::tools::timeout::tool_execution_timeout_secs());
     tracing::debug!(
         tool = %request.name,
         timeout_secs = timeout.as_secs(),

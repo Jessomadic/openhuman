@@ -242,7 +242,10 @@ async fn every_detached_park_on_a_thread_stays_recoverable() {
     let gate = Arc::new(gate);
 
     let mut handles = Vec::new();
-    for tool in ["media_generate_image_multi_a", "media_generate_video_multi_b"] {
+    for tool in [
+        "media_generate_image_multi_a",
+        "media_generate_video_multi_b",
+    ] {
         let g = gate.clone();
         handles.push(tokio::spawn(async move {
             turn_origin::with_origin(
@@ -269,7 +272,10 @@ async fn every_detached_park_on_a_thread_stays_recoverable() {
     let tools: Vec<_> = parked.iter().map(|row| row.tool_name.as_str()).collect();
     assert_eq!(
         tools,
-        vec!["media_generate_image_multi_a", "media_generate_video_multi_b"],
+        vec![
+            "media_generate_image_multi_a",
+            "media_generate_video_multi_b"
+        ],
         "both parks must be replayable, oldest first"
     );
     assert!(gate

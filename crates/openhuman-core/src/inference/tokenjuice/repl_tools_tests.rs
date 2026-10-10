@@ -477,7 +477,10 @@ fn a_canonical_artifact_path_is_accepted_when_the_workspace_is_a_symlink() {
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, log_body()).unwrap();
     let canonical_file = std::fs::canonicalize(&file).unwrap();
-    assert!(!canonical_file.starts_with(&dir), "fixture must differ lexically");
+    assert!(
+        !canonical_file.starts_with(&dir),
+        "fixture must differ lexically"
+    );
 
     let ok = read_tool_result_artifact(&dir, &canonical_file.to_string_lossy(), 1 << 20)
         .expect("canonical artifact path must be readable");
@@ -486,7 +489,7 @@ fn a_canonical_artifact_path_is_accepted_when_the_workspace_is_a_symlink() {
     let secret = real.join("secret.txt");
     std::fs::write(&secret, "needle secret").unwrap();
     let canonical_secret = std::fs::canonicalize(&secret).unwrap();
-    let err = read_tool_result_artifact(&dir, &canonical_secret.to_string_lossy(), 1 << 20)
-        .unwrap_err();
+    let err =
+        read_tool_result_artifact(&dir, &canonical_secret.to_string_lossy(), 1 << 20).unwrap_err();
     assert!(!err.contains("needle secret"), "{err}");
 }
