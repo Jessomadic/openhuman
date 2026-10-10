@@ -6,10 +6,12 @@ import chatRuntimeReducer, {
   appendProcessingProse,
   beginInferenceTurn,
   clearAllChatRuntime,
+  clearPendingApprovalForThread,
   clearPendingApprovalIfRequest,
   clearQueueStatusForThread,
   clearRuntimeForThread,
   clearTurnApprovalForThread,
+  dropDetachedApprovalsForThread,
   hydrateRuntimeFromRunLedger,
   hydrateRuntimeFromSnapshot,
   hydrateThreadUsage,
@@ -17,6 +19,7 @@ import chatRuntimeReducer, {
   type QueueStatus,
   recordChatTurnUsage,
   resetSessionTokenUsage,
+  resolvePendingApprovalForThread,
   setPendingApprovalForThread,
   setQueueStatusForThread,
   setStreamingAssistantForThread,
@@ -1038,5 +1041,75 @@ describe('detached approvals', () => {
     expect(store.getState().chatRuntime.pendingApprovalByThread['t1']).toBeDefined();
     store.dispatch(clearPendingApprovalIfRequest({ threadId: 't1', requestId: 'req-sub' }));
     expect(store.getState().chatRuntime.pendingApprovalByThread['t1']).toBeUndefined();
+  });
+
+  // Two async sub-agents parked on the same parent thread: the second card
+  // replaced the first, whose gate then expired unanswered.
+  describe('several on one thread', () => {
+    const second = { ...detached, requestId: 'req-sub-2', toolName: 'media_generate_video' };
+    const shown = (store: ReturnType<typeof makeStore>) =>
+      store.getState().chatRuntime.pendingApprovalByThread['t1']?.requestId;
+
+    it('queues a second detached approval behind the shown one, then promotes it', () => {
+      const store = makeStore();
+      store.dispatch(setPendingApprovalForThread({ threadId: 't1', approval: detached }));
+      store.dispatch(setPendingApprovalForThread({ threadId: 't1', approval: second }));
+      expect(shown(store)).toBe('req-sub');
+      // A replay of the queued request does not duplicate it.
+      store.dispatch(setPendingApprovalForThread({ threadId: 't1', approval: second }));
+      store.dispatch(clearPendingApprovalForThread({ threadId: 't1' }));
+      expect(shown(store)).toBe('req-sub-2');
+      store.dispatch(clearPendingApprovalForThread({ threadId: 't1' }));
+      expect(shown(store)).toBeUndefined();
+    });
+
+    it('drops a queued approval on its own decision or expiry, keeping the shown one', () => {
+      const store = makeStore();
+      store.dispatch(setPendingApprovalForThread({ threadId: 't1', approval: detached }));
+      store.dispatch(setPendingApprovalForThread({ threadId: 't1', approval: second }));
+      store.dispatch(clearPendingApprovalIfRequest({ threadId: 't1', requestId: 'req-sub-2' }));
+      expect(shown(store)).toBe('req-sub');
+      store.dispatch(setPendingApprovalForThread({ threadId: 't1', approval: second }));
+      store.dispatch(
+        resolvePendingApprovalForThread({
+          threadId: 't1',
+          requestId: 'req-sub-2',
+          resolution: 'expired',
+        })
+      );
+      store.dispatch(clearPendingApprovalIfRequest({ threadId: 't1', requestId: 'req-sub' }));
+      expect(shown(store)).toBeUndefined();
+    });
+
+    it("shows the parent turn's own approval first and keeps the detached one queued", () => {
+      const store = makeStore();
+      store.dispatch(setPendingApprovalForThread({ threadId: 't1', approval: detached }));
+      store.dispatch(
+        setPendingApprovalForThread({
+          threadId: 't1',
+          approval: { requestId: 'req-main', toolName: 'shell', message: 'Run ls' },
+        })
+      );
+      expect(shown(store)).toBe('req-main');
+      store.dispatch(clearTurnApprovalForThread({ threadId: 't1' }));
+      expect(shown(store)).toBe('req-sub');
+    });
+  });
+
+  // A core restart (or a missed `approval_decided`) leaves a detached card the
+  // core no longer holds. Disconnect reconciliation drops every detached card
+  // so the rejoin replay re-sends only the parks still live.
+  it('drops every detached approval on the thread for reconciliation', () => {
+    const store = makeStore();
+    store.dispatch(setPendingApprovalForThread({ threadId: 't1', approval: detached }));
+    store.dispatch(
+      setPendingApprovalForThread({
+        threadId: 't1',
+        approval: { ...detached, requestId: 'req-sub-2' },
+      })
+    );
+    store.dispatch(dropDetachedApprovalsForThread({ threadId: 't1' }));
+    expect(store.getState().chatRuntime.pendingApprovalByThread['t1']).toBeUndefined();
+    expect(store.getState().chatRuntime.queuedApprovalsByThread['t1']).toBeUndefined();
   });
 });
