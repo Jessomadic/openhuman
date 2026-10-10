@@ -91,7 +91,9 @@ fn seed_thread(node: &Node, user: &str) {
 fn leave_undelivered_result(root: &std::path::Path, user: &str) {
     let id = ProfileId::for_user(user, ProfileIdMode::Raw).unwrap();
     let workspace = ProfileLayout::new(root, &id).workspace_dir;
-    let log = workspace.join(".openhuman").join("background_completions.jsonl");
+    let log = workspace
+        .join(".openhuman")
+        .join("background_completions.jsonl");
     std::fs::create_dir_all(log.parent().unwrap()).unwrap();
     let store: Arc<dyn CompletionStore> =
         Arc::new(JsonlCompletionStore::open(&log).expect("open the completion log"));
