@@ -557,6 +557,8 @@ fn driver_error_with_snapshot(
         observed.input_tokens = guard.input_tokens;
         observed.output_tokens = guard.output_tokens;
         observed.cached_input_tokens = guard.cached_input_tokens;
+        observed.last_call_input_tokens = guard.last_call_input_tokens;
+        observed.last_call_output_tokens = guard.last_call_output_tokens;
         observed.cost_usd = if guard.charged_amount_usd > 0.0 {
             guard.charged_amount_usd
         } else {
