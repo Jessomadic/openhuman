@@ -32,6 +32,7 @@ use tinyinference_llm::model::ModelResponse;
 use tinytools::ToolResult;
 
 use crate::agent::tinyagents::host::OpenHumanRunContext;
+use crate::agent::tinyagents::observability::SubagentScope;
 use crate::agent::turn_deadline::TurnDeadline;
 
 /// Pauses the run once its turn deadline's wind-down point has passed.
@@ -115,6 +116,21 @@ where
 /// ends at the hard stop. Detached children must not inherit the deadline of
 /// the turn that spawned them.
 pub(super) fn install(
+    harness: &mut AgentHarness<(), OpenHumanRunContext>,
+    handle: &Option<SteeringHandle>,
+    run_context: &OpenHumanRunContext,
+    subagent_scope: &Option<SubagentScope>,
+) -> Option<Arc<DeadlineWindDownMiddleware>> {
+    install_for(
+        harness,
+        handle.as_ref(),
+        run_context.turn_deadline,
+        subagent_scope.is_some(),
+    )
+}
+
+/// [`install`] over plain values, for tests.
+pub(super) fn install_for(
     harness: &mut AgentHarness<(), OpenHumanRunContext>,
     handle: Option<&SteeringHandle>,
     deadline: Option<TurnDeadline>,

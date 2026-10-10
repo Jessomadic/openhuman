@@ -57,7 +57,7 @@ fn install_clamps_the_policy_and_adds_the_middleware_for_a_root_turn() {
     let now = Instant::now();
     let deadline = TurnDeadline::new(now, Duration::from_secs(900));
     let h = handle();
-    let mw = install(&mut harness, Some(&h), Some(deadline), false);
+    let mw = install_for(&mut harness, Some(&h), Some(deadline), false);
     assert!(mw.is_some());
     let clamped = harness
         .policy()
@@ -82,12 +82,12 @@ fn install_leaves_children_and_unbounded_turns_alone() {
     let mut child: AgentHarness<(), OpenHumanRunContext> = AgentHarness::new();
     child.with_policy(crate::agent::tinyagents::run_policy_for(10, false));
     let before = child.policy().limits.max_wall_clock_ms;
-    assert!(install(&mut child, Some(&h), Some(deadline), true).is_none());
+    assert!(install_for(&mut child, Some(&h), Some(deadline), true).is_none());
     assert_eq!(child.policy().limits.max_wall_clock_ms, before);
 
     let mut plain: AgentHarness<(), OpenHumanRunContext> = AgentHarness::new();
     plain.with_policy(crate::agent::tinyagents::run_policy_for(10, false));
     let before = plain.policy().limits.max_wall_clock_ms;
-    assert!(install(&mut plain, Some(&h), None, false).is_none());
+    assert!(install_for(&mut plain, Some(&h), None, false).is_none());
     assert_eq!(plain.policy().limits.max_wall_clock_ms, before);
 }
