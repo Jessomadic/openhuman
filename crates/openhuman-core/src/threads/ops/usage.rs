@@ -215,3 +215,7 @@ fn recorded_cost(
     }
     cost
 }
+
+#[cfg(test)]
+#[path = "usage_tests.rs"]
+mod tests;
