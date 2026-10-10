@@ -120,7 +120,7 @@ fn the_store_dispatches_to_documents_when_a_backend_is_pinned() {
 fn a_stale_snapshot_does_not_revert_a_newer_session() {
     let docs = docs_in(&MemoryStorage::new(), "local");
     let old = session("a");
-    docs.save(&[old.clone()]).unwrap();
+    docs.save(std::slice::from_ref(&old)).unwrap();
 
     // Another core finishes the session.
     let mut newer = old.clone();
