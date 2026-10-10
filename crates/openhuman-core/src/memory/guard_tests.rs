@@ -218,7 +218,7 @@ impl MemoryEngine for Recording {
 async fn forget_within_reaches_the_wrapped_engine_with_its_reach() {
     let recording = Arc::new(Recording::default());
     let guarded = ScrubbingEngine::wrap(recording.clone());
-    let reach = Reach::subtree("agent:ann");
+    let reach = Reach::subtree("agent:ann".parse::<tinymemory_api::Namespace>().unwrap());
     guarded
         .forget_within(vec![ItemId::new("a")], reach.clone())
         .await

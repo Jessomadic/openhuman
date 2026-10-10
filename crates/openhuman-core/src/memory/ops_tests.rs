@@ -470,6 +470,8 @@ async fn erase_all_reports_memory_off_without_an_engine() {
 /// sweeps the tree for the ids; without one it stays a plain forget by id.
 #[tokio::test]
 async fn forget_with_a_reach_forgets_within_it() {
+    use tinymemory_api::MemoryEngine as _;
+
     let tmp = tempfile::tempdir().unwrap();
     let config = config_in(&tmp);
     let engine = std::sync::Arc::new(crate::memory::test_fixtures::RecordingEngine::new());
