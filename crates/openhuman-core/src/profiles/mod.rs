@@ -30,6 +30,7 @@ pub mod gateway;
 pub mod host;
 pub mod layout;
 pub mod lease;
+pub mod lifecycle;
 pub mod ops;
 mod recovery;
 pub mod registry;
