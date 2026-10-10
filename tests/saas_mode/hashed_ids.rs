@@ -4,6 +4,8 @@
 //! work under it, and the user id itself never reaches a path on disk, a
 //! response or the core's log.
 
+use std::path::{Path, PathBuf};
+
 use super::*;
 use openhuman_core::profiles::{ProfileId, ProfileIdMode};
 
