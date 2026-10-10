@@ -91,6 +91,11 @@ pub(crate) struct TranscriptSnapshot {
     pub(crate) input_tokens: u64,
     pub(crate) output_tokens: u64,
     pub(crate) cached_input_tokens: u64,
+    /// Input and output tokens of the newest answered call alone. The fields
+    /// above sum every call, so they measure spend; these measure how full the
+    /// context window was, which is what the context gauge shows.
+    pub(crate) last_call_input_tokens: u64,
+    pub(crate) last_call_output_tokens: u64,
     /// Provider-reported cost where available, otherwise the host's per-call
     /// estimate. This covers only model calls the provider answered.
     pub(crate) charged_amount_usd: f64,
