@@ -472,7 +472,7 @@ async fn erase_all_reports_memory_off_without_an_engine() {
 async fn forget_with_a_reach_forgets_within_it() {
     let tmp = tempfile::tempdir().unwrap();
     let config = config_in(&tmp);
-    let engine = Arc::new(crate::memory::test_fixtures::RecordingEngine::new());
+    let engine = std::sync::Arc::new(crate::memory::test_fixtures::RecordingEngine::new());
     crate::memory::test_fixtures::RecordingEngine::bind(&engine, &config);
 
     let mine = learn(&config, learn_params("tea in the morning"), None)
