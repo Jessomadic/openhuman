@@ -28,7 +28,10 @@ pub enum LeafCall {
 impl LeafCall {
     /// A stateless request with owned, boxed options.
     pub fn completion(completer: Completer, request: CompletionRequest) -> Self {
-        Self::Completion { completer, request: Box::new(request) }
+        Self::Completion {
+            completer,
+            request: Box::new(request),
+        }
     }
     /// An independent agent turn with owned, boxed state.
     pub fn turn(turn: Turn) -> Self {
