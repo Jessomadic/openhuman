@@ -8,7 +8,8 @@
 //! recorded once it is gone (a restarted process).
 //!
 //! Its own test binary because it installs a backend into the process-wide
-//! storage slot and boots a core. One test, so nothing in it races either.
+//! storage slot and boots a core. Each driver is its own test case
+//! (`support/storage_drivers.rs`), and the cases take turns.
 
 use std::sync::Arc;
 

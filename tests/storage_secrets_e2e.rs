@@ -3,8 +3,8 @@
 //!
 //! Its own test binary because it installs a backend into the process-wide
 //! storage slot and sets the keyring master-key environment, which would
-//! reroute every other suite's secrets in a shared process. One test, so
-//! nothing in this binary races either.
+//! reroute every other suite's secrets in a shared process. Each driver is its
+//! own test case (`support/storage_drivers.rs`), and the cases take turns.
 
 use openhuman_core::security::credentials::http_creds::{HttpCredential, HttpCredentialsStore};
 use openhuman_core::security::credentials::profiles::{AuthProfile, AuthProfilesStore};
