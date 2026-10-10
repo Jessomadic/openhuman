@@ -26,6 +26,22 @@ fn durable_replace_syncs_parent_after_rename_and_propagates_failure() {
     assert!(!source.exists());
 }
 
+#[cfg(windows)]
+#[test]
+fn existing_ciphertext_is_republished_and_verified_before_plaintext_cleanup() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("secrets.enc");
+    std::fs::write(&path, b"ciphertext").unwrap();
+
+    super::sync_parent_dir_with_republish(&path, |destination, bytes| {
+        assert_eq!(destination, path);
+        assert_eq!(bytes, b"ciphertext");
+        super::write_atomic(destination, bytes)
+    })
+    .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"ciphertext");
+}
+
 #[test]
 fn write_atomic_replaces_contents() {
     let dir = tempfile::TempDir::new().unwrap();

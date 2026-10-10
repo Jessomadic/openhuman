@@ -78,6 +78,31 @@ fn encrypted_store_remains_readable_when_verified_plaintext_cannot_be_deleted() 
 }
 
 #[test]
+fn existing_encrypted_file_does_not_remove_plaintext_until_directory_sync_succeeds() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = EncryptedFileBackend::new(dir.path());
+    let key = [0x42; KEY_LEN];
+    let expected = legacy_secret_map();
+    backend.write_map(&key, &expected).unwrap();
+    let legacy_path = dir.path().join(LEGACY_DEV_KEYCHAIN);
+    std::fs::write(&legacy_path, serde_json::to_vec(&expected).unwrap()).unwrap();
+
+    let result = backend.read_map_with_cleanup(&key, |map| {
+        backend.cleanup_matching_legacy_file_with_sync(&legacy_path, map, true, |_| {
+            Err(KeyringError::Backend("directory sync failed".into()))
+        })
+    });
+    assert!(result.is_err());
+    assert!(
+        legacy_path.exists(),
+        "plaintext must remain until encrypted publication is durable"
+    );
+
+    assert_eq!(backend.read_map(&key).unwrap(), expected);
+    assert!(!legacy_path.exists());
+}
+
+#[test]
 fn older_plaintext_copy_is_removed_only_when_it_matches() {
     let dir = tempfile::tempdir().unwrap();
     let backend = EncryptedFileBackend::new(dir.path());

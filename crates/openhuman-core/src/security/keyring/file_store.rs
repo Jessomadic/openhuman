@@ -169,6 +169,56 @@ fn replace_durably(source: &Path, destination: &Path) -> std::io::Result<()> {
     replace_durably_with_sync(source, destination, |parent| File::open(parent)?.sync_all())
 }
 
+/// Ensure a previously published encrypted file is durable before removing a
+/// matching plaintext migration source. This retries an earlier publication
+/// that returned an error after the destination had already appeared.
+pub fn sync_parent_dir(path: &Path) -> Result<(), KeyringError> {
+    #[cfg(unix)]
+    {
+        let parent = path.parent().ok_or_else(|| {
+            KeyringError::Backend(format!("keyring path {} has no parent", path.display()))
+        })?;
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                KeyringError::Backend(format!(
+                    "could not sync keyring directory {}: {error}",
+                    parent.display()
+                ))
+            })
+    }
+    #[cfg(windows)]
+    {
+        // A failed MoveFileExW can leave the destination visible. Republish
+        // the same bytes with WRITE_THROUGH and verify the result before the
+        // caller deletes the last plaintext copy.
+        sync_parent_dir_with_republish(path, write_atomic)
+    }
+}
+
+#[cfg(windows)]
+fn sync_parent_dir_with_republish(
+    path: &Path,
+    republish: impl FnOnce(&Path, &[u8]) -> Result<(), KeyringError>,
+) -> Result<(), KeyringError> {
+    let expected = std::fs::read(path).map_err(|source| KeyringError::MigrationReadFailed {
+        path: path.display().to_string(),
+        source,
+    })?;
+    republish(path, &expected)?;
+    let actual = std::fs::read(path).map_err(|source| KeyringError::MigrationReadFailed {
+        path: path.display().to_string(),
+        source,
+    })?;
+    if actual != expected {
+        return Err(KeyringError::Backend(format!(
+            "durable keyring publication at {} failed verification",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn replace_durably_with_sync(
     source: &Path,

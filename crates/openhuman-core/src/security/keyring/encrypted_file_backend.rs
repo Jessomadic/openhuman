@@ -613,6 +613,21 @@ impl EncryptedFileBackend {
         encrypted: &HashMap<String, String>,
         strict: bool,
     ) -> Result<(), KeyringError> {
+        self.cleanup_matching_legacy_file_with_sync(
+            path,
+            encrypted,
+            strict,
+            file_store::sync_parent_dir,
+        )
+    }
+
+    fn cleanup_matching_legacy_file_with_sync(
+        &self,
+        path: &Path,
+        encrypted: &HashMap<String, String>,
+        strict: bool,
+        sync_encrypted_parent: impl FnOnce(&Path) -> Result<(), KeyringError>,
+    ) -> Result<(), KeyringError> {
         if !path.exists() {
             return Ok(());
         }
@@ -664,6 +679,10 @@ impl EncryptedFileBackend {
             log::warn!("[keyring:encrypted_file] legacy copy {} differs from encrypted secrets; leaving it for recovery", path.display());
             return Ok(());
         }
+        // A previous write may have renamed secrets.enc successfully and then
+        // failed its directory sync. Recheck durability before deleting any
+        // surviving plaintext copy on a later read.
+        sync_encrypted_parent(&self.path)?;
         std::fs::remove_file(path).map_err(|source| KeyringError::MigrationDeleteFailed {
             path: path.display().to_string(),
             source,
