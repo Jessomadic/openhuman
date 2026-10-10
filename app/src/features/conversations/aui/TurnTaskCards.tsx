@@ -55,11 +55,12 @@ export function TurnTaskProvider({ children }: PropsWithChildren) {
       cancelled = true;
     };
   }, [threadId]);
-  const cards = saved.ready && saved.threadId === threadId
-    ? updateTaskHistory(saved.cards, {anchor, todos: todos ?? [], goal})
-    : [];
+  const cards =
+    saved.ready && saved.threadId === threadId
+      ? updateTaskHistory(saved.cards, { anchor, todos: todos ?? [], goal })
+      : [];
   if (saved.ready && saved.threadId === threadId && cards !== saved.cards) {
-    setSaved({...saved, cards});
+    setSaved({ ...saved, cards });
   }
   useEffect(() => {
     if (saved.ready && saved.threadId === threadId && threadId) {
