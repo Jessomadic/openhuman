@@ -325,8 +325,13 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
                     })
                     .or(guard.pricing_model.as_deref())
                     .unwrap_or_default();
-                guard.charged_amount_usd +=
-                    crate::agent::cost::call_cost_usd(cost_model, &host_usage);
+                let call_cost = crate::agent::cost::call_cost(cost_model, &host_usage);
+                tracing::debug!(
+                    model = cost_model,
+                    ?call_cost,
+                    "[cost] per-call cost (charged, catalog estimate, or unknown)"
+                );
+                guard.cost.add(call_cost);
             }
             if route.is_some() {
                 guard.resolved_route = route;
