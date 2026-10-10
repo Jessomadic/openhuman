@@ -285,7 +285,8 @@ test("the storage area arms only the storage-drivers lane, with the sqlite and f
       .sort();
     const inLane = [...e2e.matchAll(/--test (\S+)/g)].map((m) => m[1]).sort();
     assert.deepEqual(inLane, onDisk, profile);
-    // And in the MongoDB workflow, or a target's `mongodb` case never runs.
+    // MongoDB runs the shared storage targets that support its feature set.
+    // SQLite-only targets belong to the driver lane above, not MongoDB.
     const mongo = fs.readFileSync(
       path.join(repoRoot, ".github/workflows/storage-mongodb.yml"),
       "utf8",
@@ -293,7 +294,11 @@ test("the storage area arms only the storage-drivers lane, with the sqlite and f
     const inMongo = [...mongo.matchAll(/--test (\S+)/g)]
       .map((m) => m[1])
       .sort();
-    assert.deepEqual(inMongo, onDisk, "storage-mongodb.yml");
+    assert.deepEqual(
+      inMongo,
+      onDisk.filter((target) => target !== "storage_default_import_e2e"),
+      "storage-mongodb.yml",
+    );
     if (profile === "hosted") {
       assert.deepEqual(
         hostedMatrix(plan).map((g) => g.group),

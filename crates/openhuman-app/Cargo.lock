@@ -8170,7 +8170,9 @@ name = "tinystoragedrivers"
 version = "0.5.0"
 dependencies = [
  "tinystoragedrivers-core",
+ "tinystoragedrivers-file",
  "tinystoragedrivers-secrets",
+ "tinystoragedrivers-sqlite",
 ]
 
 [[package]]
@@ -8181,6 +8183,18 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
+name = "tinystoragedrivers-file"
+version = "0.5.0"
+dependencies = [
+ "async-trait",
+ "libc",
+ "serde",
+ "serde_json",
+ "tinystoragedrivers-core",
  "tokio",
 ]
 
