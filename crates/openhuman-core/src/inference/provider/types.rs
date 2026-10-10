@@ -21,6 +21,10 @@ pub struct BilledUsage {
     /// `charged_amount_usd` is a local catalog estimate, not a provider charge
     /// (see [`BilledUsage::with_estimated_usd`]).
     pub cost_is_estimate: bool,
+    /// The provider reported what it billed for this call, so
+    /// `charged_amount_usd` is known even when it is zero (a free route).
+    /// `false` means no charge arrived; zero then means "unknown", not free.
+    pub charge_reported: bool,
 }
 
 impl BilledUsage {
