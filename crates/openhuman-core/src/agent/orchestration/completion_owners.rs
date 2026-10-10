@@ -83,8 +83,7 @@ pub(crate) fn profiles_of(id: &str) -> Vec<String> {
 /// profile the host does not know.
 pub(crate) async fn context_for_profile(profile: &str) -> Option<Arc<CoreContext>> {
     let id = crate::profiles::ProfileId::parse(profile).ok()?;
-    let host = crate::profiles::host::host()?;
-    match host.open(&id).await {
+    match crate::profiles::host::host()?.open(&id).await {
         Ok(state) => Some(Arc::clone(state.context())),
         Err(error) => {
             log::warn!("[completion_owners] cannot open the owning agent: {error}");

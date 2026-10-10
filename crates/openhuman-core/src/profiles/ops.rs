@@ -31,10 +31,11 @@ pub(crate) async fn provision_on(
         log::warn!(
             "[profiles] refusing to provision a profile named like the operator's state dir"
         );
-        return Err(format!(
-            "profile id {profile_id} is reserved on this deployment: it is the name of the \
-             operator's state directory"
-        ));
+        return Err(
+            "profile id is reserved on this deployment: it is the name of the \
+                    operator's state directory"
+                .to_string(),
+        );
     }
     let created = host.provision(&profile_id).await?;
     let log = if created {

@@ -127,15 +127,17 @@ impl EventHandler<DomainEvent> for BackgroundDeliveryHandler {
             _ => {}
         }
         let saas = crate::core::runtime::is_saas();
-        // Opening an owner (it may have been evicted) is async; the planner
-        // below resolves synchronously, so open the owners first.
-        let mut owners = std::collections::HashMap::new();
-        for profile in owning_profiles(event) {
-            if let Some(ctx) = completion_owners::context_for_profile(&profile).await {
-                owners.insert(profile, ctx);
+        // Opening a profile is async (it may take its lease), so resolve the
+        // owning profiles' contexts first and hand the sync scheduler a lookup.
+        let mut live = std::collections::HashMap::new();
+        if saas {
+            for profile in owning_profiles(event) {
+                if let Some(ctx) = completion_owners::context_for_profile(&profile).await {
+                    live.insert(profile, ctx);
+                }
             }
         }
-        for drain in drain_schedule_in(saas, event, |profile| owners.get(profile).cloned()) {
+        for drain in drain_schedule_in(saas, event, |p| live.get(p).cloned()) {
             match drain.owner {
                 // Re-enter the owner's scope so the scheduled task inherits it.
                 Some(ctx) => {
@@ -166,6 +168,60 @@ fn drain_schedule(event: &DomainEvent) -> Option<(String, Duration)> {
     Some((drain.thread_id, drain.delay))
 }
 
+/// The session, task and delay an event drains on, if it asks for a drain.
+fn drain_target(event: &DomainEvent) -> Option<(&String, Option<&String>, Duration)> {
+    match event {
+        // A user turn just ended (or failed) — drain anything that finished while
+        // it ran.
+        DomainEvent::AgentTurnCompleted { session_id, .. }
+        | DomainEvent::AgentError { session_id, .. } => {
+            Some((session_id, None, Duration::from_millis(300)))
+        }
+        // Any subagent terminal state — completed, failed, or awaiting-user — can
+        // arrive after the parent turn already went idle. Schedule a debounced
+        // drain for all three so the pending result is delivered promptly instead
+        // of sitting until some unrelated later turn. Only `SubagentCompleted`
+        // used to trigger a drain, so a failure (or an awaiting-user pause) after
+        // the parent turn went idle left the chat stuck on the original
+        // "Accepted" response (#4896). Debounce so a burst batches into a single
+        // turn.
+        DomainEvent::SubagentCompleted {
+            parent_session,
+            task_id,
+            ..
+        }
+        | DomainEvent::SubagentFailed {
+            parent_session,
+            task_id,
+            ..
+        }
+        | DomainEvent::SubagentAwaitingUser {
+            parent_session,
+            task_id,
+            ..
+        } => Some((parent_session, Some(task_id), DEBOUNCE)),
+        _ => None,
+    }
+}
+
+/// Profiles recorded as owning the task (else the session).
+fn owners_of(session: &str, task: Option<&String>) -> Vec<String> {
+    let mut profiles = task
+        .map(|t| completion_owners::profiles_of(t))
+        .unwrap_or_default();
+    if profiles.is_empty() {
+        profiles = completion_owners::profiles_of(session);
+    }
+    profiles
+}
+
+/// The profiles whose contexts [`drain_schedule_in`] will ask for.
+fn owning_profiles(event: &DomainEvent) -> Vec<String> {
+    drain_target(event)
+        .map(|(session, task, _)| owners_of(session, task))
+        .unwrap_or_default()
+}
+
 /// The drains for `event`. This subscriber runs off-task, with no tenant scope,
 /// but the thread tables are keyed per profile: the profiles that recorded the
 /// completion (by task id) or ran the session are looked up in
@@ -177,9 +233,11 @@ pub(super) fn drain_schedule_in(
     event: &DomainEvent,
     resolve: impl Fn(&str) -> Option<Arc<CoreContext>>,
 ) -> Vec<Drain> {
-    let Some((session, task, delay)) = drain_trigger(event) else {
+    let Some((session, task, delay)) = drain_target(event) else {
         return Vec::new();
     };
+    // A task id is core-minted and unique, so it names its one owner; a
+    // session id can be shared by profiles, so it may name several.
     let profiles = owners_of(session, task);
     let thread_in = |owner: Option<Arc<CoreContext>>| {
         let thread_id = match &owner {
@@ -217,65 +275,6 @@ pub(super) fn drain_schedule_in(
             }
         })
         .collect()
-}
-
-/// The session (and sub-agent task) an event asks to drain, and after how
-/// long; `None` for events that drain nothing.
-fn drain_trigger(event: &DomainEvent) -> Option<(&String, Option<&String>, Duration)> {
-    let trigger = match event {
-        // A user turn just ended (or failed) — drain anything that finished while
-        // it ran.
-        DomainEvent::AgentTurnCompleted { session_id, .. }
-        | DomainEvent::AgentError { session_id, .. } => {
-            (session_id, None, Duration::from_millis(300))
-        }
-        // Any subagent terminal state — completed, failed, or awaiting-user — can
-        // arrive after the parent turn already went idle. Schedule a debounced
-        // drain for all three so the pending result is delivered promptly instead
-        // of sitting until some unrelated later turn. Only `SubagentCompleted`
-        // used to trigger a drain, so a failure (or an awaiting-user pause) after
-        // the parent turn went idle left the chat stuck on the original
-        // "Accepted" response (#4896). Debounce so a burst batches into a single
-        // turn.
-        DomainEvent::SubagentCompleted {
-            parent_session,
-            task_id,
-            ..
-        }
-        | DomainEvent::SubagentFailed {
-            parent_session,
-            task_id,
-            ..
-        }
-        | DomainEvent::SubagentAwaitingUser {
-            parent_session,
-            task_id,
-            ..
-        } => (parent_session, Some(task_id), DEBOUNCE),
-        _ => return None,
-    };
-    Some(trigger)
-}
-
-/// The profiles noted as owning `task` (core-minted and unique, so it names
-/// its one owner) or, failing that, `session` (shared by profiles, so it may
-/// name several).
-fn owners_of(session: &str, task: Option<&String>) -> Vec<String> {
-    let profiles = task
-        .map(|t| completion_owners::profiles_of(t))
-        .unwrap_or_default();
-    if profiles.is_empty() {
-        completion_owners::profiles_of(session)
-    } else {
-        profiles
-    }
-}
-
-/// The profiles whose contexts [`drain_schedule_in`] asks for on `event`.
-fn owning_profiles(event: &DomainEvent) -> Vec<String> {
-    drain_trigger(event)
-        .map(|(session, task, _)| owners_of(session, task))
-        .unwrap_or_default()
 }
 
 /// Schedule a debounced delivery attempt for a thread.

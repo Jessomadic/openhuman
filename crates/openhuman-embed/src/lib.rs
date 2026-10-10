@@ -114,6 +114,8 @@ pub mod memory;
 #[cfg(feature = "modules")]
 pub mod modules;
 pub mod process;
+#[cfg(feature = "channels")]
+pub mod profiles;
 mod runtime;
 mod turn;
 
@@ -153,6 +155,12 @@ pub use harness::{
 };
 #[cfg(feature = "mcp")]
 pub use harness::{HttpHeader, McpAuthConfig, McpServer};
+#[cfg(feature = "channels")]
+pub use profiles::{
+    ChatReply, OpenError, ProfileError, ProfileEvents, ProfileHandle, ProfileId, ProfileIdMode,
+    ProfileRuntime, ProfileRuntimeBuilder, ProfileSummary, Provisioned, RelayAccepted,
+    RelayMessage, SaasConfig,
+};
 pub use runtime::builder::DEFAULT_MAX_AGENTS;
 /// Read-only view of a [`RuntimeBuilder`], for the layered crates' tests.
 #[doc(hidden)]
