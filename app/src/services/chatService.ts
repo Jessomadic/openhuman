@@ -95,6 +95,12 @@ export interface TurnUsageWire {
   cached_input_tokens: number;
   cost_usd: number;
   context_window: number;
+  /**
+   * Tokens the parent's context held after the turn's final model call: the
+   * context gauge's numerator. The totals above sum every call of the turn.
+   * Absent from an older core.
+   */
+  context_tokens?: number;
   subagents?: SubagentUsageWire[];
 }
 
