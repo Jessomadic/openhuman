@@ -55,8 +55,9 @@ not migrated.
 
 ## Profile ids
 
-`profile_ids` in the operator config picks how a gateway user id becomes a
-`ProfileId`:
+The top-level `profile_ids` setting in the operator config
+(`profile_ids = "hashed"`, not under a table) picks how a gateway user id
+becomes a `ProfileId`:
 
 - `"raw"` (the default): a user id matching `^[a-z0-9][a-z0-9_-]{0,63}$` is
   used unchanged, so the desktop's 24-hex backend ids pass through. `local`,
@@ -64,11 +65,16 @@ not migrated.
 - Anything else, or every id under `"hashed"`, becomes `h-` plus the first 32
   hex characters of `sha256(user_id)`.
 
+Provisioning also refuses a profile id equal to the file name of the node's
+`operator_dir`: keyring secrets are namespaced by their store's directory name,
+so such a profile would share the operator's credential slots.
+
 Both forms fit the agent-id charset and never contain a path separator.
-Changing the mode re-maps users onto different profiles. Gateway user ids are
-turned into profile ids at once (`ops.rs`, `gateway.rs`) and are never logged
-or stored; under raw mode a user id that fits the charset *is* the profile id,
-so use `"hashed"` where user ids must not reach paths and logs.
+Changing the mode may re-map users onto different profiles. Gateway user ids
+are turned into profile ids at once (`ops.rs`, `gateway.rs`) and are never
+logged. Under raw mode a user id that fits the charset *is* the profile id, so
+it reaches paths, storage and the provisioning response; use `"hashed"` where
+user ids must not. Log lines and `Outcome` messages never carry the profile id.
 
 ## The tenant key
 
@@ -227,8 +233,9 @@ A profile holds one thread per conversation, whatever interface it came in on:
   `<root>/deprovisioned/<id>-<unix-secs>-<uuid>/`; nothing is deleted. Its
   credential is cleared first (it lives in the keyring or the storage
   backend, not only in the directory), so a re-provisioned user does not
-  inherit it. A profile in use, or hosted by another node, is not archived:
-  the call fails and can be retried.
+  inherit it. If clearing it fails the profile is kept, not archived, and its
+  lease is given back so the retry can take it. A profile in use, or hosted
+  by another node, is not archived: the call fails and can be retried.
 
 ## Gateway contract
 

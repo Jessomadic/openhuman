@@ -4701,6 +4701,7 @@ dependencies = [
  "log",
  "once_cell",
  "openhuman-tinyhumans",
+ "proptest",
  "rand 0.10.2",
  "reqwest",
  "sentry",
@@ -7216,6 +7217,7 @@ version = "0.1.2"
 dependencies = [
  "async-trait",
  "flate2",
+ "libc",
  "serde",
  "serde_json",
  "sha2 0.10.9",

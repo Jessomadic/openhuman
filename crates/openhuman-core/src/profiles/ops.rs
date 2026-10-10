@@ -1,7 +1,10 @@
 //! Operator-plane operations on profiles.
 //!
-//! Gateway user ids are taken here and turned into profile ids at once; they
-//! are never logged, stored or returned.
+//! Gateway user ids are taken here and turned into profile ids at once. The
+//! user id itself is never logged, stored or returned; under raw `profile_ids`
+//! mode a qualifying id *is* the profile id, so it is stored and returned as
+//! one (use `"hashed"` where that must not happen). Log lines and `Outcome`
+//! messages stay content-free either way.
 
 use super::credentials::{self, UserCredentialKind};
 use super::host::{self, ProfileHost};
@@ -24,11 +27,21 @@ pub(crate) async fn provision_on(
     user_id: &str,
 ) -> Result<Outcome<ProvisionResult>, String> {
     let profile_id = ProfileId::for_user(user_id, host.saas().profile_ids)?;
+    if names_operator_state(&profile_id, &host.saas().operator_dir()) {
+        log::warn!(
+            "[profiles] refusing to provision a profile named like the operator's state dir"
+        );
+        return Err(
+            "profile id is reserved on this deployment: it is the name of the \
+                    operator's state directory"
+                .to_string(),
+        );
+    }
     let created = host.provision(&profile_id).await?;
     let log = if created {
-        format!("provisioned {profile_id}")
+        "profile provisioned"
     } else {
-        format!("{profile_id} was already provisioned")
+        "profile already provisioned"
     };
     Ok(Outcome::single_log(
         ProvisionResult {
@@ -37,6 +50,18 @@ pub(crate) async fn provision_on(
         },
         log,
     ))
+}
+
+/// Whether `id` is the file name of the operator's state directory.
+///
+/// Credential secrets are namespaced in the process keyring by the name of
+/// the directory their store sits in: `users/<id>` for a profile, the
+/// operator directory for the operator. A profile named like the operator
+/// directory (`operator` is reserved for the default; a configured
+/// `operator_dir` can be any name) would read and overwrite the operator's
+/// own secrets.
+fn names_operator_state(id: &ProfileId, operator_dir: &std::path::Path) -> bool {
+    operator_dir.file_name().and_then(|name| name.to_str()) == Some(id.as_str())
 }
 
 /// Close profile `profile_id` and archive its state.
@@ -51,9 +76,9 @@ pub(crate) async fn deprovision_on(
     let profile_id = ProfileId::parse(profile_id)?;
     let removed = host.deprovision(&profile_id).await?;
     let log = if removed {
-        format!("archived {profile_id}")
+        "profile archived"
     } else {
-        format!("{profile_id} was not provisioned")
+        "profile was not provisioned"
     };
     Ok(Outcome::single_log(
         DeprovisionResult {
@@ -84,11 +109,8 @@ pub(crate) async fn status_on(
     let summary = host
         .summary(&profile_id)
         .await?
-        .ok_or_else(|| format!("profile {profile_id} is not provisioned"))?;
-    Ok(Outcome::single_log(
-        summary,
-        format!("status of {profile_id}"),
-    ))
+        .ok_or_else(|| "profile is not provisioned".to_string())?;
+    Ok(Outcome::single_log(summary, "profile status read"))
 }
 
 /// Install the backend credential the gateway holds for profile `profile_id`.
@@ -118,13 +140,13 @@ pub(crate) async fn set_credential_on(
         credentials::store(&config, kind, token, expires_at)
     })
     .await?;
-    log::info!("[profiles] credential installed for profile={profile_id} kind={kind:?}");
+    log::info!("[profiles] credential installed kind={kind:?}");
     Ok(Outcome::single_log(
         CredentialResult {
             profile_id: profile_id.clone(),
             has_credential: true,
         },
-        format!("credential installed for {profile_id}"),
+        "credential installed",
     ))
 }
 
@@ -144,11 +166,11 @@ pub(crate) async fn clear_credential_on(
             credentials::clear(&config)
         })
         .await?;
-    log::info!("[profiles] credential cleared for profile={profile_id} removed={removed}");
+    log::info!("[profiles] credential cleared removed={removed}");
     let log = if removed {
-        format!("credential cleared for {profile_id}")
+        "credential cleared"
     } else {
-        format!("{profile_id} held no credential")
+        "profile held no credential"
     };
     Ok(Outcome::single_log(
         CredentialResult {
@@ -172,9 +194,9 @@ pub(crate) async fn release_on(
     let profile_id = ProfileId::parse(profile_id)?;
     let released = host.release(&profile_id).await?;
     let log = if released {
-        format!("released {profile_id}")
+        "profile released"
     } else {
-        format!("{profile_id} was not open on this node")
+        "profile was not open on this node"
     };
     Ok(Outcome::single_log(
         ReleaseResult {
