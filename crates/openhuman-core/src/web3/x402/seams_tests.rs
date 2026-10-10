@@ -259,7 +259,7 @@ async fn x402_rejected_destinations_do_not_exhaust_the_action_budget() {
         Err(RequestAuthorizationError::Denied(reason)) if reason.contains("rate limit")
     ));
     assert!(matches!(
-        guard.authorize(&proposed_request("http://127.0.0.1/"))
+        guard.authorize(&proposed_request("https://127.0.0.1/"))
             .await,
         Err(RequestAuthorizationError::Denied(reason)) if reason.contains("rate limit")
     ));
