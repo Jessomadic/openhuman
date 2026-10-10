@@ -552,6 +552,7 @@ pub fn approval_request_event(
     client_id: &str,
     tool_call_id: Option<&str>,
     expires_at: Option<&str>,
+    detached: bool,
 ) -> WebChannelEvent {
     WebChannelEvent {
         event: "approval_request".to_string(),
@@ -563,6 +564,7 @@ pub fn approval_request_event(
         args: Some(args_redacted.clone()),
         tool_call_id: tool_call_id.map(str::to_string),
         expires_at: expires_at.map(str::to_string),
+        detached: detached.then_some(true),
         ..Default::default()
     }
 }
@@ -619,10 +621,11 @@ impl EventHandler<DomainEvent> for ApprovalSurfaceSubscriber {
                 tool_call_id,
                 expires_at,
                 agent_id: _,
+                detached,
             } => match (thread_id, client_id) {
                 (Some(thread_id), Some(client_id)) => {
                     log::info!(
-                        "[web-channel] approval-surface emitting approval_request request_id={request_id} thread_id={thread_id} client_id={client_id} tool={tool_name}"
+                        "[web-channel] approval-surface emitting approval_request request_id={request_id} thread_id={thread_id} client_id={client_id} tool={tool_name} detached={detached}"
                     );
                     publish_web_channel_event(approval_request_event(
                         request_id,
@@ -633,6 +636,7 @@ impl EventHandler<DomainEvent> for ApprovalSurfaceSubscriber {
                         client_id,
                         tool_call_id.as_deref(),
                         expires_at.as_deref(),
+                        *detached,
                     ));
                 }
                 _ => {
@@ -697,6 +701,7 @@ impl EventHandler<DomainEvent> for ApprovalSurfaceSubscriber {
                         client_id,
                         tool_call_id.as_deref(),
                         expires_at.as_deref(),
+                        *detached,
                     ));
                 }
                 _ => {

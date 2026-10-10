@@ -364,6 +364,16 @@ impl ApprovalGate {
             .then_some(row)
     }
 
+    /// Whether the parked `request_id` was routed to its chat thread from a
+    /// detached task (an async-delegated sub-agent), so the replayed card keeps
+    /// the live event's `detached` flag. `false` for an unknown request.
+    pub fn request_is_detached(&self, request_id: &str) -> bool {
+        self.request_routes
+            .lock()
+            .get(request_id)
+            .is_some_and(|route| route.detached)
+    }
+
     /// Drop the thread → request mapping when it still belongs to this request.
     fn clear_thread(&self, thread_key: &Option<String>, request_id: &str) {
         if let Some(key) = thread_key {
