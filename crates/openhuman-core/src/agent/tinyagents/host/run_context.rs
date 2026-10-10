@@ -109,6 +109,11 @@ pub(crate) struct SessionTurnSidecar {
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
     pub cost_usd: f64,
+    /// Input and output tokens of the turn's final model call. The totals
+    /// above sum every call of the turn (its spend); these are the context the
+    /// model last held, the numerator of the context-window gauge.
+    pub last_call_input_tokens: u64,
+    pub last_call_output_tokens: u64,
     /// The selected model's context window for this exact request.  The
     /// provider response's generic usage cannot represent this host datum.
     pub context_window: u64,
