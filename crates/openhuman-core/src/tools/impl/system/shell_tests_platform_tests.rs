@@ -4,7 +4,6 @@
 //! Both take the platform / parent environment as a parameter so the Windows
 //! behaviour is pinned on every CI host, not only on a Windows runner.
 
-use super::super::super::shell_platform::PYTHON_UTF8_DEFAULTS;
 use super::*;
 use crate::agent::platform_shell::ShellFlavor;
 use std::collections::HashMap;

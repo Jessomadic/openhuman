@@ -1,5 +1,5 @@
 use super::shell_platform::{
-    command_param_description, python_utf8_env, shell_child_env, shell_description, SAFE_ENV_VARS,
+    command_param_description, python_utf8_env, shell_child_env, shell_description,
 };
 use crate::agent::host_runtime::RuntimeAdapter;
 use crate::agent::platform_shell::ShellFlavor;
