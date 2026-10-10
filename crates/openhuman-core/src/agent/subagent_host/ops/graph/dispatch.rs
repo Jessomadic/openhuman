@@ -424,7 +424,7 @@ pub(in super::super) async fn run_subagent_via_graph(
                         input_tokens = u.input_tokens,
                         output_tokens = u.output_tokens,
                         cached_input_tokens = u.cached_input_tokens(),
-                        call_cost,
+                        ?call_cost,
                         "[subagent] cap-hit summary call folded + priced + recorded into cost tracker (#4467, item 2)"
                     );
                 }
