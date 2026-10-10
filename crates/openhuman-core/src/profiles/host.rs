@@ -270,7 +270,6 @@ impl ProfileHost {
         self.operator.derive_with(
             ContextOverlay::new(config, user_domains(), ToolGroups::none())
                 .without_user_skill_roots()
-                .session_agent(id.as_str())
                 .profile(id.as_str()),
         )
     }
@@ -339,7 +338,6 @@ impl ProfileHost {
         let context = self.operator.derive_with(
             ContextOverlay::new(config.clone(), user_domains(), ToolGroups::none())
                 .without_user_skill_roots()
-                .session_agent(id.as_str())
                 .profile(id.as_str())
                 .agent_policy(profile_policy(&config)),
         );

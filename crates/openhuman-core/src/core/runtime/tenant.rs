@@ -40,6 +40,13 @@ impl Tenant {
         }
     }
 
+    /// Whether work for this tenant is scoped at all: a SaaS profile, an
+    /// embedded agent, or both. `false` only for the desktop's (or a CLI's)
+    /// own default orchestrator, whose state lives at the workspace root.
+    pub fn is_scoped(&self) -> bool {
+        self.profile.is_some() || self.agent.is_some()
+    }
+
     /// This tenant without its agent: for tables that isolate profiles from
     /// each other but are shared by the agents of one profile (and so, on the
     /// desktop, keep their bare-id keys for embedded agents too).
