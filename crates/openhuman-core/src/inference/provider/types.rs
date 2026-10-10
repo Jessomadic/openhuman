@@ -34,6 +34,7 @@ impl BilledUsage {
             usage: Usage::new(input_tokens, output_tokens),
             charged_amount_usd: 0.0,
             cost_is_estimate: false,
+            charge_reported: false,
         }
     }
 
