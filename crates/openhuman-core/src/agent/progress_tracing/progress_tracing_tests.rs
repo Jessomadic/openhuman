@@ -143,6 +143,8 @@ fn model_call_with_content(subagent_task_id: Option<&str>) -> AgentProgress {
     }
 }
 
+#[path = "progress_tracing_accuracy_tests.rs"]
+mod accuracy_tests;
 #[path = "progress_tracing_attribution_tests.rs"]
 mod attribution_tests;
 #[path = "progress_tracing_content_gate_tests.rs"]
