@@ -1243,14 +1243,27 @@ fn event_alias(name: &str) -> Option<String> {
 /// safe to repeat: the client keys the card by `request_id` and a decided
 /// request is no longer parked, so a socket that already has the card just
 /// re-renders the same one.
+///
+/// Every park on the thread is replayed, oldest first: several async
+/// sub-agents can each be waiting on the same parent thread, and replaying
+/// only the newest left the others unanswerable until they expired.
 fn replay_parked_approval(socket: &SocketRef, thread_id: &str) {
     let Some(gate) = crate::core_host::security::approval::ApprovalGate::try_global() else {
         return;
     };
-    let Some(row) = gate.parked_request_for_thread(thread_id) else {
-        return;
-    };
     let client_id = socket.id.to_string();
+    for row in gate.parked_requests_for_thread(thread_id) {
+        replay_one_parked_approval(socket, gate, &row, thread_id, &client_id);
+    }
+}
+
+fn replay_one_parked_approval(
+    socket: &SocketRef,
+    gate: &crate::core_host::security::approval::ApprovalGate,
+    row: &crate::core_host::security::approval::PendingApproval,
+    thread_id: &str,
+    client_id: &str,
+) {
     let expires_at = row.expires_at.map(|t| t.to_rfc3339());
     let mut event = crate::core_host::web_chat::approval_request_event(
         &row.request_id,
@@ -1258,7 +1271,7 @@ fn replay_parked_approval(socket: &SocketRef, thread_id: &str) {
         &row.action_summary,
         &row.args_redacted,
         thread_id,
-        &client_id,
+        client_id,
         row.tool_call_id.as_deref(),
         expires_at.as_deref(),
         gate.request_is_detached(&row.request_id),
