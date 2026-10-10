@@ -277,6 +277,7 @@ pub(super) async fn close_if_needed(
 /// exercised without a provider; the deterministic guard stays here, ahead of
 /// `verify`, because it is the one check that cannot fail open.
 async fn close_with_one_repair<A, AF, V, VF>(
+    model: &str,
     instruction: String,
     stop_reason: Option<&str>,
     ask: A,
@@ -289,7 +290,7 @@ where
     V: Fn(String) -> VF,
     VF: std::future::Future<Output = (Option<CloseViolation>, Option<BilledUsage>)>,
 {
-    let mut usage = RepairUsage::default();
+    let mut usage = RepairUsage::for_model(model);
     let mut prompt = instruction.clone();
     for attempt in 0..2 {
         let (candidate, candidate_usage) = ask(prompt).await;
