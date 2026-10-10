@@ -351,18 +351,33 @@ fn ensure_service_token(path: &Path) -> Result<(), ProfileError> {
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     );
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
+
+    // Write to a temporary file first, then atomically rename it into place.
+    // This ensures that if the write is interrupted, the target path is left in its original state.
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temp_path = parent.to_path_buf();
+    temp_path.push(format!(".service-token-tmp-{}", uuid::Uuid::new_v4().simple()));
+
     {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&temp_path)
+            .map_err(|e| ProfileError::Boot(format!("writing {}: {e}", path.display())))?;
+        file.write_all(token.as_bytes())
+            .map_err(|e| ProfileError::Boot(format!("writing {}: {e}", path.display())))?;
+        // file is dropped here, closing it before we rename
     }
-    let mut file = options
-        .open(path)
+
+    // Atomically move the temp file to the target path.
+    std::fs::rename(&temp_path, path)
         .map_err(|e| ProfileError::Boot(format!("writing {}: {e}", path.display())))?;
-    file.write_all(token.as_bytes())
-        .map_err(|e| ProfileError::Boot(format!("writing {}: {e}", path.display())))?;
+
     log::info!(
         "[embed][profiles] wrote a fresh service token at {} (no gateway is served)",
         path.display()
