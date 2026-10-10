@@ -23,6 +23,12 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
       id && window.__OPENHUMAN_STORE__?.getState().socket?.byUser?.[id]?.status === 'connected'
     );
   });
+  const beforeThread = await page.evaluate(() => window.__OPENHUMAN_STORE__.getState().thread.selectedThreadId);
+  await ui.button('New Conversation').click();
+  await page.waitForFunction(before => {
+    const state=window.__OPENHUMAN_STORE__.getState().thread;
+    return state.selectedThreadId && state.selectedThreadId !== before && !state.isLoadingMessages;
+  }, beforeThread);
   mock.set(
     'llmForcedResponses',
     JSON.stringify([
@@ -55,7 +61,7 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
     ])
   );
   await ui.textbox('Message input').fill('Execute the two-step checklist and report the result.');
-  await ui.button('Send message').click();
+  await ui.textbox('Message input').press('Enter');
   await page.waitForFunction(
     () =>
       document
@@ -103,7 +109,7 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
     ])
   );
   await ui.textbox('Message input').fill('try now');
-  await ui.button('Send message').click();
+  await ui.textbox('Message input').press('Enter');
   await ui.testId('stop-generation-button').waitFor({ state: 'visible' });
   const loader = await page.evaluate(
     () => !!document.querySelector('[data-slot="aui_thread-list-item-running"]')
