@@ -2783,6 +2783,11 @@ const chatRuntimeSlice = createSlice({
         contextWindow: number;
         lastTurnInputTokens: number;
         lastTurnOutputTokens: number;
+        /**
+         * Context the last turn ended with (one request, not the turn's summed
+         * spend). `0`/absent from an older core: fall back to the turn totals.
+         */
+        lastTurnContextTokens?: number;
         subAgents?: Array<{
           agentId: string;
           inputTokens: number;
