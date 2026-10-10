@@ -147,7 +147,12 @@ impl Guard {
 
     /// What a driver-fenced write's refusal means: a [`ErrorKind::Fenced`]
     /// becomes the latched fence's error; anything else passes through.
-    async fn settle<T>(&self, lease: &LeaseFence, op: &'static str, outcome: Result<T>) -> Result<T> {
+    async fn settle<T>(
+        &self,
+        lease: &LeaseFence,
+        op: &'static str,
+        outcome: Result<T>,
+    ) -> Result<T> {
         match outcome {
             Err(error) if error.kind() == ErrorKind::Fenced => {
                 Err(self.fences.driver_refused(lease, op).await)
@@ -226,11 +231,19 @@ impl DocumentStore for FencedDocuments {
         doc: Value,
         precondition: Precondition,
     ) -> Result<Version> {
-        fenced_write!(self, "documents.put", documents.put(collection, id, doc, precondition))
+        fenced_write!(
+            self,
+            "documents.put",
+            documents.put(collection, id, doc, precondition)
+        )
     }
 
     async fn delete(&self, collection: &str, id: &str, precondition: Precondition) -> Result<bool> {
-        fenced_write!(self, "documents.delete", documents.delete(collection, id, precondition))
+        fenced_write!(
+            self,
+            "documents.delete",
+            documents.delete(collection, id, precondition)
+        )
     }
 
     async fn query(&self, collection: &str, query: &Query) -> Result<Page<Versioned<Value>>> {
@@ -242,7 +255,11 @@ impl DocumentStore for FencedDocuments {
     }
 
     async fn delete_where(&self, collection: &str, filter: &Filter) -> Result<u64> {
-        fenced_write!(self, "documents.delete_where", documents.delete_where(collection, filter))
+        fenced_write!(
+            self,
+            "documents.delete_where",
+            documents.delete_where(collection, filter)
+        )
     }
 
     async fn claim(
@@ -252,7 +269,11 @@ impl DocumentStore for FencedDocuments {
         sort: &[Sort],
         patch: &Value,
     ) -> Result<Option<Versioned<Value>>> {
-        fenced_write!(self, "documents.claim", documents.claim(collection, filter, sort, patch))
+        fenced_write!(
+            self,
+            "documents.claim",
+            documents.claim(collection, filter, sort, patch)
+        )
     }
 
     async fn atomic_batch(&self, ops: Vec<WriteOp>) -> Result<Vec<WriteResult>> {
@@ -264,7 +285,11 @@ impl DocumentStore for FencedDocuments {
     }
 
     async fn drop_collection(&self, collection: &str) -> Result<()> {
-        fenced_write!(self, "documents.drop_collection", documents.drop_collection(collection))
+        fenced_write!(
+            self,
+            "documents.drop_collection",
+            documents.drop_collection(collection)
+        )
     }
 }
 
@@ -288,7 +313,11 @@ impl StreamStore for FencedStreams {
     }
 
     async fn append_batch(&self, stream: &str, values: Vec<Value>) -> Result<u64> {
-        fenced_write!(self, "streams.append_batch", streams.append_batch(stream, values))
+        fenced_write!(
+            self,
+            "streams.append_batch",
+            streams.append_batch(stream, values)
+        )
     }
 
     async fn read_window(&self, stream: &str, from: u64, limit: usize) -> Result<Vec<StreamEntry>> {
@@ -300,7 +329,11 @@ impl StreamStore for FencedStreams {
     }
 
     async fn truncate_before(&self, stream: &str, offset: u64) -> Result<u64> {
-        fenced_write!(self, "streams.truncate_before", streams.truncate_before(stream, offset))
+        fenced_write!(
+            self,
+            "streams.truncate_before",
+            streams.truncate_before(stream, offset)
+        )
     }
 
     async fn delete_stream(&self, stream: &str) -> Result<bool> {

@@ -345,9 +345,10 @@ async fn memory_driver_refuses_a_write_after_a_takeover_the_check_missed() {
 async fn sqlite_driver_refuses_a_write_after_a_takeover_the_check_missed() {
     let dir = tempfile::tempdir().unwrap();
     let url = format!("sqlite:{}", dir.path().join("fenced.db").display());
-    let backend = tinystoragedrivers::open(&tinystoragedrivers::StorageConfig::parse(&url).unwrap())
-        .await
-        .unwrap();
+    let backend =
+        tinystoragedrivers::open(&tinystoragedrivers::StorageConfig::parse(&url).unwrap())
+            .await
+            .unwrap();
     driver_refuses_the_write_the_host_check_admitted(backend).await;
 }
 
