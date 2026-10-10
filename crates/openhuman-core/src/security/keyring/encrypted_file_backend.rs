@@ -436,6 +436,14 @@ impl EncryptedFileBackend {
     }
 
     fn read_map(&self, key: &[u8; KEY_LEN]) -> Result<HashMap<String, String>, KeyringError> {
+        self.read_map_with_cleanup(key, |map| self.cleanup_matching_legacy_files(map))
+    }
+
+    fn read_map_with_cleanup(
+        &self,
+        key: &[u8; KEY_LEN],
+        cleanup: impl FnOnce(&HashMap<String, String>) -> Result<(), KeyringError>,
+    ) -> Result<HashMap<String, String>, KeyringError> {
         if !self.path.exists() {
             return self.migrate_legacy_dev_keychain(key);
         }
@@ -452,7 +460,19 @@ impl EncryptedFileBackend {
         match crypto::chacha20_decrypt(key, &blob) {
             Ok(plaintext) => match serde_json::from_slice::<HashMap<String, String>>(&plaintext) {
                 Ok(map) => {
-                    self.cleanup_matching_legacy_files(&map)?;
+                    if let Err(error) = cleanup(&map) {
+                        match error {
+                            KeyringError::MigrationDeleteFailed { .. } => {
+                                // The encrypted copy is valid. Keep serving it
+                                // while leaving the plaintext source for a
+                                // later cleanup attempt or manual recovery.
+                                log::warn!(
+                                    "[keyring:encrypted_file] could not remove verified legacy copy: {error}"
+                                );
+                            }
+                            _ => return Err(error),
+                        }
+                    }
                     Ok(map)
                 }
                 Err(e) => {

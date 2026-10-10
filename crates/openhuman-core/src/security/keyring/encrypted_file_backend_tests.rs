@@ -53,6 +53,31 @@ fn encrypted_store_removes_only_matching_legacy_plaintext() {
 }
 
 #[test]
+fn encrypted_store_remains_readable_when_verified_plaintext_cannot_be_deleted() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = EncryptedFileBackend::new(dir.path());
+    let key = [0x42; KEY_LEN];
+    let expected = legacy_secret_map();
+    backend.write_map(&key, &expected).unwrap();
+    let legacy_path = dir.path().join(LEGACY_DEV_KEYCHAIN);
+    std::fs::write(&legacy_path, serde_json::to_vec(&expected).unwrap()).unwrap();
+
+    let actual = backend
+        .read_map_with_cleanup(&key, |_| {
+            Err(KeyringError::MigrationDeleteFailed {
+                path: legacy_path.display().to_string(),
+                source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "test denial"),
+            })
+        })
+        .unwrap();
+    assert_eq!(actual, expected);
+    assert!(
+        legacy_path.exists(),
+        "plaintext must be preserved for recovery"
+    );
+}
+
+#[test]
 fn older_plaintext_copy_is_removed_only_when_it_matches() {
     let dir = tempfile::tempdir().unwrap();
     let backend = EncryptedFileBackend::new(dir.path());

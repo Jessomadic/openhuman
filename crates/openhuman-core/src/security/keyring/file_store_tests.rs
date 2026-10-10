@@ -8,6 +8,24 @@ use super::{
     write_atomic,
 };
 
+#[cfg(unix)]
+#[test]
+fn durable_replace_syncs_parent_after_rename_and_propagates_failure() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let source = dir.path().join("staged");
+    let destination = dir.path().join("secrets.enc");
+    std::fs::write(&source, b"encrypted").unwrap();
+
+    let error = super::replace_durably_with_sync(&source, &destination, |parent| {
+        assert_eq!(parent, dir.path());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"encrypted");
+        Err(std::io::Error::other("directory sync failed"))
+    })
+    .unwrap_err();
+    assert_eq!(error.to_string(), "directory sync failed");
+    assert!(!source.exists());
+}
+
 #[test]
 fn write_atomic_replaces_contents() {
     let dir = tempfile::TempDir::new().unwrap();

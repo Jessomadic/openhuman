@@ -104,12 +104,14 @@ pub fn lock_path_for(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-/// Replace `path`'s contents with `bytes`, atomically and `0600`.
+/// Replace `path`'s contents with `bytes`, atomically, durably, and `0600`.
 ///
 /// Staged through a temp file unique to this process and call, then renamed —
 /// so a concurrent writer can never observe, or rename into place, a partially
-/// written buffer. The temp file is removed if the rename fails, leaving no
-/// debris behind for the next run to trip over.
+/// written buffer. The temp file is synced before publication, and the rename
+/// is made durable before returning, so a verified encrypted migration can
+/// then remove its plaintext source. The temp file is removed if publication
+/// fails, leaving no debris behind for the next run to trip over.
 ///
 /// # Errors
 ///
@@ -150,7 +152,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), KeyringError> {
         ))
     })?;
 
-    std::fs::rename(&tmp_path, path).map_err(|e| {
+    replace_durably(&tmp_path, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp_path);
         KeyringError::Backend(format!(
             "could not replace the keyring file at {}: {e}",
@@ -158,6 +160,61 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), KeyringError> {
         ))
     })
 }
+
+/// Publish the synced file and persist its directory entry before callers may
+/// remove a plaintext migration source. Unix requires syncing the parent
+/// directory after rename; Windows can request a write-through move.
+#[cfg(unix)]
+fn replace_durably(source: &Path, destination: &Path) -> std::io::Result<()> {
+    replace_durably_with_sync(source, destination, |parent| File::open(parent)?.sync_all())
+}
+
+#[cfg(unix)]
+fn replace_durably_with_sync(
+    source: &Path,
+    destination: &Path,
+    sync_parent: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    std::fs::rename(source, destination)?;
+    let parent = destination.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "keyring path has no parent",
+        )
+    })?;
+    sync_parent(parent)
+}
+
+#[cfg(windows)]
+fn replace_durably(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // A directory handle cannot be flushed portably on Windows. The
+    // write-through move is the platform's durability barrier for the rename.
+    let moved = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+compile_error!("keyring durable replacement requires a platform implementation");
 
 /// Reserve a fresh temp file, advancing past leftovers from crashed writers.
 fn reserve_temp_file(
