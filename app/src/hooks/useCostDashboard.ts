@@ -9,6 +9,8 @@ export interface CostDashboardModelStats {
   cost_usd: number;
   total_tokens: number;
   request_count: number;
+  /** Requests with no known cost; absent from an older core. */
+  unpriced_request_count?: number;
   provider: string | null;
   percent_of_total: number;
 }
