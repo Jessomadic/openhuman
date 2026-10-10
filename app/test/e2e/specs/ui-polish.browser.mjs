@@ -1,4 +1,4 @@
-/* global window, document, getComputedStyle */
+/* global window, document, getComputedStyle, location */
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { URL } from 'node:url';
@@ -23,14 +23,10 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
       id && window.__OPENHUMAN_STORE__?.getState().socket?.byUser?.[id]?.status === 'connected'
     );
   });
-  const beforeThread = await page.evaluate(
-    () => window.__OPENHUMAN_STORE__.getState().thread.selectedThreadId
-  );
-  await ui.button('New Conversation').click();
-  await page.waitForFunction(before => {
-    const state = window.__OPENHUMAN_STORE__.getState().thread;
-    return state.selectedThreadId && state.selectedThreadId !== before && !state.isLoadingMessages;
-  }, beforeThread);
+  await page.waitForFunction(() => {
+    const state=window.__OPENHUMAN_STORE__.getState().thread;
+    return state.selectedThreadId && !state.isLoadingThreads && !state.isLoadingMessages && location.hash.endsWith(state.selectedThreadId);
+  });
   mock.set(
     'llmForcedResponses',
     JSON.stringify([
