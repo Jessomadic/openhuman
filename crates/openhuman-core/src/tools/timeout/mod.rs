@@ -248,7 +248,7 @@ pub async fn output_unbounded(
     let pid = child.id();
     let reaped = process_cleanup::Reaped::register();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
-    let waiter = tokio::spawn(async move {
+    let waiter = crate::runtime::spawn_scoped(async move {
         let _reaped = reaped;
         collect_command_output(child, cancellation).await
     });
