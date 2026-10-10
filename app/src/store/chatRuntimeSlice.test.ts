@@ -1081,6 +1081,20 @@ describe('detached approvals', () => {
       expect(shown(store)).toBeUndefined();
     });
 
+    it("never displaces the parent turn's waiting approval with a detached one", () => {
+      const store = makeStore();
+      store.dispatch(
+        setPendingApprovalForThread({
+          threadId: 't1',
+          approval: { requestId: 'req-main', toolName: 'shell', message: 'Run ls' },
+        })
+      );
+      store.dispatch(setPendingApprovalForThread({ threadId: 't1', approval: detached }));
+      expect(shown(store)).toBe('req-main');
+      store.dispatch(clearTurnApprovalForThread({ threadId: 't1' }));
+      expect(shown(store)).toBe('req-sub');
+    });
+
     it("shows the parent turn's own approval first and keeps the detached one queued", () => {
       const store = makeStore();
       store.dispatch(setPendingApprovalForThread({ threadId: 't1', approval: detached }));
