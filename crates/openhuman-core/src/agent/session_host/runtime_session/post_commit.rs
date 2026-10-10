@@ -109,6 +109,145 @@ pub(super) fn elapsed_ms(since: Instant) -> u64 {
     since.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
+/// Who committed the turn, for the post-turn hooks and log correlation.
+pub(super) struct TurnIdentity {
+    pub(super) session_id: String,
+    pub(super) agent_id: String,
+    pub(super) channel: String,
+}
+
+/// The session's `after_commit` hook body, in the order described in the
+/// module docs: caller-visible state, then `TurnCompleted`, then the cheap
+/// finalize steps, with goal accounting deferred to a fenced background task.
+pub(super) async fn finalize_committed_turn(
+    state: &std::sync::Mutex<super::OpenHumanSessionState>,
+    post_turn_hooks: &[std::sync::Arc<dyn crate::agent::hooks::PostTurnHook>],
+    identity: TurnIdentity,
+    receipt: tinyagents_runtime::CommitReceipt<crate::agent::tinyagents::host::OpenHumanRunContext>,
+) {
+    let commit_started = std::time::Instant::now();
+    let output = receipt.outcome.output.clone().unwrap_or_default();
+    // Skips compaction checkpoints (user-role, not the user's words).
+    let input =
+        crate::agent::tinyagents::last_user_message(&receipt.outcome.history)
+            .map(crate::agent::message_convert::user_text_with_markers)
+            .unwrap_or_default();
+    let sidecar = receipt
+        .options
+        .context
+        .session_sidecar
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    // This turn's model calls, not every assistant row of the
+    // whole conversation (`turn_iterations`).
+    let iterations = turn_iterations(
+        sidecar.model_calls,
+        &receipt.outcome.history,
+    );
+    tracing::debug!(
+        session_id = %identity.session_id,
+        iterations,
+        commit_ms = ?sidecar
+            .driver_finished_at
+            .map(|at| commit_started.saturating_duration_since(at).as_millis() as u64),
+        "[session-runtime] post-commit: durable commit done; finalizing turn"
+    );
+    let usage = super::holistic_last_turn_usage(&sidecar);
+    let interrupted = sidecar.hit_cap || receipt.outcome.interrupted;
+    let tool_calls = sidecar
+        .tool_outcomes
+        .iter()
+        .map(|outcome| crate::agent::hooks::ToolCallRecord {
+            name: outcome.name.clone(),
+            arguments: outcome.arguments.clone(),
+            success: outcome.success,
+            output_summary: crate::agent::hooks::sanitize_tool_output(
+                &outcome.content,
+                &outcome.name,
+                outcome.success,
+            ),
+            duration_ms: outcome.duration_ms,
+        })
+        .collect::<Vec<_>>();
+    let turn_duration_ms = sidecar
+        .duration
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or_default();
+    // State the caller reads as soon as `run_turn` returns.
+    let prelude = {
+        let mut state = state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.last_turn_hit_cap = interrupted;
+        state.last_turn_usage = Some(usage);
+        state.prelude.clone()
+    };
+    // Completion first: `TurnCompleted` is the progress
+    // bridge's drain fence, and nothing below gates it. Goal
+    // accounting runs after it in the background; the next
+    // turn awaits it before reading the goal.
+    let goal_accounting = {
+        let prelude = prelude.clone();
+        let thread_id = receipt.options.context.thread_id.clone();
+        let sidecar = sidecar.clone();
+        async move {
+            let Some(prelude) = prelude else {
+                return;
+            };
+            let started = std::time::Instant::now();
+            super::account_committed_turn_against_goal(
+                &prelude.workspace_dir,
+                thread_id.as_deref(),
+                &sidecar,
+            )
+            .await;
+            tracing::debug!(
+                elapsed_ms = elapsed_ms(started),
+                "[session-runtime] post-commit: goal accounting done"
+            );
+        }
+    };
+    let (_, pending) = complete_then_defer(
+        super::progress::send_receipt_progress(&receipt, &input, &output, iterations),
+        goal_accounting,
+    )
+    .await;
+    if let Some(prelude) = prelude {
+        let started = std::time::Instant::now();
+        prelude.finalize_after_durable_commit(&receipt).await;
+        tracing::debug!(
+            elapsed_ms = elapsed_ms(started),
+            "[session-runtime] post-commit: finalize hooks done"
+        );
+    }
+    {
+        let mut state = state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.last_commit = Some(receipt);
+        state.pending_post_commit = Some(pending);
+    }
+    crate::agent::hooks::fire_hooks(
+        post_turn_hooks,
+        crate::agent::hooks::TurnContext {
+            user_message: input,
+            assistant_response: output,
+            tool_calls,
+            turn_duration_ms,
+            session_id: Some(identity.session_id.clone()),
+            agent_id: Some(identity.agent_id),
+            entrypoint: Some(identity.channel),
+            iteration_count: iterations as usize,
+        },
+    );
+    tracing::debug!(
+        session_id = %identity.session_id,
+        elapsed_ms = elapsed_ms(commit_started),
+        "[session-runtime] post-commit: after_commit hook done"
+    );
+}
+
 #[cfg(test)]
 #[path = "post_commit_tests.rs"]
 mod tests;
