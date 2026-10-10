@@ -68,7 +68,7 @@ impl SpanCollector {
                     .clone()
                     .or_else(|| state.last_iteration_span_id.clone());
                 let clock = state.call_clock;
-                let fallback = state.last_model.clone();
+                let fallback = state.last_raw_model.clone();
                 match iteration_id {
                     Some(id) => {
                         let idx = self.span_index_by_id(&id);
@@ -94,7 +94,7 @@ impl SpanCollector {
                     parent,
                     self.current_iteration_index,
                     self.call_clock,
-                    self.last_model.clone(),
+                    self.last_raw_model.clone(),
                 )
             }
         };
@@ -118,19 +118,30 @@ impl SpanCollector {
             Some(id) => match self.subagent_state_mut(id) {
                 Some(state) => {
                     state.call_clock = next_clock;
-                    state.last_model = Some(model.clone());
+                    state.last_raw_model = Some(model.clone());
                     std::mem::take(&mut state.first_deltas)
                 }
                 None => Default::default(),
             },
             None => {
                 self.call_clock = next_clock;
-                self.last_model = Some(model.clone());
+                self.last_raw_model = Some(model.clone());
                 std::mem::take(&mut self.first_deltas)
             }
         };
 
         let labeled_model = generation::model_label(provider_id, &model);
+        // Remember which model this scope is on so the tool spans it requests
+        // name it (correlating tool errors to models without a join). The
+        // label already drops an empty provider (the journal replay has none).
+        match subagent_task_id {
+            Some(id) => {
+                if let Some(state) = self.subagent_state_mut(id) {
+                    state.last_model = Some(labeled_model.clone());
+                }
+            }
+            None => self.last_model = Some(labeled_model.clone()),
+        }
         let pricing = crate::agent::cost::lookup_known_pricing(&model);
         let usage = generation::normalize_usage(
             input_tokens,
