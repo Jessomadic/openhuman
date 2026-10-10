@@ -69,7 +69,7 @@ fn scopes_do_not_see_each_others_artifacts() {
 }
 
 #[test]
-fn the_legacy_files_are_imported_once_and_a_delete_sticks() {
+fn the_legacy_files_are_imported_without_overwriting() {
     let dir = tempfile::tempdir().unwrap();
     let a = dir.path().join("a");
     std::fs::create_dir_all(&a).unwrap();
@@ -79,24 +79,60 @@ fn the_legacy_files_are_imported_once_and_a_delete_sticks() {
     )
     .unwrap();
     std::fs::write(a.join("args.json"), r#"{"x":2}"#).unwrap();
+    let b = dir.path().join("b");
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::write(
+        b.join("meta.json"),
+        serde_json::to_string(&meta("b", 2, None)).unwrap(),
+    )
+    .unwrap();
     let bad = dir.path().join("bad");
     std::fs::create_dir_all(&bad).unwrap();
     std::fs::write(bad.join("meta.json"), "{nope").unwrap();
+    std::fs::create_dir_all(dir.path().join("empty")).unwrap();
 
     let docs = docs_in(&MemoryStorage::new(), "local");
-    // A record created before the import is not overwritten.
+    // A record and arguments written before the import are not overwritten.
     let mut existing = meta("a", 1, Some("t"));
     existing.title = "kept".into();
     docs.put_meta(&existing).unwrap();
-    assert_eq!(docs.import_legacy(dir.path()).unwrap(), 1);
+    docs.put_args("a", &serde_json::json!({ "x": 9 })).unwrap();
+    assert_eq!(docs.import_legacy(dir.path()).unwrap(), 1, "only b is new");
     assert_eq!(docs.get_meta("a").unwrap().unwrap().title, "kept");
-    assert_eq!(docs.get_args("a").unwrap().unwrap()["x"], 2);
+    assert_eq!(docs.get_args("a").unwrap().unwrap()["x"], 9);
+    assert!(docs.get_meta("b").unwrap().is_some());
 
-    // Deleted afterwards, it is not imported again by a later run.
-    assert!(docs.delete("a").unwrap());
+    // Repeating it creates nothing.
     assert_eq!(docs.import_legacy(dir.path()).unwrap(), 0);
-    assert!(docs.get_meta("a").unwrap().is_none());
     assert_eq!(docs.import_legacy(&dir.path().join("none")).unwrap(), 0);
+}
+
+#[test]
+fn a_legacy_folder_that_cannot_be_read_fails_the_import() {
+    let dir = tempfile::tempdir().unwrap();
+    let not_a_dir = dir.path().join("artifacts");
+    std::fs::write(&not_a_dir, "a file").unwrap();
+    let docs = docs_in(&MemoryStorage::new(), "local");
+    assert!(docs.import_legacy(&not_a_dir).is_err());
+
+    // An unreadable sidecar (here a directory named args.json) fails it too.
+    let a = dir.path().join("legacy/a");
+    std::fs::create_dir_all(a.join("args.json")).unwrap();
+    std::fs::write(
+        a.join("meta.json"),
+        serde_json::to_string(&meta("a", 1, None)).unwrap(),
+    )
+    .unwrap();
+    assert!(docs.import_legacy(&dir.path().join("legacy")).is_err());
+}
+
+#[test]
+fn delete_removes_the_record_before_its_arguments() {
+    let docs = docs_in(&MemoryStorage::new(), "local");
+    docs.put_args("orphan", &serde_json::json!({})).unwrap();
+    // No record: reported absent, and the orphaned arguments are swept.
+    assert!(!docs.delete("orphan").unwrap());
+    assert!(docs.get_args("orphan").unwrap().is_none());
 }
 
 #[tokio::test]
@@ -126,9 +162,15 @@ async fn the_store_dispatches_to_documents_when_a_backend_is_pinned() {
     assert_eq!(read_artifact_args(ws, "a").await.unwrap()["n"], 1);
     assert!(read_artifact_args(ws, "b").await.is_err());
 
+    std::fs::create_dir_all(ws.join("artifacts/a")).unwrap();
+    std::fs::write(ws.join("artifacts/a/meta.json"), "{}").unwrap();
     delete_artifact(ws, FileRoots::from(ws.to_path_buf()), "a")
         .await
         .unwrap();
+    let missing = delete_artifact(ws, FileRoots::from(ws.to_path_buf()), "a")
+        .await
+        .unwrap_err();
+    assert!(missing.contains("not found"), "{missing}");
     super::TEST_OVERRIDE.with(|slot| *slot.borrow_mut() = None);
 
     assert!(docs.get_meta("a").unwrap().is_none());
