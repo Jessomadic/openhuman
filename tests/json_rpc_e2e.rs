@@ -12455,6 +12455,9 @@ async fn json_rpc_threads_token_usage_reads_persisted_thread_totals() {
     assert_eq!(data["turn_count"], 2);
     assert_eq!(data["last_turn_input_tokens"], 350);
     assert_eq!(data["last_turn_output_tokens"], 80);
+    // These records predate the per-call fields and carry no call count, so
+    // the gauge numerator falls back to the one-call reading: 350 + 80.
+    assert_eq!(data["last_turn_context_tokens"], 430);
     assert_eq!(data["model"], "reasoning-v1");
     // reasoning-v1 resolves to a 1M context window.
     assert_eq!(data["context_window"], 1_000_000);
