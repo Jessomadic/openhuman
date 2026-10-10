@@ -15,23 +15,23 @@ The tree also carries a mobile shell: `AppRoutesIOS.tsx`, `pages/ios/`, the `ser
 
 ## Quick reference
 
-| Section                                      | Covers                                                          |
-| -------------------------------------------- | --------------------------------------------------------------- |
-| [Architecture](#architecture-overview)       | Provider chain, build, layout, conventions                      |
-| [State management](#state-management)        | Redux Toolkit slices, selectors, persistence                    |
-| [Services layer](#services-layer)            | `apiClient`, `socketService`, `coreRpcClient`                   |
-| [Providers](#providers)                      | `ThemeProvider`, `CoreState`, `Socket`, `ChatRuntime` providers |
-| [Pages and routing](#pages-and-routing)      | `HashRouter`, route guards, main routes                         |
-| [Components](#components)                    | UI / settings component patterns                                |
-| [Hooks and utilities](#hooks-and-utilities)   | Shared hooks, helpers, config                                   |
+| Section                                     | Covers                                                          |
+| ------------------------------------------- | --------------------------------------------------------------- |
+| [Architecture](#architecture-overview)      | Provider chain, build, layout, conventions                      |
+| [State management](#state-management)       | Redux Toolkit slices, selectors, persistence                    |
+| [Services layer](#services-layer)           | `apiClient`, `socketService`, `coreRpcClient`                   |
+| [Providers](#providers)                     | `ThemeProvider`, `CoreState`, `Socket`, `ChatRuntime` providers |
+| [Pages and routing](#pages-and-routing)     | `HashRouter`, route guards, main routes                         |
+| [Components](#components)                   | UI / settings component patterns                                |
+| [Hooks and utilities](#hooks-and-utilities) | Shared hooks, helpers, config                                   |
 
 ## Scale
 
-| Metric                                  | How to read it                                                 |
-| --------------------------------------- | -------------------------------------------------------------- |
-| TypeScript / TSX files under `app/src/` | `find app/src -name '*.ts' -o -name '*.tsx' \| wc -l`           |
-| App-level hooks                         | `ls app/src/hooks/*.ts app/src/hooks/*.tsx \| wc -l`            |
-| Test runner                             | Vitest (`app/test/vitest.config.ts`)                           |
+| Metric                                  | How to read it                                        |
+| --------------------------------------- | ----------------------------------------------------- |
+| TypeScript / TSX files under `app/src/` | `find app/src -name '*.ts' -o -name '*.tsx' \| wc -l` |
+| App-level hooks                         | `ls app/src/hooks/*.ts app/src/hooks/*.tsx \| wc -l`  |
+| Test runner                             | Vitest (`app/test/vitest.config.ts`)                  |
 
 ## Directory layout
 
@@ -69,7 +69,7 @@ OpenHuman's desktop UI is a React 19 app (`app/src/`) that:
 | File                    | Purpose                                                                          |
 | ----------------------- | -------------------------------------------------------------------------------- |
 | `app/src/main.tsx`      | React root, polyfills, Sentry boundary, store, global styles                     |
-| `app/src/App.tsx`       | Provider chain (see below) + desktop/mobile shells, Settings       |
+| `app/src/App.tsx`       | Provider chain (see below) + desktop/mobile shells, Settings                     |
 | `app/src/AppRoutes.tsx` | `HashRouter` routes, `ProtectedRoute` / `PublicRoute` / `DefaultRedirect` guards |
 
 ### Provider chain
@@ -78,20 +78,20 @@ OpenHuman's desktop UI is a React 19 app (`app/src/`) that:
 
 _Generated from `app/src/App.tsx` by `scripts/generate-architecture-docs.mjs`. Do not edit by hand — run `pnpm docs:generate` to refresh._
 
-| # | Component | Role |
-| --- | --- | --- |
-| 1 | `Sentry.ErrorBoundary` | Crash boundary; renders ErrorFallbackScreen |
-| 2 | `Provider` | Redux store; enables useAppSelector / dispatch app-wide |
-| 3 | `PersistGate` | Holds UI until persisted Redux slices rehydrate |
-| 4 | `ThemeProvider` | Theme tokens and dark-mode handling |
-| 5 | `I18nProvider` | Localization context consumed via useT |
-| 6 | `BootCheckGate` | Blocks render until the core boot snapshot resolves |
-| 7 | `CoreStateProvider` | Core app snapshot: auth, session, onboarding state |
-| 8 | `SocketProvider` | Core socket.io events; desktop only (mobile uses the TunnelTransport relay) |
-| 9 | `ChatRuntimeProvider` | Chat runtime events, tool timeline, and approvals |
-| 10 | `Router` | HashRouter navigation for all routes |
-| 11 | `CommandProvider` | Command palette context |
-| 12 | `ServiceBlockingGate` | Blocks the shell until required services are configured |
+| #   | Component              | Role                                                                        |
+| --- | ---------------------- | --------------------------------------------------------------------------- |
+| 1   | `Sentry.ErrorBoundary` | Crash boundary; renders ErrorFallbackScreen                                 |
+| 2   | `Provider`             | Redux store; enables useAppSelector / dispatch app-wide                     |
+| 3   | `PersistGate`          | Holds UI until persisted Redux slices rehydrate                             |
+| 4   | `ThemeProvider`        | Theme tokens and dark-mode handling                                         |
+| 5   | `I18nProvider`         | Localization context consumed via useT                                      |
+| 6   | `BootCheckGate`        | Blocks render until the core boot snapshot resolves                         |
+| 7   | `CoreStateProvider`    | Core app snapshot: auth, session, onboarding state                          |
+| 8   | `SocketProvider`       | Core socket.io events; desktop only (mobile uses the TunnelTransport relay) |
+| 9   | `ChatRuntimeProvider`  | Chat runtime events, tool timeline, and approvals                           |
+| 10  | `Router`               | HashRouter navigation for all routes                                        |
+| 11  | `CommandProvider`      | Command palette context                                                     |
+| 12  | `ServiceBlockingGate`  | Blocks the shell until required services are configured                     |
 
 <!-- END GENERATED: provider-chain -->
 
@@ -160,31 +160,31 @@ The application uses Redux Toolkit with Redux-Persist. There is no single root p
 
 Authoritative list = the `reducer` map in `store/index.ts`. One-line purposes:
 
-| Slice                 | Purpose                                                                          | Persisted?                                                      |
-| --------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `accounts`            | Connected web-app accounts + rail ordering                                        | `accounts`, `order`, `lastActiveAccountId` (not the active id)  |
-| `announcement`        | Harness-init announcement banner, seen ids                                        | `shownIds`                                                      |
-| `channelConnections`  | Messaging channel connections (WhatsApp, Slack, …)                                | connections + migration/default-channel fields                  |
-| `chatRuntime`         | Streaming buffers, tool timelines, inference status, artifacts                    | only `artifactsByThread` (ready snapshots)                       |
-| `connectivity`        | navigator.onLine, core health, renderer to core socket, core to hosted link       | no                                                               |
-| `coreMode`            | Pre-login core mode selection (embedded / self-hosted / cloud)                    | `mode` (plain localStorage)                                      |
-| `followupSuggestions` | Follow-up chips for each thread's latest settled turn                             | no (in-memory only)                                              |
-| `githubStar`          | Whether the user dismissed the in-app "Star us on GitHub" CTA                     | `dismissed`                                                      |
-| `layout`              | Two-pane layout geometry (sidebar visibility, dragged widths)                     | `panels`                                                         |
-| `locale`              | UI language                                                                        | `current` (plain localStorage)                                  |
-| `mascot`              | Mascot appearance / voice selection                                               | `color`, `voiceId`, `customMascotGifUrl`, `selectedMascotId`    |
-| `notifications`       | Notification items + preferences                                                  | `items`, `preferences`                                          |
-| `persona`             | Cosmetic persona display name + description (SOUL.md lives in the core)           | `displayName`, `description`                                    |
-| `ptt`                 | Push-to-talk hotkey + session prefs (`isHeld` deliberately excluded)              | `shortcut`, `speakReplies`, `showOverlay`                        |
-| `queue`               | The core's per-thread run queue plus the composer's pending follow-up messages    | no (in-memory only)                                              |
-| `runMode`             | Per-thread plan/build run mode                                                    | no (in-memory only)                                              |
-| `socket`              | Per-user socket connection status / socket ids                                    | no (reconnects on boot)                                          |
-| `theme`               | Theme mode, font size, message view mode, custom themes                           | plain localStorage                                               |
-| `thread`              | Chat thread list + per-thread message caches                                      | only `selectedThreadId`                                          |
-| `threadGoal`          | Durable per-thread goal state                                                     | no (in-memory only)                                              |
-| `threadTodos`         | Live per-thread todo list                                                         | no (in-memory only)                                              |
-| `userErrors`          | User-actionable runtime errors                                            | no (in-memory only)                                              |
-| `walletPreferences`   | Hidden-token preferences for the wallet view                                      | `hiddenTokenKeys`                                                |
+| Slice                 | Purpose                                                                        | Persisted?                                                     |
+| --------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| `accounts`            | Connected web-app accounts + rail ordering                                     | `accounts`, `order`, `lastActiveAccountId` (not the active id) |
+| `announcement`        | Harness-init announcement banner, seen ids                                     | `shownIds`                                                     |
+| `channelConnections`  | Messaging channel connections (WhatsApp, Slack, …)                             | connections + migration/default-channel fields                 |
+| `chatRuntime`         | Streaming buffers, tool timelines, inference status, artifacts                 | only `artifactsByThread` (ready snapshots)                     |
+| `connectivity`        | navigator.onLine, core health, renderer to core socket, core to hosted link    | no                                                             |
+| `coreMode`            | Pre-login core mode selection (embedded / self-hosted / cloud)                 | `mode` (plain localStorage)                                    |
+| `followupSuggestions` | Follow-up chips for each thread's latest settled turn                          | no (in-memory only)                                            |
+| `githubStar`          | Whether the user dismissed the in-app "Star us on GitHub" CTA                  | `dismissed`                                                    |
+| `layout`              | Two-pane layout geometry (sidebar visibility, dragged widths)                  | `panels`                                                       |
+| `locale`              | UI language                                                                    | `current` (plain localStorage)                                 |
+| `mascot`              | Mascot appearance / voice selection                                            | `color`, `voiceId`, `customMascotGifUrl`, `selectedMascotId`   |
+| `notifications`       | Notification items + preferences                                               | `items`, `preferences`                                         |
+| `persona`             | Cosmetic persona display name + description (SOUL.md lives in the core)        | `displayName`, `description`                                   |
+| `ptt`                 | Push-to-talk hotkey + session prefs (`isHeld` deliberately excluded)           | `shortcut`, `speakReplies`, `showOverlay`                      |
+| `queue`               | The core's per-thread run queue plus the composer's pending follow-up messages | no (in-memory only)                                            |
+| `runMode`             | Per-thread plan/build run mode                                                 | no (in-memory only)                                            |
+| `socket`              | Per-user socket connection status / socket ids                                 | no (reconnects on boot)                                        |
+| `theme`               | Theme mode, font size, message view mode, custom themes                        | plain localStorage                                             |
+| `thread`              | Chat thread list + per-thread message caches                                   | only `selectedThreadId`                                        |
+| `threadGoal`          | Durable per-thread goal state                                                  | no (in-memory only)                                            |
+| `threadTodos`         | Live per-thread todo list                                                      | no (in-memory only)                                            |
+| `userErrors`          | User-actionable runtime errors                                                 | no (in-memory only)                                            |
+| `walletPreferences`   | Hidden-token preferences for the wallet view                                   | `hiddenTokenKeys`                                              |
 
 Ephemeral chat state (streaming buffers, tool timelines) must not survive a restart: the UI would try to resume a turn whose live driver is gone. The one exception, agent-generated artifacts, goes through the `artifactsReadyOnlyTransform` in `store/index.ts` (pure logic in `store/artifactsPersistFilter.ts`).
 
@@ -349,7 +349,7 @@ disagree about the same setting.
 
 | Module                  | Role                                                                                                      |
 | ----------------------- | --------------------------------------------------------------------------------------------------------- |
-| `ChatMascotContext.tsx` | Shared dock/stage refs and the send binding. Every value is stable: see the re-render note below.        |
+| `ChatMascotContext.tsx` | Shared dock/stage refs and the send binding. Every value is stable: see the re-render note below.         |
 | `ChatMascotDock.tsx`    | The small mascot standing on the composer's input box. An anchor + hit area; it draws nothing.            |
 | `ChatMascotStage.tsx`   | The scaled-up voice surface: `MicComposer`, input-device selector, speak-replies switch, collapse button. |
 | `ChatMascotOverlay.tsx` | The single Rive instance, moved between dock and stage with a `transform`.                                |
@@ -419,20 +419,20 @@ through the app's shadcn configuration (`base-nova`), with OpenHuman tokens,
 translations and product slots. Registry components are editable source; they
 are not separately exported components from the npm runtime package.
 
-| Surface | assistant-ui owner | OpenHuman adapter |
-| --- | --- | --- |
-| Message list, scrolling and scroll-anchor pill | `ThreadPrimitive.Viewport`, `Messages`, `ScrollToBottom` | Real thread identity through `adapters.threadList.threadId`; run-start jumps disabled to preserve readers in history |
-| Main composer, send and cancel | `ComposerPrimitive`, `LexicalComposerInput` | Draft persistence, model selection, product voice mode and core-backed file ingestion |
-| Message editing | Message-scoped `ComposerPrimitive.Root`, `Input`, `Send`, `Cancel` | Edit RPC and translated warning about subsequent turns |
-| Message actions and branches | `ActionBarPrimitive`, `BranchPickerPrimitive` | Adapter capability gates and core-backed regeneration, speech and feedback |
-| Queued follow-ups | `ComposerPrimitive.Queue`, `QueueItemPrimitive.Text`, `Remove` | Core run-queue adapter and translated registry row captions |
-| Markdown, code and citations | `MarkdownTextPrimitive` and registry elements | Source projection, app links, math and artifact access |
-| Reasoning and tool groups | `MessagePrimitive.GroupedParts`, registry tool-group/reasoning elements | Core timing and grouping interleaved reasoning with calls |
-| Tasks and subagents | Registry task-card/subagent-list, `ReadonlyThreadProvider` | Delegation state, awaiting-user replies and worktree actions |
-| Approvals, questions and plans | Registry approval-card, elicitation-form and agent-plan | Core decision RPCs, security policy and plan/workflow lifecycle |
-| Todos and goals | Registry todo-list and agent-status | Durable harness progress and remembered disclosure state |
-| Images, documents and tool results | Registry image, artifact-card, web-search, terminal-block, code-diff and web-preview | Core artifact and tool-result projection |
-| Sources, conversation map and context | Registry sources, conversation-map and context elements | Core sources, search, token usage and context breakdown RPC |
+| Surface                                        | assistant-ui owner                                                                   | OpenHuman adapter                                                                                                    |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Message list, scrolling and scroll-anchor pill | `ThreadPrimitive.Viewport`, `Messages`, `ScrollToBottom`                             | Real thread identity through `adapters.threadList.threadId`; run-start jumps disabled to preserve readers in history |
+| Main composer, send and cancel                 | `ComposerPrimitive`, `LexicalComposerInput`                                          | Draft persistence, model selection, product voice mode and core-backed file ingestion                                |
+| Message editing                                | Message-scoped `ComposerPrimitive.Root`, `Input`, `Send`, `Cancel`                   | Edit RPC and translated warning about subsequent turns                                                               |
+| Message actions and branches                   | `ActionBarPrimitive`, `BranchPickerPrimitive`                                        | Adapter capability gates and core-backed regeneration, speech and feedback                                           |
+| Queued follow-ups                              | `ComposerPrimitive.Queue`, `QueueItemPrimitive.Text`, `Remove`                       | Core run-queue adapter and translated registry row captions                                                          |
+| Markdown, code and citations                   | `MarkdownTextPrimitive` and registry elements                                        | Source projection, app links, math and artifact access                                                               |
+| Reasoning and tool groups                      | `MessagePrimitive.GroupedParts`, registry tool-group/reasoning elements              | Core timing and grouping interleaved reasoning with calls                                                            |
+| Tasks and subagents                            | Registry task-card/subagent-list, `ReadonlyThreadProvider`                           | Delegation state, awaiting-user replies and worktree actions                                                         |
+| Approvals, questions and plans                 | Registry approval-card, elicitation-form and agent-plan                              | Core decision RPCs, security policy and plan/workflow lifecycle                                                      |
+| Todos and goals                                | Registry todo-list and agent-status                                                  | Durable harness progress and remembered disclosure state                                                             |
+| Images, documents and tool results             | Registry image, artifact-card, web-search, terminal-block, code-diff and web-preview | Core artifact and tool-result projection                                                                             |
+| Sources, conversation map and context          | Registry sources, conversation-map and context elements                              | Core sources, search, token usage and context breakdown RPC                                                          |
 
 Keep runtime behavior in the library. New product functionality should use a
 runtime adapter or component slot rather than a second scroll controller,
@@ -471,29 +471,29 @@ The application uses HashRouter with protected and public route guards. Desktop 
 
 `app/src/AppRoutes.tsx` is the authoritative table and is heavily commented with the rationale for each entry. The desktop routes it declares:
 
-| Route | Renders | Guard |
-| --- | --- | --- |
-| `/` | `Welcome` | `PublicRoute` (signed in: forwards to `/home`) |
-| `/auth` | `WebCallbackPage`, the auth callback | none |
-| `/callback/:kind`, `/callback/:kind/:status` | `WebCallbackPage`, generic OAuth and provider callbacks | none |
-| `/onboarding/*` | `Onboarding` stepper | `ProtectedRoute` |
-| `/human` | `HumanPage`, the dedicated mascot stage | `ProtectedRoute` |
-| `/chat/:threadId?` | `Accounts`, the unified chat (agent plus connected web apps) | `ProtectedRoute` |
-| `/flows` | `FlowsPage` | `ProtectedRoute` |
-| `/flows/draft` | `FlowCanvasDraftPage`, an unsaved proposed graph passed in `location.state` | `ProtectedRoute` |
-| `/flows/:id` | `FlowCanvasPage` | `ProtectedRoute` |
-| `/workflows` | `Activity`, the `SKILL.md` workflow hub | `ProtectedRoute` |
-| `/workflows/run` | `WorkflowsRun`, the single-purpose Skill runner | `ProtectedRoute` |
-| `/connections` | `Skills`, the connections hub | `ProtectedRoute` |
-| `/invites` | `Invites` | `ProtectedRoute` |
-| `/notifications` | `Notifications` | `ProtectedRoute` |
-| `/settings/*` | `Settings` | `ProtectedRoute` |
-| `/ptt-overlay` | `PttOverlayPage`, the push-to-talk overlay window | none |
-| `/dev/agent-insights` | `AgentInsightsPreview` | dev only |
-| `/dev/ui` | `UiGallery`, every shared UI primitive in the active theme | dev only |
-| `/dev/tools` | `ToolCallGallery`, every tool-call state and the whole core catalog | dev only |
-| `/dev/assistant-ui` | The upstream assistant-ui demo on a mock runtime | dev only |
-| `*` | `DefaultRedirect` | none |
+| Route                                        | Renders                                                                     | Guard                                          |
+| -------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------- |
+| `/`                                          | `Welcome`                                                                   | `PublicRoute` (signed in: forwards to `/home`) |
+| `/auth`                                      | `WebCallbackPage`, the auth callback                                        | none                                           |
+| `/callback/:kind`, `/callback/:kind/:status` | `WebCallbackPage`, generic OAuth and provider callbacks                     | none                                           |
+| `/onboarding/*`                              | `Onboarding` stepper                                                        | `ProtectedRoute`                               |
+| `/human`                                     | `HumanPage`, the dedicated mascot stage                                     | `ProtectedRoute`                               |
+| `/chat/:threadId?`                           | `Accounts`, the unified chat (agent plus connected web apps)                | `ProtectedRoute`                               |
+| `/flows`                                     | `FlowsPage`                                                                 | `ProtectedRoute`                               |
+| `/flows/draft`                               | `FlowCanvasDraftPage`, an unsaved proposed graph passed in `location.state` | `ProtectedRoute`                               |
+| `/flows/:id`                                 | `FlowCanvasPage`                                                            | `ProtectedRoute`                               |
+| `/workflows`                                 | `Activity`, the `SKILL.md` workflow hub                                     | `ProtectedRoute`                               |
+| `/workflows/run`                             | `WorkflowsRun`, the single-purpose Skill runner                             | `ProtectedRoute`                               |
+| `/connections`                               | `Skills`, the connections hub                                               | `ProtectedRoute`                               |
+| `/invites`                                   | `Invites`                                                                   | `ProtectedRoute`                               |
+| `/notifications`                             | `Notifications`                                                             | `ProtectedRoute`                               |
+| `/settings/*`                                | `Settings`                                                                  | `ProtectedRoute`                               |
+| `/ptt-overlay`                               | `PttOverlayPage`, the push-to-talk overlay window                           | none                                           |
+| `/dev/agent-insights`                        | `AgentInsightsPreview`                                                      | dev only                                       |
+| `/dev/ui`                                    | `UiGallery`, every shared UI primitive in the active theme                  | dev only                                       |
+| `/dev/tools`                                 | `ToolCallGallery`, every tool-call state and the whole core catalog         | dev only                                       |
+| `/dev/assistant-ui`                          | The upstream assistant-ui demo on a mock runtime                            | dev only                                       |
+| `*`                                          | `DefaultRedirect`                                                           | none                                           |
 
 The four `/dev/*` routes are registered inside an `IS_DEV` branch (`utils/config`), so `import.meta.env.DEV` is substituted at build time, the branch folds away, and their component trees leave a production bundle entirely. They are previews, never part of the shipped product.
 
@@ -501,18 +501,18 @@ Memory is a surface of `/connections`, not a route of its own: `?tab=brain&brain
 
 Back-compat redirects, all `Navigate replace`. The `ForwardSearch` ones copy the query string to the destination so old deep links still land on the right sub-tab:
 
-| From | To |
-| --- | --- |
-| `/home` | `/chat` |
-| `/accounts` | `/chat` |
-| `/brain` | `/connections?tab=brain` (`BrainRedirect` remaps the old `?tab=` to `?brain=`) |
-| `/skills` | `/connections` (`ForwardSearch`) |
-| `/channels` | `/connections?tab=messaging` |
-| `/activity` | `/settings/account` |
-| `/intelligence` | `/settings/account` |
-| `/feedback` | `/settings/feedback` |
-| `/routines` | `/flows` |
-| `/webhooks` | `/settings/integrations` (`ForwardSearch`) |
+| From            | To                                                                             |
+| --------------- | ------------------------------------------------------------------------------ |
+| `/home`         | `/chat`                                                                        |
+| `/accounts`     | `/chat`                                                                        |
+| `/brain`        | `/connections?tab=brain` (`BrainRedirect` remaps the old `?tab=` to `?brain=`) |
+| `/skills`       | `/connections` (`ForwardSearch`)                                               |
+| `/channels`     | `/connections?tab=messaging`                                                   |
+| `/activity`     | `/settings/account`                                                            |
+| `/intelligence` | `/settings/account`                                                            |
+| `/feedback`     | `/settings/feedback`                                                           |
+| `/routines`     | `/flows`                                                                       |
+| `/webhooks`     | `/settings/integrations` (`ForwardSearch`)                                     |
 
 There is no `/login` route: authentication flows through the Welcome page, the `/auth` callback, and deep links. `/agents` does not exist either, and Settings is an ordinary route rather than an overlay (see [Settings](#settings)).
 
@@ -591,7 +591,7 @@ components/
 ├── ProtectedRoute / PublicRoute / DefaultRedirect   # Route guards
 ├── layout/shell/            # RootShellLayout, AppSidebar, SidebarSlot (two-pane app chrome)
 ├── settings/                # Settings registry, layout, panels, controls (see above)
-├── accounts/                # Connected-app provider icons 
+├── accounts/                # Connected-app provider icons
 ├── BootCheckGate/, daemon/  # Boot + service gates in the provider chain
 ├── commands/                # CommandProvider (command palette)
 ├── Announcement/, upsell/, notices/, walkthrough/    # Shell-level overlays
@@ -713,15 +713,15 @@ const result = await callCoreRpc<Snapshot>({
 
 These names still turn up in older code and notes. Use the replacement:
 
-| Removed | Replaced by |
-| --- | --- |
-| `SettingsModal`, `SettingsModalFrame`, `SettingsModalLayout`, `settingsOverlay.ts` | `/settings/*` as an ordinary route rendered by `Settings` |
-| `SettingsPanelLayout`, `useSettingsAnimation`, `ProfilePanel` | The `settingsRouteRegistry` plus `components/settings/layout/` |
-| `components/settings/search/` and `settingsSearchRegistry` | Nothing: the sidebar search field was removed. `searchKeywords` stays on the registry entries. |
-| `WebviewHost` overlay in `components/accounts/` | Nothing: it went with the CEF provider webviews |
-| The frontend QuickJS skills engine | Skill execution in the Rust core |
-| `UserProvider`, `AIProvider`, `SkillProvider` | `CoreStateProvider` for auth and user state; AI configuration and skills in the core |
-| `/conversations`, `/accounts` as standalone pages | `/chat/:threadId?` (`Accounts`), the unified chat surface |
+| Removed                                                                            | Replaced by                                                                                    |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `SettingsModal`, `SettingsModalFrame`, `SettingsModalLayout`, `settingsOverlay.ts` | `/settings/*` as an ordinary route rendered by `Settings`                                      |
+| `SettingsPanelLayout`, `useSettingsAnimation`, `ProfilePanel`                      | The `settingsRouteRegistry` plus `components/settings/layout/`                                 |
+| `components/settings/search/` and `settingsSearchRegistry`                         | Nothing: the sidebar search field was removed. `searchKeywords` stays on the registry entries. |
+| `WebviewHost` overlay in `components/accounts/`                                    | Nothing: it went with the CEF provider webviews                                                |
+| The frontend QuickJS skills engine                                                 | Skill execution in the Rust core                                                               |
+| `UserProvider`, `AIProvider`, `SkillProvider`                                      | `CoreStateProvider` for auth and user state; AI configuration and skills in the core           |
+| `/conversations`, `/accounts` as standalone pages                                  | `/chat/:threadId?` (`Accounts`), the unified chat surface                                      |
 
 ## See also
 

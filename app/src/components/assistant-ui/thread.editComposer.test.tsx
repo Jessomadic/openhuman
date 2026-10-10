@@ -1,10 +1,18 @@
-import { type AppendMessage, AssistantRuntimeProvider, useExternalStoreRuntime } from '@assistant-ui/react';
+import {
+  type AppendMessage,
+  AssistantRuntimeProvider,
+  useExternalStoreRuntime,
+} from '@assistant-ui/react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Thread } from './thread';
 
-function Harness({ onEdit = vi.fn(async () => {}) }: { onEdit?: (message: AppendMessage) => Promise<void> }) {
+function Harness({
+  onEdit = vi.fn(async () => {}),
+}: {
+  onEdit?: (message: AppendMessage) => Promise<void>;
+}) {
   const runtime = useExternalStoreRuntime({
     messages: [{ id: 'user-1', role: 'user' as const, content: 'Original question' }],
     convertMessage: message => message,
