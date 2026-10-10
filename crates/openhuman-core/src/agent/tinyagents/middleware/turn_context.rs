@@ -96,9 +96,10 @@ pub(crate) struct TranscriptSnapshot {
     /// context window was, which is what the context gauge shows.
     pub(crate) last_call_input_tokens: u64,
     pub(crate) last_call_output_tokens: u64,
-    /// Provider-reported cost where available, otherwise the host's per-call
-    /// estimate. This covers only model calls the provider answered.
-    pub(crate) charged_amount_usd: f64,
+    /// Cost of the model calls the provider answered: each call's reported
+    /// charge, else its catalog estimate, else unknown (see
+    /// [`crate::agent::cost::call_cost`]).
+    pub(crate) cost: crate::agent::cost::CostTally,
     /// The last accepted model route. A failed follow-up has no response of
     /// its own, so this remains the route that incurred the snapshot usage.
     pub(crate) resolved_route: Option<ResolvedModelRoute>,
