@@ -5,6 +5,12 @@
 
 use std::process::Command;
 
+#[macro_use]
+#[path = "support/storage_drivers.rs"]
+mod storage_drivers;
+
+use storage_drivers::UrlCase;
+
 fn core(workspace: &std::path::Path, url: Option<&str>, args: &[&str]) -> std::process::Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_openhuman-core"));
     cmd.args(args)
@@ -56,69 +62,60 @@ fn one_shot(url: &str, args: &[&str]) -> (std::process::Output, tempfile::TempDi
     (output, workspace)
 }
 
-#[test]
-fn a_second_process_reads_what_a_one_shot_wrote_to_the_backend() {
-    let data = tempfile::tempdir().unwrap();
-    // (url, whether this build carries the driver for it)
-    let candidates = [
-        (
-            format!("sqlite:{}", data.path().join("shared.db").display()),
-            cfg!(feature = "storage-sqlite"),
-        ),
-        (
-            format!("file:{}", data.path().join("shared-files").display()),
-            cfg!(feature = "storage-file"),
-        ),
+/// Every driver is asked the same thing: write a job in one process, list in
+/// another. A durable driver shows it to the second process; `memory` keeps
+/// nothing between processes, so it must not.
+fn a_second_process_reads_what_a_one_shot_wrote_to_the_backend(case: UrlCase) {
+    let args = [
+        "cron",
+        "add",
+        "--name",
+        "storage-probe",
+        "--schedule",
+        r#"{"kind":"every","every_ms":3600000}"#,
+        "--command",
+        "echo probe",
     ];
-    let mut tested = 0;
-    for (url, driver_built) in &candidates {
-        if !driver_built {
-            continue;
-        }
-        let (added, _first) = one_shot(
-            url,
-            &[
-                "cron",
-                "add",
-                "--name",
-                "storage-probe",
-                "--schedule",
-                r#"{"kind":"every","every_ms":3600000}"#,
-                "--command",
-                "echo probe",
-            ],
-        );
-        let stderr = String::from_utf8_lossy(&added.stderr);
-        assert!(added.status.success(), "cron add against {url}: {stderr}");
+    let (added, _first) = one_shot(&case.url, &args);
+    let stderr = String::from_utf8_lossy(&added.stderr);
+    assert!(
+        added.status.success(),
+        "cron add against {}: {stderr}",
+        case.driver.name()
+    );
 
-        // A different workspace: only the backend can hold the job.
-        let (listed, _second) = one_shot(url, &["cron", "list"]);
-        assert!(
-            listed.status.success(),
-            "{}",
-            String::from_utf8_lossy(&listed.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&listed.stdout);
+    // A different workspace: only the backend can hold the job.
+    let (listed, _second) = one_shot(&case.url, &["cron", "list"]);
+    assert!(
+        listed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&listed.stdout);
+    if case.driver.is_durable() {
         assert!(
             stdout.contains("storage-probe"),
             "second process sees the job: {stdout}"
         );
+    } else {
+        assert!(
+            !stdout.contains("storage-probe"),
+            "memory keeps nothing between processes: {stdout}"
+        );
+    }
 
-        // And without the URL the same fresh workspace has nothing.
-        let workspace = tempfile::tempdir().unwrap();
-        let classic = core(workspace.path(), None, &["cron", "list"]);
-        assert!(
-            classic.status.success(),
-            "{}",
-            String::from_utf8_lossy(&classic.stderr)
-        );
-        assert!(
-            !String::from_utf8_lossy(&classic.stdout).contains("storage-probe"),
-            "the job lives in the backend, not in files"
-        );
-        tested += 1;
-    }
-    if tested == 0 {
-        eprintln!("skipped: no storage driver compiled in (enable storage-sqlite or storage-file)");
-    }
+    // And without the URL the same fresh workspace has nothing.
+    let workspace = tempfile::tempdir().unwrap();
+    let classic = core(workspace.path(), None, &["cron", "list"]);
+    assert!(
+        classic.status.success(),
+        "{}",
+        String::from_utf8_lossy(&classic.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&classic.stdout).contains("storage-probe"),
+        "the job lives in the backend, not in files"
+    );
 }
+
+driver_cases!(url a_second_process_reads_what_a_one_shot_wrote_to_the_backend);

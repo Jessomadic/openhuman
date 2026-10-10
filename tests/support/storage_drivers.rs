@@ -23,7 +23,8 @@
 //!
 //! Include with `#[macro_use] mod storage_drivers;` and declare the body with
 //! `driver_cases!(sync body)` (or `async body`), where `body` is
-//! `fn(Case)` (or `async fn(Case)`).
+//! `fn(Case)` (or `async fn(Case)`); `driver_cases!(url body)` takes a
+//! `fn(UrlCase)` for suites that spawn `openhuman-core` against the URL.
 
 #![allow(dead_code)]
 
@@ -193,6 +194,28 @@ impl Drop for Case {
     }
 }
 
+/// A driver's URL for suites that hand it to a spawned `openhuman-core`
+/// process instead of opening the backend in the test process.
+pub struct UrlCase {
+    pub driver: Driver,
+    pub url: String,
+    pub data_dir: tempfile::TempDir,
+}
+
+/// Runs a body that only needs the driver's URL (`driver_cases!(url body)`).
+pub fn run_url(driver: Driver, body: fn(UrlCase)) {
+    let data_dir = tempfile::tempdir().expect("temp dir");
+    let Some(url) = driver.url(data_dir.path()) else {
+        eprintln!("skipped {}: {MONGO_URL_VAR} is not set", driver.name());
+        return;
+    };
+    body(UrlCase {
+        driver,
+        url,
+        data_dir,
+    });
+}
+
 /// Runs a synchronous case body on `driver`.
 pub fn run_sync(driver: Driver, body: fn(Case)) {
     if let Some(case) = Case::open(driver) {
@@ -228,6 +251,9 @@ macro_rules! driver_cases {
     };
     (async $body:ident) => {
         driver_cases!(@each run_async $body);
+    };
+    (url $body:ident) => {
+        driver_cases!(@each run_url $body);
     };
     (@each $runner:ident $body:ident) => {
         mod memory {
