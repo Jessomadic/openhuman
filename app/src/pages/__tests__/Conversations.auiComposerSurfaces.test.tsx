@@ -24,6 +24,7 @@ import { Provider } from 'react-redux';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import Conversations from '../../features/conversations/Conversations';
 import { SidebarSlotOutlet, SidebarSlotProvider } from '../../components/layout/shell/SidebarSlot';
 // Type-only: erased at runtime, so it does not defeat `vi.hoisted`.
 import type { FlowApprovalRequest } from '../../hooks/useFlowApprovalRequests';
@@ -240,7 +241,6 @@ async function renderChat(
       ...(preload.chatRuntime ?? {}),
     },
   });
-  const { default: Conversations } = await import('../../features/conversations/Conversations');
 
   await act(async () => {
     render(
