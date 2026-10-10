@@ -142,52 +142,52 @@ function ThreadListView() {
   const threadIds = useAuiState(s => s.threads.threadIds);
   const filtered = threadIds.flatMap(id => {
     const thread = props.threads.find(item => item.id === id);
-    return thread && props.resolveTitle(id).toLowerCase().includes(search.trim().toLowerCase()) ? [thread] : [];
+    return thread && props.resolveTitle(id).toLowerCase().includes(search.trim().toLowerCase())
+      ? [thread]
+      : [];
   });
   const groups = groupThreads(filtered, new Date(), props.isPinned ?? isThreadPinned);
   return (
-        <ThreadListRoot className="h-full min-h-0">
-          <div className="flex-none px-2 pb-2">
-            <ThreadListNew
-              data-testid="new-thread-button"
-              data-analytics-id="chat-sidebar-new-thread"
-              className="w-full"
-              title={t('chat.newThreadShortcut')}>
-              {t('chat.newConversation')}
-            </ThreadListNew>
-            {props.threads.length > 0 && (
-              <ThreadListSearch value={search} onValueChange={setSearch} />
-            )}
-          </div>
-          <div
-            data-slot="aui_thread-list-items"
-            className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3 [scrollbar-gutter:stable_both-edges] [scrollbar-width:thin]">
-            {groups.map(group => (
-              <section
-                key={group.key}
-                data-testid={`thread-group-${group.key}`}
-                aria-label={t(GROUP_LABEL_KEYS[group.key])}
-                className="flex flex-col gap-0.5">
-                <h3
-                  data-slot="aui_thread-list-group-label"
-                  className="text-muted-foreground px-2.5 pt-3 pb-1 text-xs font-medium">
-                  {t(GROUP_LABEL_KEYS[group.key])}
-                </h3>
-                {group.threads.map(thread => (
-                  <ThreadListPrimitive.ItemByIndex
-                    key={thread.id}
-                    index={threadIds.indexOf(thread.id)}
-                    components={{ ThreadListItem: ThreadRow }}
-                  />
-                ))}
-              </section>
+    <ThreadListRoot className="h-full min-h-0">
+      <div className="flex-none px-2 pb-2">
+        <ThreadListNew
+          data-testid="new-thread-button"
+          data-analytics-id="chat-sidebar-new-thread"
+          className="w-full"
+          title={t('chat.newThreadShortcut')}>
+          {t('chat.newConversation')}
+        </ThreadListNew>
+        {props.threads.length > 0 && <ThreadListSearch value={search} onValueChange={setSearch} />}
+      </div>
+      <div
+        data-slot="aui_thread-list-items"
+        className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3 [scrollbar-gutter:stable_both-edges] [scrollbar-width:thin]">
+        {groups.map(group => (
+          <section
+            key={group.key}
+            data-testid={`thread-group-${group.key}`}
+            aria-label={t(GROUP_LABEL_KEYS[group.key])}
+            className="flex flex-col gap-0.5">
+            <h3
+              data-slot="aui_thread-list-group-label"
+              className="text-muted-foreground px-2.5 pt-3 pb-1 text-xs font-medium">
+              {t(GROUP_LABEL_KEYS[group.key])}
+            </h3>
+            {group.threads.map(thread => (
+              <ThreadListPrimitive.ItemByIndex
+                key={thread.id}
+                index={threadIds.indexOf(thread.id)}
+                components={{ ThreadListItem: ThreadRow }}
+              />
             ))}
-            {groups.length === 0 && (
-              <p className="text-muted-foreground px-2.5 py-4 text-center text-xs">
-                {t(search ? 'assistantUi.threadList.noThreadsFound' : 'chat.noThreads')}
-              </p>
-            )}
-          </div>
-        </ThreadListRoot>
+          </section>
+        ))}
+        {groups.length === 0 && (
+          <p className="text-muted-foreground px-2.5 py-4 text-center text-xs">
+            {t(search ? 'assistantUi.threadList.noThreadsFound' : 'chat.noThreads')}
+          </p>
+        )}
+      </div>
+    </ThreadListRoot>
   );
 }
