@@ -3084,6 +3084,71 @@ describe('ChatRuntimeProvider — detached sub-agent approvals', () => {
     expect(store.getState().chatRuntime.pendingApprovalByThread['t-sub']).toBeUndefined();
   });
 
+  it('keeps a second detached card on the thread answerable instead of replacing the first', () => {
+    const listeners = renderProvider();
+    act(() => {
+      listeners.onApprovalRequest?.({
+        thread_id: 't-sub',
+        request_id: 'appr-a',
+        tool_name: 'media_generate_image',
+        message: 'Run `media_generate_image`',
+        detached: true,
+      });
+      listeners.onApprovalRequest?.({
+        thread_id: 't-sub',
+        request_id: 'appr-b',
+        tool_name: 'media_generate_video',
+        message: 'Run `media_generate_video`',
+        detached: true,
+      });
+    });
+    const runtime = () => store.getState().chatRuntime;
+    expect(runtime().pendingApprovalByThread['t-sub']?.requestId).toBe('appr-a');
+
+    // The first is answered elsewhere; the second takes its place.
+    act(() => {
+      listeners.onApprovalDecided?.({
+        thread_id: 't-sub',
+        request_id: 'appr-a',
+        message: 'approve_once',
+      });
+    });
+    expect(runtime().pendingApprovalByThread['t-sub']?.requestId).toBe('appr-b');
+    act(() => {
+      listeners.onApprovalDecided?.({ thread_id: 't-sub', request_id: 'appr-b', message: 'deny' });
+    });
+    expect(runtime().pendingApprovalByThread['t-sub']).toBeUndefined();
+  });
+
+  it('drops a detached card on a socket drop and rejoins its thread for the core replay', async () => {
+    const listeners = renderProvider();
+    act(() => {
+      listeners.onApprovalRequest?.({
+        thread_id: 't-sub',
+        request_id: 'appr-sub',
+        tool_name: 'media_generate_image',
+        message: 'Run `media_generate_image`',
+        detached: true,
+      });
+    });
+    // The parent turn is long settled: nothing is in flight on the thread.
+    act(() => {
+      listeners.onDone?.(done('t-sub'));
+    });
+    vi.mocked(socketService.subscribeThread).mockClear();
+
+    // The core restarts: its waiter and route for `appr-sub` are gone.
+    act(() => {
+      store.dispatch(setStatusForUser({ userId: '__pending__', status: 'disconnected' }));
+    });
+    expect(store.getState().chatRuntime.pendingApprovalByThread['t-sub']).toBeUndefined();
+    act(() => {
+      store.dispatch(setStatusForUser({ userId: '__pending__', status: 'connected' }));
+    });
+    // The rejoin is what makes the core replay any park it still holds.
+    await waitFor(() => expect(socketService.subscribeThread).toHaveBeenCalledWith('t-sub'));
+  });
+
   it('still clears an in-turn card when its turn ends', () => {
     const listeners = renderProvider();
     act(() => {

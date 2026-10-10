@@ -238,11 +238,23 @@ pub(crate) fn read_tool_result_artifact(
             _ => return Err(artifact_refused("that path is not a tool-result artifact")),
         }
     };
-    if !resolved.starts_with(dir) {
+    // The lexical gate accepts either spelling of `dir`: the store may hand
+    // out the canonical path (macOS `/var` -> `/private/var`) while `dir` is
+    // configured through a symlinked component. The canonical containment
+    // check below is what actually enforces the boundary.
+    let canonical_dir = std::fs::canonicalize(dir).ok();
+    let lexically_inside = resolved.starts_with(dir)
+        || canonical_dir
+            .as_deref()
+            .is_some_and(|canonical_dir| resolved.starts_with(canonical_dir));
+    if !lexically_inside {
         return Err(artifact_refused("that path is not a tool-result artifact"));
     }
     let not_found = |_| artifact_refused("that artifact no longer exists");
-    let canonical_dir = std::fs::canonicalize(dir).map_err(not_found)?;
+    let canonical_dir = match canonical_dir {
+        Some(canonical_dir) => canonical_dir,
+        None => std::fs::canonicalize(dir).map_err(not_found)?,
+    };
     let canonical = std::fs::canonicalize(&resolved).map_err(not_found)?;
     if !canonical.starts_with(&canonical_dir) {
         return Err(artifact_refused(

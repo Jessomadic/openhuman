@@ -360,3 +360,28 @@ fn parse_composio_connect_timeout_honors_override_and_zero_opt_out() {
     // `0` → opt out of the composio-side bound (fall back to the gate TTL).
     assert_eq!(parse_composio_connect_timeout(Some("0")), None);
 }
+
+#[test]
+fn composio_connect_charges_pre_gate_work_to_the_park_bound() {
+    use std::time::Duration;
+    let bound = Duration::from_secs(DEFAULT_COMPOSIO_CONNECT_TIMEOUT_SECS);
+    let tool_budget = match composio_connect_tool_timeout(Some(bound)) {
+        tinytools::ToolTimeout::Millis(ms) => Duration::from_millis(ms),
+        other => panic!("expected an explicit budget, got {other:?}"),
+    };
+    // 50 s of slow config/connection/catalog reads before the card is raised:
+    // pre-gate + park must still end before the tool deadline, with the
+    // remaining slack left for the post-approval liveness check.
+    let pre_gate = Duration::from_secs(50);
+    let park = remaining_park_bound(Some(bound), pre_gate).unwrap();
+    assert_eq!(park, bound - pre_gate);
+    assert!(pre_gate + park < tool_budget);
+
+    // Pre-gate work that used the whole bound still raises a short park.
+    assert_eq!(
+        remaining_park_bound(Some(bound), bound * 2),
+        Some(Duration::from_secs(1))
+    );
+    // Opting out of the bound stays unbounded.
+    assert_eq!(remaining_park_bound(None, pre_gate), None);
+}
