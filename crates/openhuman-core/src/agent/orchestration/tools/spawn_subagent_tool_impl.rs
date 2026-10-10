@@ -482,7 +482,7 @@ impl SpawnSubagentTool {
                                         worktree_path: None,
                                         changed_files: Vec::new(),
                                         dirty_status: None,
-                                        stop: None,
+                                        stop: super::incomplete_stop(&reason),
                                     })
                                     .await;
                             }
@@ -501,7 +501,13 @@ impl SpawnSubagentTool {
                              delegation unchanged.",
                             outcome.task_id, outcome.agent_id, outcome.output,
                         );
-                        Ok(ToolResult::success(envelope))
+                        Ok(super::stopped_subagent_result(
+                            "spawn_subagent",
+                            &outcome.agent_id,
+                            &outcome.task_id,
+                            &reason,
+                            envelope,
+                        ))
                     }
                     SubagentRunStatus::Cancelled => {
                         tracing::info!(

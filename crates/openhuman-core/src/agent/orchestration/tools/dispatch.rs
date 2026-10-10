@@ -572,7 +572,7 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
                                     worktree_path: None,
                                     changed_files: Vec::new(),
                                     dirty_status: None,
-                                    stop: None,
+                                    stop: incomplete_stop(&reason),
                                 })
                                 .await;
                         }
@@ -585,12 +585,13 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
                         outcome.task_id,
                         outcome.iterations,
                     );
-                    Ok(ToolResult::success(incomplete_envelope(
+                    Ok(stopped_subagent_result(
                         tool_name,
-                        reason,
-                        &outcome.output,
-                        mode,
-                    )))
+                        &outcome.agent_id,
+                        &outcome.task_id,
+                        &reason,
+                        incomplete_envelope(tool_name, &reason, &outcome.output, mode),
+                    ))
                 }
                 SubagentRunStatus::Cancelled => {
                     log::info!(

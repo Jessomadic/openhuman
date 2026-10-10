@@ -598,12 +598,12 @@ impl ContinueSubagentTool {
                                         worktree_path: None,
                                         changed_files: Vec::new(),
                                         dirty_status: None,
-                                        stop: None,
+                                        stop: super::incomplete_stop(&reason),
                                     })
                                     .await;
                             }
                         }
-                        Ok(ToolResult::success(format!(
+                        let envelope = format!(
                             "[SUBAGENT_INCOMPLETE]\n\
                              task_id: {}\n\
                              agent_id: {}\n\
@@ -614,7 +614,14 @@ impl ContinueSubagentTool {
                              report this as done; relay the partial result and the blocker to the \
                              user, or take a different approach.",
                             outcome.task_id, outcome.agent_id, outcome.output,
-                        )))
+                        );
+                        Ok(super::stopped_subagent_result(
+                            "continue_subagent",
+                            &outcome.agent_id,
+                            &outcome.task_id,
+                            &reason,
+                            envelope,
+                        ))
                     }
                     SubagentRunStatus::Cancelled => {
                         tracing::info!(
