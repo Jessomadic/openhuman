@@ -13,7 +13,7 @@ impl Turn {
     /// Run the turn.
     ///
     /// Establishes the origin and progress scopes described in the module docs,
-    /// then dispatches through [`call`](crate::call::call) so the
+    /// then dispatches through the shared call handler so the
     /// `{result, logs}` envelope, [`DomainSet`](openhuman_core::core::runtime::DomainSet)
     /// gating and error classification are handled the same way as every other
     /// facade method.

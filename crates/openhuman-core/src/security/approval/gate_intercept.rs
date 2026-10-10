@@ -555,8 +555,8 @@ impl ApprovalGate {
                 agent_id: agent_id.clone(),
             });
             // Publish every surface inside the same registration barrier.
-            // Workspace lookup completed before creating a row, so neither
-            // removal nor a fast human decision can precede these surfaces.
+            // Workspace lookup cannot delay a flow surface after the generic
+            // request; scoped removal and decisions wait for every surface.
             if let Some(ApprovalSourceContext::Flow {
                 flow_id, run_id, ..
             }) = &source_context
