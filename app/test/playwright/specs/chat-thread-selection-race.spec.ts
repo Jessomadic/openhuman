@@ -16,7 +16,8 @@ test('a stale thread-list response preserves a thread selected while it was in f
 
   const selectedDuringLoad = await startNewThread(page);
   const remainingThread = await startNewThread(page);
-  expect(remainingThread).not.toBe(selectedDuringLoad);
+  const omittedThread = await startNewThread(page);
+  expect(new Set([selectedDuringLoad, remainingThread, omittedThread]).size).toBe(3);
 
   let captureRequest: (() => void) | undefined;
   const requestCaptured = new Promise<void>(resolve => {
@@ -26,19 +27,33 @@ test('a stale thread-list response preserves a thread selected while it was in f
   const responseReleased = new Promise<void>(resolve => {
     releaseResponse = resolve;
   });
+  let releaseConcurrentThreadLists: (() => void) | undefined;
+  const concurrentThreadListsReleased = new Promise<void>(resolve => {
+    releaseConcurrentThreadLists = resolve;
+  });
   let holdNextThreadList = false;
+  let deferConcurrentThreadLists = false;
+  const responseMarker = '__stale_thread_list_applied__';
 
   await page.route('**/rpc', async (route, request) => {
     const body = JSON.parse(request.postData() || '{}') as { id: number; method: string };
-    if (!holdNextThreadList || body.method !== 'openhuman.threads_list') {
+    if (body.method !== 'openhuman.threads_list') {
       await route.continue();
       return;
     }
 
+    if (!holdNextThreadList) {
+      if (deferConcurrentThreadLists) await concurrentThreadListsReleased;
+      await route.continue();
+      return;
+    }
+
+    const holdResponse = holdNextThreadList;
     holdNextThreadList = false;
+    deferConcurrentThreadLists = true;
     const response = await route.fetch();
     const payload = (await response.json()) as {
-      result: { data: { count: number; threads: Array<{ id: string }> } };
+      result: { data: { count: number; threads: Array<{ id: string; title?: string }> } };
     };
     if (!payload.result?.data?.threads) {
       throw new Error(`unexpected threads_list response: ${JSON.stringify(payload)}`);
@@ -46,11 +61,17 @@ test('a stale thread-list response preserves a thread selected while it was in f
     const threadList = payload.result.data;
     payload.result.data = {
       ...threadList,
-      threads: threadList.threads.filter(thread => thread.id !== selectedDuringLoad),
+      threads: threadList.threads
+        .filter(thread => thread.id !== selectedDuringLoad && thread.id !== omittedThread)
+        .map(thread =>
+          thread.id === remainingThread ? { ...thread, title: responseMarker } : thread
+        ),
     };
     payload.result.data.count = payload.result.data.threads.length;
-    captureRequest?.();
-    await responseReleased;
+    if (holdResponse) {
+      captureRequest?.();
+      await responseReleased;
+    }
     await route.fulfill({ response, body: JSON.stringify(payload) });
   });
 
@@ -67,17 +88,45 @@ test('a stale thread-list response preserves a thread selected while it was in f
   releaseResponse?.();
   await expect
     .poll(() =>
-      page.evaluate((threadId: string) => {
-        const store = (
-          window as typeof window & {
-            __OPENHUMAN_STORE__?: {
-              getState?: () => { thread?: { threads?: Array<{ id: string }> } };
-            };
-          }
-        ).__OPENHUMAN_STORE__;
-        return store?.getState?.().thread?.threads?.some(thread => thread.id === threadId) ?? false;
-      }, selectedDuringLoad)
+      page.evaluate(
+        ({
+          selectedThreadId,
+          omittedThreadId,
+          remainingThreadId,
+        }: {
+          selectedThreadId: string;
+          omittedThreadId: string;
+          remainingThreadId: string;
+        }) => {
+          const store = (
+            window as typeof window & {
+              __OPENHUMAN_STORE__?: {
+                getState?: () => { thread?: { threads?: Array<{ id: string; title?: string }> } };
+              };
+            }
+          ).__OPENHUMAN_STORE__;
+          const threads = store?.getState?.().thread?.threads ?? [];
+          return {
+            selectedThreadPreserved: threads.some(thread => thread.id === selectedThreadId),
+            omittedThreadRemoved: !threads.some(thread => thread.id === omittedThreadId),
+            filteredResponseApplied: threads.some(
+              thread =>
+                thread.id === remainingThreadId && thread.title === '__stale_thread_list_applied__'
+            ),
+          };
+        },
+        {
+          selectedThreadId: selectedDuringLoad,
+          omittedThreadId: omittedThread,
+          remainingThreadId: remainingThread,
+        }
+      )
     )
-    .toBe(false);
+    .toEqual({
+      selectedThreadPreserved: true,
+      omittedThreadRemoved: true,
+      filteredResponseApplied: true,
+    });
+  releaseConcurrentThreadLists?.();
   expect(await selectedThreadId(page)).toBe(selectedDuringLoad);
 });
