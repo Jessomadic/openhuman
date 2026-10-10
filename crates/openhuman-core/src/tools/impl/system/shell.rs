@@ -1,5 +1,3 @@
-#[cfg(test)]
-use super::shell_platform::PYTHON_UTF8_DEFAULTS;
 use super::shell_platform::{
     command_param_description, python_utf8_env, shell_child_env, shell_description, SAFE_ENV_VARS,
 };
