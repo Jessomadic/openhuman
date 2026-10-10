@@ -76,7 +76,8 @@ fn every_agent_answers_policy_from_its_own_tier() {
             // The scripted final reply is advisory; the tool result sent back
             // to the model proves the policy denied execution.
             let a_requests = chat_requests(&a_provider).await;
-            let a_denial = tool_results(a_requests.get(1).expect("a continued after its tool call"));
+            let a_denial =
+                tool_results(a_requests.get(1).expect("a continued after its tool call"));
             assert!(
                 a_denial.contains("[policy-blocked]") && a_denial.contains("read-only mode"),
                 "a's shell call is refused by its own tier: {}",
