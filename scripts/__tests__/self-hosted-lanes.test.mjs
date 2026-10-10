@@ -235,6 +235,52 @@ test("untouched areas leave only the always-on gates", () => {
   );
 });
 
+test("the storage area arms only the storage-drivers lane, with the sqlite and file drivers on", () => {
+  for (const profile of ["hosted", "ex63"]) {
+    const plan = buildPlan({
+      profile,
+      areas: { ...NONE, storage: true },
+      env: profile === "ex63" ? EX63_ENV : {},
+    });
+    const on = plan.lanes.flatMap((l) =>
+      l.checks.filter((c) => c.when).map((c) => `${l.name}:${c.name}`),
+    );
+    assert.deepEqual(
+      on.filter((id) => id.startsWith("storage-drivers:")),
+      [
+        "storage-drivers:storage-e2e",
+        "storage-drivers:storage-lib-tests",
+        "storage-drivers:storage-session-store-tests",
+      ],
+      profile,
+    );
+    const lane = plan.lanes.find((l) => l.name === "storage-drivers");
+    assert.equal(lane.active, true, profile);
+    for (const check of lane.checks) {
+      assert.match(check.run, /--features [a-z,-]*storage-sqlite,storage-file/);
+    }
+    // Every root storage target runs in the lane, so a new one cannot be
+    // forgotten: the targets on disk are exactly the targets in the command.
+    const e2e = lane.checks.find((c) => c.name === "storage-e2e").run;
+    const onDisk = fs
+      .readdirSync(path.join(repoRoot, "tests"))
+      .filter((f) => /^(storage_.*_e2e|cli_storage_url_e2e)\.rs$/.test(f))
+      .map((f) => f.replace(/\.rs$/, ""))
+      .sort();
+    const inLane = [...e2e.matchAll(/--test (\S+)/g)].map((m) => m[1]).sort();
+    assert.deepEqual(inLane, onDisk, profile);
+    if (profile === "hosted") {
+      assert.deepEqual(
+        hostedMatrix(plan).map((g) => g.group),
+        ["checks", "storage"],
+      );
+    }
+  }
+  // Without the area the lane stays off.
+  const off = buildPlan({ profile: "hosted", areas: NONE });
+  assert.equal(off.lanes.find((l) => l.name === "storage-drivers").active, false);
+});
+
 test("hosted matrix only spins up groups with active lanes", () => {
   const docsOnly = hostedMatrix(
     buildPlan({ profile: "hosted", areas: { ...NONE, docs: true } }),

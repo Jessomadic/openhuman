@@ -17,8 +17,8 @@
 #   - nightly on main, so a driver regression that slipped past a path filter
 #     (for instance a vendor bump) is still caught within a day;
 #   - on demand.
-# It is not a required check: it is a lane of its own, so a slow mongod never
-# holds up CI Lane results.
+# It is not a required check: it is a workflow of its own, so a slow mongod
+# never holds up the PR lanes.
 name: Storage (MongoDB)
 
 on:
