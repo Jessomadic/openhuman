@@ -37,7 +37,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn measure(count: usize) -> anyhow::Result<()> {
-    let mock = MockServer::start().await;
+    let mock = MockServer::builder()
+        .disable_request_recording()
+        .start()
+        .await;
     Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/v1/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({

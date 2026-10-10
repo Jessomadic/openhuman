@@ -4,7 +4,7 @@
 //! [`init_master_key`] loads the key once from [`MASTER_KEY_ENV`] or
 //! [`MASTER_KEY_FILE_ENV`] for headless hosts, otherwise from the OS keychain.
 //! The cached key avoids repeated prompts in dev-signed macOS builds;
-//! this backend never reads the OS keychain itself.
+//! file operations use the cache; initialization may access the OS keychain.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

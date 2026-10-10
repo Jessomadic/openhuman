@@ -332,7 +332,9 @@ async fn collect_command_output(
                 // Its PID cannot be reused while signalling this group.
                 group.kill();
                 child.start_kill()?;
-                drain.await?;
+                if let Ok(result) = tokio::time::timeout(Duration::from_secs(2), drain).await {
+                    result?;
+                }
             }
             result = &mut drain => { result?; }
         }

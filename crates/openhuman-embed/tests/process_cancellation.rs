@@ -216,3 +216,46 @@ async fn host_commands_receive_stdin_and_timeout_after_reaping() {
     let pid = std::fs::read_to_string(pidfile).unwrap();
     assert!(!std::path::Path::new(&format!("/proc/{}", pid.trim())).exists());
 }
+
+#[tokio::test]
+async fn cancellation_reaps_the_leader_when_an_escaped_descendant_holds_its_pipes() {
+    let scratch = tempfile::tempdir().unwrap();
+    let pidfile = scratch.path().join("escaped.pid");
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command.args([
+        "-c",
+        &format!(
+            "setsid sh -c 'echo $$ > {}; sleep 30' & wait",
+            pidfile.display()
+        ),
+    ]);
+    let cleanup = openhuman_embed::process::CommandCleanup::default();
+    let mut run = Box::pin(cleanup.scope(output_unbounded(&mut command)));
+    let pid = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::select! {
+                result = &mut run => panic!("command ended early: {result:?}"),
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+            if let Ok(pid) = std::fs::read_to_string(&pidfile) {
+                break pid;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    drop(run);
+    let settled = tokio::time::timeout(Duration::from_secs(4), cleanup.wait()).await;
+    // This deliberately escaped group belongs to the fixture; clean it on
+    // both red and green paths before asserting the bounded acknowledgement.
+    let status = std::process::Command::new("kill")
+        .args(["-KILL", "--", &format!("-{}", pid.trim())])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    cleanup.wait().await;
+    assert!(
+        settled.is_ok(),
+        "escaped descendant blocked cancellation acknowledgement"
+    );
+}
