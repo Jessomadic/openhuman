@@ -405,7 +405,7 @@ impl ShellTool {
         };
         cmd.env_clear();
 
-        for (var, val) in shell_child_env(|name| std::env::var_os(name)) {
+        for (var, val) in shell_child_env(crate::tools::timeout::CommandEnvironment::var_os) {
             cmd.env(var, val);
         }
 
@@ -662,7 +662,7 @@ impl ShellTool {
         } else {
             Some(prepend_path_dirs(
                 prepend_dirs.iter().map(|p| p.as_path()),
-                &std::env::var("PATH").unwrap_or_default(),
+                &crate::tools::timeout::CommandEnvironment::var("PATH").unwrap_or_default(),
             ))
         }
     }

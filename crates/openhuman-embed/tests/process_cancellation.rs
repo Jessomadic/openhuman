@@ -121,3 +121,141 @@ async fn deadline_kills_and_reaps_a_command() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn exited_group_leader_is_not_reaped_until_its_descendants_close_the_pipes() {
+    let scratch = tempfile::tempdir().unwrap();
+    let pidfile = scratch.path().join("exited.pid");
+    let mut cmd = openhuman_core::agent::platform_shell::build_tokio_command(&format!(
+        "sleep 30 & echo $$ $! > {}; exit 0",
+        pidfile.display()
+    ));
+    let cleanup = ProcessCleanup::default();
+    let mut run = Box::pin(cleanup.scope(output_unbounded(&mut cmd)));
+    let pids = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::select! {
+                result = &mut run => panic!("pipes closed early: {result:?}"),
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+            if let Ok(text) = std::fs::read_to_string(&pidfile) {
+                let pids: Vec<u32> = text
+                    .split_whitespace()
+                    .map(|p| p.parse().unwrap())
+                    .collect();
+                break pids;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    // Poll the output future while the waiter processes the shell's exit.
+    tokio::select! {
+        result = &mut run => panic!("pipes closed early: {result:?}"),
+        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+    }
+    let leader_reserved = std::path::Path::new(&format!("/proc/{}", pids[0])).exists();
+    drop(run);
+    tokio::time::timeout(Duration::from_secs(2), cleanup.wait())
+        .await
+        .unwrap();
+    assert!(
+        leader_reserved,
+        "reaped leader PID could be reused while cancellation still addresses its group"
+    );
+    assert!(!std::path::Path::new(&format!("/proc/{}", pids[0])).exists());
+}
+
+#[tokio::test]
+async fn cancellable_turns_route_interpreters_away_from_unacknowledged_pools() {
+    let mut config = openhuman_core::config::RuntimePoolConfig::default();
+    config.python.enabled = Some(true);
+    assert!(openhuman_core::runtime::pool::python::enabled(&config));
+    assert!(openhuman_core::runtime::pool::node::enabled(&config));
+    let cleanup = ProcessCleanup::default();
+    cleanup
+        .scope(async {
+            tokio::task::yield_now().await;
+            assert!(!openhuman_core::runtime::pool::python::enabled(&config));
+            assert!(
+                !openhuman_core::runtime::pool::node::enabled(&config),
+                "cancellable node jobs must use an owned subprocess"
+            );
+        })
+        .await;
+    assert!(openhuman_core::runtime::pool::node::enabled(&config));
+}
+
+#[tokio::test]
+async fn host_commands_receive_stdin_and_timeout_after_reaping() {
+    let mut cmd = tokio::process::Command::new("/bin/sh");
+    cmd.args(["-c", "cat; printf stderr >&2"]);
+    let output = openhuman_embed::process::command_output(
+        &mut cmd,
+        b"payload".to_vec(),
+        Duration::from_secs(2),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output.stdout, b"payload");
+    assert_eq!(output.stderr, b"stderr");
+    let scratch = tempfile::tempdir().unwrap();
+    let pidfile = scratch.path().join("host.pid");
+    let mut cmd = tokio::process::Command::new("/bin/sh");
+    cmd.args(["-c", &format!("echo $$ > {}; sleep 30", pidfile.display())]);
+    let outer = openhuman_embed::process::CommandCleanup::default();
+    let result = outer
+        .scope(openhuman_embed::process::command_output(
+            &mut cmd,
+            Vec::new(),
+            Duration::from_millis(100),
+        ))
+        .await;
+    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    outer.wait().await;
+    let pid = std::fs::read_to_string(pidfile).unwrap();
+    assert!(!std::path::Path::new(&format!("/proc/{}", pid.trim())).exists());
+}
+
+#[tokio::test]
+async fn cancellation_reaps_the_leader_when_an_escaped_descendant_holds_its_pipes() {
+    let scratch = tempfile::tempdir().unwrap();
+    let pidfile = scratch.path().join("escaped.pid");
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command.args([
+        "-c",
+        &format!(
+            "setsid sh -c 'echo $$ > {}; sleep 30' & wait",
+            pidfile.display()
+        ),
+    ]);
+    let cleanup = openhuman_embed::process::CommandCleanup::default();
+    let mut run = Box::pin(cleanup.scope(output_unbounded(&mut command)));
+    let pid = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::select! {
+                result = &mut run => panic!("command ended early: {result:?}"),
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+            if let Ok(pid) = std::fs::read_to_string(&pidfile) {
+                break pid;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    drop(run);
+    let settled = tokio::time::timeout(Duration::from_secs(4), cleanup.wait()).await;
+    // This deliberately escaped group belongs to the fixture; clean it on
+    // both red and green paths before asserting the bounded acknowledgement.
+    let status = std::process::Command::new("kill")
+        .args(["-KILL", "--", &format!("-{}", pid.trim())])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    cleanup.wait().await;
+    assert!(
+        settled.is_ok(),
+        "escaped descendant blocked cancellation acknowledgement"
+    );
+}

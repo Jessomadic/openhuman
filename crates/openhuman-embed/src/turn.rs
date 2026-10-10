@@ -88,6 +88,9 @@ pub struct Turn {
     control_deadline: Option<tokio::time::Instant>,
     observer: Option<Arc<dyn crate::observe::TurnObserver>>,
     trace_content: crate::observe::TraceContent,
+    hooks: openhuman_core::agent::hooks::HookScope,
+    tools: Option<openhuman_core::agent::HostTools>,
+    tool_env: Option<openhuman_core::tools::timeout::CommandEnvironment>,
 }
 
 impl Turn {
@@ -114,11 +117,83 @@ impl Turn {
             control_deadline: None,
             observer: None,
             trace_content: crate::observe::TraceContent::MetadataOnly,
+            hooks: Default::default(),
+            tools: None,
+            tool_env: None,
         }
     }
 
     pub(crate) fn with_agent_id(mut self, id: &str) -> Self {
         self.request.agent_id = Some(id.to_string());
+        self
+    }
+
+    pub(crate) fn with_hooks(mut self, hooks: openhuman_core::agent::hooks::HookScope) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
+    /// Add a tool callback for this turn only, after runtime and agent hooks.
+    /// Does not change the agent or any other concurrent turn.
+    pub fn tool_hook(mut self, hook: Arc<dyn crate::seams::ToolHook>) -> Self {
+        self.hooks.push_tool(hook);
+        self
+    }
+
+    /// Replace this turn's host tools, including attached sources. An empty
+    /// belt revokes them. Builtin tools remain governed by the agent definition;
+    /// the agent's original host tools return on its next turn.
+    pub fn tools(
+        mut self,
+        factory: impl for<'a> Fn(
+                openhuman_core::agent::TurnContext<'a>,
+            ) -> openhuman_core::agent::HostTurnTools
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        self.tools = Some(Arc::new(factory));
+        self
+    }
+
+    /// Replace the environment of owned builtin tool subprocesses for this
+    /// turn. Variables absent from this map are not inherited from the daemon.
+    /// Interpreter pools are bypassed so a pooled process cannot carry another
+    /// turn's environment. Independently spawned host tasks must carry the scope.
+    pub fn tool_env(mut self, env: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.tool_env = Some(openhuman_core::tools::timeout::CommandEnvironment::new(env));
+        self
+    }
+
+    /// Await the host's permission decision before each tool executes.
+    /// The callback may wait for UI approval, then return `Proceed`, `Deny`,
+    /// or `ProceedWith`. Returning `Ask` denies the call; this callback itself
+    /// owns the approval wait. Static tool/security restrictions still apply.
+    /// Agent and turn callbacks are additive: a denial cannot be overridden.
+    pub fn can_use_tool<F>(self, callback: F) -> Self
+    where
+        F: for<'a> Fn(&'a crate::seams::ToolHookContext) -> crate::PermissionFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.tool_hook(std::sync::Arc::new(crate::permission::PermissionHook(
+            callback,
+        )))
+    }
+
+    /// Observe cumulative usage after each model call or vote to stop before
+    /// the next call. Return `StopDecision::Continue` for observation alone;
+    /// a budget policy can return `StopDecision::Stop`. Scoped to this turn; no runtime-global policy is replaced.
+    pub fn stop_hook(mut self, hook: std::sync::Arc<dyn crate::seams::StopHook>) -> Self {
+        self.hooks.push_stop(hook);
+        self
+    }
+
+    /// Add a completed-turn callback for this turn only. The callback runs
+    /// asynchronously with an owned snapshot after the turn completes.
+    pub fn post_turn_hook(mut self, hook: Arc<dyn crate::seams::PostTurnHook>) -> Self {
+        self.hooks.push_post_turn(hook);
         self
     }
 
@@ -298,6 +373,7 @@ impl Turn {
     pub fn route(mut self, route: Route) -> Self {
         self.request.inference_url = Some(route.base_url);
         self.request.api_key = Some(route.api_key);
+        self.request.inference_headers = route.headers;
         self
     }
 
@@ -358,7 +434,7 @@ impl Turn {
 /// DomainSet gate itself before touching the core.
 use openhuman_core::agent::tinyagents::host::LastTurnUsage;
 
-type UsageSink = std::sync::Mutex<Option<LastTurnUsage>>;
+use crate::turn_meter::UsageSink;
 
 use openhuman_core::agent::tinyagents::response_shape::{FinalResponse, ResponseShapeScope};
 
@@ -374,6 +450,7 @@ mod futures_box {
 /// What only an agent target can honour, already validated by
 /// [`Turn::validate_turn_options`].
 struct AgentTurnOptions {
+    tools: Option<openhuman_core::agent::HostTools>,
     shape: std::sync::Arc<ResponseShapeScope>,
     untrusted_input: bool,
 }
@@ -432,8 +509,9 @@ async fn dispatch(
                     let route = openhuman_core::config::schema::EphemeralRoute::from_params(
                         request.inference_url,
                         request.api_key,
-                    );
-                    let host = inner.composed_host_tools();
+                    )
+                    .map(|route| route.with_headers(request.inference_headers));
+                    let host = options.tools.or_else(|| inner.composed_host_tools());
                     let target = AgentChatTarget::Definition {
                         definition: &inner.definition,
                         host: host.as_ref(),

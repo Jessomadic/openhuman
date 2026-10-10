@@ -68,6 +68,8 @@ pub struct Route {
     pub base_url: String,
     /// The bearer presented to `base_url`.
     pub api_key: String,
+    /// Headers scoped to this route and never persisted or logged as values.
+    pub headers: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for Route {
@@ -79,6 +81,7 @@ impl std::fmt::Debug for Route {
         f.debug_struct("Route")
             .field("base_url", &sanitize_url_for_display(&self.base_url))
             .field("api_key", &"<redacted>")
+            .field("headers", &self.headers.len())
             .finish()
     }
 }
@@ -136,7 +139,13 @@ impl Route {
         Self {
             base_url: base_url.into(),
             api_key: api_key.into(),
+            headers: Vec::new(),
         }
+    }
+    /// Add a header sent only to this route's endpoint.
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
     }
 }
 
@@ -167,6 +176,9 @@ pub struct TurnRequest {
     /// Endpoint half of the per-call route. Paired with `api_key`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inference_url: Option<String>,
+    /// Additional headers owned by this turn route.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inference_headers: Vec<(String, String)>,
     /// Bearer half of the per-call route. Paired with `inference_url`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
@@ -186,6 +198,7 @@ impl TurnRequest {
             thread_id: None,
             cwd: None,
             inference_url: None,
+            inference_headers: Vec::new(),
             api_key: None,
             agent_id: None,
         }

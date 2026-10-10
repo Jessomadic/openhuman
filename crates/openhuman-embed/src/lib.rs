@@ -122,7 +122,10 @@ pub mod identity;
 pub mod memory;
 #[cfg(feature = "modules")]
 pub mod modules;
+mod permission;
+pub use permission::PermissionFuture;
 pub mod observe;
+
 pub mod process;
 #[cfg(feature = "channels")]
 pub mod profiles;
@@ -132,6 +135,7 @@ pub mod routing;
 mod runtime;
 mod turn;
 mod turn_cancellation;
+mod turn_meter;
 
 /// Core internals for `openhuman-tinyhumans` and `openhuman-rpc` only; see
 /// the module docs. Not part of the host-facing API.
@@ -194,6 +198,9 @@ pub use runtime::{
 pub mod seams {
     pub use openhuman_core::agent::hooks::{PostTurnHook, ToolHook};
     pub use openhuman_core::agent::hooks::{ToolHookContext, ToolHookDecision, TurnContext};
+    pub use openhuman_core::agent::stop_hooks::{
+        BudgetStopHook, StopDecision, StopHook, TurnState,
+    };
     pub use openhuman_core::core::all::{ControllerExtension, DomainGroup};
     pub use openhuman_core::core::server_launcher::{HostBoot, ServeRequest, ServerLauncher};
     pub use openhuman_core::security::SecurityPolicy;

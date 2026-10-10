@@ -42,7 +42,12 @@ async fn scenario() {
         .unwrap();
 
     // Cancellation before send never reaches inference and cannot hang.
-    let mut turn = agent.turn("cancel before sending");
+    let metered = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = metered.clone();
+    let mut turn = agent.turn("cancel before sending").meter(move |usage| {
+        assert!(usage.is_none());
+        observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
     let cancel = turn.cancellation_handle();
     tokio::time::timeout(Duration::from_secs(2), cancel.cancel())
         .await
@@ -52,6 +57,11 @@ async fn scenario() {
         Err(CoreError::TurnCancelled { .. })
     ));
     assert!(common::chat_requests(&provider).await.is_empty());
+    assert_eq!(
+        metered.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "cancelled turn is metered once"
+    );
 
     // A later turn on the same agent remains usable.
     let mut turn = agent.turn("answer normally");
@@ -77,7 +87,10 @@ async fn scenario() {
     let blocked = runtime
         .agent(AgentSpec::new("blocked").provider(route(&slow, "test-model")))
         .unwrap();
-    let mut turn = blocked.turn("wait for inference");
+    let observed = metered.clone();
+    let mut turn = blocked.turn("wait for inference").meter(move |_| {
+        observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
     let cancel = turn.cancellation_handle();
     let sent = tokio::spawn(turn.send());
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -97,6 +110,7 @@ async fn scenario() {
         sent.await.unwrap(),
         Err(CoreError::TurnCancelled { .. })
     ));
+    assert_eq!(metered.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert_eq!(agent.run("still usable").await.unwrap().reply, "finished");
 
     let observed = Arc::new(Outcomes::default());
@@ -118,7 +132,11 @@ async fn scenario() {
 
     // An externally dropped send future also acknowledges cancellation.
     let prior_requests = common::chat_requests(&slow).await.len();
-    let mut turn = blocked.turn("drop this inference request");
+    let observed = metered.clone();
+    let mut turn = blocked.turn("drop this inference request").meter(move |_| {
+        observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+
     let cancel = turn.cancellation_handle();
     let sent = tokio::spawn(turn.send());
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -133,6 +151,8 @@ async fn scenario() {
     tokio::time::timeout(Duration::from_secs(2), cancel.cancel())
         .await
         .unwrap();
+
+    assert_eq!(metered.load(std::sync::atomic::Ordering::SeqCst), 3);
 
     let mut invalid = agent
         .turn("invalid route")

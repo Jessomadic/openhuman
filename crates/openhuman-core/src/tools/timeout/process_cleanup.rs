@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
 
 tokio::task_local! {
-    static ACTIVE: ProcessCleanup;
+    static ACTIVE: Vec<ProcessCleanup>;
 }
 
 /// Command waiters belonging to one turn. Clone before scoping the turn;
@@ -16,9 +16,18 @@ tokio::task_local! {
 pub struct ProcessCleanup(Arc<Mutex<Vec<watch::Receiver<bool>>>>);
 
 impl ProcessCleanup {
+    /// Whether the current task must acknowledge owned subprocess cleanup.
+    /// Interpreter pools have no per-job cancellation acknowledgement and
+    /// therefore cannot accept work from this scope.
+    pub fn is_active() -> bool {
+        ACTIVE.try_with(|_| ()).is_ok()
+    }
+
     /// Run a future with command waiters registered to this turn.
     pub async fn scope<T>(&self, future: impl Future<Output = T>) -> T {
-        ACTIVE.scope(self.clone(), future).await
+        let mut scopes = ACTIVE.try_with(Clone::clone).unwrap_or_default();
+        scopes.push(self.clone());
+        ACTIVE.scope(scopes, future).await
     }
 
     /// Wait for every registered command to exit and its output pipes to close.
@@ -41,12 +50,14 @@ pub(super) struct Reaped(watch::Sender<bool>);
 impl Reaped {
     pub(super) fn register() -> Self {
         let (done, waiter) = watch::channel(false);
-        let _ = ACTIVE.try_with(|cleanup| {
-            cleanup
-                .0
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(waiter);
+        let _ = ACTIVE.try_with(|scopes| {
+            for cleanup in scopes {
+                cleanup
+                    .0
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(waiter.clone());
+            }
         });
         Self(done)
     }

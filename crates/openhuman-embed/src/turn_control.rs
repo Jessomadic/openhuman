@@ -24,6 +24,24 @@ impl Turn {
     /// that is a build/composition fact, not a failure, and a host should hide
     /// the surface rather than report an error.
     pub async fn send(mut self) -> Result<TurnOutcome, CoreError> {
+        let hooks = std::mem::take(&mut self.hooks);
+        let environment = self.tool_env.take();
+        let fresh_tools = self.tools.is_some();
+        let dispatch = hooks.scope(Box::pin(self.send_scoped()));
+        let dispatch = async move {
+            if fresh_tools {
+                openhuman_core::agent::tool_snapshot_scope::with_fresh_snapshot(dispatch).await
+            } else {
+                dispatch.await
+            }
+        };
+        match environment {
+            Some(environment) => environment.scope(dispatch).await,
+            None => dispatch.await,
+        }
+    }
+
+    async fn send_scoped(mut self) -> Result<TurnOutcome, CoreError> {
         // External cancellation cascades inward; cancelling this turn through
         // its acknowledgement handle/deadline must not cancel a shared parent.
         let token = self
@@ -177,12 +195,14 @@ impl Turn {
             let deadline = self.control_deadline;
             let token = self.token_cancellation.clone();
             let native = openhuman_core::agent::host_overrides::current_cancellation();
-            let cancellation = match self.cancellation.take() {
-                Some(cancellation) => cancellation,
-                None if deadline.is_some() || token.is_some() => crate::TurnCancellation::default(),
-                None => return Box::pin(self.send_inner()).await,
+            let cancellation = self.cancellation.take().or_else(|| {
+                (deadline.is_some() || token.is_some()).then(crate::TurnCancellation::default)
+            });
+            let _guard = cancellation.as_ref().map(crate::TurnCancellation::enter);
+            let meter = crate::turn_meter::TurnMeter::new(self.meter.take());
+            let Some(cancellation) = cancellation else {
+                return Box::pin(self.send_inner(&meter.usage)).await;
             };
-            let _guard = cancellation.enter();
             let outcome = cancellation
                 .cleanup()
                 .scope(async {
@@ -208,7 +228,7 @@ impl Turn {
                             native.cancel();
                             Err(CoreError::DeadlineExceeded { method: AGENT_CHAT })
                         },
-                        outcome = Box::pin(self.send_inner()) => outcome,
+                        outcome = Box::pin(self.send_inner(&meter.usage)) => outcome,
                     }
                 })
                 .await;
@@ -248,7 +268,7 @@ impl Turn {
             .clone()
     }
 
-    async fn send_inner(mut self) -> Result<TurnOutcome, CoreError> {
+    async fn send_inner(mut self, usage: &UsageSink) -> Result<TurnOutcome, CoreError> {
         // The core neither mints nor returns a session id, so continuing a
         // conversation would otherwise be impossible without the caller
         // inventing an id scheme — which every embedder has then done
@@ -296,8 +316,6 @@ impl Turn {
         // Filled by the turn itself, before any error is raised, so a failed
         // turn is still metered. Read back below whether the dispatch returned
         // a reply or an error.
-        let usage: UsageSink = std::sync::Mutex::new(None);
-        let meter = self.meter.take();
         let wants_json = self
             .response_format
             .as_ref()
@@ -332,12 +350,13 @@ impl Turn {
                 },
             ),
             untrusted_input: self.untrusted_input,
+            tools: self.tools.take(),
         };
         let budget = self.budget.take().map(|budget| crate::budget::ModelBudget {
             ledger: budget.ledger.child(crate::budget::SpendLimits::default()),
             call: budget.call,
         });
-        let dispatch = dispatch(self.target, self.request, self.seed.take(), &usage, options);
+        let dispatch = dispatch(self.target, self.request, self.seed.take(), usage, options);
         let dispatch = async {
             match &budget {
                 Some(budget) => {
@@ -389,17 +408,6 @@ impl Turn {
             log::debug!("[embed][agent] turn_failed session={session_id} kind={tag}");
         });
 
-        // Before the `?`. A turn that errored still spent what it spent, and
-        // this is the only place both the sink and a failing result are in
-        // hand -- `TurnOutcome` below is never built on that path.
-        if let Some(meter) = meter {
-            meter(
-                usage
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone(),
-            );
-        }
         let reply = reply.map_err(|error| {
             match budget.as_ref().and_then(|budget| budget.ledger.refusal()) {
                 Some(source) => CoreError::BudgetExceeded {
@@ -429,8 +437,9 @@ impl Turn {
             reply,
             session_id,
             usage: usage
-                .into_inner()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
             structured,
             finish_reason: report.finish_reason,
             answered_model: report.answered_model,
@@ -473,6 +482,12 @@ impl Turn {
         let host_only = match &self.target {
             TurnTarget::Agent(agent) => agent.host_only,
             TurnTarget::Runtime(_) => {
+                if self.tools.is_some() {
+                    return refuse(
+                        "per-turn host tools need a runtime-owned Agent",
+                        "turn_tools_unsupported",
+                    );
+                }
                 if self.response_format.is_some()
                     || self.max_tokens.is_some()
                     || self.top_p.is_some()

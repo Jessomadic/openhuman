@@ -40,7 +40,7 @@ const LEGACY_LIMIT_ENTRIES = [
   // under the general 750 limit, so it needs no exception at all.
   // The session-todo integration added transcript metadata construction to
   // this already-exempt composition seam. Keep its allowance exact.
-  ["crates/openhuman-core/src/agent/session_host/runtime_session.rs", 1349],
+  ["crates/openhuman-core/src/agent/session_host/runtime_session.rs", 1293],
   // Session-host factory still assembles the product's deliberately coupled
   // provider, security, memory, tool and prompt policy.  Generic session
   // state moved to tinyagents-runtime; this remaining composition is split in
@@ -161,6 +161,7 @@ for (const [directory, table] of [
   ["examples", "example"],
 ]) {
   const files = rootRustTargetNames(directory);
+
   const declared = declaredTargets(table);
   for (const name of files) {
     if (!declared.has(name))
