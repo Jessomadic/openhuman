@@ -149,5 +149,7 @@ mod attribution_tests;
 mod content_gate_tests;
 #[path = "progress_tracing_span_tree_tests.rs"]
 mod span_tree_tests;
+#[path = "progress_tracing_tool_span_tests.rs"]
+mod tool_span_tests;
 #[path = "progress_tracing_ttft_tests.rs"]
 mod ttft_tests;
