@@ -180,6 +180,7 @@ impl ReportRow {
         match usage.cost_source {
             CostSource::ProviderCharged => self.charged_usd += usage.cost_usd,
             CostSource::Estimated => self.estimated_usd += usage.cost_usd,
+            CostSource::Unknown => self.unpriced_calls += 1,
         }
     }
 
