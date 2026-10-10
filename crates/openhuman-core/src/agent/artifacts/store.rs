@@ -391,7 +391,23 @@ pub(crate) async fn delete_artifact(
     }
     if let Some(docs) = documents(workspace_dir).await? {
         let id = artifact_id.to_string();
-        on_docs(docs, move |docs| docs.delete(&id).map(|_| ())).await?;
+        let existed = on_docs(docs, move |docs| docs.delete(&id)).await?;
+        // The legacy directory goes too, so a later import does not bring
+        // the artifact back.
+        match tokio::fs::remove_dir_all(&artifact_dir).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(format!(
+                    "[artifacts] failed to delete legacy record for id={artifact_id}: {e}"
+                ))
+            }
+        }
+        if !existed {
+            return Err(format!(
+                "[artifacts] failed to delete artifact id={artifact_id}: not found"
+            ));
+        }
         log::debug!("[artifacts] delete_artifact: deleted record id={artifact_id}");
         return Ok(());
     }
