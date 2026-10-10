@@ -41,6 +41,39 @@ fn text(result: &ToolResult) -> String {
     result.text()
 }
 
+#[tokio::test]
+async fn the_memory_tool_stops_write_churn_and_recovers_on_the_next_chat_turn() {
+    use crate::agent::turn_origin::{with_origin, AgentTurnOrigin};
+    let tmp = tempfile::tempdir().unwrap();
+    let config = config_in(&tmp);
+    let engine = bind_reference(&config);
+    let tool = MemoryTool::new(Arc::new(config));
+    let origin = |request: &str| AgentTurnOrigin::WebChat {
+        thread_id: "thread-budget".into(),
+        client_id: "client-budget".into(),
+        request_id: Some(request.into()),
+    };
+    with_origin(origin("first"), async {
+        for i in 0..9 {
+            let result = tool
+                .execute(json!({"action":"learn","text":format!("fact {i}")}))
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, i == 8);
+        }
+    })
+    .await;
+    assert_eq!(stored(&engine, MetaFilter::default()).await.len(), 8);
+    let result = with_origin(
+        origin("next"),
+        tool.execute(json!({"action":"learn","text":"next turn fact"})),
+    )
+    .await
+    .unwrap();
+    assert!(!result.is_error);
+    assert_eq!(stored(&engine, MetaFilter::default()).await.len(), 9);
+}
+
 #[test]
 fn schema_and_permissions_follow_the_action() {
     let tool = MemoryTool::new(Arc::new(Config::default()));

@@ -298,6 +298,14 @@ The agent `memory` tool applies the same confinement and overwrites any
   forget` tool. `learn` stamps the item with facts the model does not choose:
   workspace, thread id, memory agent id, the learnings namespace, the tool
   call, and `source.kind = agent`.
+  `MemoryTool` bounds optional engine work with [`tool_budget.rs`](./tool_budget.rs):
+  15 seconds per call, 30 seconds of aggregate engine time and eight attempts
+  per harness run. Concurrent reads reserve from the same time budget. A timeout
+  disables further memory calls in that run and returns a tool error asking the
+  model to continue without memory; the next run starts fresh. A timed-out write
+  can already have reached the server, so the error warns against retrying it.
+  Calls outside a harness still have the per-call deadline. RPC operations and
+  explicit settings/import/deletion workflows retain their own behavior.
 - `deletion::forget_thread` (`deletion.rs`): called by `threads` when a
   thread is deleted. `channels::forget_channel` is called by `channels` on
   disconnect.

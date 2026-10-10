@@ -103,13 +103,17 @@ pub const MEMORY_TOOL_NAME: &str = "memory";
 /// The `memory` tool.
 pub struct MemoryTool {
     config: Arc<Config>,
+    budget: super::tool_budget::ToolBudget,
 }
 
 impl MemoryTool {
     /// A tool bound to `config`'s engine.
     #[must_use]
     pub fn new(config: Arc<Config>) -> Self {
-        Self { config }
+        Self {
+            config,
+            budget: super::tool_budget::ToolBudget::default(),
+        }
     }
 }
 
@@ -351,7 +355,15 @@ impl Tool for MemoryTool {
         context: Option<&dyn ToolRunContext>,
     ) -> anyhow::Result<ToolResult> {
         let facts = CallFacts::gather(&self.config, context);
-        Ok(run_action(&self.config, &args, &facts).await)
+        let run_id = context
+            .and_then(ToolRunContext::host_extension)
+            .and_then(|any| any.downcast_ref::<tinyagents_harness::tool::ToolExecutionContext>())
+            .map(|ctx| ctx.run_id.as_str().to_string())
+            .or_else(crate::agent::turn_origin::current_request_id);
+        Ok(self
+            .budget
+            .run(run_id, run_action(&self.config, &args, &facts))
+            .await)
     }
 }
 
