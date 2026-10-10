@@ -100,7 +100,6 @@ pub(super) fn current(config: &Config) -> Result<Option<Docs>> {
     )
 }
 
-
 fn status_of(raw: Option<&str>) -> NotificationStatus {
     match raw {
         Some("read") => NotificationStatus::Read,
