@@ -178,6 +178,7 @@ fn empty_response(thread_id: &str) -> ThreadTokenUsageResponse {
         turn_count: 0,
         last_turn_input_tokens: 0,
         last_turn_output_tokens: 0,
+        last_turn_context_tokens: 0,
         context_window: 0,
         model: None,
         updated: None,
