@@ -1,5 +1,3 @@
-import threadGoalReducer from '../../../store/threadGoalSlice';
-import threadTodosReducer from '../../../store/threadTodosSlice';
 /**
  * Composer slot identity on the assistant-ui chat surface.
  *
@@ -22,7 +20,9 @@ import { describe, expect, it, vi } from 'vitest';
 import chatRuntimeReducer from '../../../store/chatRuntimeSlice';
 import mascotReducer from '../../../store/mascotSlice';
 import runModeReducer from '../../../store/runModeSlice';
+import threadGoalReducer from '../../../store/threadGoalSlice';
 import threadReducer from '../../../store/threadSlice';
+import threadTodosReducer from '../../../store/threadTodosSlice';
 import { AssistantUiChat } from './AssistantUiChat';
 
 const THREAD_ID = 't-slots';

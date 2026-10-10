@@ -1,5 +1,3 @@
-import threadGoalReducer from '../../../store/threadGoalSlice';
-import threadTodosReducer from '../../../store/threadTodosSlice';
 /**
  * The conversation map: `Cmd`/`Ctrl+F` find-in-conversation and assistant-ui's
  * persistent turn rail, both scoped to the live `/chat`
@@ -16,7 +14,9 @@ import { threadApi } from '../../../services/api/threadApi';
 import chatRuntimeReducer from '../../../store/chatRuntimeSlice';
 import mascotReducer from '../../../store/mascotSlice';
 import runModeReducer from '../../../store/runModeSlice';
+import threadGoalReducer from '../../../store/threadGoalSlice';
 import threadReducer from '../../../store/threadSlice';
+import threadTodosReducer from '../../../store/threadTodosSlice';
 import type { ThreadMessage } from '../../../types/thread';
 import { AssistantUiChat } from '../components/AssistantUiChat';
 

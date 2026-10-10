@@ -1,5 +1,3 @@
-import threadGoalReducer from '../../../store/threadGoalSlice';
-import threadTodosReducer from '../../../store/threadTodosSlice';
 /**
  * The render half of the parked-approval repair.
  *
@@ -29,7 +27,9 @@ import chatRuntimeReducer, {
   type PendingApproval,
   setPendingApprovalForThread,
 } from '../../../store/chatRuntimeSlice';
+import threadGoalReducer from '../../../store/threadGoalSlice';
 import threadReducer from '../../../store/threadSlice';
+import threadTodosReducer from '../../../store/threadTodosSlice';
 import { ChatToolFallback } from './ChatToolParts';
 
 vi.mock('../../../services/api/threadApi', () => ({
@@ -90,9 +90,12 @@ function gatedPart(over: Record<string, unknown> = {}) {
 
 function buildStore(approval?: PendingApproval) {
   const store = configureStore({
-    reducer: combineReducers({ thread: threadReducer,
+    reducer: combineReducers({
+      thread: threadReducer,
       threadGoal: threadGoalReducer,
-      threadTodos: threadTodosReducer, chatRuntime: chatRuntimeReducer }),
+      threadTodos: threadTodosReducer,
+      chatRuntime: chatRuntimeReducer,
+    }),
     preloadedState: {
       thread: {
         threads: [],

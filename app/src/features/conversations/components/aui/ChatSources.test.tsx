@@ -1,5 +1,3 @@
-import threadGoalReducer from '../../../../store/threadGoalSlice';
-import threadTodosReducer from '../../../../store/threadTodosSlice';
 /**
  * Inline source list under a settled answer.
  *
@@ -47,7 +45,9 @@ import { threadApi } from '../../../../services/api/threadApi';
 import chatRuntimeReducer from '../../../../store/chatRuntimeSlice';
 import mascotReducer from '../../../../store/mascotSlice';
 import runModeReducer from '../../../../store/runModeSlice';
+import threadGoalReducer from '../../../../store/threadGoalSlice';
 import threadReducer from '../../../../store/threadSlice';
+import threadTodosReducer from '../../../../store/threadTodosSlice';
 import type { DerivedDisplayItem } from '../../../../types/derivedTranscript';
 import type { ThreadMessage } from '../../../../types/thread';
 import { AssistantUiChat } from '../AssistantUiChat';

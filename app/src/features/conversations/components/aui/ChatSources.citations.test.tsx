@@ -1,5 +1,3 @@
-import threadGoalReducer from '../../../../store/threadGoalSlice';
-import threadTodosReducer from '../../../../store/threadTodosSlice';
 /**
  * `[n]` in the model's own answer text becomes an inline citation marker
  * (`elements/inline-citation.tsx`'s `CitationMarker`) instead of plain text,
@@ -17,7 +15,9 @@ import { threadApi } from '../../../../services/api/threadApi';
 import chatRuntimeReducer from '../../../../store/chatRuntimeSlice';
 import mascotReducer from '../../../../store/mascotSlice';
 import runModeReducer from '../../../../store/runModeSlice';
+import threadGoalReducer from '../../../../store/threadGoalSlice';
 import threadReducer from '../../../../store/threadSlice';
+import threadTodosReducer from '../../../../store/threadTodosSlice';
 import type { DerivedDisplayItem } from '../../../../types/derivedTranscript';
 import type { ThreadMessage } from '../../../../types/thread';
 import { AssistantUiChat } from '../AssistantUiChat';
