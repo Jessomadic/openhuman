@@ -26,6 +26,12 @@ on:
     branches: [main, release]
     paths:
       - ".github/workflows/storage-mongodb.yml"
+      - ".github/ci-paths-filter.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/openhuman-*/Cargo.toml"
+      - ".cargo/config.toml"
+      - "rust-toolchain.toml"
       - "crates/openhuman-core/src/storage/**"
       - "crates/openhuman-core/src/cron/**"
       - "crates/openhuman-core/src/flows/**"
@@ -56,6 +62,9 @@ on:
   workflow_dispatch: {}
 
 permissions:
+  # `actions: read` lets scripts/ci-cancel-aware.sh poll the run status, so a
+  # cancelled run stops its own cargo/docker client.
+  actions: read
   contents: read
 
 concurrency:
@@ -79,7 +88,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 1
           # Submodules come from the step below (only the ones a build reads).
@@ -111,7 +120,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target .cargo-registry
-          docker run --rm --network host --init \
+          # Through the cancellation wrapper: a cancelled run TERMs the docker
+          # client, and the `Stop` step below removes the named container.
+          bash scripts/ci-cancel-aware.sh docker run --rm --name oh-storage-test --network host --init \
             -v "$PWD:/work" -w /work \
             -v "$PWD/.cargo-registry:/usr/local/cargo/registry" \
             -e TSD_MONGO_URL \
@@ -142,6 +153,6 @@ jobs:
         if: failure()
         run: docker logs tsd-mongo 2>&1 | tail -n 100 || true
 
-      - name: Stop the MongoDB container
+      - name: Stop the containers
         if: always()
-        run: docker rm -f tsd-mongo >/dev/null 2>&1 || true
+        run: docker rm -f oh-storage-test tsd-mongo >/dev/null 2>&1 || true

@@ -12,7 +12,7 @@
 //! - `file`: when the `storage-file` feature is compiled in, on a temp
 //!   directory;
 //! - `mongodb`: when `storage-mongodb` is compiled in AND `TSD_MONGO_URL` is
-//!   set (a replica set, as `tinystoragedrivers`' CI uses). Each case gets a
+//!   set to a local throwaway server (localhost, 127.0.0.1 or ::1; a replica set, as `tinystoragedrivers`' CI uses). Each case gets a
 //!   database of its own (`oh_e2e_<uuid>`), so runs never see each other's
 //!   records and scopes stay isolated. With `TSD_MONGO_URL` unset the case
 //!   passes after printing that it was skipped.

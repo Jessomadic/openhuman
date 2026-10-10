@@ -220,6 +220,8 @@ storage:
   - 'crates/openhuman-core/src/web3/wallet/**'
   - 'crates/openhuman-core/src/config/schema/storage.rs'
   - 'crates/openhuman-rpc/src/session_store/**'
+  - 'Cargo.toml'
+  - 'Cargo.lock'
   - 'crates/openhuman-*/Cargo.toml'
   - 'tests/storage_*.rs'
   - 'tests/cli_storage_url_e2e.rs'
