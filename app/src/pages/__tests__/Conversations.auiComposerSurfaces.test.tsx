@@ -39,12 +39,11 @@ import runModeReducer from '../../store/runModeSlice';
 import socketReducer from '../../store/socketSlice';
 import themeReducer from '../../store/themeSlice';
 import threadGoalReducer from '../../store/threadGoalSlice';
-import {
+import threadReducer, {
   addMessageLocal,
   clearThreadInferenceActive,
   markThreadInferenceActive,
 } from '../../store/threadSlice';
-import threadReducer from '../../store/threadSlice';
 import threadTodosReducer, { setThreadTodos } from '../../store/threadTodosSlice';
 import type { Thread, ThreadMessage } from '../../types/thread';
 
