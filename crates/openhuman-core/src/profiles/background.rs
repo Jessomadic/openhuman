@@ -12,6 +12,10 @@
 //!   profile's context**, so the jobs read that user's config, credential and
 //!   memory root and nobody else's.
 //!
+//! Before a profile's jobs start, its lease fence is checked against the
+//! stored lease record, and the jobs are dropped mid-run if the profile is
+//! fenced meanwhile ([`super::fence`]).
+//!
 //! Users run one after another, and the memory job queue serialises them
 //! further; a single slow user delays the rest of a tick, never another
 //! user's data.
@@ -82,20 +86,38 @@ pub async fn tick(host: &ProfileHost) -> TickReport {
                 continue;
             }
         };
+        // Verify the lease against its stored record before starting: a
+        // node that lost the profile must not run its jobs, even before its
+        // heartbeat notices.
+        let fence = Arc::clone(state.lease_fence());
+        if let Err(error) = fence.check(super::lease::now_ms()).await {
+            log::warn!("[profiles][background] profile={id} not run, lease fence: {error}");
+            report.skipped += 1;
+            continue;
+        }
         let config = state.config.clone();
+        // Stop at once if the profile is fenced while its jobs run.
         let result = CoreContext::scope(Arc::clone(state.context()), async move {
-            jobs::run(&config, Selection::Due).await
+            tokio::select! {
+                biased;
+                () = fence.fenced() => None,
+                result = jobs::run(&config, Selection::Due) => Some(result),
+            }
         })
         .await;
         match result {
-            Ok(runs) => {
+            None => {
+                log::warn!("[profiles][background] profile={id} fenced mid-run; jobs stopped");
+                report.skipped += 1;
+            }
+            Some(Ok(runs)) => {
                 log::debug!(
                     "[profiles][background] profile={id} ran {} memory job(s)",
                     runs.len()
                 );
                 report.ran += 1;
             }
-            Err(error) => {
+            Some(Err(error)) => {
                 log::debug!("[profiles][background] profile={id} memory jobs not run: {error}");
                 report.skipped += 1;
             }
