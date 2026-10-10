@@ -37,10 +37,12 @@ impl Provider {
 }
 
 /// One endpoint/model choice in an ordered ladder.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CompletionRung {
     completer: Completer,
     model: String,
+    provider_options: Option<serde_json::Value>,
+    max_tokens: Option<Option<u32>>,
     unpinned: bool,
 }
 impl CompletionRung {
@@ -49,8 +51,23 @@ impl CompletionRung {
         Self {
             completer,
             model: model.into(),
+            provider_options: None,
+            max_tokens: None,
             unpinned: false,
         }
+    }
+    /// Replace the request's provider options on this rung. Applied before
+    /// `unpinned` removes gateway routing pins; other request fields survive.
+    pub fn provider_options(mut self, options: serde_json::Value) -> Self {
+        self.provider_options = Some(options);
+        self
+    }
+    /// Override this rung's initial output cap. `None` explicitly removes an
+    /// inherited cap and disables truncation growth; omitting this builder
+    /// inherits the request cap. Each rung retries from its own initial cap.
+    pub fn max_tokens(mut self, cap: Option<u32>) -> Self {
+        self.max_tokens = Some(cap);
+        self
     }
     /// Remove only the gateway `provider` routing object on this rung. Model,
     /// reasoning, usage requests, images and every other option are preserved.
@@ -58,6 +75,18 @@ impl CompletionRung {
     pub fn unpinned(mut self) -> Self {
         self.unpinned = true;
         self
+    }
+}
+
+impl std::fmt::Debug for CompletionRung {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletionRung")
+            .field("completer", &self.completer)
+            .field("model", &self.model)
+            .field("has_provider_options", &self.provider_options.is_some())
+            .field("max_tokens", &self.max_tokens)
+            .field("unpinned", &self.unpinned)
+            .finish()
     }
 }
 
@@ -157,7 +186,7 @@ impl CompletionLadder {
         self.truncation = Some(retry);
         self
     }
-    /// Run the ladder. Every rung starts from the original messages and token
+    /// Run the ladder. Every rung starts from the original messages and its own or inherited
     /// cap; truncated output never becomes trusted conversation history.
     pub async fn complete(
         &self,
@@ -183,6 +212,12 @@ impl CompletionLadder {
         for rung in &self.rungs {
             let mut current = request.clone();
             current.model = rung.model.clone();
+            if let Some(options) = &rung.provider_options {
+                current.provider_options = options.clone();
+            }
+            if let Some(cap) = rung.max_tokens {
+                current.max_tokens = cap;
+            }
             if rung.unpinned {
                 if let Some(options) = current.provider_options.as_object_mut() {
                     options.remove("provider");
@@ -225,7 +260,7 @@ impl CompletionLadder {
                             total_usage: total_usage(&attempts),
                             response,
                             attempts,
-                        })
+                        });
                     }
                     Ok(_) => {
                         last_error = CoreError::Rpc {

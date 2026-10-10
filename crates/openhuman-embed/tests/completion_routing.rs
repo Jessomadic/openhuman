@@ -1,7 +1,7 @@
 //! Ordered routing, capped truncation retries and provider-reported accounting.
 use openhuman_embed::routing::{CompletionLadder, CompletionRung, TruncationRetry};
 use openhuman_embed::{ChatMessage, Completer, CompletionRequest, Route};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
@@ -166,4 +166,86 @@ async fn unpinned_rungs_are_terminal_and_success_never_tries_fallback() {
         .expect("first answers");
     assert_eq!(result.attempts.len(), 1);
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn fallback_uses_its_own_provider_pin_and_retries_from_its_own_cap() {
+    let first = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(400)
+                .set_body_json(json!({"error":{"message":"fixture rejection"}})),
+        )
+        .mount(&first)
+        .await;
+    let fallback = scripted(vec![
+        answer("actual", "length", 0.01),
+        answer("actual", "stop", 0.02),
+    ])
+    .await;
+    let outcome = CompletionLadder::new(
+        rung(&first, "primary")
+            .provider_options(
+                json!({"provider":{"only":["primary-pin"]},"reasoning":{"effort":"low"}}),
+            )
+            .max_tokens(Some(16)),
+    )
+    .fallback(
+        rung(&fallback, "fallback")
+            .provider_options(
+                json!({"provider":{"only":["fallback-pin"]},"reasoning":{"effort":"high"}}),
+            )
+            .max_tokens(Some(32)),
+    )
+    .truncation_retry(TruncationRetry::new(1, 128))
+    .complete(
+        CompletionRequest::new("ignored", vec![ChatMessage::user("review")])
+            .max_tokens(8)
+            .provider_options(json!({"provider":{"only":["request-pin"]}})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        outcome
+            .attempts
+            .iter()
+            .map(|attempt| attempt.max_tokens)
+            .collect::<Vec<_>>(),
+        vec![Some(16), Some(32), Some(64)]
+    );
+    let requests = first.received_requests().await.unwrap();
+    let primary: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(primary["provider"]["only"][0], "primary-pin");
+    assert_eq!(primary["max_tokens"], 16);
+    let requests = fallback.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for (request, cap) in requests.iter().zip([32, 64]) {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["provider"]["only"][0], "fallback-pin");
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert_eq!(body["max_tokens"], cap);
+    }
+}
+
+#[tokio::test]
+async fn unpinned_rung_removes_its_own_pin_and_can_explicitly_clear_the_cap() {
+    let provider = scripted(vec![answer("actual", "length", 0.01)]).await;
+    let choice = rung(&provider,"model")
+        .provider_options(json!({"provider":{"only":["own-pin"]},"reasoning":{"effort":"high"},"host-private":"SECRET-OPTION"}))
+        .max_tokens(None).unpinned();
+    assert!(!format!("{choice:?}").contains("SECRET-OPTION"));
+    let error = CompletionLadder::new(choice)
+        .truncation_retry(TruncationRetry::new(2, 128))
+        .complete(
+            CompletionRequest::new("ignored", vec![ChatMessage::user("review")]).max_tokens(8),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.attempts.len(), 1);
+    assert_eq!(error.attempts[0].max_tokens, None);
+    let requests = provider.received_requests().await.unwrap();
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert!(body.get("provider").is_none());
+    assert!(body.get("max_tokens").is_none());
+    assert_eq!(body["reasoning"]["effort"], "high");
 }

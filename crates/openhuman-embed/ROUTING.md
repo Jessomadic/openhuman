@@ -24,7 +24,15 @@ assert_eq!(outcome.attempts.last().unwrap().answered_model, outcome.response.ans
 # }
 ```
 
-Each rung starts with the original conversation and cap. A `length` finish
+Each rung starts with the original conversation. By default it inherits the
+request cap and provider options. `CompletionRung::provider_options(value)`
+replaces the options for that rung, and `max_tokens(Some(cap))` overrides its
+initial cap. `max_tokens(None)` explicitly removes an inherited cap and disables
+truncation growth; omitting the builder inherits the request cap. Options are
+replaced before `unpinned()` removes the provider routing object. Rung debug
+output omits option values. Each fallback retries from its own initial cap.
+
+A `length` finish
 reason retries the same rung at doubled caps, bounded by both the retry count
 and absolute ceiling; 1024 tokens with the example policy tries 1024, 2048,
 4096. A missing cap never creates an implicit token budget. At the ceiling,
