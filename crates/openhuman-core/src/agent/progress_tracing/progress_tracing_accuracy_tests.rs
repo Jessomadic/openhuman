@@ -145,7 +145,11 @@ fn calls_folded_into_one_iteration_do_not_share_its_start() {
         .collect();
     assert_eq!(
         starts,
-        vec![(1_000, Some(3_000)), (3_000, Some(5_000)), (5_000, Some(9_000))]
+        vec![
+            (1_000, Some(3_000)),
+            (3_000, Some(5_000)),
+            (5_000, Some(9_000))
+        ]
     );
 }
 
@@ -210,7 +214,10 @@ fn late_child_tool_completion_after_subagent_completed_closes_the_span() {
         (iteration(1), 1_000),
         (spawn("t1", "Builder"), 1_100),
         (child_iteration("t1", 1), 1_200),
-        (child_tool_started("t1", "c1", "get_node_kind_contract"), 1_300),
+        (
+            child_tool_started("t1", "c1", "get_node_kind_contract"),
+            1_300,
+        ),
         (child_completed("t1", 900), 2_000),
         (
             child_tool_completed("t1", "c1", "get_node_kind_contract", 4),
@@ -275,20 +282,24 @@ fn tool_without_completion_is_force_closed_at_its_parent_end() {
 
 #[test]
 fn turn_without_completion_is_an_error() {
-    let mut c = collect(&[
-        (AgentProgress::TurnStarted, 1_000),
-        (iteration(1), 1_000),
-    ]);
+    let mut c = collect(&[(AgentProgress::TurnStarted, 1_000), (iteration(1), 1_000)]);
     c.finish(5_000);
     let turn = find(c.spans(), "agent.turn");
     assert_eq!(turn.status, SpanStatus::Error);
-    assert_eq!(turn.attributes["turn.outcome"], serde_json::json!("incomplete"));
+    assert_eq!(
+        turn.attributes["turn.outcome"],
+        serde_json::json!("incomplete")
+    );
     assert_eq!(
         exported_attr(c.spans(), "agent.turn", "langfuse.observation.level").as_deref(),
         Some("ERROR")
     );
-    assert!(exported_attr(c.spans(), "agent.turn", "langfuse.observation.status_message")
-        .is_some());
+    assert!(exported_attr(
+        c.spans(),
+        "agent.turn",
+        "langfuse.observation.status_message"
+    )
+    .is_some());
 }
 
 #[test]
@@ -300,7 +311,10 @@ fn failed_turn_message_is_content_gated() {
     gated.finish_with_outcome(2_000, Some(failed()));
     let turn = find(gated.spans(), "agent.turn");
     assert_eq!(turn.status, SpanStatus::Error);
-    assert_eq!(turn.attributes["error.message"], serde_json::json!("Turn failed"));
+    assert_eq!(
+        turn.attributes["error.message"],
+        serde_json::json!("Turn failed")
+    );
 
     let mut captured = collect_with_capture(&[(AgentProgress::TurnStarted, 1_000)]);
     captured.finish_with_outcome(2_000, Some(failed()));
@@ -317,7 +331,10 @@ fn cancelled_turn_is_a_warning_not_an_error() {
     c.finish_with_outcome(2_000, Some(TurnOutcome::Cancelled { reason: None }));
     let turn = find(c.spans(), "agent.turn");
     assert_eq!(turn.status, SpanStatus::Unset);
-    assert_eq!(turn.attributes["turn.outcome"], serde_json::json!("cancelled"));
+    assert_eq!(
+        turn.attributes["turn.outcome"],
+        serde_json::json!("cancelled")
+    );
     assert_eq!(
         turn.attributes["observation.level"],
         serde_json::json!("WARNING")
@@ -330,7 +347,12 @@ fn completed_turn_is_not_reclassified_by_finish() {
         (AgentProgress::TurnStarted, 1_000),
         (AgentProgress::TurnCompleted { iterations: 1 }, 2_000),
     ]);
-    c.finish_with_outcome(3_000, Some(TurnOutcome::Failed { message: "x".into() }));
+    c.finish_with_outcome(
+        3_000,
+        Some(TurnOutcome::Failed {
+            message: "x".into(),
+        }),
+    );
     let turn = find(c.spans(), "agent.turn");
     assert_eq!(turn.status, SpanStatus::Ok);
     assert_eq!(turn.end_unix_ms, Some(2_000));
@@ -376,7 +398,16 @@ fn empty_provider_and_model_do_not_produce_dot_labels() {
         (AgentProgress::TurnStarted, 1_000),
         (iteration(1), 1_000),
         (
-            call("openrouter/deepseek/deepseek-v4-flash", "", None, 10, 1, 0, 0, 0.0),
+            call(
+                "openrouter/deepseek/deepseek-v4-flash",
+                "",
+                None,
+                10,
+                1,
+                0,
+                0,
+                0.0,
+            ),
             2_000,
         ),
         (iteration(2), 3_000),
@@ -404,12 +435,23 @@ fn unpriced_model_placeholder_cost_is_not_recorded() {
     let c = collect(&[
         (AgentProgress::TurnStarted, 1_000),
         (iteration(1), 1_000),
-        (call(model, "openrouter", None, 1_000, 100, 0, 0, placeholder), 2_000),
+        (
+            call(model, "openrouter", None, 1_000, 100, 0, 0, placeholder),
+            2_000,
+        ),
     ]);
     let g = generations(c.spans())[0];
-    assert_eq!(g.attributes["gen_ai.usage.cost_usd"], serde_json::json!(0.0));
-    assert_eq!(g.attributes["gen_ai.cost.source"], serde_json::json!("unpriced"));
-    assert!(!g.attributes.contains_key("gen_ai.pricing.input_per_mtok_usd"));
+    assert_eq!(
+        g.attributes["gen_ai.usage.cost_usd"],
+        serde_json::json!(0.0)
+    );
+    assert_eq!(
+        g.attributes["gen_ai.cost.source"],
+        serde_json::json!("unpriced")
+    );
+    assert!(!g
+        .attributes
+        .contains_key("gen_ai.pricing.input_per_mtok_usd"));
     assert_eq!(
         exported_attr(
             c.spans(),
@@ -427,12 +469,24 @@ fn free_model_is_priced_at_zero() {
         (AgentProgress::TurnStarted, 1_000),
         (iteration(1), 1_000),
         (
-            call("deepseek/deepseek-chat-v3.1:free", "openrouter", None, 1_000, 100, 0, 0, 0.0),
+            call(
+                "deepseek/deepseek-chat-v3.1:free",
+                "openrouter",
+                None,
+                1_000,
+                100,
+                0,
+                0,
+                0.0,
+            ),
             2_000,
         ),
     ]);
     let g = generations(c.spans())[0];
-    assert_eq!(g.attributes["gen_ai.usage.cost_usd"], serde_json::json!(0.0));
+    assert_eq!(
+        g.attributes["gen_ai.usage.cost_usd"],
+        serde_json::json!(0.0)
+    );
     assert_eq!(
         g.attributes["gen_ai.pricing.output_per_mtok_usd"],
         serde_json::json!(0.0)
@@ -448,15 +502,30 @@ fn uncached_only_input_route_reports_a_consistent_total() {
         (AgentProgress::TurnStarted, 1_000),
         (iteration(1), 1_000),
         (
-            call("claude-sonnet-4-5", "claude-code", None, 12, 300, 40_000, 2_000, 0.0),
+            call(
+                "claude-sonnet-4-5",
+                "claude-code",
+                None,
+                12,
+                300,
+                40_000,
+                2_000,
+                0.0,
+            ),
             2_000,
         ),
     ]);
     let g = generations(c.spans())[0];
     let a = &g.attributes;
     assert_eq!(a["gen_ai.usage.input_tokens"], serde_json::json!(42_012));
-    assert_eq!(a["gen_ai.usage.uncached_input_tokens"], serde_json::json!(12));
-    assert_eq!(a["gen_ai.usage.cache_creation_tokens"], serde_json::json!(2_000));
+    assert_eq!(
+        a["gen_ai.usage.uncached_input_tokens"],
+        serde_json::json!(12)
+    );
+    assert_eq!(
+        a["gen_ai.usage.cache_creation_tokens"],
+        serde_json::json!(2_000)
+    );
     assert_eq!(a["gen_ai.usage.total_tokens"], serde_json::json!(42_312));
     let usage: serde_json::Value = serde_json::from_str(
         &exported_attr(
@@ -468,7 +537,5 @@ fn uncached_only_input_route_reports_a_consistent_total() {
     )
     .unwrap();
     assert_eq!(usage["total"], serde_json::json!(42_312));
-    assert!(
-        usage["total"].as_u64().unwrap() >= usage["cache_read_input_tokens"].as_u64().unwrap()
-    );
+    assert!(usage["total"].as_u64().unwrap() >= usage["cache_read_input_tokens"].as_u64().unwrap());
 }
