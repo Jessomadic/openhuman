@@ -72,11 +72,22 @@ impl BilledUsage {
         self
     }
 
-    /// Sets the provider-charged USD amount.
+    /// Records what the provider billed for this call. Zero is a real charge
+    /// (a free route), not "unknown".
     pub fn with_charged_usd(mut self, usd: f64) -> Self {
         self.charged_amount_usd = usd;
         self.cost_is_estimate = false;
+        self.charge_reported = true;
         self
+    }
+
+    /// Records a charge only when the provider reported one; `None` leaves
+    /// the cost unknown.
+    pub fn with_reported_charge(self, usd: Option<f64>) -> Self {
+        match usd {
+            Some(usd) => self.with_charged_usd(usd),
+            None => self,
+        }
     }
 
     /// Sets a locally estimated USD cost, kept apart from provider charges so
@@ -84,6 +95,7 @@ impl BilledUsage {
     pub fn with_estimated_usd(mut self, usd: f64) -> Self {
         self.charged_amount_usd = usd;
         self.cost_is_estimate = true;
+        self.charge_reported = false;
         self
     }
 }
