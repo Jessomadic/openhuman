@@ -150,7 +150,7 @@ jobs:
             -e RUST_MIN_STACK=16777216 \
             "$CI_IMAGE" bash -euo pipefail -c '
               git config --global --add safe.directory "*"
-              cargo test -p openhuman-cli --features storage-mongodb \
+              cargo test --no-fail-fast -p openhuman-cli --features storage-mongodb \
                 --test storage_approvals_e2e \
                 --test storage_domains_e2e \
                 --test storage_flows_e2e \
@@ -159,7 +159,7 @@ jobs:
                 --test storage_agent_scopes_e2e \
                 --test storage_delegation_e2e \
                 --test cli_storage_url_e2e
-              cargo test -p openhuman-rpc --features session-store,storage-mongodb --lib -- session_store::
+              cargo test --no-fail-fast -p openhuman-rpc --features session-store,storage-mongodb --lib -- session_store::
             '
 
       - name: Fix ownership of the build output
