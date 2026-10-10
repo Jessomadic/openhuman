@@ -193,6 +193,8 @@ fn last_turn_usage_reports_the_same_holistic_totals_as_transcript_billing() {
         cached_input_tokens: 3,
         cost_usd: 0.004,
         context_window: 128_000,
+        last_call_input_tokens: 9,
+        last_call_output_tokens: 2,
         ..Default::default()
     };
     sidecar
