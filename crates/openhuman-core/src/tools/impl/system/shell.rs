@@ -2,7 +2,6 @@ use super::shell_platform::{
     command_param_description, python_utf8_env, shell_child_env, shell_description,
 };
 use crate::agent::host_runtime::RuntimeAdapter;
-use crate::agent::platform_shell::ShellFlavor;
 use crate::runtime::javascript::NodeBootstrap;
 use crate::runtime::python::PythonBootstrap;
 use crate::security::{AuditLogger, CommandExecutionLog, GateDecision, SecurityPolicy};
@@ -169,7 +168,7 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        shell_description(ShellFlavor::current())
+        shell_description(self.runtime.shell_flavor())
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -178,7 +177,7 @@ impl Tool for ShellTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": command_param_description(ShellFlavor::current())
+                    "description": command_param_description(self.runtime.shell_flavor())
                 },
                 "category": {
                     "type": "string",
