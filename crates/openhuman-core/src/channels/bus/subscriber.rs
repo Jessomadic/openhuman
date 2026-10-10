@@ -67,7 +67,9 @@ impl EventHandler<DomainEvent> for ChannelInboundSubscriber {
         // If that contract is broken, the legacy channel-only key would let
         // different users share one chat session and its prepared wallet quote.
         if channel.split(':').next() == Some("discord")
-            && sender.as_deref().is_none_or(|value| value.trim().is_empty())
+            && sender
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
         {
             tracing::warn!("[channel-inbound] dropping Discord message without sender id");
             return;
