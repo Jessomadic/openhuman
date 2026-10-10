@@ -264,6 +264,8 @@ pub struct Turn {
     untrusted_input: bool,
     cancellation: Option<crate::TurnCancellation>,
     timeout: Option<std::time::Duration>,
+    observer: Option<Arc<dyn crate::observe::TurnObserver>>,
+    trace_content: crate::observe::TraceContent,
 }
 
 impl Turn {
@@ -285,6 +287,8 @@ impl Turn {
             untrusted_input: false,
             cancellation: None,
             timeout: None,
+            observer: None,
+            trace_content: crate::observe::TraceContent::MetadataOnly,
         }
     }
 
@@ -511,6 +515,30 @@ impl Turn {
     /// that is a build/composition fact, not a failure, and a host should hide
     /// the surface rather than report an error.
     pub async fn send(mut self) -> Result<TurnOutcome, CoreError> {
+        // Keep cancellation acknowledgement behind the terminal callback too.
+        let _observer_guard = self.cancellation.as_ref().map(|handle| handle.enter());
+        let Some(observer) = self.observer.take() else {
+            return self.send_controlled().await;
+        };
+        let capture = self.trace_content;
+        let session_id = self
+            .session_id
+            .clone()
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or_else(|| format!("embed-{}", uuid::Uuid::new_v4()));
+        self.session_id = Some(session_id.clone());
+        let message = self.request.message.clone();
+        crate::observe::observe_turn(
+            observer,
+            capture,
+            &session_id,
+            &message,
+            self.send_controlled(),
+        )
+        .await
+    }
+
+    async fn send_controlled(mut self) -> Result<TurnOutcome, CoreError> {
         let timeout = self.timeout.take();
         let cancellation = match self.cancellation.take() {
             Some(cancellation) => cancellation,
@@ -541,6 +569,20 @@ impl Turn {
         // waiters. No new command can register after this point.
         cancellation.cleanup().wait().await;
         outcome
+    }
+
+    /// Observe completion and, on runtime-owned agents, model and tool events.
+    /// Caller-built core runtimes provide terminal metadata only. Payloads are
+    /// omitted unless [`Self::trace_content`] explicitly enables them.
+    pub fn observer(mut self, observer: Arc<dyn crate::observe::TurnObserver>) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
+    /// Explicitly consent to model messages and tool payloads in observations.
+    pub fn trace_content(mut self, content: crate::observe::TraceContent) -> Self {
+        self.trace_content = content;
+        self
     }
 
     /// Bound the entire turn, including tool calls and answer repair.
@@ -875,7 +917,7 @@ async fn dispatch(
             let turn: futures_box::BoxFuture<'_, Result<AgentReply, CoreError>> =
                 Box::pin(async move {
                     use openhuman_core::inference::host_runtime::ops::{
-                        AgentChatTarget, agent_chat_for,
+                        agent_chat_for, AgentChatTarget,
                     };
                     let mut config = inner.config.clone();
                     let route = openhuman_core::config::schema::EphemeralRoute::from_params(

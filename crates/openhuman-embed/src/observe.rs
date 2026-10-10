@@ -15,6 +15,14 @@ pub enum TurnFailure {
     Provider,
     /// Host domain rejected the turn.
     Domain,
+    /// Locally refused structured output.
+    Structured,
+    /// Spending admission refused another physical call.
+    Budget,
+    /// Caller requested cancellation.
+    Cancelled,
+    /// Whole-turn deadline elapsed.
+    Deadline,
     /// Other facade or configuration failure.
     Other,
 }
@@ -77,6 +85,10 @@ where
     let failure = result.as_ref().err().map(|error| match error {
         CoreError::Rpc { .. } => TurnFailure::Provider,
         CoreError::Domain { .. } => TurnFailure::Domain,
+        CoreError::StructuredOutput { .. } => TurnFailure::Structured,
+        CoreError::BudgetExceeded { .. } => TurnFailure::Budget,
+        CoreError::Cancelled { .. } | CoreError::TurnCancelled { .. } => TurnFailure::Cancelled,
+        CoreError::DeadlineExceeded { .. } => TurnFailure::Deadline,
         _ => TurnFailure::Other,
     });
     observer.on_turn(&TurnTrace {
