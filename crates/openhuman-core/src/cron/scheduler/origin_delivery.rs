@@ -70,7 +70,7 @@ pub(crate) async fn append_to_origin_transcript(
         FileTranscriptLocator, SessionRef, TranscriptMessage,
     };
     let session = SessionRef::scoped(append.thread_id.to_string(), append.agent_id.to_string());
-    if let Some(agent) = crate::core::runtime::agent_scope::current_agent_id() {
+    if let Some(agent) = crate::agent::session_store::current_embedded_agent() {
         use tinyagents_session::transcript::TranscriptLocator;
         crate::agent::session_store::AgentTranscriptFiles::new(workspace_dir, &agent)
             .session_exists(&session);
