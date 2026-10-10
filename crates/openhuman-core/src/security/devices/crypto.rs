@@ -4,8 +4,8 @@
 //! Wire format (frame v2): `version(1=0x02) || nonce(24) || ciphertext+tag`.
 //! Frames produced with the previous `version=0x01` shape (single shared key,
 //! same key in both directions, no KDF) are no longer accepted; peers MUST
-//! re-pair after upgrade. The iOS client is marked in-progress / non-shipping
-//! in CLAUDE.md, so the forced re-pair is acceptable.
+//! upgrade before reconnecting. An upgraded client may reuse a valid pairing
+//! profile and device key.
 //!
 //! Session key derivation (`derive_session_keys`):
 //! ```text
@@ -287,7 +287,7 @@ impl TunnelCipher {
     ///
     /// Frames with `version = 0x01` (the pre-upgrade single-key shape) are
     /// rejected with an explicit `UnsupportedFrameVersion` message so peers
-    /// see a clear "re-pair required" signal instead of a generic AEAD
+    /// see a clear "client upgrade required" signal instead of a generic AEAD
     /// failure.
     pub fn open(&mut self, frame: &[u8]) -> Result<Vec<u8>, String> {
         if frame.is_empty() {
@@ -296,7 +296,7 @@ impl TunnelCipher {
         if frame[0] == LEGACY_FRAME_VERSION_V1 {
             return Err(
                 "[devices/crypto] UnsupportedFrameVersion: legacy v1 frame rejected — \
-                 peer must re-pair to upgrade to v2 directional subkeys"
+                 peer must upgrade to v2 directional subkeys before reconnecting"
                     .into(),
             );
         }
