@@ -671,6 +671,25 @@ export interface PendingApproval {
    * `ToolCallMessagePart.approval.resolution` union.
    */
   resolution?: 'expired' | 'cancelled';
+  /**
+   * The park can outlive the turn it is shown on
+   * (`ChatApprovalRequestEvent.detached`): an async-delegated sub-agent asking
+   * for approval after — or while — its parent turn finishes. Turn-end
+   * handlers keep a detached entry (its gate is still parked; clearing it was
+   * what left every async `image_agent` approval invisible until it expired)
+   * and `approval_decided` clears it instead.
+   */
+  detached?: boolean;
+}
+
+/**
+ * Drop the thread's parked approval at a turn boundary, unless it is detached
+ * from that turn (see `PendingApproval.detached`) — a detached park is still
+ * waiting on the user after the turn that surfaced it ends.
+ */
+function dropTurnBoundApproval(state: ChatRuntimeState, threadId: string): void {
+  if (state.pendingApprovalByThread[threadId]?.detached) return;
+  delete state.pendingApprovalByThread[threadId];
 }
 
 /**
