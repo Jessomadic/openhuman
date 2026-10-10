@@ -13,8 +13,7 @@ use super::secrets::{decrypt_config_secrets, encrypt_config_secrets};
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-use tokio::fs::{self, OpenOptions};
-use tokio::io::AsyncWriteExt;
+use tokio::fs;
 
 /// Guards the "corrupted config read, resetting to defaults" warning so it
 /// fires at most once per process lifetime. Without this, a permanently
@@ -414,7 +413,12 @@ impl Config {
         let config_path = config_path.to_path_buf();
         let workspace_dir = workspace_dir.to_path_buf();
 
-        if !config_path.exists() {
+        // A snapshot reload reads through the config source: the file, or the
+        // scope's config document on a shared backend (bootstrap tables still
+        // come from the file). The first load of a process does not: see
+        // `source`.
+        let source = super::source::for_config(&config_path);
+        if !source.exists().await {
             let mut config = Config {
                 config_path,
                 workspace_dir,
@@ -435,8 +439,10 @@ impl Config {
             );
         }
 
-        let (raw, read_was_recovered) =
-            Box::pin(read_config_with_recovery_or_default(&config_path)).await?;
+        let super::source::ConfigRead {
+            contents: raw,
+            recovered: read_was_recovered,
+        } = Box::pin(source.read()).await?;
         let (mut config, config_was_corrupted) = if read_was_recovered && raw.is_empty() {
             (Config::default(), true)
         } else {
