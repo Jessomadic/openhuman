@@ -195,3 +195,7 @@ Per-section `*_tests.rs` files, plus [`load_tests.rs`](./load_tests.rs) (split i
   `action_dir` / `workspace_dir` boundary this module only describes.
 - [Settings](../../../../../gitbooks/features/settings.md)
 - [Deep architecture reference](../../../../../gitbooks/developing/architecture.md)
+
+## Config sources
+
+`load/source/` defines the `ConfigSource` port: where the TOML text of a config lives. `FileConfigSource` is `config.toml` with the atomic replace and `.bak` of `load/atomic_commit.rs` (the file stays hand-editable). `DocumentConfigSource` is the `config/{scope}` document on a shared (multi-tenant) storage backend, used by `Config::save` and by snapshot reloads (`load_from_config_path`). The first load of a process (`load_or_init`) always reads the file. Bootstrap tables (`[storage]`) are never written to a document and are always re-applied from the file on a document read. `SaasConfig` is not part of this.
