@@ -399,7 +399,8 @@ fn retire_tables(db_path: &Path, tables: &[&str]) -> Result<()> {
             .query_map([table], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for index in indexes {
-            tx.execute_batch(&format!("DROP INDEX \"{index}\""))?;
+            let quoted = index.replace('"', "\"\"");
+            tx.execute_batch(&format!("DROP INDEX \"{quoted}\""))?;
         }
         tx.execute_batch(&format!("ALTER TABLE \"{table}\" RENAME TO \"{target}\""))
             .with_context(|| format!("rename {table} to {target}"))?;
