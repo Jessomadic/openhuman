@@ -321,6 +321,11 @@ fn profiles_round_trip_their_own_memory_and_never_anothers() {
     // On the wire: every memory request carried one profile's credential,
     // and named only scopes inside that profile's root.
     let requests = s.mock.requests();
+    if std::env::var("DUMP_MEMORY_WIRE").is_ok() {
+        for (i, r) in requests.iter().enumerate() {
+            eprintln!("{i} {} {} {} {:?}", r.method, r.path, r.bearer, r.scopes);
+        }
+    }
     assert!(!requests.is_empty());
     let owners: std::collections::HashMap<String, String> = profiles
         .iter()
