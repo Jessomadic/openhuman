@@ -1,3 +1,5 @@
+import threadGoalReducer from '../../../store/threadGoalSlice';
+import threadTodosReducer from '../../../store/threadTodosSlice';
 /**
  * The conversation map: `Cmd`/`Ctrl+F` find-in-conversation and assistant-ui's
  * persistent turn rail, both scoped to the live `/chat`
@@ -32,6 +34,8 @@ function buildStore(messages: ThreadMessage[]) {
   return configureStore({
     reducer: combineReducers({
       thread: threadReducer,
+      threadGoal: threadGoalReducer,
+      threadTodos: threadTodosReducer,
       chatRuntime: chatRuntimeReducer,
       mascot: mascotReducer,
       runMode: runModeReducer,

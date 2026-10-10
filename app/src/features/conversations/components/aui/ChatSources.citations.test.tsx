@@ -1,3 +1,5 @@
+import threadGoalReducer from '../../../../store/threadGoalSlice';
+import threadTodosReducer from '../../../../store/threadTodosSlice';
 /**
  * `[n]` in the model's own answer text becomes an inline citation marker
  * (`elements/inline-citation.tsx`'s `CitationMarker`) instead of plain text,
@@ -50,6 +52,8 @@ function buildStore(message: ThreadMessage) {
   return configureStore({
     reducer: combineReducers({
       thread: threadReducer,
+      threadGoal: threadGoalReducer,
+      threadTodos: threadTodosReducer,
       chatRuntime: chatRuntimeReducer,
       mascot: mascotReducer,
       runMode: runModeReducer,

@@ -209,6 +209,7 @@ vi.mock('../../store/userScopedStorage', () => ({
   userScopedStorage: {
     getItem: vi.fn().mockResolvedValue(null),
     setItem: vi.fn().mockResolvedValue(undefined),
+    removeItem: vi.fn().mockResolvedValue(undefined),
   },
 }));
 

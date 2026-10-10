@@ -1,3 +1,5 @@
+import threadGoalReducer from '../../../../store/threadGoalSlice';
+import threadTodosReducer from '../../../../store/threadTodosSlice';
 /**
  * Inline source list under a settled answer.
  *
@@ -87,6 +89,8 @@ function buildStore(message: ThreadMessage = agentMessage()) {
   return configureStore({
     reducer: combineReducers({
       thread: threadReducer,
+      threadGoal: threadGoalReducer,
+      threadTodos: threadTodosReducer,
       chatRuntime: chatRuntimeReducer,
       mascot: mascotReducer,
       runMode: runModeReducer,

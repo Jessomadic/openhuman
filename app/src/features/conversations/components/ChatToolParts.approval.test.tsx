@@ -1,3 +1,5 @@
+import threadGoalReducer from '../../../store/threadGoalSlice';
+import threadTodosReducer from '../../../store/threadTodosSlice';
 /**
  * The render half of the parked-approval repair.
  *
@@ -88,7 +90,9 @@ function gatedPart(over: Record<string, unknown> = {}) {
 
 function buildStore(approval?: PendingApproval) {
   const store = configureStore({
-    reducer: combineReducers({ thread: threadReducer, chatRuntime: chatRuntimeReducer }),
+    reducer: combineReducers({ thread: threadReducer,
+      threadGoal: threadGoalReducer,
+      threadTodos: threadTodosReducer, chatRuntime: chatRuntimeReducer }),
     preloadedState: {
       thread: {
         threads: [],

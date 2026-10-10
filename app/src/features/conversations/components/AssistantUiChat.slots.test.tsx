@@ -1,3 +1,5 @@
+import threadGoalReducer from '../../../store/threadGoalSlice';
+import threadTodosReducer from '../../../store/threadTodosSlice';
 /**
  * Composer slot identity on the assistant-ui chat surface.
  *
@@ -29,6 +31,8 @@ function buildStore() {
   return configureStore({
     reducer: combineReducers({
       thread: threadReducer,
+      threadGoal: threadGoalReducer,
+      threadTodos: threadTodosReducer,
       chatRuntime: chatRuntimeReducer,
       mascot: mascotReducer,
       // The composer's `/plan` / `/build` commands read it (`useRunMode`).

@@ -1,3 +1,5 @@
+import threadGoalReducer from '../../../store/threadGoalSlice';
+import threadTodosReducer from '../../../store/threadTodosSlice';
 /**
  * Welcome suggestion chips on the assistant-ui chat surface.
  *
@@ -55,6 +57,8 @@ function buildStore(messages: ThreadMessage[]) {
   return configureStore({
     reducer: combineReducers({
       thread: threadReducer,
+      threadGoal: threadGoalReducer,
+      threadTodos: threadTodosReducer,
       chatRuntime: chatRuntimeReducer,
       mascot: mascotReducer,
       // The composer's `/plan` / `/build` commands read it (`useRunMode`).
