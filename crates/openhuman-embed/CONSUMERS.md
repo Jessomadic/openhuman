@@ -89,7 +89,7 @@ need to import core constants or hand-assemble the builder.
 Create one `Runtime` during server startup and share it with `Arc<Runtime>`.
 Create or reuse independently configured `Agent` handles on that runtime;
 clone an agent handle for concurrent requests and use distinct session IDs
-for unrelated reviews. Do not call `Runtime::builder().build()` per HTTP
+for unrelated requests. Do not call `Runtime::builder().build()` per HTTP
 request: process-wide keyring, event bus and subscriber ownership deliberately
 refuse a second live runtime with `RuntimeError::AlreadyRunning`.
 

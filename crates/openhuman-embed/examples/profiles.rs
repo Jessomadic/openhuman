@@ -1,7 +1,7 @@
 //! Title: SaaS profiles isolate conversation history
 //! Summary: SaaS profiles isolate conversation history.
 //! Run: offline with loopback stubs; no live path.
-//! Feature: default
+//! Feature: channels
 
 mod support;
 fn main() -> anyhow::Result<()> {

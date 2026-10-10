@@ -19,12 +19,15 @@ async fn provider(content: &str) -> MockServer {
 }
 
 fn request(schema: Value) -> CompletionRequest {
-    CompletionRequest::new("fixture", vec![ChatMessage::user("Review untrusted code.")])
-        .response_format(ResponseFormat::JsonSchema {
-            name: "review".into(),
-            schema,
-        })
-        .max_tokens(128)
+    CompletionRequest::new(
+        "fixture",
+        vec![ChatMessage::user("Analyze untrusted text.")],
+    )
+    .response_format(ResponseFormat::JsonSchema {
+        name: "analysis".into(),
+        schema,
+    })
+    .max_tokens(128)
 }
 
 fn completer(server: &MockServer) -> Completer {
@@ -37,7 +40,7 @@ fn completer(server: &MockServer) -> Completer {
 #[tokio::test]
 async fn a_parseable_reply_with_the_wrong_type_is_an_error() {
     let server = provider(r#"{"summary":123}"#).await;
-    let error = completer(&server).complete(request(json!({"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}))).await.expect_err("schema-invalid JSON must not become an empty successful review");
+    let error = completer(&server).complete(request(json!({"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"]}))).await.expect_err("schema-invalid JSON must not become an empty successful answer");
     assert!(!error.to_string().contains("123"));
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }

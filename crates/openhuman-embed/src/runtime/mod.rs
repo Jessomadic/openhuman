@@ -14,22 +14,22 @@
 //!
 //! // Step 2 — agents, each fully described. Nothing about one leaks into
 //! // another: their own MCP servers, skills, working directory, access tier.
-//! let reviewer = runtime.agent(
-//!     AgentSpec::new("reviewer")
-//!         .system_prompt("You review pull requests.")
+//! let analyst = runtime.agent(
+//!     AgentSpec::new("analyst")
+//!         .system_prompt("You summarize documents.")
 //!         .access(Access::readonly())
-//!         .action_dir("/srv/checkouts/pr-42"),
+//!         .action_dir("/srv/documents"),
 //! )?;
-//! let fixer = runtime.agent(
-//!     AgentSpec::new("fixer")
+//! let writer = runtime.agent(
+//!     AgentSpec::new("writer")
 //!         .provider(Provider::openai_compatible("https://api.example/v1", "sk-…").model("gpt-5"))
 //!         .access(Access::full())
-//!         .action_dir("/srv/checkouts/pr-42"),
+//!         .action_dir("/srv/documents"),
 //! )?;
 //!
-//! let review = reviewer.run("Summarise the risks in this change.").await?;
-//! let fix = fixer.turn(format!("Address: {}", review.reply)).send().await?;
-//! println!("{}", fix.reply);
+//! let analysis = analyst.run("Summarise this document.").await?;
+//! let draft = writer.turn(format!("Explain: {}", analysis.reply)).send().await?;
+//! println!("{}", draft.reply);
 //! # Ok(())
 //! # }
 //! ```

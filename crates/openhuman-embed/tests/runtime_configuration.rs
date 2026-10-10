@@ -67,7 +67,7 @@ async fn assert_runtime_configuration() {
         .define_template(
             "shared",
             AgentDefinitionSpec::new()
-                .bare_prompt("Shared reviewer.")
+                .bare_prompt("Shared analyst.")
                 .tools(ToolScopeSpec::Named(Vec::new())),
         )
         .unwrap();

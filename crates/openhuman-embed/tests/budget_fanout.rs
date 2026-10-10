@@ -28,7 +28,7 @@ fn completer(server: &MockServer) -> Completer {
     ))
 }
 fn request(model: &str) -> CompletionRequest {
-    CompletionRequest::new(model, vec![ChatMessage::user("review")]).max_tokens(30)
+    CompletionRequest::new(model, vec![ChatMessage::user("analysis")]).max_tokens(30)
 }
 fn leaf(server: &MockServer, model: &str) -> LeafCall {
     LeafCall::completion(completer(server), request(model))

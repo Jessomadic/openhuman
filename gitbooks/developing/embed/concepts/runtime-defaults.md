@@ -4,7 +4,7 @@ description: "Runtime defaults form the starting point for newly registered agen
 
 # Runtime defaults
 
-The runtime's default provider, access policy and `ModelDefaults` reduce repeated setup. `AgentSpec` can override those defaults for a reviewer, a coding agent or another workload without changing its siblings. Temperature and token limits are forwarded to the selected native model request, rather than being merely descriptive builder values.
+The runtime's default provider, access policy and `ModelDefaults` reduce repeated setup. `AgentSpec` can override those defaults for an analyst, a writing agent or another workload without changing its siblings. Temperature and token limits are forwarded to the selected native model request, rather than being merely descriptive builder values.
 
 `Runtime::defaults()` returns a snapshot. Runtime default setters affect agents created afterward; existing agents retain the configuration they were built with. Configure an explicit agent override when its behavior must remain independent of future runtime defaults.
 

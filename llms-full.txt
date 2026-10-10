@@ -18,7 +18,7 @@
 - [Observability](gitbooks/developing/embed/concepts/observability.md): Subscribe with `Runtime::events` before starting work you want to observe. Each event has a sequence number and runtime identity, with an agent ID and per-call turn ID where applicable. Repeated calls on the same durable session receive different turn IDs; the session ID is not the observation ID.
 - [Profiles and SaaS](gitbooks/developing/embed/concepts/profiles-saas.md): Ordinary runtime agents share an operator's configuration path and credentials. Use `ProfileRuntime` when one server serves different authenticated users who must not share those resources. Provision a profile, install its credential, and retain a `ProfileHandle` while serving that user's requests.
 - [Providers](gitbooks/developing/embed/concepts/providers.md): A runtime provider is the default inference choice for its agents. An agent can override it with an OpenAI-compatible route or a native `ChatModel<()>` through `Provider::custom`. The `providers` facade exposes the request/response contracts so custom adapters do not need to implement an HTTP server.
-- [Runtime defaults](gitbooks/developing/embed/concepts/runtime-defaults.md): The runtime's default provider, access policy and `ModelDefaults` reduce repeated setup. `AgentSpec` can override those defaults for a reviewer, a coding agent or another workload without changing its siblings. Temperature and token limits are forwarded to the selected native model request, rather than being merely descriptive builder values.
+- [Runtime defaults](gitbooks/developing/embed/concepts/runtime-defaults.md): The runtime's default provider, access policy and `ModelDefaults` reduce repeated setup. `AgentSpec` can override those defaults for an analyst, a writing agent or another workload without changing its siblings. Temperature and token limits are forwarded to the selected native model request, rather than being merely descriptive builder values.
 - [Runtime](gitbooks/developing/embed/concepts/runtime.md): A `Runtime` boots the in-process core once. It owns the selected domains, background services, module host and runtime defaults. Its agents share that core while using separately derived contexts. Build one runtime and pass an `Arc<Runtime>` to the parts of your application that register agents.
 - [Skills](gitbooks/developing/embed/concepts/skills.md): A skill bundle contains `SKILL.md` plus any referenced resources. `AgentSpec::skills_dir` copies bundles into the agent's `agents/<id>/skills/` tree. Copying is intentional: discovery rejects symlinked bundles, so linking a shared directory does not install it.
 - [Testing](gitbooks/developing/embed/concepts/testing.md): The runnable examples default to loopback fixtures. They assert request bodies, tool results, file effects, transcript scope and event ordering; a successful Rust compilation alone does not prove those behaviors. Live example execution is explicitly opt-in through the documented environment variables.
@@ -174,31 +174,31 @@ A turn dispatches through the agent's native context, not through JSON-RPC or an
 <!-- BEGIN EMBED: crates/openhuman-embed/examples/two_agents.rs#two_agents -->
 
 ```rust
-    let reviewer_dir = tempfile::tempdir()?;
-    let fixer_dir = tempfile::tempdir()?;
-    let reviewer = runtime.agent(
-        AgentSpec::new("reviewer")
-            .system_prompt("REVIEWER_PROMPT: review code")
-            .action_dir(reviewer_dir.path())
+    let analyst_dir = tempfile::tempdir()?;
+    let writer_dir = tempfile::tempdir()?;
+    let analyst = runtime.agent(
+        AgentSpec::new("analyst")
+            .system_prompt("ANALYST_PROMPT: summarize documents")
+            .action_dir(analyst_dir.path())
             .access(openhuman_embed::Access::readonly()),
     )?;
-    let fixer = runtime.agent(
-        AgentSpec::new("fixer")
-            .system_prompt("FIXER_PROMPT: explain fixes")
-            .action_dir(fixer_dir.path())
+    let writer = runtime.agent(
+        AgentSpec::new("writer")
+            .system_prompt("WRITER_PROMPT: compose explanations")
+            .action_dir(writer_dir.path())
             .access(openhuman_embed::Access::full()),
     )?;
-    assert_ne!(reviewer.action_dir(), fixer.action_dir());
-    assert_ne!(reviewer.home_dir(), fixer.home_dir());
-    assert_ne!(reviewer.workspace_dir(), reviewer.action_dir());
-    assert!(!reviewer.run("Review").await?.reply.is_empty());
-    assert!(!fixer.run("Explain").await?.reply.is_empty());
+    assert_ne!(analyst.action_dir(), writer.action_dir());
+    assert_ne!(analyst.home_dir(), writer.home_dir());
+    assert_ne!(analyst.workspace_dir(), analyst.action_dir());
+    assert!(!analyst.run("Analyze").await?.reply.is_empty());
+    assert!(!writer.run("Explain").await?.reply.is_empty());
     if support::offline() {
         let requests = support::chat_requests(&provider).await;
         assert_eq!(requests.len(), 2);
-        assert!(String::from_utf8_lossy(&requests[0].body).contains("REVIEWER_PROMPT"));
-        assert!(!String::from_utf8_lossy(&requests[0].body).contains("FIXER_PROMPT"));
-        assert!(String::from_utf8_lossy(&requests[1].body).contains("FIXER_PROMPT"));
+        assert!(String::from_utf8_lossy(&requests[0].body).contains("ANALYST_PROMPT"));
+        assert!(!String::from_utf8_lossy(&requests[0].body).contains("WRITER_PROMPT"));
+        assert!(String::from_utf8_lossy(&requests[1].body).contains("WRITER_PROMPT"));
     }
     println!("two distinct prompts and action workspaces verified");
 ```
@@ -332,7 +332,7 @@ description: "An Agent combines one identity, derived context and independently 
 
 Register an `AgentSpec` with `Runtime::agent`. Its ID selects the agent's home, durable session identity and addressed cron/channel work. An `Agent` clone refers to the same instance; it does not copy state or start another core. Runtime-wide credentials remain shared, so two agents are not two authenticated customers.
 
-Keep `action_dir` separate from the internal workspace. The action directory is where tools act; the agent home stores internal transcripts, skills and other state. The example gives a reviewer and a fixer distinct folders and prompts while sharing one provider connection setup.
+Keep `action_dir` separate from the internal workspace. The action directory is where tools act; the agent home stores internal transcripts, skills and other state. The example gives an analyst and a writer distinct folders and prompts while sharing one provider connection setup.
 
 ## Runtime and agent scope
 
@@ -345,31 +345,31 @@ Keep `action_dir` separate from the internal workspace. The action directory is 
 <!-- BEGIN EMBED: crates/openhuman-embed/examples/two_agents.rs#two_agents -->
 
 ```rust
-    let reviewer_dir = tempfile::tempdir()?;
-    let fixer_dir = tempfile::tempdir()?;
-    let reviewer = runtime.agent(
-        AgentSpec::new("reviewer")
-            .system_prompt("REVIEWER_PROMPT: review code")
-            .action_dir(reviewer_dir.path())
+    let analyst_dir = tempfile::tempdir()?;
+    let writer_dir = tempfile::tempdir()?;
+    let analyst = runtime.agent(
+        AgentSpec::new("analyst")
+            .system_prompt("ANALYST_PROMPT: summarize documents")
+            .action_dir(analyst_dir.path())
             .access(openhuman_embed::Access::readonly()),
     )?;
-    let fixer = runtime.agent(
-        AgentSpec::new("fixer")
-            .system_prompt("FIXER_PROMPT: explain fixes")
-            .action_dir(fixer_dir.path())
+    let writer = runtime.agent(
+        AgentSpec::new("writer")
+            .system_prompt("WRITER_PROMPT: compose explanations")
+            .action_dir(writer_dir.path())
             .access(openhuman_embed::Access::full()),
     )?;
-    assert_ne!(reviewer.action_dir(), fixer.action_dir());
-    assert_ne!(reviewer.home_dir(), fixer.home_dir());
-    assert_ne!(reviewer.workspace_dir(), reviewer.action_dir());
-    assert!(!reviewer.run("Review").await?.reply.is_empty());
-    assert!(!fixer.run("Explain").await?.reply.is_empty());
+    assert_ne!(analyst.action_dir(), writer.action_dir());
+    assert_ne!(analyst.home_dir(), writer.home_dir());
+    assert_ne!(analyst.workspace_dir(), analyst.action_dir());
+    assert!(!analyst.run("Analyze").await?.reply.is_empty());
+    assert!(!writer.run("Explain").await?.reply.is_empty());
     if support::offline() {
         let requests = support::chat_requests(&provider).await;
         assert_eq!(requests.len(), 2);
-        assert!(String::from_utf8_lossy(&requests[0].body).contains("REVIEWER_PROMPT"));
-        assert!(!String::from_utf8_lossy(&requests[0].body).contains("FIXER_PROMPT"));
-        assert!(String::from_utf8_lossy(&requests[1].body).contains("FIXER_PROMPT"));
+        assert!(String::from_utf8_lossy(&requests[0].body).contains("ANALYST_PROMPT"));
+        assert!(!String::from_utf8_lossy(&requests[0].body).contains("WRITER_PROMPT"));
+        assert!(String::from_utf8_lossy(&requests[1].body).contains("WRITER_PROMPT"));
     }
     println!("two distinct prompts and action workspaces verified");
 ```
@@ -1041,7 +1041,7 @@ description: "Runtime defaults form the starting point for newly registered agen
 
 # Runtime defaults
 
-The runtime's default provider, access policy and `ModelDefaults` reduce repeated setup. `AgentSpec` can override those defaults for a reviewer, a coding agent or another workload without changing its siblings. Temperature and token limits are forwarded to the selected native model request, rather than being merely descriptive builder values.
+The runtime's default provider, access policy and `ModelDefaults` reduce repeated setup. `AgentSpec` can override those defaults for an analyst, a writing agent or another workload without changing its siblings. Temperature and token limits are forwarded to the selected native model request, rather than being merely descriptive builder values.
 
 `Runtime::defaults()` returns a snapshot. Runtime default setters affect agents created afterward; existing agents retain the configuration they were built with. Configure an explicit agent override when its behavior must remain independent of future runtime defaults.
 
@@ -1163,16 +1163,16 @@ Enable the named Embed `skills` feature for skill setters and registry access. L
 
 ```rust
     let skills = tempfile::tempdir()?;
-    std::fs::create_dir(skills.path().join("review"))?;
-    std::fs::write(skills.path().join("review/SKILL.md"),
-        "---\nname: review\ndescription: Review Rust functions carefully.\n---\nCheck error paths.\n")?;
+    std::fs::create_dir(skills.path().join("summarize"))?;
+    std::fs::write(skills.path().join("summarize/SKILL.md"),
+        "---\nname: summarize\ndescription: Summarize documents clearly.\n---\nInclude the main points.\n")?;
     let agent = runtime.agent(AgentSpec::new("skilled").skills_dir(skills.path()))?;
     let copied = agent
         .workspace_dir()
-        .join("agents/skilled/skills/review/SKILL.md");
+        .join("agents/skilled/skills/summarize/SKILL.md");
     assert_eq!(
         std::fs::read_to_string(&copied)?,
-        std::fs::read_to_string(skills.path().join("review/SKILL.md"))?
+        std::fs::read_to_string(skills.path().join("summarize/SKILL.md"))?
     );
     assert!(!std::fs::symlink_metadata(copied)?.file_type().is_symlink());
     assert!(!agent.run("Hello").await?.reply.is_empty());
@@ -1280,7 +1280,9 @@ description: "Tool catalogs expose only the allowed execution surface; host tool
 
 An agent's `ToolScopeSpec` chooses built-ins, named tools or `HostOnly`. Host-only mode starts with the host's advertised tools, requires an explicit bare prompt, and does not inherit an orchestrator tool catalog. This is useful when your application already owns read-only data access or tightly scoped actions.
 
-`AgentSpec::tools` is a per-turn factory returning `HostTurnTools`. Factories can attach the turn's context to their executors without sharing mutable tool state across unrelated sessions. Import `Tool` and `ToolResult` from `openhuman_embed` so their types match the vendored implementation used by the core.
+`AgentSpec::tools` is a per-turn factory returning `HostTurnTools`. Factories can attach the turn's context to their executors without sharing mutable tool state across unrelated sessions. Import `Tool`, `ToolResult` and `ToolPolicy` from `openhuman_embed` so their types match the vendored implementation used by the core.
+
+Declare a host executor's requirements with `Tool::policy`, for example `ToolPolicy::read_only()`. The host implements application-specific tools and owns their authorization, data boundaries and output handling; Embed supplies the generic execution contract.
 
 ## Runtime and agent scope
 
@@ -1695,38 +1697,38 @@ A runtime owns shared services and credentials. Each `AgentSpec` selects its pro
 <!-- BEGIN EMBED: crates/openhuman-embed/examples/two_agents.rs#two_agents -->
 
 ```rust
-    let reviewer_dir = tempfile::tempdir()?;
-    let fixer_dir = tempfile::tempdir()?;
-    let reviewer = runtime.agent(
-        AgentSpec::new("reviewer")
-            .system_prompt("REVIEWER_PROMPT: review code")
-            .action_dir(reviewer_dir.path())
+    let analyst_dir = tempfile::tempdir()?;
+    let writer_dir = tempfile::tempdir()?;
+    let analyst = runtime.agent(
+        AgentSpec::new("analyst")
+            .system_prompt("ANALYST_PROMPT: summarize documents")
+            .action_dir(analyst_dir.path())
             .access(openhuman_embed::Access::readonly()),
     )?;
-    let fixer = runtime.agent(
-        AgentSpec::new("fixer")
-            .system_prompt("FIXER_PROMPT: explain fixes")
-            .action_dir(fixer_dir.path())
+    let writer = runtime.agent(
+        AgentSpec::new("writer")
+            .system_prompt("WRITER_PROMPT: compose explanations")
+            .action_dir(writer_dir.path())
             .access(openhuman_embed::Access::full()),
     )?;
-    assert_ne!(reviewer.action_dir(), fixer.action_dir());
-    assert_ne!(reviewer.home_dir(), fixer.home_dir());
-    assert_ne!(reviewer.workspace_dir(), reviewer.action_dir());
-    assert!(!reviewer.run("Review").await?.reply.is_empty());
-    assert!(!fixer.run("Explain").await?.reply.is_empty());
+    assert_ne!(analyst.action_dir(), writer.action_dir());
+    assert_ne!(analyst.home_dir(), writer.home_dir());
+    assert_ne!(analyst.workspace_dir(), analyst.action_dir());
+    assert!(!analyst.run("Analyze").await?.reply.is_empty());
+    assert!(!writer.run("Explain").await?.reply.is_empty());
     if support::offline() {
         let requests = support::chat_requests(&provider).await;
         assert_eq!(requests.len(), 2);
-        assert!(String::from_utf8_lossy(&requests[0].body).contains("REVIEWER_PROMPT"));
-        assert!(!String::from_utf8_lossy(&requests[0].body).contains("FIXER_PROMPT"));
-        assert!(String::from_utf8_lossy(&requests[1].body).contains("FIXER_PROMPT"));
+        assert!(String::from_utf8_lossy(&requests[0].body).contains("ANALYST_PROMPT"));
+        assert!(!String::from_utf8_lossy(&requests[0].body).contains("WRITER_PROMPT"));
+        assert!(String::from_utf8_lossy(&requests[1].body).contains("WRITER_PROMPT"));
     }
     println!("two distinct prompts and action workspaces verified");
 ```
 
 <!-- END EMBED -->
 
-The [complete two_agents example](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/two_agents.rs) sends real turns and checks the provider requests: the reviewer prompt does not contain the fixer prompt. It also checks different action directories and agent homes. Run `cargo run -p openhuman-embed --example two_agents`.
+The [complete two_agents example](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/two_agents.rs) sends real turns and checks the provider requests: the analyst prompt does not contain the writer prompt. It also checks different action directories and agent homes. Run `cargo run -p openhuman-embed --example two_agents`.
 
 Agents on one runtime share the runtime configuration and credential root. Separate action directories are useful for cooperating agents; use [SaaS profiles](saas-multi-tenant.md) for user isolation.
 
@@ -2374,7 +2376,7 @@ For managed TinyHumans inference, use the [TinyHumans host integration](integrat
 
 ## Extend the example
 
-- Give a reviewer and a fixer separate tools and folders: [multiple agents](guides/multi-agent.md).
+- Give an analyst and a writer separate tools and folders: [multiple agents](guides/multi-agent.md).
 - Serve a request through your own HTTP transport: [deploy a server](guides/deploy-server.md).
 - Attach application functions: [tools](concepts/tools.md).
 - Isolate authenticated customers: [SaaS guide](guides/saas-multi-tenant.md).
@@ -2636,9 +2638,9 @@ Run: `cargo run -p openhuman-embed --example memory`
 
 SaaS profiles isolate conversation history.
 
-[Source](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/profiles.rs) · offline with loopback stubs; no live path.
+[Source](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/profiles.rs) · offline with loopback stubs; no live path. · feature: channels
 
-Run: `cargo run -p openhuman-embed --example profiles`
+Run: `cargo run -p openhuman-embed --example profiles --features channels`
 
 ## Hello agent: a prompt in and a reply out
 
@@ -2931,6 +2933,7 @@ Generate the complete local Rust API reference with `cargo doc -p openhuman-embe
 - [`ToolAttachmentError`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
 - [`ToolExposure`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
 - [`ToolGroups`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
+- [`ToolPolicy`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
 - [`ToolResult`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
 - [`ToolScopeSpec`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
 - [`TransportProfile`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
@@ -2967,7 +2970,6 @@ Generate the complete local Rust API reference with `cargo doc -p openhuman-embe
 - [`process`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
 - [`profiles`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
 - [`providers`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
-- [`repository`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
 - [`routing`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
 - [`run_from_args`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
 - [`schema_for_rpc_method`](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/src/lib.rs)
@@ -3100,7 +3102,7 @@ The compiled capability report describes this build:
 - [Linux agent fleet memory and latency](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/linux_fleet.rs): Measure retained runtime-owned agents using loopback inference and two worker threads. (offline on Linux; use a fresh constrained cgroup for release measurements.)
 - [Connect an actual MCP protocol stub over loopback](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/mcp.rs): Connect an actual MCP protocol stub over loopback. (offline with loopback stubs; no live path.; feature: mcp)
 - [Tenant scoped memory facade with an in-memory engine](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/memory.rs): Tenant scoped memory facade with an in-memory engine. (offline with loopback stubs; no live path.)
-- [SaaS profiles isolate conversation history](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/profiles.rs): SaaS profiles isolate conversation history. (offline with loopback stubs; no live path.)
+- [SaaS profiles isolate conversation history](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/profiles.rs): SaaS profiles isolate conversation history. (offline with loopback stubs; no live path.; feature: channels)
 - [Hello agent: a prompt in and a reply out](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/run_turn.rs): Hello agent: a prompt in and a reply out. (offline; optional live via OPENHUMAN_EXAMPLE_LIVE=1 and BASE_URL/API_KEY/MODEL.)
 - [Runtime lifecycle events and live hook registration](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/runtime_events.rs): Observe ordered metadata and add/remove a runtime-wide hook while agents keep running. (offline with a loopback provider; no live path.)
 - [Access tiers and explicit sandbox choices](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/sandbox_access.rs): Access tiers and explicit sandbox choices. (offline with loopback stubs; no live path.)

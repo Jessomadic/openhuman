@@ -27,8 +27,8 @@ successful read. Before execution the provider gets `tool_choice: required` and
 no final response format; afterwards it receives the requested answer schema.
 The host also enforces this requirement when a provider ignores the wire hint.
 
-Use a `HostOnly`, read-only agent and the [repository tools](src/repository/README.md)
-for untrusted review input. Validation does not grant tool or write permissions.
+Use a `HostOnly`, read-only agent with host-owned application tools
+for untrusted application input. Validation does not grant tool or write permissions.
 
 Tests: `structured_validation`, `structured_turns`, `tool_required_routing`, and
 `completion_routing` use loopback provider fixtures and require no model key.

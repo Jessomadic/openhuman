@@ -27,8 +27,8 @@ pub enum ToolScopeSpec {
     Named(Vec<String>),
     /// The host's tools and nothing else.
     ///
-    /// For an agent that must never act — a reviewer reading an untrusted
-    /// diff. The registry the model sees is built from the tools the host
+    /// For an agent that must never act — an analyst reading an untrusted
+    /// document. The registry the model sees is built from the tools the host
     /// supplies ([`AgentSpec::tools`](super::AgentSpec::tools),
     /// [`Agent::attach_tools`](super::Agent::attach_tools)) alone: no
     /// config-derived, delegation, memory, skill or MCP tool, and a
