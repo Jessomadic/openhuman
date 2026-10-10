@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+type ThreadLocks = Mutex<HashMap<(PathBuf, String), Arc<tokio::sync::Mutex<()>>>>;
+
 use chrono::Utc;
 use serde_json::json;
 use tinyagents_session::transcript::TranscriptMessage;
