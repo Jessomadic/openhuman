@@ -83,25 +83,32 @@ fn session_of<'k>(key: &'k str, me: &Tenant) -> Option<&'k str> {
         .map(|(_, session)| session)
 }
 
-/// Mark a user turn on `session_id` as in flight, for the calling profile.
-/// Called by the turn loop itself, inside the turn's scope, because the bus
-/// subscriber runs off-task and could not tell which profile a session
-/// belongs to.
-pub(crate) fn note_turn_started(session_id: &str) {
-    let key = tenant::profile_key(session_id);
-    busy()
-        .lock()
-        .expect("background_delivery busy poisoned")
-        .insert(key);
+/// A user turn in flight on a session, for the calling profile; the session
+/// counts as busy until this is dropped. Taken by the turn loop itself, inside
+/// the turn's scope, because the bus subscriber runs off-task and could not
+/// tell which profile a session id belongs to. The key is computed once, so
+/// dropping it anywhere (a cancelled turn) clears the right entry.
+pub(crate) struct TurnBusy {
+    key: String,
 }
 
-/// The calling profile's turn on `session_id` ended (completed or failed).
-pub(crate) fn note_turn_ended(session_id: &str) {
-    let key = tenant::profile_key(session_id);
-    busy()
-        .lock()
-        .expect("background_delivery busy poisoned")
-        .remove(&key);
+impl TurnBusy {
+    pub(crate) fn start(session_id: &str) -> Self {
+        let key = tenant::profile_key(session_id);
+        busy()
+            .lock()
+            .expect("background_delivery busy poisoned")
+            .insert(key.clone());
+        Self { key }
+    }
+}
+
+impl Drop for TurnBusy {
+    fn drop(&mut self) {
+        if let Ok(mut busy) = busy().lock() {
+            busy.remove(&self.key);
+        }
+    }
 }
 
 /// Is any in-flight turn of the calling profile running on `thread_id`?
