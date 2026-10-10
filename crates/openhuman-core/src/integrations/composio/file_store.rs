@@ -72,6 +72,43 @@ where
     })
 }
 
+/// Applies `change` to the value at `path` and writes it back when `change`
+/// reports a change, returning its result.
+///
+/// With a storage backend this is a compare-and-swap loop, so two cores that
+/// share the scope never lose each other's update (`change` is retried on a
+/// conflict and must be repeatable). Without one it is the process-wide
+/// [`lock`] around a load and a save.
+///
+/// # Errors
+///
+/// The value cannot be read or written.
+pub(crate) async fn update<T, R>(
+    path: &Path,
+    change: impl Fn(&mut T) -> (R, bool) + Send + 'static,
+) -> Result<R, String>
+where
+    T: DeserializeOwned + Serialize + Default + 'static,
+    R: Send + 'static,
+{
+    if let Some(docs) =
+        super::file_store_documents::current().map_err(|e| format!("[composio:store] {e:#}"))?
+    {
+        let owned = path.to_path_buf();
+        return tokio::task::spawn_blocking(move || docs.update(&owned, change))
+            .await
+            .map_err(|error| format!("[composio:store] updating {} failed: {error}", path.display()))?
+            .map_err(|error| format!("[composio:store] updating {} failed: {error:#}", path.display()));
+    }
+    let _guard = lock().await;
+    let mut value: T = load(path).await?;
+    let (result, changed) = change(&mut value);
+    if changed {
+        save(path, &value).await?;
+    }
+    Ok(result)
+}
+
 /// Writes `value` to `path` atomically (temp file, then rename).
 ///
 /// # Errors
