@@ -118,6 +118,7 @@ pub mod process;
 pub mod profiles;
 mod runtime;
 mod turn;
+mod turn_cancellation;
 
 /// Core internals for `openhuman-tinyhumans` and `openhuman-rpc` only; see
 /// the module docs. Not part of the host-facing API.
@@ -215,6 +216,7 @@ pub use complete::{
 };
 pub use session_store::{InMemorySessionStores, SessionStoreProvider};
 pub use turn::{absolute, Route, Turn, TurnOutcome, TurnRequest};
+pub use turn_cancellation::TurnCancellation;
 
 use std::sync::Arc;
 

@@ -18,6 +18,9 @@ use std::time::Duration;
 use tinyagents_harness::tool::ToolTimeoutSettings;
 use tinytools::ToolTimeout;
 
+mod process_cleanup;
+pub use process_cleanup::ProcessCleanup;
+
 /// Default tool-execution timeout in seconds when nothing else is configured.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 120;
 /// Smallest accepted timeout. `0` would disable the timeout entirely, so it is
@@ -226,26 +229,81 @@ pub async fn output_or_kill(
     cmd: &mut tokio::process::Command,
     deadline: Duration,
 ) -> Result<std::io::Result<std::process::Output>, tokio::time::error::Elapsed> {
+    tokio::time::timeout(deadline, output_unbounded(cmd)).await
+}
+
+/// Capture a command with no deadline, killing its process group if the
+/// future is dropped. The child is reaped by an owned waiter even when the
+/// caller cancels; a scoped [`ProcessCleanup`] can await that waiter.
+pub async fn output_unbounded(
+    cmd: &mut tokio::process::Command,
+) -> std::io::Result<std::process::Output> {
     use std::process::Stdio;
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     own_process_group(cmd.as_std_mut());
-    let child = match cmd.spawn() {
-        Ok(child) => child,
-        Err(error) => return Ok(Err(error)),
-    };
+    let child = cmd.spawn()?;
     let pid = child.id();
-    match tokio::time::timeout(deadline, child.wait_with_output()).await {
-        Ok(output) => Ok(output),
-        Err(elapsed) => {
-            if let Some(pid) = pid {
-                kill_process_group(pid);
-            }
-            Err(elapsed)
+    let reaped = process_cleanup::Reaped::register();
+    let (cancel, cancellation) = tokio::sync::watch::channel(false);
+    let waiter = tokio::spawn(async move {
+        let _reaped = reaped;
+        collect_command_output(child, cancellation).await
+    });
+    let mut group = CommandGroup { pid, cancel };
+    let result = waiter.await.map_err(std::io::Error::other)?;
+    group.pid = None;
+    result
+}
+
+struct CommandGroup {
+    pid: Option<u32>,
+    cancel: tokio::sync::watch::Sender<bool>,
+}
+
+impl Drop for CommandGroup {
+    fn drop(&mut self) {
+        if let Some(pid) = self.pid {
+            kill_process_group(pid);
+            self.cancel.send_replace(true);
         }
     }
+}
+
+async fn collect_command_output(
+    mut child: tokio::process::Child,
+    mut cancellation: tokio::sync::watch::Receiver<bool>,
+) -> std::io::Result<std::process::Output> {
+    use tokio::io::AsyncReadExt;
+
+    let mut stdout = child.stdout.take().expect("command stdout is piped");
+    let mut stderr = child.stderr.take().expect("command stderr is piped");
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    let wait = async {
+        tokio::select! {
+            biased;
+            _ = async { let _ = cancellation.wait_for(|cancelled| *cancelled).await; } => {
+                // Reap the direct child on every platform. On Unix the
+                // caller has also signalled the process group.
+                child.kill().await?;
+                child.wait().await
+            }
+            result = child.wait() => result,
+        }
+    };
+    let (status, _, _) = tokio::try_join!(
+        wait,
+        stdout.read_to_end(&mut stdout_bytes),
+        stderr.read_to_end(&mut stderr_bytes),
+    )?;
+    Ok(std::process::Output {
+        status,
+        stdout: stdout_bytes,
+        stderr: stderr_bytes,
+    })
 }
 
 /// Make `cmd` the leader of a new process group when it is spawned, so that

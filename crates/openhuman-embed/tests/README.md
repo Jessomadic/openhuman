@@ -37,6 +37,8 @@ recorded on the wrong server.
 | [`memory_facade.rs`](memory_facade.rs) | `Runtime::memory` over TinyMemory's in-memory reference engine keeps two tenant roots apart. |
 | [`saas_profiles.rs`](saas_profiles.rs) | A `ProfileRuntime` (SaaS mode, in-process): two users on thread `t1` see only their own messages and ride their own credential, a held `ProfileHandle` keeps its profile from release, a relayed Telegram message lands on the user's `channel:` thread with its `channel_outbound` reply on that user's events only, and the process refuses any other core afterwards. Inference is `common::echo_inference` behind `common::PointedTransport`. |
 | [`public_api.rs`](public_api.rs) | Compile-time check that the host-facing types and signatures stay exported. |
+| [`turn_cancellation.rs`](turn_cancellation.rs) | Cancellation before send, during inference and during a builtin shell command; repeated requests and agent reuse. |
+| [`process_cancellation.rs`](process_cancellation.rs) | On Linux, dropping a command future kills its shell descendants. |
 
 ## Running
 
