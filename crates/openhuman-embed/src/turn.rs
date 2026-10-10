@@ -78,11 +78,14 @@ pub struct Turn {
     response_format: Option<crate::complete::ResponseFormat>,
     structured_retries: u8,
     max_tokens: Option<u32>,
+    top_p: Option<f64>,
+    token_cancellation: Option<crate::CancellationToken>,
     provider_options: serde_json::Value,
     require_tool_call: bool,
     untrusted_input: bool,
     cancellation: Option<crate::TurnCancellation>,
     timeout: Option<std::time::Duration>,
+    control_deadline: Option<tokio::time::Instant>,
     observer: Option<Arc<dyn crate::observe::TurnObserver>>,
     trace_content: crate::observe::TraceContent,
 }
@@ -101,11 +104,14 @@ impl Turn {
             response_format: None,
             structured_retries: 0,
             max_tokens: None,
+            top_p: None,
+            token_cancellation: None,
             provider_options: serde_json::Value::Null,
             require_tool_call: false,
             untrusted_input: false,
             cancellation: None,
             timeout: None,
+            control_deadline: None,
             observer: None,
             trace_content: crate::observe::TraceContent::MetadataOnly,
         }
@@ -304,6 +310,27 @@ impl Turn {
     pub fn origin(mut self, origin: AgentTurnOrigin) -> Self {
         self.origin = Some(origin);
         self
+    }
+
+    /// Nucleus sampling for this turn; must be finite and between zero and one.
+    pub fn top_p(mut self, probability: f64) -> Self {
+        self.top_p = Some(probability);
+        self
+    }
+
+    /// Bind caller cancellation to the turn and its recursive tool/agent tree.
+    pub fn cancellation(mut self, token: crate::CancellationToken) -> Self {
+        self.token_cancellation = Some(token);
+        self
+    }
+
+    pub(crate) fn stream_cancellation(&self) -> crate::CancellationToken {
+        self.token_cancellation.clone().unwrap_or_default()
+    }
+
+    /// Start this configured turn as an owned stream, cancelled when dropped.
+    pub fn stream(self) -> crate::TurnStream {
+        crate::TurnStream::start(self)
     }
 
     /// Stream live turn progress — tool calls, deltas, turn boundaries.
@@ -512,3 +539,52 @@ pub fn absolute(dir: impl AsRef<Path>) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 #[path = "turn_tests.rs"]
 mod tests;
+
+fn event_thread_id(origin: Option<&AgentTurnOrigin>, session_id: &str) -> String {
+    match origin {
+        Some(AgentTurnOrigin::WebChat { thread_id, .. }) => thread_id.clone(),
+        _ => session_id.to_owned(),
+    }
+}
+
+struct ObservedTurn {
+    hub: Arc<crate::events::EventHub>,
+    agent_id: Option<String>,
+    thread_id: String,
+    turn_id: String,
+    success: bool,
+}
+impl Drop for ObservedTurn {
+    fn drop(&mut self) {
+        self.hub.end_turn(
+            self.agent_id.clone(),
+            &self.thread_id,
+            &self.turn_id,
+            self.success,
+        );
+    }
+}
+fn observe_progress(
+    hub: &crate::events::EventHub,
+    agent_id: &Option<String>,
+    turn_id: &str,
+    item: &AgentProgress,
+) {
+    let kind = match item {
+        AgentProgress::ToolCallStarted { tool_name, .. } => {
+            Some(crate::RuntimeEventKind::ToolStarted {
+                tool_name: tool_name.clone(),
+            })
+        }
+        AgentProgress::ToolCallCompleted {
+            tool_name, success, ..
+        } => Some(crate::RuntimeEventKind::ToolEnded {
+            tool_name: tool_name.clone(),
+            success: *success,
+        }),
+        _ => None,
+    };
+    if let Some(kind) = kind {
+        hub.emit(agent_id.clone(), Some(turn_id.to_owned()), kind);
+    }
+}

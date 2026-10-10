@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 
 pub use openhuman_core::core::runtime::{AGENT_WORKER_STACK_BYTES, MAX_BLOCKING_THREADS};
 
+/// Sentry options and event scrubbing shared by desktop and terminal hosts.
 #[cfg(feature = "crash-reporting")]
+#[cfg_attr(docsrs, doc(cfg(feature = "crash-reporting")))]
 #[path = "process_sentry.rs"]
 pub mod sentry;
 

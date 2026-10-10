@@ -41,6 +41,8 @@ pub struct ResponseShape {
     pub provider_options: serde_json::Value,
     /// Require a successful tool execution before accepting terminal output.
     pub require_tool_call: bool,
+    /// Nucleus sampling probability applied to every call of this turn.
+    pub top_p: Option<f64>,
 }
 
 /// Validates terminal provider text without retrieving external resources.
@@ -234,6 +236,9 @@ impl Middleware<(), OpenHumanRunContext> for ResponseShapeMiddleware {
         }
         if let Some(cap) = shape.max_output_tokens {
             request.max_tokens = Some(cap);
+        }
+        if let Some(top_p) = shape.top_p {
+            request.top_p = Some(top_p);
         }
         Ok(())
     }

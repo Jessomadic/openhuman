@@ -59,3 +59,18 @@ pub(super) fn install_depth(
         harness.with_policy(policy);
     }
 }
+
+impl super::turn_models::TurnModels {
+    /// Wrap every concrete route and summarizer below harness retries/fallback.
+    pub(crate) fn with_budget(mut self, budget: Option<&ModelBudget>) -> Self {
+        let Some(budget) = budget else {
+            return self;
+        };
+        self.primary = budget.wrap(self.primary);
+        self.summarizer = budget.wrap(self.summarizer);
+        for (_, route) in &mut self.routes {
+            *route = budget.wrap(route.clone());
+        }
+        self
+    }
+}

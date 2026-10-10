@@ -1,6 +1,14 @@
 //! Whole-turn validation, observation, cancellation, deadlines and dispatch.
 use super::*;
 
+struct CancellationRelay(tokio::task::JoinHandle<()>);
+
+impl Drop for CancellationRelay {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 impl Turn {
     /// Run the turn.
     ///
@@ -16,10 +24,49 @@ impl Turn {
     /// that is a build/composition fact, not a failure, and a host should hide
     /// the surface rather than report an error.
     pub async fn send(mut self) -> Result<TurnOutcome, CoreError> {
+        // External cancellation cascades inward; cancelling this turn through
+        // its acknowledgement handle/deadline must not cancel a shared parent.
+        let token = self
+            .token_cancellation
+            .clone()
+            .unwrap_or_default()
+            .child_token();
+        // A synchronously ready model stream can stay inside one dispatch poll.
+        // Relay control independently so its native cancellation checks also
+        // interrupt that poll; abort the relay when this turn ends or is dropped.
+        self.control_deadline = self
+            .timeout
+            .and_then(|duration| tokio::time::Instant::now().checked_add(duration));
+        let cancellation = self.cancellation.clone();
+        let deadline = self.control_deadline;
+        let _relay = (cancellation.is_some() || deadline.is_some()).then(|| {
+            let native = token.clone();
+            CancellationRelay(tokio::spawn(async move {
+                tokio::select! {
+                    _ = async {
+                        match cancellation {
+                            Some(handle) => handle.cancelled().await,
+                            None => std::future::pending().await,
+                        }
+                    } => {},
+                    _ = async {
+                        match deadline {
+                            Some(deadline) => tokio::time::sleep_until(deadline).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {},
+                }
+                native.cancel();
+            }))
+        });
+        openhuman_core::agent::host_overrides::with_cancellation(token, self.send_traced()).await
+    }
+
+    async fn send_traced(mut self) -> Result<TurnOutcome, CoreError> {
         // Keep cancellation acknowledgement behind the terminal callback too.
         let _observer_guard = self.cancellation.as_ref().map(|handle| handle.enter());
         let Some(observer) = self.observer.take() else {
-            return self.send_controlled().await;
+            return self.send_events().await;
         };
         let capture = self.trace_content;
         let session_id = self
@@ -29,14 +76,95 @@ impl Turn {
             .unwrap_or_else(|| format!("embed-{}", uuid::Uuid::new_v4()));
         self.session_id = Some(session_id.clone());
         let message = self.request.message.clone();
-        crate::observe::observe_turn(
-            observer,
-            capture,
-            &session_id,
-            &message,
-            self.send_controlled(),
-        )
-        .await
+        crate::observe::observe_turn(observer, capture, &session_id, &message, self.send_events())
+            .await
+    }
+
+    // Runtime lifecycle events enclose control/cleanup, while progress delivery
+    // keeps polling that control future even when the caller stops draining.
+    async fn send_events(mut self) -> Result<TurnOutcome, CoreError> {
+        let (hub, agent_id) = match &self.target {
+            TurnTarget::Agent(agent) => (
+                Some(agent._runtime_guard.events.clone()),
+                Some(agent.id.clone()),
+            ),
+            TurnTarget::Runtime(_) => (None, None),
+        };
+        let Some(hub) = hub else {
+            return self.send_controlled().await;
+        };
+        let session_id = self
+            .session_id
+            .clone()
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or_else(|| format!("embed-{}", uuid::Uuid::new_v4()));
+        self.session_id = Some(session_id.clone());
+        let thread_id = event_thread_id(self.origin.as_ref(), &session_id);
+        let turn_id = hub.begin_turn(agent_id.clone(), &thread_id);
+        let mut end = ObservedTurn {
+            hub: hub.clone(),
+            agent_id: agent_id.clone(),
+            thread_id,
+            turn_id: turn_id.clone(),
+            success: false,
+        };
+        let forward = self.progress.take();
+        let token = openhuman_core::agent::host_overrides::current_cancellation();
+        let acknowledgement = self.cancellation.clone();
+        let deadline = self.control_deadline;
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        self.progress = Some(tx);
+        let mut dispatch = self.send_controlled();
+        let mut pending_progress = None;
+        let mut outcome = loop {
+            tokio::select! {
+                biased;
+                result = &mut dispatch => break result,
+                item = rx.recv() => if let Some(item) = item {
+                    observe_progress(&hub, &agent_id, &turn_id, &item);
+                    if let Some(sink) = &forward {
+                        let retained = item.clone();
+                        tokio::select! {
+                            _ = sink.send(item) => {},
+                            _ = token.cancelled() => {},
+                            result = &mut dispatch => { pending_progress = Some(retained); break result; },
+                        }
+                    }
+                } else { break (&mut dispatch).await; },
+            }
+        };
+        drop(dispatch);
+        while let Some((item, observed)) = pending_progress
+            .take()
+            .map(|item| (item, true))
+            .or_else(|| rx.try_recv().ok().map(|item| (item, false)))
+        {
+            if !observed {
+                observe_progress(&hub, &agent_id, &turn_id, &item);
+            }
+            if outcome.is_ok() {
+                if let Some(sink) = &forward {
+                    tokio::select! {
+                        _ = sink.send(item) => {},
+                        _ = token.cancelled() => outcome = Err(CoreError::TurnCancelled { method: AGENT_CHAT }),
+                        _ = async {
+                            match &acknowledgement {
+                                Some(handle) => handle.cancelled().await,
+                                None => std::future::pending().await,
+                            }
+                        } => outcome = Err(CoreError::TurnCancelled { method: AGENT_CHAT }),
+                        _ = async {
+                            match deadline {
+                                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                                None => std::future::pending().await,
+                            }
+                        } => outcome = Err(CoreError::DeadlineExceeded { method: AGENT_CHAT }),
+                    }
+                }
+            }
+        }
+        end.success = outcome.is_ok();
+        outcome
     }
 
     // Erase this large dispatch future at the control boundary: composing
@@ -46,10 +174,12 @@ impl Turn {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<TurnOutcome, CoreError>> + Send>>
     {
         Box::pin(async move {
-            let timeout = self.timeout.take();
+            let deadline = self.control_deadline;
+            let token = self.token_cancellation.clone();
+            let native = openhuman_core::agent::host_overrides::current_cancellation();
             let cancellation = match self.cancellation.take() {
                 Some(cancellation) => cancellation,
-                None if timeout.is_some() => crate::TurnCancellation::default(),
+                None if deadline.is_some() || token.is_some() => crate::TurnCancellation::default(),
                 None => return Box::pin(self.send_inner()).await,
             };
             let _guard = cancellation.enter();
@@ -58,16 +188,26 @@ impl Turn {
                 .scope(async {
                     tokio::select! {
                         biased;
+                        _ = async {
+                            match &token {
+                                Some(token) => token.cancelled().await,
+                                None => std::future::pending().await,
+                            }
+                        } => Err(CoreError::TurnCancelled { method: AGENT_CHAT }),
                         _ = cancellation.cancelled() => {
+                            native.cancel();
                             log::debug!("[embed][agent] turn cancelled");
                             Err(CoreError::TurnCancelled { method: AGENT_CHAT })
                         }
                         _ = async {
-                            match timeout {
-                                Some(duration) => tokio::time::sleep(duration).await,
+                            match deadline {
+                                Some(deadline) => tokio::time::sleep_until(deadline).await,
                                 None => std::future::pending().await,
                             }
-                        } => Err(CoreError::DeadlineExceeded { method: AGENT_CHAT }),
+                        } => {
+                            native.cancel();
+                            Err(CoreError::DeadlineExceeded { method: AGENT_CHAT })
+                        },
                         outcome = Box::pin(self.send_inner()) => outcome,
                     }
                 })
@@ -183,6 +323,7 @@ impl Turn {
                         .take()
                         .map(crate::complete::ResponseFormat::into_wire),
                     max_output_tokens: self.max_tokens,
+                    top_p: self.top_p,
                     validator: wants_json.then(|| std::sync::Arc::new(validator) as std::sync::Arc<dyn openhuman_core::agent::tinyagents::response_shape::ResponseValidator>),
                     structured_retries: self.structured_retries,
                     provider_options: self.provider_options.clone(),
@@ -320,11 +461,21 @@ impl Turn {
                 expected_user_state: true,
             })
         };
+        if self
+            .top_p
+            .is_some_and(|p| !p.is_finite() || !(0.0..=1.0).contains(&p))
+        {
+            return refuse(
+                "top_p must be finite and between zero and one",
+                "invalid_model_parameter",
+            );
+        }
         let host_only = match &self.target {
             TurnTarget::Agent(agent) => agent.host_only,
             TurnTarget::Runtime(_) => {
                 if self.response_format.is_some()
                     || self.max_tokens.is_some()
+                    || self.top_p.is_some()
                     || self.structured_retries != 0
                     || !self.provider_options.is_null()
                     || self.require_tool_call
