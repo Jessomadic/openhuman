@@ -9,8 +9,8 @@
 
 mod common;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{chat_requests, offline_config, runtime, stub_backend};
 use openhuman_embed::complete::ResponseFormat;
@@ -18,7 +18,7 @@ use openhuman_embed::{
     AgentDefinitionSpec, AgentSpec, CoreError, HostTurnTools, Provider, Runtime, Tool,
     ToolScopeSpec, Workspace,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -376,5 +376,73 @@ fn shared_budget_stops_the_tool_loop_before_its_next_provider_call() {
             assert_eq!(chat_requests(&provider).await.len(),1);
             assert_eq!(ledger.snapshot().spent.cost_micros,100);
         }).await.unwrap();
+    });
+}
+
+#[test]
+fn empty_truncated_terminal_answers_use_only_the_explicit_repair_allowance() {
+    let _guard = RUNTIME_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    runtime().block_on(async {
+        tokio::spawn(async {
+            let backend = stub_backend().await;
+            let runtime = build_runtime(&backend).await;
+            for retries in [0, 1] {
+                let provider = provider(vec![
+                    completion(
+                        json!({"role":"assistant","content":""}),
+                        "length",
+                        "fixture",
+                        0,
+                    ),
+                    completion(
+                        json!({"role":"assistant","content":"{\"verdict\":\"reject\"}"}),
+                        "stop",
+                        "fixture",
+                        0,
+                    ),
+                ])
+                .await;
+                let agent = runtime
+                    .agent(reviewer(
+                        &format!("empty-truncated-{retries}"),
+                        &provider,
+                        Arc::new(AtomicUsize::new(0)),
+                    ))
+                    .unwrap();
+                let result = agent
+                    .turn("Review this diff.")
+                    .response_format(review_schema())
+                    .max_tokens(512)
+                    .structured_retries(retries)
+                    .send()
+                    .await;
+                if retries == 0 {
+                    let error = result.expect_err(
+                        "zero repair allowance must refuse the original empty truncated answer",
+                    );
+                    let CoreError::StructuredOutput { failure, .. } = error else {
+                        panic!("typed failure");
+                    };
+                    assert_eq!(
+                        failure.reason,
+                        openhuman_embed::structured::StructuredFailureReason::Truncated
+                    );
+                    assert_eq!(failure.attempts, 1);
+                } else {
+                    assert_eq!(
+                        result.unwrap().structured,
+                        Some(json!({"verdict":"reject"}))
+                    );
+                }
+                assert_eq!(
+                    chat_requests(&provider).await.len(),
+                    usize::from(retries) + 1
+                );
+            }
+        })
+        .await
+        .unwrap();
     });
 }

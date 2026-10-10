@@ -80,7 +80,7 @@ impl Validator {
         let Some(validator) = &self.0 else {
             return Ok(None);
         };
-        if matches!(finish, Some("length" | "max_tokens")) {
+        if matches!(finish, Some("length" | "max_tokens" | "MAX_TOKENS")) {
             return Err(StructuredFailureReason::Truncated);
         }
         let value =

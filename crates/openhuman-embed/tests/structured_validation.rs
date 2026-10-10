@@ -2,9 +2,9 @@
 
 mod common;
 
-use openhuman_embed::complete::{ChatMessage, Completer, CompletionRequest, ResponseFormat};
 use openhuman_embed::Route;
-use serde_json::{json, Value};
+use openhuman_embed::complete::{ChatMessage, Completer, CompletionRequest, ResponseFormat};
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -84,4 +84,29 @@ async fn external_schema_retrieval_is_refused_before_inference() {
         .await
         .unwrap_err();
     assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn uppercase_max_tokens_refuses_even_a_schema_valid_answer() {
+    let server = MockServer::start().await;
+    let mut reply = common::chat_completion("{}");
+    reply["choices"][0]["finish_reason"] = json!("MAX_TOKENS");
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(reply))
+        .mount(&server)
+        .await;
+    let error = completer(&server)
+        .complete(request(json!({"type":"object"})))
+        .await
+        .expect_err("a provider truncation marker must refuse a parseable answer");
+    let openhuman_embed::CoreError::StructuredOutput { failure, .. } = error else {
+        panic!("typed truncation failure");
+    };
+    assert_eq!(
+        failure.reason,
+        openhuman_embed::structured::StructuredFailureReason::Truncated
+    );
+    assert_eq!(failure.attempts, 1);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }

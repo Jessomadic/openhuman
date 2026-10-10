@@ -182,6 +182,11 @@ pub(super) fn install(harness: &mut AgentHarness<(), OpenHumanRunContext>, root:
                 schema: serde_json::json!({}),
             });
             policy.output_retry.max_attempts = scope.shape.structured_retries;
+            // Strict output validation owns the complete repair allowance;
+            // empty-response recovery must not issue additional model calls.
+            policy.truncated_empty_retries = 0;
+            policy.truncated_empty_nudges = 0;
+            policy.truncated_empty_reasoning_fallback = false;
             policy.output_retry.message_template =
                 "Return complete JSON matching the requested schema.".into();
             harness.with_policy(policy);
