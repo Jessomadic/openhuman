@@ -8,7 +8,6 @@ function Harness({ onEdit = vi.fn() }: { onEdit?: ReturnType<typeof vi.fn> }) {
   const runtime = useExternalStoreRuntime({
     messages: [
       { id: 'user-1', role: 'user' as const, content: 'Original question' },
-      { id: 'answer-1', role: 'assistant' as const, content: 'Original answer' },
     ],
     convertMessage: message => message,
     isRunning: false,
