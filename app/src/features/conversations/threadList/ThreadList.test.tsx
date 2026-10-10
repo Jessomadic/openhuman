@@ -111,7 +111,11 @@ describe('ThreadList', () => {
     const running = within(screen.getByTestId('thread-row-t2')).getByText('Plan trip');
     expect(running).toHaveAttribute('data-running', 'true');
     expect(running).toHaveClass('shimmer', 'motion-reduce:animate-none');
-    expect(screen.getByTestId('thread-row-t2').querySelector('[data-slot="aui_thread-list-item-running"]')).toBeNull();
+    expect(
+      screen
+        .getByTestId('thread-row-t2')
+        .querySelector('[data-slot="aui_thread-list-item-running"]')
+    ).toBeNull();
   });
 
   it('creates and switches conversations through the runtime adapter', async () => {

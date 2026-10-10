@@ -18,7 +18,6 @@ import {
 } from '@assistant-ui/react';
 import {
   ArchiveIcon,
-  Loader2Icon,
   MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
@@ -293,18 +292,14 @@ export const ThreadListItem: FC<{
           {...triggerProps}
           data-slot="aui_thread-list-item-trigger"
           className="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center rounded-md px-2.5 text-start text-sm outline-none group-hover:pe-9 group-has-focus-visible:pe-9 group-has-data-[state=open]:pe-9 group-data-active:pe-9 focus-visible:ring-1">
-          {isRunning && (
-            <Loader2Icon
-              aria-hidden
-              data-slot="aui_thread-list-item-running"
-              className="text-muted-foreground me-1.5 size-3.5 shrink-0 animate-spin"
-            />
-          )}
           <span
             data-slot="aui_thread-list-item-title"
             data-running={isRunning ? 'true' : undefined}
             aria-busy={isRunning || undefined}
-            className="min-w-0 flex-1 truncate">
+            className={cn(
+              'min-w-0 flex-1 truncate',
+              isRunning && 'shimmer motion-reduce:animate-none'
+            )}>
             <ThreadListItemPrimitive.Title fallback={t('chat.untitledThread')} />
           </span>
           {trailing}
