@@ -27,6 +27,8 @@ use crate::agent::tinyagents::host::OpenHumanRunContext;
 /// What a host asks of every model call in one turn.
 #[derive(Clone, Default)]
 pub struct ResponseShape {
+    /// Observer captured before the host dispatches to the core worker.
+    pub observer: Option<Arc<super::turn_observer::ObserverScope>>,
     /// Host validation of the original terminal text, before any repair.
     pub validator: Option<Arc<dyn ResponseValidator>>,
     /// Bounded number of output repair attempts.
@@ -151,7 +153,12 @@ pub async fn with_response_shape<F: std::future::Future>(
     scope: Arc<ResponseShapeScope>,
     fut: F,
 ) -> F::Output {
-    RESPONSE_SHAPE.scope(scope, Box::pin(fut)).await
+    let observer = scope.shape.observer.clone();
+    let run = RESPONSE_SHAPE.scope(scope, Box::pin(fut));
+    match observer {
+        Some(observer) => super::turn_observer::with_observer(observer, run).await,
+        None => run.await,
+    }
 }
 
 /// Push the shaping middleware onto a root turn's harness, when a shape is

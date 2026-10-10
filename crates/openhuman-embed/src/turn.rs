@@ -637,6 +637,7 @@ impl Turn {
                     structured_retries: self.structured_retries,
                     provider_options: self.provider_options.clone(),
                     require_tool_call: self.require_tool_call,
+                    observer: openhuman_core::agent::tinyagents::turn_observer::current_scope(),
                 },
             ),
             untrusted_input: self.untrusted_input,
@@ -874,7 +875,7 @@ async fn dispatch(
             let turn: futures_box::BoxFuture<'_, Result<AgentReply, CoreError>> =
                 Box::pin(async move {
                     use openhuman_core::inference::host_runtime::ops::{
-                        agent_chat_for, AgentChatTarget,
+                        AgentChatTarget, agent_chat_for,
                     };
                     let mut config = inner.config.clone();
                     let route = openhuman_core::config::schema::EphemeralRoute::from_params(

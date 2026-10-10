@@ -62,6 +62,7 @@ pub(crate) mod stop_hooks;
 pub mod todos;
 pub(crate) mod tools;
 mod topology;
+pub mod turn_observer;
 mod turn_models;
 mod turn_outcome;
 mod turn_policy;

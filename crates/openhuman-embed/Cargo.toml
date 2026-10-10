@@ -9,6 +9,7 @@ readme = "README.md"
 publish = false
 
 [features]
+langfuse = ["openhuman-core/langfuse"]
 # `channels` is in core's default set already; enabling it here too compiles
 # the `Runtime::channels` facade in a default build.
 default = ["openhuman-core/default", "channels"]

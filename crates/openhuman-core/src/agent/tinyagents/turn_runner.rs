@@ -462,8 +462,9 @@ pub(super) async fn run_turn_via_tinyagents_body(
                 Some(journal_run_id.as_str().to_string());
         }
     }
-    let events = Some(EventSink::with_stream_id(journal_run_id.as_str()));
-
+    let sink = EventSink::with_stream_id(journal_run_id.as_str());
+    super::turn_observer::install(&mut harness, &sink, hosted_root.is_some());
+    let events = Some(sink);
     // Attach the event bridge for EVERY turn — including an unobserved
     // (`on_progress = None`) background/cron turn (#4467, item 3). The bridge's
     // `record_usage` feeds the global cost tracker on each `UsageRecorded` event
@@ -472,8 +473,7 @@ pub(super) async fn run_turn_via_tinyagents_body(
     // `record_unobserved_turn_usage` fallback below only runs on the success path
     // and never sees a failed run's usage. With `on_progress = None` the bridge
     // still records cost but its progress `send`s are inert no-ops, so there is
-    // no spurious streaming. `events` is created unconditionally above, so the
-    // bridge is always present.
+    // no spurious streaming; every turn has an event sink.
     let bridge = events.as_ref().map(|events| {
         let bridge = OpenhumanEventBridge::with_scope(
             on_progress,

@@ -113,6 +113,7 @@ pub mod fanout;
 mod harness;
 pub mod identity;
 pub mod memory;
+pub mod observe;
 #[cfg(feature = "modules")]
 pub mod modules;
 pub mod process;

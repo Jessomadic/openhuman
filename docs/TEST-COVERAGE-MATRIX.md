@@ -667,6 +667,7 @@ The thread JSONL store moved to `tinyagents_session::threads` (`vendor/tinyagent
 | 16.1.17 | Enforced shared turn/run budgets | RU+RI | `crates/openhuman-embed/tests/budget_fanout.rs`, `vendor/tinyagents/vendor/tinyinference/crates/tinyinference-llm/src/model/budget_tests.rs` | ✅ | Atomic parent/child reservations, physical provider admission, conservative unknown spend, cancellation and output cap |
 | 16.1.18 | Ordered bounded fanout | RI | `crates/openhuman-embed/tests/budget_fanout.rs` | ✅ | Input-order results, per-branch and child error isolation, branch ceilings, shared-budget concurrent refusal and empty fanout |
 | 16.1.13 | Awaited per-turn cancellation | RI | `crates/openhuman-embed/tests/turn_cancellation.rs`, `crates/openhuman-embed/tests/process_cancellation.rs` | ✅ | Before send, during inference and during a builtin shell command; agent reuse, concurrent cancellation handles, failure/drop acknowledgement, bounded and unbounded descendant termination plus direct-child reaping on Linux |
+| 16.1.20 | Host turn observer privacy and runtime propagation | RI | `crates/openhuman-embed/tests/turn_observers.rs`, `crates/openhuman-embed/tests/observed_turns.rs` | ✅ | Sanitized terminal failures, opt-in payloads, root runtime scope propagation, real model/tool callbacks and answering-model usage |
 
 ## Summary
 
