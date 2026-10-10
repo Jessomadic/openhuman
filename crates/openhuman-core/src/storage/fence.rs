@@ -112,7 +112,10 @@ pub struct LeaseFence {
     expires_at_ms: AtomicU64,
     margin_ms: u64,
     scopes: Vec<ScopeMatch>,
-    leases: Arc<dyn LeaseStore>,
+    /// Weak: a fence must not keep its node's lease store (and so a file
+    /// lock) alive after the host that owns it is gone. A gone store fails
+    /// the check closed.
+    leases: Weak<dyn LeaseStore>,
     latch: tokio::sync::watch::Sender<bool>,
     /// While the fence is latched, it stays registered (refusing writes)
     /// until this anchor is gone: the work that could still write is what
@@ -149,7 +152,7 @@ impl LeaseFence {
             expires_at_ms: AtomicU64::new(expires_at_ms),
             margin_ms,
             scopes,
-            leases,
+            leases: Arc::downgrade(&leases),
             latch: tokio::sync::watch::channel(false).0,
             anchor: Mutex::new(None),
         }
@@ -199,8 +202,9 @@ impl LeaseFence {
         let _ = rx.wait_for(|fenced| *fenced).await;
     }
 
-    /// Keeps this fence registered after it latches for as long as `anchor`
-    /// is alive (see [`FenceRegistry::lookup`]).
+    /// Keeps this fence registered after it latches only for as long as
+    /// `anchor` is alive (see [`FenceRegistry::lookup`]). Without an anchor
+    /// a latched fence stays until it is retired or replaced.
     pub fn anchor_to(&self, anchor: Weak<dyn Any + Send + Sync>) {
         *self.anchor.lock().unwrap_or_else(PoisonError::into_inner) = Some(anchor);
     }
@@ -210,7 +214,7 @@ impl LeaseFence {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
-            .is_some_and(|anchor| anchor.strong_count() > 0)
+            .is_none_or(|anchor| anchor.strong_count() > 0)
     }
 
     /// The checks that need no I/O: the latch, and the grant's expiry by
@@ -243,8 +247,10 @@ impl LeaseFence {
     /// [`FenceError::Unverified`] (the write is refused, not risked).
     pub async fn check(&self, now_ms: u64) -> Result<(), FenceError> {
         self.check_local(now_ms)?;
-        let record = self
-            .leases
+        let Some(leases) = self.leases.upgrade() else {
+            return Err(FenceError::Unverified("the lease store is gone".into()));
+        };
+        let record = leases
             .holder(&self.key)
             .await
             .map_err(|error| FenceError::Unverified(error.to_string()))?;
