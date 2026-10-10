@@ -114,22 +114,17 @@ pub(super) fn handle_inference_update_model_settings(
 ) -> ControllerFuture {
     Box::pin(async move {
         let update = deserialize_params::<InferenceUpdateModelSettingsParams>(params)?;
-        let ca_certs = update.cloud_providers.as_ref().map(|providers| {
-            providers
-                .iter()
-                .filter_map(|provider| {
-                    provider
-                        .ca_cert_pem
-                        .as_ref()
-                        .map(|pem| (provider.slug.clone(), pem.clone()))
-                })
-                .collect::<std::collections::HashMap<_, _>>()
-        });
-        if let Some(certs) = &ca_certs {
-            for pem in certs.values().filter(|pem| !pem.is_empty()) {
-                crate::util::tls::parse_ca_bundle(pem)?;
-            }
-        }
+        let ca_certs = update
+            .cloud_providers
+            .as_ref()
+            .map(|providers| {
+                crate::config::ops::collect_provider_ca_certs(
+                    providers
+                        .iter()
+                        .map(|provider| (provider.slug.as_str(), provider.ca_cert_pem.as_deref())),
+                )
+            })
+            .transpose()?;
         let patch = config_rpc::ModelSettingsPatch {
             api_url: update.api_url,
             inference_url: update.inference_url,

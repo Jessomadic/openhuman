@@ -142,7 +142,7 @@ pub async fn list_configured_models_from_config(
     );
 
     let client = if let Some(pem) = config.cloud_provider_ca_certs.get(&entry.slug) {
-        crate::util::tls::client_with_ca_bundle_with_timeouts(pem, "providers.list_models", 30, 10)?
+        crate::util::tls::client_with_ca_bundle_with_timeouts(pem, "provider.compatible", 30, 10)?
     } else {
         crate::config::build_runtime_proxy_client_with_timeouts("providers.list_models", 30, 10)
     };

@@ -123,6 +123,7 @@ export function useProviderConnect({
           slug,
           label: localLabel ?? BUILTIN_PROVIDER_META[slug]?.label ?? slug,
           endpoint,
+          caCertPem: saved.cloudProviders.find(provider => provider.slug === slug)?.caCertPem,
           authStyle: authStyleForSlug(slug),
           // CLI-login providers hold no API key — reflect that honestly.
           maskedKey: maskKeyLabel(!isCliLogin),
@@ -175,6 +176,7 @@ export function useProviderConnect({
               slug: upserted.slug,
               label: upserted.label,
               endpoint: upserted.endpoint,
+              ca_cert_pem: upserted.caCertPem ?? '',
               auth_style: upserted.authStyle,
             },
           ];

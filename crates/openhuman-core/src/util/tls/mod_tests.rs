@@ -11,7 +11,7 @@ fn platform_tls_client_builds_with_native_roots_enabled() {
 fn private_ca_bundle_is_accepted_without_disabling_public_roots() {
     let pem = include_str!("test-ca.pem");
     assert_eq!(parse_ca_bundle(pem).unwrap().len(), 1);
-    assert!(client_with_ca_bundle(pem, "providers.list_models").is_ok());
+    assert!(client_with_ca_bundle(pem, "provider.compatible").is_ok());
 }
 
 #[test]

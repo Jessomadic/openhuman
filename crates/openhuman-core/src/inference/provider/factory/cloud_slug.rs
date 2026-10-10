@@ -424,7 +424,7 @@ pub(super) fn try_create_cloud_slug_chat_model_from_string_with_native_tools(
         explicit_cache_control: endpoint_is_openrouter(&endpoint),
     };
     let chat = if let Some(pem) = config.cloud_provider_ca_certs.get(&slug) {
-        let http = match crate::util::tls::client_with_ca_bundle(pem, "providers.inference") {
+        let http = match crate::util::tls::client_with_ca_bundle(pem, "provider.compatible") {
             Ok(http) => http,
             Err(error) => return Some(Err(anyhow::anyhow!(error))),
         };

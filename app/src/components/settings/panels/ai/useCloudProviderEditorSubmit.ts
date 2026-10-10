@@ -57,16 +57,9 @@ export function useCloudProviderEditorSubmit({
         auth_style: p.authStyle,
       }));
 
-      // Persist the credential BEFORE the probe so the factory has it
-      // available. Let setCloudProviderKey throw — the editor's button-click
-      // handler catches and surfaces the error inline.
-      if (apiKey && upserted.slug !== 'openhuman') {
-        await setCloudProviderKey(upserted.slug, apiKey);
-      }
-
       // Live verification — flush the new cloud_providers list and call
-      // `/models` through the Rust controller. Skip for the OpenHuman backend
-      // (session JWT, no probe-able endpoint).
+      // `/models` through the Rust controller. Flush first so Rust validates
+      // the CA bundle before a new or replacement credential is persisted.
       if (upserted.slug !== 'openhuman') {
         const list =
           editing === 'new' || !editing
@@ -83,6 +76,11 @@ export function useCloudProviderEditorSubmit({
             auth_style: p.authStyle,
           }));
         await flushCloudProviders(nextWireProviders);
+        // The provider must be configured before probing, and its CA has now
+        // passed Rust-side validation. Let key-write failures surface inline.
+        if (apiKey) {
+          await setCloudProviderKey(upserted.slug, apiKey);
+        }
         // `skipProbe` is the user's explicit "add it anyway" after a failed
         // verification. A provider whose `/models` listing is absent or
         // auth-shaped differently (Azure's classic `api-version` surface is
