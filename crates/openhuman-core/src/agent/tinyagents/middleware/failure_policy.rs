@@ -107,11 +107,17 @@ pub(super) fn is_optional_service(tool: &str) -> bool {
     )
 }
 
-/// Tools whose timeout has always been transient, kept as a floor under the
-/// side-effect reading: a `web_fetch` declaring network access must not become
-/// an uncertain action because its policy does not say `read_only`.
+/// Read tools whose timeout is always transient, kept as a floor under the
+/// side-effect reading for a call judged by name alone (no registered tool
+/// facts, e.g. a dispatcher's unregistered target): a `web_fetch` declaring
+/// network access must not become an uncertain action because its policy
+/// does not say `read_only`, and `web_answer_tool` carries no reading verb.
+/// Every entry is a production tool name; `web_search` was dropped when the
+/// search tools became TinySearch's `web_*_tool` set.
 const ALWAYS_RETRYABLE_ON_TIMEOUT: &[&str] = &[
-    "web_search",
+    "web_search_tool",
+    "web_answer_tool",
+    "web_contents_tool",
     "web_fetch",
     "file_read",
     "list_files",
@@ -191,6 +197,26 @@ pub(super) fn classified_recovery_policy(
     if is_command_exit_report(error) {
         return None;
     }
+    // A delegated task (a TinyComputer browser task) that ended without
+    // finishing. The call itself is not uncertain: the task reports what it
+    // did and what to change, and its prose (a page's `403`, a planner's
+    // `timed out`) is that report, not the call's verdict, so keyword
+    // sniffing must not turn it into a zero-retry credential or uncertain
+    // class. One changed attempt; a model gateway failing under the task
+    // (5xx, connection) is transient like any other.
+    if error
+        .trim_start()
+        .starts_with(crate::tools::status::TASK_FAILED_MARKER)
+    {
+        // Classify the headline only: the task report appended after the
+        // blank line is page and planner text, not the call's verdict.
+        let headline = error.split("\n\n").next().unwrap_or(error);
+        let class = crate::tools::status::classify(headline, false).class;
+        return Some(match class {
+            Class::ServiceUnavailable | Class::ModelConnection => ("transient", 2),
+            _ => ("task_failed", 1),
+        });
+    }
     // A module the host could not load stays unloaded until the app restarts,
     // so retrying the same tool cannot help. Steer the model off it once
     // rather than halting the run on the first call or spending a transient
@@ -238,7 +264,16 @@ pub(super) fn classified_recovery_policy(
     Some(match class {
         Class::MissingPermission => ("permission", 0),
         Class::BadCredentials => ("authentication", 0),
-        Class::BlockedByPolicy | Class::Denied | Class::ApprovalExpired => ("policy", 0),
+        // The policy refused this call before the tool ran, and its refusal
+        // names a narrower, permitted alternative (scope the path, a read
+        // instead of a write). One alternative is the point of that copy:
+        // halting on the refusal itself ended production turns after one
+        // attempt. Its own class, so a refusal does not share a budget with
+        // the user's denial, and a second refusal on the same operation and
+        // scope still stops.
+        Class::BlockedByPolicy => ("blocked_by_policy", 1),
+        // The user said no, or never answered. Asking again only re-prompts.
+        Class::Denied | Class::ApprovalExpired => ("policy", 0),
         // A shell command calling a program this host lacks (often a POSIX
         // tool on Windows) is a call the model can correct: one retry, with a
         // nudge naming the host OS and shell. Other tools keep zero.
