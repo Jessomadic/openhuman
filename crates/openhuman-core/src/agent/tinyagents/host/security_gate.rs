@@ -545,6 +545,29 @@ impl SecurityGate for OpenHumanSecurityGate {
             )));
         };
 
+        // A scheduled prompt is data, not an open-ended approval for later
+        // actions. Keep cron agent turns within a read-only tool capability.
+        // This check precedes the shell shortcut and all approval settings,
+        // including installations where the approval gate is disabled.
+        if matches!(
+            crate::agent::turn_origin::current(),
+            Some(
+                crate::agent::turn_origin::AgentTurnOrigin::TrustedAutomation {
+                    source: crate::agent::turn_origin::TrustedAutomationSource::Cron,
+                    ..
+                }
+            )
+        ) && (call.tool_name == SHELL_TOOL
+            || tool.permission_level_with_args(&call.arguments) > PermissionLevel::ReadOnly
+            || tool.external_effect_with_args(&call.arguments))
+        {
+            return Ok(GateDecision::deny(format!(
+                "{} Scheduled agent turns may use read-only tools only; '{}' needs a live user action.",
+                crate::security::POLICY_DENIED_MARKER,
+                call.tool_name
+            )));
+        }
+
         // 3. `shell` is the one tool whose arguments carry a classifiable
         //    command, and `gate_decision` already encodes the autonomy tier —
         //    at a finer grain than the tool's coarse `Execute` permission
