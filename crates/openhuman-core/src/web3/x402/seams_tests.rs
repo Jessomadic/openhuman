@@ -177,6 +177,52 @@ async fn x402_guard_rejects_readonly_and_private_destinations() {
     ));
 }
 
+#[tokio::test]
+async fn x402_rejected_destinations_do_not_exhaust_the_action_budget() {
+    let guard = HostRequestGuard {
+        security: Arc::new(SecurityPolicy {
+            max_actions_per_hour: 1,
+            ..SecurityPolicy::default()
+        }),
+        allowed_domains: vec![],
+    };
+    assert!(matches!(
+        guard
+            .authorize(&proposed_request("http://127.0.0.1/"))
+            .await,
+        Err(RequestAuthorizationError::InvalidDestination(_))
+    ));
+    assert!(guard
+        .authorize(&proposed_request("https://8.8.8.8/"))
+        .await
+        .is_ok());
+    assert!(matches!(
+        guard.authorize(&proposed_request("https://8.8.8.8/"))
+            .await,
+        Err(RequestAuthorizationError::Denied(reason)) if reason.contains("rate limit")
+    ));
+}
+
+#[tokio::test]
+async fn x402_tool_runs_the_host_guard_before_network_or_payment() {
+    use tinytools::Tool;
+
+    let security = Arc::new(SecurityPolicy::default());
+    let blocked_private = request_tool(security.clone(), vec![])
+        .execute(serde_json::json!({"url": "http://127.0.0.1:1/"}))
+        .await
+        .unwrap();
+    assert!(blocked_private.is_error);
+    assert!(blocked_private.text().contains("[policy-blocked]"));
+
+    let blocked_domain = request_tool(security, vec!["example.com".into()])
+        .execute(serde_json::json!({"url": "https://8.8.8.8/"}))
+        .await
+        .unwrap();
+    assert!(blocked_domain.is_error);
+    assert!(blocked_domain.text().contains("[policy-blocked]"));
+}
+
 #[test]
 fn the_tool_is_built_from_the_host_seams() {
     use tinytools::Tool;

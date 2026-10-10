@@ -69,11 +69,6 @@ impl RequestGuard for HostRequestGuard {
                 "Action blocked: autonomy is read-only".into(),
             ));
         }
-        if !self.security.record_action() {
-            return Err(RequestAuthorizationError::Denied(
-                "Action blocked: rate limit exceeded".into(),
-            ));
-        }
         let host = reqwest::Url::parse(&request.url)
             .ok()
             .and_then(|parsed| parsed.host_str().map(str::to_string))
@@ -89,6 +84,11 @@ impl RequestGuard for HostRequestGuard {
         let target = validate_url_with_dns_check(&request.url, &self.allowed_domains)
             .await
             .map_err(|error| RequestAuthorizationError::InvalidDestination(error.to_string()))?;
+        if !self.security.record_action() {
+            return Err(RequestAuthorizationError::Denied(
+                "Action blocked: rate limit exceeded".into(),
+            ));
+        }
         self.security.disclose(
             &target.host,
             request.body.is_some(),
