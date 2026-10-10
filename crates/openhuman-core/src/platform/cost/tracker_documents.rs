@@ -78,36 +78,67 @@ impl CostDocs {
         })
     }
 
-    /// Imports a legacy `state/costs.jsonl` into an empty ledger, then renames
-    /// it to `costs.jsonl.migrated` so it is not read twice. Returns how many
-    /// records were imported. Malformed lines are skipped, as readers skip them.
+    /// Imports a legacy `state/costs.jsonl`, then renames it to
+    /// `costs.jsonl.migrated` so it is not read twice. Returns how many
+    /// records were created. A record whose id is already stored (by an
+    /// earlier attempt, another core importing at the same time, or a repeat
+    /// line in the file) is skipped, so the import is idempotent. Malformed
+    /// lines are skipped, as readers skip them.
+    ///
+    /// # Errors
+    ///
+    /// A storage error, or a failed rename: the ledger then stays in place and
+    /// the import is not recorded as done, so the next call retries it (and
+    /// creates nothing twice).
     pub(super) fn import_legacy(&self, path: &std::path::Path) -> Result<usize> {
         if !path.exists() {
             return Ok(0);
         }
-        let existing: std::collections::HashSet<String> =
-            self.all()?.into_iter().map(|record| record.id).collect();
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("read legacy cost ledger {}", path.display()))?;
         let mut imported = 0;
         for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
             match serde_json::from_str::<CostRecord>(line) {
-                Ok(record) if existing.contains(&record.id) => {
-                    let _ = record;
-                }
                 Ok(record) => {
-                    self.add(&record)?;
-                    imported += 1;
+                    if self.add_if_absent(&record)? {
+                        imported += 1;
+                    }
                 }
                 Err(error) => log::warn!("[cost::tracker] legacy import: skipping line: {error}"),
             }
         }
         let migrated = path.with_extension("jsonl.migrated");
-        if let Err(error) = std::fs::rename(path, &migrated) {
-            log::warn!("[cost::tracker] legacy import: could not rename ledger: {error}");
-        }
+        std::fs::rename(path, &migrated).with_context(|| {
+            format!(
+                "set aside legacy cost ledger {} as {}",
+                path.display(),
+                migrated.display()
+            )
+        })?;
         log::debug!("[cost::tracker] legacy import: imported={imported}");
         Ok(imported)
+    }
+
+    /// [`Self::import_legacy`] once per process for this backend instance,
+    /// scope and ledger path; a failed import is retried by the next call.
+    pub(super) fn import_legacy_once(&self, path: &std::path::Path) -> Result<()> {
+        let key = path.display().to_string();
+        self.0
+            .once_per_backend(&key, || self.import_legacy(path).map(|_| ()))
+    }
+
+    /// Writes `record` unless its id is already stored; `false` when it was.
+    fn add_if_absent(&self, record: &CostRecord) -> Result<bool> {
+        let mut doc = serde_json::to_value(record).context("serialize cost record")?;
+        doc["ts_ms"] = Value::from(record.usage.timestamp.timestamp_millis());
+        let id = record.id.clone();
+        self.0.run(|docs| async move {
+            match docs.put(RECORDS, &id, doc, Precondition::Absent).await {
+                Ok(_) => Ok(true),
+                Err(error) if error.kind() == tinystoragedrivers::ErrorKind::Conflict => Ok(false),
+                Err(error) => Err(error),
+            }
+        })
     }
 
     /// Every record, oldest first. Documents that no longer parse are skipped

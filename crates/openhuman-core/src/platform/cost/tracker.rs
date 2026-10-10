@@ -541,18 +541,13 @@ impl CostStorage {
 
     /// The workspace's JSONL ledger predates the backend and belongs to the
     /// single-user (`local`) scope; import it into that scope once.
+    /// Once per process for the backend instance (see
+    /// `CostDocs::import_legacy_once`).
     fn import_legacy_once(&self, docs: &super::tracker_documents::CostDocs) -> Result<()> {
-        static DONE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
         if crate::storage::current_scope().ok() != Some(crate::storage::Scope::local()) {
             return Ok(());
         }
-        let mut done = DONE.lock();
-        if done.contains(&self.path) {
-            return Ok(());
-        }
-        docs.import_legacy(&self.path)?;
-        done.push(self.path.clone());
-        Ok(())
+        docs.import_legacy_once(&self.path)
     }
 
     fn rebuild_aggregates(&mut self, day: NaiveDate, year: i32, month: u32) -> Result<()> {
