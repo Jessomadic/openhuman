@@ -1,4 +1,4 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type AISettings, EMPTY_SETTINGS } from '../aiPanelTypes';
@@ -105,6 +105,7 @@ describe('useProviderConnect', () => {
         credentialMode: 'api_key',
       });
     });
+    await waitFor(() => expect(finishKeyWrite).toBeTypeOf('function'));
 
     const latest: AISettings = {
       ...saved,
@@ -128,5 +129,35 @@ describe('useProviderConnect', () => {
         ]),
       })
     );
+  });
+
+  it('does not write a provider key when the provider flush fails', async () => {
+    api.flushCloudProviders
+      .mockRejectedValueOnce(new Error('settings write failed'))
+      .mockResolvedValueOnce(undefined);
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useProviderConnect({
+        draft: EMPTY_SETTINGS,
+        saved: EMPTY_SETTINGS,
+        persist,
+        t: key => key,
+        onConnected: vi.fn(),
+      })
+    );
+
+    await act(async () => {
+      await expect(
+        result.current.connectProvider({
+          slug: 'openai',
+          value: 'new-key',
+          credentialMode: 'api_key',
+        })
+      ).rejects.toThrow('settings write failed');
+    });
+
+    expect(api.flushCloudProviders).toHaveBeenCalledTimes(2);
+    expect(api.setCloudProviderKey).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
   });
 });

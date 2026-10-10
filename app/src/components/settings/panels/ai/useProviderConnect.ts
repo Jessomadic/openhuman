@@ -141,9 +141,7 @@ export function useProviderConnect({
           maskedKey: maskKeyLabel(!isCliLogin),
         };
 
-        if (!isLocalRuntime && !isCodexOAuth && !isCliLogin && slug !== 'openhuman') {
-          await setCloudProviderKey(slug, trimmed);
-        } else if (isLocalRuntime && slug === 'ollama') {
+        if (isLocalRuntime && slug === 'ollama') {
           const baseUrl = endpoint.replace(/\/v1\/?$/, '');
           await openhumanUpdateLocalAiSettings({
             base_url: baseUrl,
@@ -202,7 +200,36 @@ export function useProviderConnect({
               auth_style: currentUpserted.authStyle,
             },
           ];
-          await flushCloudProviders(nextWireProviders);
+          let flushedProviders = nextWireProviders;
+          try {
+            await flushCloudProviders(flushedProviders);
+            if (!isLocalRuntime && !isCodexOAuth && !isCliLogin) {
+              await setCloudProviderKey(slug, trimmed);
+            }
+            const latestSettingsAfterKey = latestSettings.current;
+            const latestDraftProvider = latestSettingsAfterKey.draft.cloudProviders.find(
+              provider => provider.slug === slug
+            );
+            const latestSavedProvider = latestSettingsAfterKey.saved.cloudProviders.find(
+              provider => provider.slug === slug
+            );
+            const latestCaCertPem =
+              latestDraftProvider?.caCertPem ?? latestSavedProvider?.caCertPem ?? '';
+            if (latestCaCertPem !== (currentUpserted.caCertPem ?? '')) {
+              flushedProviders = flushedProviders.map(provider =>
+                provider.slug === slug ? { ...provider, ca_cert_pem: latestCaCertPem } : provider
+              );
+              await flushCloudProviders(flushedProviders);
+            }
+          } catch (writeError) {
+            await flushCloudProviders(priorWireProviders).catch(rollbackErr =>
+              console.warn(
+                `[ai-settings] rollback flush after provider write failure slug=${slug}`,
+                rollbackErr
+              )
+            );
+            throw writeError;
+          }
           if (!isCodexOAuth && !isCliLogin) {
             try {
               await listProviderModels(slug);
