@@ -31,9 +31,15 @@ impl Lifecycle {
     /// Stops admitting turns and ends the ones in flight; returns whether this
     /// caller claimed removal before another caller.
     pub(crate) fn mark_removed(&self) -> bool {
+        self.mark_removed_with(|| {})
+    }
+
+    /// Claim removal and settle owned approvals before waking in-flight turns.
+    pub(crate) fn mark_removed_with(&self, before_notify: impl FnOnce()) -> bool {
         if self.removal_claimed.swap(true, Ordering::SeqCst) {
             return false;
         }
+        before_notify();
         // A cancelled turn can retain the watch read while its future drops.
         // Only the first claimant writes; repeated teardown never waits on it.
         self.removed.send_replace(true);

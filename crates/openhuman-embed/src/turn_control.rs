@@ -228,7 +228,20 @@ impl Turn {
                             native.cancel();
                             Err(CoreError::DeadlineExceeded { method: AGENT_CHAT })
                         },
-                        outcome = Box::pin(self.send_inner(&meter.usage)) => outcome,
+                        outcome = Box::pin(self.send_inner(&meter.usage)) => {
+                            // The relay can interrupt a long dispatch poll before
+                            // this select polls its control branches again. Keep
+                            // the public error tied to the triggering control.
+                            if token.as_ref().is_some_and(|token| token.is_cancelled())
+                                || cancellation.is_cancelled()
+                            {
+                                Err(CoreError::TurnCancelled { method: AGENT_CHAT })
+                            } else if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                                Err(CoreError::DeadlineExceeded { method: AGENT_CHAT })
+                            } else {
+                                outcome
+                            }
+                        },
                     }
                 })
                 .await;
