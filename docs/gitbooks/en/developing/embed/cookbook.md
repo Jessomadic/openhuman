@@ -104,9 +104,9 @@ Run: `cargo run -p openhuman-embed --example memory`
 
 SaaS profiles isolate conversation history.
 
-[Source](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/profiles.rs) · offline with loopback stubs; no live path.
+[Source](https://github.com/tinyhumansai/openhuman/blob/main/crates/openhuman-embed/examples/profiles.rs) · offline with loopback stubs; no live path. · feature: channels
 
-Run: `cargo run -p openhuman-embed --example profiles`
+Run: `cargo run -p openhuman-embed --example profiles --features channels`
 
 ## Hello agent: a prompt in and a reply out
 

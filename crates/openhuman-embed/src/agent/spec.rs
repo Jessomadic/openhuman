@@ -406,7 +406,7 @@ impl AgentSpec {
     /// use openhuman_embed::{AgentSpec, HostTurnTools, Tool};
     ///
     /// # fn belt_for(_chat: Option<&str>) -> Vec<Box<dyn Tool>> { Vec::new() }
-    /// let spec = AgentSpec::new("reviewer")
+    /// let spec = AgentSpec::new("assistant")
     ///     .tools(|turn| HostTurnTools::advertised(belt_for(turn.session_id())));
     /// ```
     #[must_use]

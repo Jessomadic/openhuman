@@ -44,7 +44,7 @@ For managed TinyHumans inference, use the [TinyHumans host integration](integrat
 
 ## Extend the example
 
-- Give a reviewer and a fixer separate tools and folders: [multiple agents](guides/multi-agent.md).
+- Give an analyst and a writer separate tools and folders: [multiple agents](guides/multi-agent.md).
 - Serve a request through your own HTTP transport: [deploy a server](guides/deploy-server.md).
 - Attach application functions: [tools](concepts/tools.md).
 - Isolate authenticated customers: [SaaS guide](guides/saas-multi-tenant.md).

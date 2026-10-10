@@ -8,7 +8,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn request() -> CompletionRequest {
-    CompletionRequest::new("fixture", vec![ChatMessage::user("Review.")])
+    CompletionRequest::new("fixture", vec![ChatMessage::user("Analyze.")])
 }
 async fn provider() -> MockServer {
     let server = MockServer::start().await;
