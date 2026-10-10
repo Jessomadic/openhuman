@@ -429,6 +429,19 @@ const ThreadRoot: FC<{
     ConversationMap,
   } = useContext(ThreadComponentsContext);
   const { isDraggingFiles, dropHandlers } = useThreadFileDrop();
+  const footerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const footer = footerRef.current;
+    const viewport = footer?.closest<HTMLElement>('[data-slot="aui_thread-viewport"]');
+    if (!footer || !viewport) return;
+    const measure = () => viewport.style.setProperty('--task-card-bottom', `${footer.getBoundingClientRect().height + 8}px`);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(footer);
+    return () => observer.disconnect();
+  }, []);
+
 
   return (
     <ThreadPrimitive.Root
@@ -477,6 +490,7 @@ const ThreadRoot: FC<{
           </div>
 
           <ThreadPrimitive.ViewportFooter
+            ref={footerRef}
             className={cn(
               'aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6',
               !isEmpty && 'sticky bottom-0 mt-auto rounded-t-(--composer-radius)'

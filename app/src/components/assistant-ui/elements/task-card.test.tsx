@@ -7,7 +7,7 @@ vi.mock('@/lib/i18n/I18nContext', () => ({ useT: () => ({ t: (key: string) => ke
 describe('task card conversation placement', () => {
   it('sticks active work to the bottom and releases completed work', () => {
     const { container, rerender } = render(<TaskCard label="Inspect UI" state="working" />);
-    expect(container.firstChild).toHaveClass('sticky', 'bottom-0');
+    expect(container.firstChild).toHaveClass('sticky', 'bottom-(--task-card-bottom,0px)');
     rerender(<TaskCard label="Inspect UI" state="done" />);
     expect(container.firstChild).not.toHaveClass('sticky');
   });

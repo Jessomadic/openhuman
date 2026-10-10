@@ -112,7 +112,7 @@ export function TaskCard({
       className={cn(
         paper,
         'flex w-full max-w-sm flex-col overflow-hidden rounded-2xl',
-        (state === 'working' || state === 'waiting') && 'sticky bottom-0 z-10 bg-background',
+        (state === 'working' || state === 'waiting') && 'sticky bottom-(--task-card-bottom,0px) z-10 bg-background',
         className
       )}
       {...props}>
