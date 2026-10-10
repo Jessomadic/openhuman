@@ -124,3 +124,27 @@ async fn a_failed_release_write_keeps_the_lock_and_the_holding() {
     }
     a.release(grant).await.unwrap();
 }
+
+#[tokio::test]
+async fn releasing_a_key_whose_directory_moved_away_drops_the_stale_holding() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (
+        LocalLeases::new(dir.path(), "a"),
+        LocalLeases::new(dir.path(), "b"),
+    );
+    let grant = a.acquire("moved", 0).await.unwrap();
+    // The key's directory is archived with its lock file inside.
+    let key_dir = local_dir(dir.path(), "moved");
+    std::fs::rename(&key_dir, dir.path().join("archived")).unwrap();
+    a.release(grant).await.unwrap();
+    assert!(!key_dir.exists(), "releasing must not recreate the directory");
+
+    // A fresh directory: `a` takes the real lock again instead of answering
+    // from a holding on the archived file, so `b` is held out.
+    let again = a.acquire("moved", 1).await.unwrap();
+    assert_eq!(again.previous_unclean, false);
+    assert!(matches!(
+        b.acquire("moved", 2).await,
+        Err(LeaseError::Held(_))
+    ));
+}
