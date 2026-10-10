@@ -231,6 +231,12 @@ pub fn assert_covers_user_surface() {
     let ours: Vec<&str> = GENERATORS.iter().map(|(m, _)| *m).collect();
     let missing: Vec<&&str> = USER_METHODS.iter().filter(|m| !ours.contains(m)).collect();
     let stale: Vec<&&str> = ours.iter().filter(|m| !USER_METHODS.contains(m)).collect();
+    let mut seen = std::collections::HashSet::new();
+    let duplicate: Vec<&&str> = ours.iter().filter(|m| !seen.insert(**m)).collect();
+    assert!(
+        duplicate.is_empty(),
+        "duplicate isolation-fuzz generators: {duplicate:?}"
+    );
     assert!(
         missing.is_empty(),
         "USER_METHODS entries with no isolation-fuzz generator (add one to \

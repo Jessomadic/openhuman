@@ -78,8 +78,7 @@ fn an_eviction_storm_keeps_live_turns_controllable() {
     assert!(body.get("result").is_some(), "{body}");
     let queued = queue(&node, alice, "live");
     assert!(
-        queued.to_string().contains("CANARY-alice-followup")
-            || queued.to_string().contains("\"id\""),
+        queued.to_string().contains("CANARY-alice-followup"),
         "the follow-up is queued: {queued}"
     );
 
@@ -127,6 +126,12 @@ fn an_eviction_storm_keeps_live_turns_controllable() {
                         "client_id": "c1", "thread_id": thread, "message": canary(i + 1, "storm")
                     }),
                 );
+                // Give the turn a moment to start (it may also have finished
+                // already) so the wait below cannot pass before it began.
+                let start = Instant::now();
+                while start.elapsed() < Duration::from_secs(3) && !active(&node, user, &thread) {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
                 wait_until(
                     "a churning user's short turn",
                     &node,
