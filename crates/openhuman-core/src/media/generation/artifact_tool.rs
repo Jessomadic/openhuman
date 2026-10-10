@@ -295,7 +295,8 @@ impl<T: Tool> Tool for MediaArtifactTool<T> {
             context,
             label,
             super::progress::HEARTBEAT_INTERVAL,
-            self.inner.execute_with_context(args.clone(), options, context),
+            self.inner
+                .execute_with_context(args.clone(), options, context),
         )
         .await?;
         if result.is_error {

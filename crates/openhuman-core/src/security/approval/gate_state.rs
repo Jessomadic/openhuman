@@ -40,12 +40,14 @@ impl ApprovalGate {
         request_id: &str,
         decision: ApprovalDecision,
     ) -> anyhow::Result<Option<PendingApproval>> {
-        if !matches!(decision, ApprovalDecision::ApproveOnce | ApprovalDecision::Deny)
-            && self
-                .request_routes
-                .lock()
-                .get(request_id)
-                .is_some_and(|route| route.forced)
+        if !matches!(
+            decision,
+            ApprovalDecision::ApproveOnce | ApprovalDecision::Deny
+        ) && self
+            .request_routes
+            .lock()
+            .get(request_id)
+            .is_some_and(|route| route.forced)
         {
             anyhow::bail!("this action requires a one-time approval or denial");
         }
@@ -123,7 +125,8 @@ impl ApprovalGate {
         let rows = store::list_pending_for_agent(&self.config, Some(agent))?;
         let mut denied = 0;
         for row in rows {
-            let Some(decided) = store::decide(&self.config, &row.request_id, ApprovalDecision::Deny)?
+            let Some(decided) =
+                store::decide(&self.config, &row.request_id, ApprovalDecision::Deny)?
             else {
                 continue;
             };
@@ -288,7 +291,9 @@ impl ApprovalGate {
     /// park time in `intercept_audited_inner`, alongside the `thread_to_request`
     /// insert.
     fn insert_request_route(&self, request_id: &str, route: RequestRoute) {
-        self.request_routes.lock().insert(request_id.to_string(), route);
+        self.request_routes
+            .lock()
+            .insert(request_id.to_string(), route);
     }
 
     /// Remove and return the routing correlation for `request_id`, if any.

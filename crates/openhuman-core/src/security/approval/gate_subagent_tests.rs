@@ -26,11 +26,11 @@ async fn requested_event(
 ) -> crate::core::events::DomainEvent {
     loop {
         match rx.recv().await {
-            Some(ref ev @ crate::core::events::DomainEvent::ApprovalRequested { ref tool_name, .. })
-                if tool_name == tool =>
-            {
-                return ev.clone()
-            }
+            Some(
+                ref ev @ crate::core::events::DomainEvent::ApprovalRequested {
+                    ref tool_name, ..
+                },
+            ) if tool_name == tool => return ev.clone(),
             Some(_) => continue,
             None => panic!("the bus closed before the expected event arrived"),
         }
@@ -97,10 +97,20 @@ async fn an_async_subagent_park_reaches_the_parent_thread_detached_with_a_short_
     else {
         unreachable!()
     };
-    assert_eq!(thread_id.as_deref(), Some("thread-parent"), "routed to the parent thread");
+    assert_eq!(
+        thread_id.as_deref(),
+        Some("thread-parent"),
+        "routed to the parent thread"
+    );
     assert_eq!(client_id.as_deref(), Some("client-sub"));
-    assert!(detached, "a park that can outlive its turn is marked detached");
-    assert!(gate.request_is_detached(&request_id), "the replay path sees it too");
+    assert!(
+        detached,
+        "a park that can outlive its turn is marked detached"
+    );
+    assert!(
+        gate.request_is_detached(&request_id),
+        "the replay path sees it too"
+    );
 
     let row = wait_parked(&gate).await;
     assert!(
@@ -132,7 +142,8 @@ async fn an_inline_chat_park_is_not_detached_and_keeps_the_full_window() {
     let handle = tokio::spawn(async move {
         turn_origin::with_origin(
             web_origin(),
-            APPROVAL_CHAT_CONTEXT.scope(chat_ctx(), g.intercept(tool, "run", serde_json::json!({}))),
+            APPROVAL_CHAT_CONTEXT
+                .scope(chat_ctx(), g.intercept(tool, "run", serde_json::json!({}))),
         )
         .await
     });
@@ -202,7 +213,11 @@ async fn an_expired_park_tells_the_model_nobody_answered() {
     let handle = tokio::spawn(async move {
         turn_origin::with_origin(
             async_subagent_origin("thread-expiry"),
-            g.intercept("media_generate_video", "generate a clip", serde_json::json!({})),
+            g.intercept(
+                "media_generate_video",
+                "generate a clip",
+                serde_json::json!({}),
+            ),
         )
         .await
     });

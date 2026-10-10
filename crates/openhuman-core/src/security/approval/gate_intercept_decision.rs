@@ -123,9 +123,7 @@ impl ApprovalGate {
                 let denied = store::decide(&self.config, request_id, ApprovalDecision::Deny);
                 let persisted = match &denied {
                     Ok(Some(_)) => Some(ApprovalDecision::Deny),
-                    Ok(None) => store::get_decision(&self.config, request_id)
-                        .ok()
-                        .flatten(),
+                    Ok(None) => store::get_decision(&self.config, request_id).ok().flatten(),
                     Err(_) => None,
                 };
                 if matches!(persisted, Some(d) if d.is_approve()) {
@@ -165,7 +163,7 @@ impl ApprovalGate {
                             client_id: route.as_ref().and_then(|r| r.client_id.clone()),
                             tool_call_id: route.and_then(|r| r.tool_call_id),
                             resolution: Some("expired".to_string()),
-                        agent_id: row.agent_id.clone(),
+                            agent_id: row.agent_id.clone(),
                         });
                     }
                     (

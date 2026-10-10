@@ -30,7 +30,11 @@ fn status(state: JobState) -> VideoJobStatus {
 #[test]
 fn heartbeat_names_the_elapsed_time_and_job_state() {
     assert_eq!(
-        heartbeat_message("Generating video", Duration::from_secs(95), Some("in_progress")),
+        heartbeat_message(
+            "Generating video",
+            Duration::from_secs(95),
+            Some("in_progress")
+        ),
         "Generating video — 1m 35s elapsed (job in_progress)"
     );
     assert_eq!(
@@ -50,9 +54,13 @@ async fn a_long_call_reports_progress_with_the_polled_job_state() {
         tokio::time::sleep(Duration::from_secs(20)).await;
         "clip.mp4"
     };
-    let output =
-        with_progress_heartbeat(Some(&recorder), "Generating video", HEARTBEAT_INTERVAL, work)
-            .await;
+    let output = with_progress_heartbeat(
+        Some(&recorder),
+        "Generating video",
+        HEARTBEAT_INTERVAL,
+        work,
+    )
+    .await;
     assert_eq!(output, "clip.mp4");
     let updates = recorder.updates.lock().unwrap().clone();
     assert_eq!(
@@ -67,10 +75,15 @@ async fn a_long_call_reports_progress_with_the_polled_job_state() {
 #[tokio::test(start_paused = true)]
 async fn a_quick_call_reports_nothing() {
     let recorder = Recorder::default();
-    let output = with_progress_heartbeat(Some(&recorder), "Generating image", HEARTBEAT_INTERVAL, async {
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        1
-    })
+    let output = with_progress_heartbeat(
+        Some(&recorder),
+        "Generating image",
+        HEARTBEAT_INTERVAL,
+        async {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            1
+        },
+    )
     .await;
     assert_eq!(output, 1);
     assert!(recorder.updates.lock().unwrap().is_empty());

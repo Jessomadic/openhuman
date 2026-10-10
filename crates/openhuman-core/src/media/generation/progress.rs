@@ -40,7 +40,9 @@ pub(crate) fn video_status_observer() -> ProgressFn {
     Arc::new(|status: &VideoJobStatus| {
         let state = status.state.to_string();
         let recorded = JOB_STATE.try_with(|slot| {
-            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(state.clone());
+            *slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(state.clone());
         });
         tracing::trace!(
             job_state = %state,
