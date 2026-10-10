@@ -572,3 +572,7 @@ mod tests;
 #[cfg(test)]
 #[path = "browser_schema_tests.rs"]
 mod schema_tests;
+
+#[cfg(test)]
+#[path = "browser_task_outcome_tests.rs"]
+mod task_outcome_tests;
