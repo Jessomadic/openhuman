@@ -100,6 +100,7 @@ const STORAGE_LIB_FILTERS = [
   "desktop::control::",
   "platform::cost::",
   "inference::tokenjuice::",
+  "config::schema::load::source::",
 ];
 
 /**

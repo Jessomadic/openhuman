@@ -228,6 +228,7 @@ storage:
   - 'crates/openhuman-core/src/inference/tokenjuice/**'
   - 'crates/openhuman-core/src/web3/wallet/**'
   - 'crates/openhuman-core/src/config/schema/storage.rs'
+  - 'crates/openhuman-core/src/config/schema/load/source/**'
   - 'crates/openhuman-rpc/src/session_store/**'
   - 'Cargo.toml'
   - 'Cargo.lock'

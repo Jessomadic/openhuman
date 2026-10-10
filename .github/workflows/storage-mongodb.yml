@@ -52,6 +52,7 @@ on:
       - "crates/openhuman-core/src/inference/tokenjuice/**"
       - "crates/openhuman-core/src/web3/wallet/**"
       - "crates/openhuman-core/src/config/schema/storage.rs"
+      - "crates/openhuman-core/src/config/schema/load/source/**"
       - "crates/openhuman-rpc/src/session_store/**"
       - "tests/storage_*.rs"
       - "tests/cli_storage_url_e2e.rs"
