@@ -25,9 +25,9 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use tinyagents_harness::context::RunContext;
-use tinyagents_harness::middleware::Middleware;
+use tinyagents_harness::middleware::{Middleware, ToolInvocationIdentity};
+use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
-use tinyagents_harness::AgentHarness;
 use tinyinference_llm::model::ModelResponse;
 use tinytools::ToolResult;
 
@@ -99,7 +99,7 @@ where
         &self,
         _ctx: &mut RunContext<Ctx>,
         _state: &State,
-        _invocation: &tinyagents_harness::middleware::ToolInvocationIdentity,
+        _invocation: &ToolInvocationIdentity,
         _result: &mut ToolResult,
     ) -> tinyagents_harness::Result<()> {
         self.maybe_pause("after_tool", Instant::now());

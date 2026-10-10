@@ -20,6 +20,7 @@
 //! tinyagents harness.
 
 mod compaction_carry;
+mod deadline_wind_down;
 pub mod config;
 pub mod discovery;
 mod embeddings;
