@@ -128,10 +128,9 @@ pub(super) async fn finalize_committed_turn(
     let commit_started = std::time::Instant::now();
     let output = receipt.outcome.output.clone().unwrap_or_default();
     // Skips compaction checkpoints (user-role, not the user's words).
-    let input =
-        crate::agent::tinyagents::last_user_message(&receipt.outcome.history)
-            .map(crate::agent::message_convert::user_text_with_markers)
-            .unwrap_or_default();
+    let input = crate::agent::tinyagents::last_user_message(&receipt.outcome.history)
+        .map(crate::agent::message_convert::user_text_with_markers)
+        .unwrap_or_default();
     let sidecar = receipt
         .options
         .context
@@ -141,10 +140,7 @@ pub(super) async fn finalize_committed_turn(
         .clone();
     // This turn's model calls, not every assistant row of the
     // whole conversation (`turn_iterations`).
-    let iterations = turn_iterations(
-        sidecar.model_calls,
-        &receipt.outcome.history,
-    );
+    let iterations = turn_iterations(sidecar.model_calls, &receipt.outcome.history);
     tracing::debug!(
         session_id = %identity.session_id,
         iterations,
