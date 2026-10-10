@@ -142,7 +142,7 @@ async fn releasing_a_key_whose_directory_moved_away_drops_the_stale_holding() {
     // A fresh directory: `a` takes the real lock again instead of answering
     // from a holding on the archived file, so `b` is held out.
     let again = a.acquire("moved", 1).await.unwrap();
-    assert_eq!(again.previous_unclean, false);
+    assert!(!again.previous_unclean);
     assert!(matches!(
         b.acquire("moved", 2).await,
         Err(LeaseError::Held(_))
