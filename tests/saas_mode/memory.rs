@@ -10,7 +10,7 @@
 //! `ann` and `anna` are deliberate: one root is a string prefix of the
 //! other, and a scope listing is a string-prefix match.
 
-use super::mock_memory::{MemoryRequest, MockMemory};
+use super::mock_memory::{credential_id, MemoryRequest, MockMemory};
 use super::*;
 
 const USERS: [&str; 3] = ["ann", "anna", "bob"];
