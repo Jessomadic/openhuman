@@ -1,3 +1,8 @@
+#[cfg(test)]
+use super::shell_platform::PYTHON_UTF8_DEFAULTS;
+use super::shell_platform::{
+    command_param_description, python_utf8_env, shell_child_env, shell_description, SAFE_ENV_VARS,
+};
 use crate::agent::host_runtime::RuntimeAdapter;
 use crate::agent::platform_shell::ShellFlavor;
 use crate::runtime::javascript::NodeBootstrap;
@@ -13,105 +18,6 @@ use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolTimeout}
 
 /// Maximum output size in bytes (1MB).
 const MAX_OUTPUT_BYTES: usize = 1_048_576;
-/// Environment variables safe to pass to shell commands.
-/// Only functional variables are included — never API keys or secrets.
-const SAFE_ENV_VARS: &[&str] = &[
-    "PATH",
-    "HOME",
-    "TERM",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "USER",
-    "SHELL",
-    "TMPDIR",
-    // Windows process creation and child command lookup need these after env_clear().
-    "SystemRoot",
-    "WINDIR",
-    "COMSPEC",
-    "PATHEXT",
-    "TEMP",
-    "TMP",
-    "USERPROFILE",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "ProgramFiles",
-    "ProgramFiles(x86)",
-    "ProgramW6432",
-];
-
-/// Python's text-encoding defaults for a shell child, unless the parent sets
-/// its own. Under `cmd.exe` the console code page is a legacy one (cp1252,
-/// cp437), so a script printing anything outside it dies with
-/// `UnicodeEncodeError: 'charmap' codec can't encode …`. UTF-8 mode
-/// (`PYTHONUTF8`) fixes `open()` and the stdio defaults; `PYTHONIOENCODING`
-/// covers interpreters older than 3.7 and stdio explicitly. Both are no-ops
-/// for a non-Python command and on a host whose locale is already UTF-8.
-const PYTHON_UTF8_DEFAULTS: &[(&str, &str)] = &[("PYTHONUTF8", "1"), ("PYTHONIOENCODING", "utf-8")];
-
-/// The Python encoding variables for a child: the parent's own value when
-/// `lookup` has one, else [`PYTHON_UTF8_DEFAULTS`].
-fn python_utf8_env(
-    lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
-) -> Vec<(&'static str, std::ffi::OsString)> {
-    PYTHON_UTF8_DEFAULTS
-        .iter()
-        .map(|(name, default)| {
-            let value = lookup(name).unwrap_or_else(|| (*default).into());
-            (*name, value)
-        })
-        .collect()
-}
-
-/// The environment a native shell child starts from after `env_clear()`:
-/// every [`SAFE_ENV_VARS`] name `lookup` (the parent environment) has, plus
-/// [`python_utf8_env`].
-///
-/// `var_os`, not `var`: a value that is not valid Unicode (possible on both
-/// Windows and Unix) used to be dropped silently. Lookups through
-/// `std::env::var_os` are case-insensitive on Windows, so `USERPROFILE`
-/// matches a parent that spells it `UserProfile`.
-fn shell_child_env(
-    lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
-) -> Vec<(&'static str, std::ffi::OsString)> {
-    let mut env: Vec<(&'static str, std::ffi::OsString)> = SAFE_ENV_VARS
-        .iter()
-        .filter_map(|name| lookup(name).map(|value| (*name, value)))
-        .collect();
-    env.extend(python_utf8_env(&lookup));
-    env
-}
-
-/// The `shell` tool description for the shell this host spawns. Models default
-/// to POSIX syntax, so on Windows the description says outright that commands
-/// run under `cmd.exe` and gives the equivalents of the commands they reach for.
-fn shell_description(flavor: ShellFlavor) -> &'static str {
-    match flavor {
-        ShellFlavor::Cmd => {
-            "Execute a command under Windows cmd.exe (`cmd /C`), not a POSIX shell: run code, \
-             manipulate workspace files, or launch applications (`start \"\" music:`). Use cmd \
-             syntax: `cd` with no argument prints the current directory (no `pwd`), `dir` lists \
-             (no `ls`), `type` prints a file (no `cat`), `findstr` searches (no `grep`), \
-             `del`/`copy`/`move` replace rm/cp/mv, variables are `%VAR%` (not `$VAR`), and \
-             commands chain with `&&` (`;` is not a separator). For PowerShell run \
-             `powershell -NoProfile -Command \"...\"`. Only stdout/stderr comes back, so a script \
-             that computes silently or only writes a file returns nothing — print what you need, \
-             or read the file afterwards."
-        }
-        ShellFlavor::Posix => {
-            "Execute a shell command: run code, manipulate workspace files, or launch applications (`open -a Music`, `xdg-open music://`). Only stdout/stderr comes back, so a script that computes silently or only writes a file returns nothing — print what you need, or read the file afterwards."
-        }
-    }
-}
-
-/// The `command` parameter's description, matching [`shell_description`].
-fn command_param_description(flavor: ShellFlavor) -> &'static str {
-    match flavor {
-        ShellFlavor::Cmd => "The cmd.exe command to execute (cmd syntax, not POSIX)",
-        ShellFlavor::Posix => "The shell command to execute",
-    }
-}
-
 /// Exit status coreutils `timeout` returns when its own limit expires.
 const COMMAND_TIMEOUT_EXIT_CODE: i32 = 124;
 /// Appended to an exit-124 failure: the command's own `timeout` fired, not the
