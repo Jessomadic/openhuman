@@ -10,7 +10,7 @@
 //! ```
 //!
 //! No user header means the operator plane. With one, the request runs under
-//! that user's agent — which must already be provisioned — and nothing else.
+//! that user's profile — which must already be provisioned — and nothing else.
 //! The signature, required unless the operator turns it off, binds the user id
 //! to the bearer holder and a ±60 s window: a gateway that forwards a client's
 //! headers by mistake cannot be talked into acting as another user.
@@ -22,8 +22,8 @@ use std::sync::Arc;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2_011::Sha256;
 
-use super::host::{self, UserAgentState};
-use super::types::UserAgentId;
+use super::host::{self, Profile, ProfileHost};
+use super::types::ProfileId;
 
 /// The gateway's user header.
 pub const USER_HEADER: &str = "x-openhuman-user";
@@ -91,8 +91,8 @@ impl GatewayRefusal {
 pub enum GatewayScope {
     /// No user header: the operator plane.
     Operator,
-    /// One user's agent.
-    User(Arc<UserAgentState>),
+    /// One user's profile.
+    User(Arc<Profile>),
 }
 
 /// Pick the scope for a request that already presented the service bearer.
@@ -108,19 +108,33 @@ pub fn resolve_scope(
         return Ok(GatewayScope::Operator);
     };
     let host = host::host().ok_or_else(|| GatewayRefusal::new(503, "this core serves no users"))?;
-    let agent = UserAgentId::for_user(user_id).map_err(|e| GatewayRefusal::new(400, e))?;
+    resolve_user_on(&host, user_id, signature, secret, now).map(GatewayScope::User)
+}
+
+/// [`resolve_scope`] for a request that names `user_id`, on an explicit
+/// `host` rather than the process's: the profile that serves that user, or
+/// the refusal.
+pub fn resolve_user_on(
+    host: &ProfileHost,
+    user_id: &str,
+    signature: Option<&str>,
+    secret: &str,
+    now: u64,
+) -> Result<Arc<Profile>, GatewayRefusal> {
+    let profile = ProfileId::for_user(user_id, host.saas().profile_ids)
+        .map_err(|e| GatewayRefusal::new(400, e))?;
     if host.saas().require_user_signature {
         let signature = signature
             .ok_or_else(|| GatewayRefusal::new(401, format!("missing {USER_SIG_HEADER}")))?;
         verify(secret, user_id, signature, now).map_err(|e| {
-            log::warn!("[user_agents][gateway] refused agent={agent}: {e}");
+            log::warn!("[profiles][gateway] refused a scoped request: {e}");
             GatewayRefusal::new(401, e)
         })?;
     }
-    match host.open(&agent) {
+    match host.open(&profile) {
         Ok(state) => {
-            log::debug!("[user_agents][gateway] scoped request to agent={agent}");
-            Ok(GatewayScope::User(state))
+            log::debug!("[profiles][gateway] scoped request to an open profile");
+            Ok(state)
         }
         Err(e) if e.contains("not provisioned") => Err(GatewayRefusal::new(403, e)),
         Err(e) => Err(GatewayRefusal::new(503, e)),
@@ -130,3 +144,7 @@ pub fn resolve_scope(
 #[cfg(test)]
 #[path = "gateway_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "gateway_proptest_tests.rs"]
+mod proptest_tests;
