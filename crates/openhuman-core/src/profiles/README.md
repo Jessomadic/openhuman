@@ -74,7 +74,8 @@ Changing the mode may re-map users onto different profiles. Gateway user ids
 are turned into profile ids at once (`ops.rs`, `gateway.rs`) and are never
 logged. Under raw mode a user id that fits the charset *is* the profile id, so
 it reaches paths, storage and the provisioning response; use `"hashed"` where
-user ids must not. Log lines and `Outcome` messages never carry the profile id.
+user ids must not. `ProfileRuntime` may include the profile id in debug logs
+during `provision` and `open`; do not treat debug logs as profile-id-free.
 
 ## The tenant key
 
