@@ -344,8 +344,8 @@
   },
   {
     "rule": "json-write",
-    "path": "crates/openhuman-core/src/profiles/host.rs",
-    "line": 124,
+    "path": "crates/openhuman-core/src/profiles/registry.rs",
+    "line": 141,
     "text": "std::fs::write(&layout.meta_path, raw)",
     "occurrence": 1
   },
