@@ -703,8 +703,8 @@ export type BrowserPage = Page;
 export function browserElements(page: BrowserPage) {
   const language = (name: string) => page.getByRole('combobox', { name, exact: true });
   return {
-    textbox: (name: string) => page.getByRole('textbox', {name, exact: true}),
-    button: (name: string) => page.getByRole('button', {name, exact: true}),
+    textbox: (name: string) => page.getByRole('textbox', { name, exact: true }),
+    button: (name: string) => page.getByRole('button', { name, exact: true }),
     testId: (id: string) => page.getByTestId(id),
     slot: (slot: string) => page.locator(`[data-slot="${slot}"]`),
     language,

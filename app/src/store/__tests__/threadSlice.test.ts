@@ -254,12 +254,18 @@ describe('threadSlice loadThreadMessages thunk', () => {
   it('preserves old message identities and order when rehydrating after the next turn', async () => {
     const store = createStore();
     store.dispatch(setSelectedThread('t-1'));
-    const history = [makeMessage({id: 'first-user', sender: 'user'}), makeMessage({id: 'first-answer', sender: 'agent', content: 'First answer'})];
-    mockedThreadApi.getThreadMessages.mockResolvedValueOnce({messages: history, count: 2});
+    const history = [
+      makeMessage({ id: 'first-user', sender: 'user' }),
+      makeMessage({ id: 'first-answer', sender: 'agent', content: 'First answer' }),
+    ];
+    mockedThreadApi.getThreadMessages.mockResolvedValueOnce({ messages: history, count: 2 });
     await store.dispatch(loadThreadMessages('t-1'));
     const original = store.getState().thread.messages;
-    const next = [...history.map(message => ({...message, extraMetadata: {...message.extraMetadata}})), makeMessage({id: 'try-now', sender: 'user', content: 'try now'})];
-    mockedThreadApi.getThreadMessages.mockResolvedValueOnce({messages: next, count: 3});
+    const next = [
+      ...history.map(message => ({ ...message, extraMetadata: { ...message.extraMetadata } })),
+      makeMessage({ id: 'try-now', sender: 'user', content: 'try now' }),
+    ];
+    mockedThreadApi.getThreadMessages.mockResolvedValueOnce({ messages: next, count: 3 });
     await store.dispatch(loadThreadMessages('t-1'));
     const refreshed = store.getState().thread.messages;
     expect(refreshed.map(message => message.id)).toEqual(['first-user', 'first-answer', 'try-now']);

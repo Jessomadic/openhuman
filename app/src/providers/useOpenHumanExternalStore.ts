@@ -162,7 +162,8 @@ export function useCoreTranscriptProjection(
     const project = (items: DerivedDisplayItem[], partial = false) => {
       const mapped = mapDisplayItems(items, { skipRequestIds });
       setProjection(previous => {
-        if (partial && previous.threadId === threadId && Object.keys(previous.timelines).length > 0) return previous;
+        if (partial && previous.threadId === threadId && Object.keys(previous.timelines).length > 0)
+          return previous;
         if (previous.threadId !== threadId) {
           return { threadId, timelines: mapped.timelines, transcripts: mapped.transcripts };
         }

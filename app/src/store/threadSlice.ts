@@ -1,4 +1,3 @@
-import { jsonValuesEqual } from '../utils/jsonValuesEqual';
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 
 import { extractWorkflowProposalFromMessages } from '../lib/workflows/workflowProposal';
@@ -6,6 +5,7 @@ import { threadApi } from '../services/api/threadApi';
 import { isThreadNotFoundCoreRpcError } from '../services/coreRpcClient';
 import type { Thread, ThreadMessage } from '../types/thread';
 import { IS_DEV } from '../utils/config';
+import { jsonValuesEqual } from '../utils/jsonValuesEqual';
 import { setWorkflowProposalForThread } from './chatRuntimeSlice';
 import { resetUserScopedState } from './resetActions';
 
@@ -662,9 +662,15 @@ const threadSlice = createSlice({
         const localOnly = existing.filter(m => !fetchedIds.has(m.id));
         const messages =
           localOnly.length > 0
-            ? [...stableFetched, ...localOnly].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+            ? [...stableFetched, ...localOnly].sort(
+                (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)
+              )
             : stableFetched;
-        const stableMessages = messages.length === existing.length && messages.every((message, index) => message === existing[index]) ? existing : messages;
+        const stableMessages =
+          messages.length === existing.length &&
+          messages.every((message, index) => message === existing[index])
+            ? existing
+            : messages;
         state.messagesByThreadId[threadId] = stableMessages;
         if (threadId === state.selectedThreadId) {
           state.messages = stableMessages;

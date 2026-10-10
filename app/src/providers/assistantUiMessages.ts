@@ -695,14 +695,22 @@ function mergedAssistantText(messages: readonly ThreadMessage[]): string {
   return texts.join('\n\n');
 }
 
-const mergedRunCache = new WeakMap<ThreadMessage, {rows: readonly ThreadMessage[]; merged: ThreadMessage}>();
+const mergedRunCache = new WeakMap<
+  ThreadMessage,
+  { rows: readonly ThreadMessage[]; merged: ThreadMessage }
+>();
 
 function mergeAssistantRun(messages: readonly ThreadMessage[]): ThreadMessage {
   const firstRow = messages[0];
   const cached = firstRow && mergedRunCache.get(firstRow);
-  if (cached && cached.rows.length === messages.length && cached.rows.every((row, index) => row === messages[index])) return cached.merged;
+  if (
+    cached &&
+    cached.rows.length === messages.length &&
+    cached.rows.every((row, index) => row === messages[index])
+  )
+    return cached.merged;
   const merged = mergeAssistantRunUncached(messages);
-  if (firstRow && messages.length > 1) mergedRunCache.set(firstRow, {rows: messages, merged});
+  if (firstRow && messages.length > 1) mergedRunCache.set(firstRow, { rows: messages, merged });
   return merged;
 }
 
