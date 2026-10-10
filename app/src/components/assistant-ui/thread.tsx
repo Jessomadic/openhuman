@@ -1172,7 +1172,6 @@ const AssistantMessage: FC = () => {
       <div
         data-slot="aui_assistant-message-content"
         className="text-foreground px-2 leading-relaxed wrap-break-word">
-        {MessageTasks && <MessageTasks />}
         <MessagePrimitive.GroupedParts
           groupBy={groupPartByType({
             reasoning: ['group-activity'],
@@ -1229,6 +1228,7 @@ const AssistantMessage: FC = () => {
         {stopped && <StoppedRunSlot />}
         <MessageError />
         <ChatErrorNotice />
+        {MessageTasks && <MessageTasks />}
       </div>
 
       <div
