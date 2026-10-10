@@ -5,12 +5,14 @@
 //! running its in-process work until its heartbeat notices the loss, and in
 //! that window its writes would land on top of the new holder's.
 //!
-//! A [`LeaseFence`] closes most of that window for the storage ports. It is
-//! one grant (key, node, epoch) plus the scopes that grant protects. While a
+//! A [`LeaseFence`] closes that window for the storage ports. It is one
+//! grant (key, node, epoch) plus the scopes that grant protects. While a
 //! fence is registered in a [`FenceRegistry`], every write a
 //! [`FencedBackend`](super::fenced_backend::FencedBackend) sends to one of
-//! those scopes first calls [`LeaseFence::check`], which refuses the write
-//! with a typed [`FenceError`] when:
+//! those scopes is checked twice.
+//!
+//! First, on this node, [`LeaseFence::check`] refuses the write with a typed
+//! [`FenceError`] when:
 //!
 //! 1. the fence is latched ([`LeaseFence::fence`]: the heartbeat lost the
 //!    lease, or an earlier check saw it superseded);
@@ -19,18 +21,34 @@
 //! 3. the stored lease record no longer names this node at this epoch, or
 //!    has expired, or cannot be read (fail closed).
 //!
-//! # What this does not guarantee
+//! Then the storage driver enforces it. The write goes through
+//! [`StorageBackend::for_scope_fenced`](tinystoragedrivers::StorageBackend::for_scope_fenced)
+//! with [`LeaseFence::driver_fence`], so the driver re-reads the lease record
+//! in the same atomic step as the write and refuses it
+//! ([`ErrorKind::Fenced`](tinystoragedrivers::ErrorKind::Fenced)) unless the
+//! record still names this node at this epoch, unreleased. A holder that
+//! passes the first check and is then paused past a takeover cannot land
+//! the write: the driver refusal latches the fence and surfaces as
+//! [`FenceError::Superseded`].
 //!
-//! The check and the write are two operations. A holder that passes the
-//! check and is then paused for longer than the remaining grant can still
-//! land one write after a takeover. The ports offer no way to make the
-//! write conditional on a document in another scope: `atomic_batch` is
-//! optional (`Capability::Transactions`, MongoDB replica sets only) and has
-//! no read-only guard op, and streams and blobs take no precondition at
-//! all. Closing the race needs a fencing primitive in tinystoragedrivers
-//! (a write guarded by a fence document's epoch, enforced by the driver).
-//! The skew margin makes the race need a pause longer than the margin
-//! *after* a successful check, rather than any pause at all.
+//! # Where the race is still open
+//!
+//! The driver step needs [`Capability::Fencing`](tinystoragedrivers::Capability::Fencing)
+//! and a lease record in the storage ports. Without either, the write runs
+//! after the first check alone, and a holder paused for longer than its
+//! remaining grant *after* a successful check can still land one write after
+//! a takeover:
+//!
+//! - MongoDB without transactions (a standalone server) has no fencing, and
+//!   MongoDB blob writes cannot be fenced (GridFS cannot join a
+//!   transaction);
+//! - writes to a named database ([`StorageBackend::database`](tinystoragedrivers::StorageBackend::database))
+//!   cannot see the lease record, which lives in the default database;
+//! - file leases (hosts without a backend) keep no record in the ports, but
+//!   they cannot be lost while the process lives either.
+//!
+//! The skew margin makes that race need a pause longer than the margin
+//! after a successful check, rather than any pause at all.
 //!
 //! Scopes nobody registered pass through untouched, so a backend with an
 //! empty registry (every single-user host) behaves exactly as before.
@@ -39,7 +57,9 @@ use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, PoisonError, Weak};
 
-use super::lease::LeaseStore;
+use tinystoragedrivers::{Fence, Filter};
+
+use super::lease::{LeaseStore, LEASE_COLLECTION};
 use super::StorageError;
 
 /// Why a fenced write was refused.
@@ -166,6 +186,56 @@ impl LeaseFence {
     /// The epoch this fence guards with.
     pub fn epoch(&self) -> u64 {
         self.epoch
+    }
+
+    /// The node holding the grant.
+    pub fn node(&self) -> &str {
+        &self.node
+    }
+
+    /// The fence a storage driver enforces for this grant: the lease record
+    /// (where the lease store keeps it, [`LeaseStore::record_scope`]) must
+    /// still name this node at this epoch, unreleased. `None` when the lease
+    /// store keeps no record in the storage ports (file leases) or is gone;
+    /// then only [`Self::check`] guards the write.
+    pub fn driver_fence(&self) -> Option<Fence> {
+        let scope = self.leases.upgrade()?.record_scope()?;
+        Some(Fence::new(
+            scope,
+            LEASE_COLLECTION,
+            self.key.clone(),
+            Filter::eq("epoch", self.epoch)
+                .and(Filter::eq("owner", self.node.clone()))
+                .and(Filter::eq("released", false)),
+        ))
+    }
+
+    /// The refusal for a write the storage driver fenced off
+    /// ([`ErrorKind::Fenced`](tinystoragedrivers::ErrorKind::Fenced)): the
+    /// lease record moved on between [`Self::check`] and the write. Re-reads
+    /// the record for the stored epoch; the fence is latched either way.
+    pub async fn refused_by_driver(&self, now_ms: u64) -> FenceError {
+        match self.check(now_ms).await {
+            // `check` latched it if the record moved on.
+            Err(error) => {
+                self.fence();
+                error
+            }
+            Ok(()) => {
+                // The driver could not match a record this node can still
+                // read as its own: a guard the driver cannot see. Fail closed.
+                tracing::error!(
+                    target: "openhuman::storage::fence",
+                    epoch = self.epoch,
+                    "[storage][fence] driver refused a write the lease record still admits; latching"
+                );
+                self.fence();
+                FenceError::Superseded {
+                    held: self.epoch,
+                    stored: None,
+                }
+            }
+        }
     }
 
     /// Whether this fence guards `scope`.
@@ -348,18 +418,48 @@ impl FenceRegistry {
     ///
     /// The fence's refusal, as a port error ([`FenceError::into_storage`]).
     pub async fn guard(&self, scope: &str, op: &'static str) -> Result<(), StorageError> {
+        self.admit(scope, op).await.map(|_| ())
+    }
+
+    /// [`Self::guard`], handing back the fence that admitted the write (if
+    /// any) so the caller can have the driver enforce it too.
+    ///
+    /// # Errors
+    ///
+    /// The fence's refusal, as a port error ([`FenceError::into_storage`]).
+    pub async fn admit(
+        &self,
+        scope: &str,
+        op: &'static str,
+    ) -> Result<Option<Arc<LeaseFence>>, StorageError> {
         let Some(fence) = self.lookup(scope) else {
-            return Ok(());
+            return Ok(None);
         };
-        fence.check(self.now_ms()).await.map_err(|error| {
-            tracing::warn!(
-                target: "openhuman::storage::fence",
-                op,
-                epoch = fence.epoch,
-                "[storage][fence] refused a write: {error}"
-            );
-            error.into_storage()
-        })
+        match fence.check(self.now_ms()).await {
+            Ok(()) => Ok(Some(fence)),
+            Err(error) => {
+                tracing::warn!(
+                    target: "openhuman::storage::fence",
+                    op,
+                    epoch = fence.epoch,
+                    "[storage][fence] refused a write: {error}"
+                );
+                Err(error.into_storage())
+            }
+        }
+    }
+
+    /// The port error for a write to `fence`'s scopes that the storage
+    /// driver refused ([`LeaseFence::refused_by_driver`]).
+    pub async fn driver_refused(&self, fence: &LeaseFence, op: &'static str) -> StorageError {
+        let error = fence.refused_by_driver(self.now_ms()).await;
+        tracing::warn!(
+            target: "openhuman::storage::fence",
+            op,
+            epoch = fence.epoch,
+            "[storage][fence] the driver refused a write the host check admitted: {error}"
+        );
+        error.into_storage()
     }
 }
 
