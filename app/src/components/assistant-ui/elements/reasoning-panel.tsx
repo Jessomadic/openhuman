@@ -15,8 +15,8 @@
  *   reads best, Codex style) and localizes it.
  * - Step bodies render through the registry's own `MarkdownText` (via
  *   assistant-ui's `TextMessagePartProvider`) instead of a plain `<p>`.
- * - A streaming list stays pinned to its newest step inside a bounded
- *   scroll region (the runtime element's `ReasoningText` behaviour).
+ * - Automatic following belongs to the enclosing assistant-ui viewport; this
+ *   panel never writes scroll offsets.
  */
 import { cn } from '@/components/assistant-ui/lib/utils';
 import { MarkdownText } from '@/components/assistant-ui/markdown-text';

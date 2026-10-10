@@ -72,6 +72,8 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
   await page.waitForFunction(
     () => document.querySelector('[data-testid="todo-checklist"]')?.dataset.state === 'done'
   );
+  await ui.testId('sidebar-nav-separator').waitFor({state: 'visible'});
+  assert.equal(await ui.slot('aui_thread-list-search').count(), 0);
   const geometry = await page.evaluate(() => {
     const card = document.querySelector('[data-testid="todo-checklist"]');
     const content = card.closest('[data-slot="aui_assistant-message-content"]');
@@ -84,11 +86,15 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
       maxWidth: getComputedStyle(card).maxWidth,
       inComposer: !!card.closest('form'),
       state: card.dataset.state,
+      blur: getComputedStyle(card).backdropFilter,
+      opacity: getComputedStyle(card).opacity,
     };
   });
   assert.equal(geometry.maxWidth, 'none');
   assert.equal(geometry.inComposer, false);
   assert.equal(geometry.state, 'done');
+  assert.equal(geometry.blur, 'none');
+  assert.equal(geometry.opacity, '1');
   assert.ok(Math.abs(geometry.cardWidth - geometry.contentWidth) < 2);
   await page.evaluate(() => {
     window.__historyRoots = [...document.querySelectorAll('[data-role]')];
@@ -170,6 +176,6 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
   assert.equal(messages[3].second, true);
   await screenshot('next-turn-stable');
   log(
-    'PASS: real assistant-ui send/stream/settle preserves message order, DOM identity, completed-plan attachment, widths and running loader'
+    'PASS: real assistant-ui send/stream/settle preserves message order, DOM identity, completed-plan attachment, widths, typing scroll stability, sidebar divider and running loader'
   );
 }
