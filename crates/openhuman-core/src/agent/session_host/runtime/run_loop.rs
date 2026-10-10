@@ -75,6 +75,11 @@ impl OpenHumanSessionHost {
         }
 
         let history_snapshot = self.history();
+        // Busy state for background-result delivery is marked here, in the
+        // turn's own (profile) scope; the bus subscriber runs off-task.
+        crate::agent::orchestration::background_delivery::note_turn_started(
+            self.event_session_id(),
+        );
         BUS.publish(DomainEvent::AgentTurnStarted {
             session_id: self.event_session_id().to_string(),
             channel: self.event_channel().to_string(),
@@ -84,6 +89,9 @@ impl OpenHumanSessionHost {
             Ok(response) => {
                 let history = self.history();
                 let new_entries = Self::new_entries_for_turn(&history_snapshot, &history);
+                crate::agent::orchestration::background_delivery::note_turn_ended(
+                    self.event_session_id(),
+                );
                 BUS.publish(DomainEvent::AgentTurnCompleted {
                     session_id: self.event_session_id().to_string(),
                     text_chars: response.chars().count(),
