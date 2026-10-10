@@ -268,6 +268,7 @@ export async function waitForAppReady(page: Page): Promise<void> {
     }
   };
   const init = await readInitStatus();
+  if (init?.overall === 'done' || init?.overall === 'idle') return;
   if (init?.overall === 'running' || init?.overall === 'failed') {
     const alreadyDismissed = await page.evaluate(
       startedAt =>
@@ -275,22 +276,41 @@ export async function waitForAppReady(page: Page): Promise<void> {
       init.started_at
     );
     if (alreadyDismissed) return;
+  }
 
-    const continueButton = page.getByTestId(/harness-init-(?:background|continue-anyway)/);
-    await expect
-      .poll(
-        async () => {
-          if (await continueButton.isVisible().catch(() => false)) return true;
-          const current = await readInitStatus();
-          return current?.overall === 'done' || current?.overall === 'idle' || current === null;
-        },
-        { timeout: 10_000 }
-      )
-      .toBe(true);
-    if (await continueButton.isVisible().catch(() => false)) {
-      await continueButton.click();
-      await expect(page.getByTestId('harness-init-dialog')).toBeHidden({ timeout: 5_000 });
-    }
+  const dialog = page.getByTestId('harness-init-dialog');
+  const backgroundButton = page.getByTestId('harness-init-background');
+  const continueButton = page.getByTestId('harness-init-continue-anyway');
+  const action: { value: 'background' | 'continue' | 'terminal' } = { value: 'terminal' };
+  await expect
+    .poll(
+      async () => {
+        if (await continueButton.isVisible().catch(() => false)) {
+          action.value = 'continue';
+          return true;
+        }
+        if (await backgroundButton.isVisible().catch(() => false)) {
+          action.value = 'background';
+          return true;
+        }
+        const current = await readInitStatus();
+        if (current?.overall === 'done' || current?.overall === 'idle') {
+          action.value = 'terminal';
+          return true;
+        }
+        if (current === null && !(await dialog.isVisible().catch(() => false))) {
+          action.value = 'terminal';
+          return true;
+        }
+        return false;
+      },
+      { timeout: 10_000 }
+    )
+    .toBe(true);
+  if (action.value === 'background' || action.value === 'continue') {
+    const button = action.value === 'background' ? backgroundButton : continueButton;
+    await button.click();
+    await expect(dialog).toBeHidden({ timeout: 5_000 });
   }
 }
 

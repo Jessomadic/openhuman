@@ -614,9 +614,13 @@ const threadSlice = createSlice({
       .addCase(loadThreads.fulfilled, (state, action) => {
         state.isLoadingThreads = false;
         const liveThreadIds = new Set(action.payload.threads.map(thread => thread.id));
+        const currentIntentVersion = state.selectionIntentVersion ?? 0;
         const selectionWasSuperseded =
-          state.selectionIntentVersion !==
-          (action.payload.selectionIntentVersionAtRequest ?? state.selectionIntentVersion);
+          currentIntentVersion !==
+          (action.payload.selectionIntentVersionAtRequest ?? currentIntentVersion);
+        if (selectionWasSuperseded && !state.selectedThreadId && state.threads.length === 0) {
+          return;
+        }
         const supersedingThread =
           selectionWasSuperseded &&
           state.selectedThreadId &&

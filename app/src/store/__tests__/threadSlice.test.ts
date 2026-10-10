@@ -212,6 +212,22 @@ describe('threadSlice loadThreads thunk', () => {
     vi.clearAllMocks();
   });
 
+  it('does not restore threads from a load superseded by clearing all threads', async () => {
+    const store = createStore();
+    let resolveThreads!: (value: { threads: Thread[]; count: number }) => void;
+    mockedThreadApi.getThreads.mockImplementationOnce(
+      () => new Promise(resolve => (resolveThreads = resolve))
+    );
+
+    const request = store.dispatch(loadThreads());
+    store.dispatch(clearAllThreads());
+    resolveThreads({ threads: [makeThread({ id: 'stale' })], count: 1 });
+    await request;
+
+    expect(store.getState().thread.threads).toEqual([]);
+    expect(store.getState().thread.selectedThreadId).toBeNull();
+  });
+
   it('sets isLoadingThreads while pending and stores threads on fulfilled', async () => {
     const store = createStore();
     const payload = { threads: [makeThread({ id: 'a' })], count: 1 };
