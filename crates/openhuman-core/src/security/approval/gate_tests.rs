@@ -208,6 +208,8 @@ mod forced_tests;
 mod origin_intercept_tests;
 #[path = "gate_subagent_tests.rs"]
 mod subagent_tests;
+#[path = "gate_tenant_tests.rs"]
+mod tenant_tests;
 #[path = "gate_triage_tests.rs"]
 mod triage_tests;
 #[path = "gate_ttl_and_triage_tests.rs"]

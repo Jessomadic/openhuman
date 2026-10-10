@@ -233,13 +233,36 @@ A profile holds one thread per conversation, whatever interface it came in on:
     and would answer `org:<id>` or a minted local root instead.
   - The autonomy policy is on and supervised, with no auto-approval, no tool
     installation and no trusted roots.
-- **`session_agent` stays the profile id.** The default agent was meant to run
-  with no `session_agent`, as on the desktop. That needs every site that keys
-  on the acting agent to key on the tenant instead; the approval gate's thread
-  routes, the MCP host, skill homes, origin delivery and the transcript
-  fallback still read `agent_scope::current_agent_id()`, so a profile without
-  an agent id would share their keys with every other profile. Until those
-  move to `current_tenant`, the profile id doubles as the agent id.
+- **The isolation boundary is the profile's `CoreContext`.** It carries the
+  forced config, its own security policy (`agent_policy`, never the
+  operator's), `profile = <profile id>` (the tenant key: storage scope,
+  `/events`, cost, per-thread tables, via `core::runtime::current_tenant`)
+  and the user families (threads, channels for web chat, memory), narrowed
+  further by `surface::USER_METHODS`. Work for a user runs under it, which is
+  what the config loader, the session store and the per-thread caches key on.
+- **The default agent has no `session_agent`.** As on the desktop, a
+  profile's default agent runs with no agent id: its state sits at the root
+  of the profile's own workspace, and its session-store key is
+  `<profile>~default` (`core::runtime::session_key`). Every seam that must
+  keep users apart keys on the tenant, never on the agent id alone:
+  - the approval gate's thread routes (`approval::gate::thread_route_key`:
+    the `tenant_key` of the thread under a profile);
+  - the MCP host (a profile's host lives at its workspace root; a profile
+    never falls back to the process default or a lone open host, and a SaaS
+    task with no scope gets none);
+  - skill homes (`<workspace>/agents/default/` for a profile's default agent;
+    never the operator's `~/.openhuman`, and nothing without a scope);
+  - origin delivery and the transcript fallback (the profile's workspace
+    root, the same place its file-backed session store writes);
+  - web chat keys, in-flight turns, completion owners, event stamps
+    (`WebChannelEvent::profile`), storage scopes and the cost ledger, which
+    already keyed on the profile.
+
+  What still reads the agent id (`agent_scope::current_agent_id`,
+  `CoreContext::session_agent`) is genuinely per agent: `agent_scope_dir` (an
+  embedded agent's subdirectory of a workspace), the cost ledger's
+  `session_agent` column, owner records for embedded agents (devices, cron
+  completions, flows) and log fields.
 - **No ambient fallback.** Tenant-keyed code reads `current_tenant()`, never
   `CoreContext::current()` or `.session_agent()`; `pnpm saas:ambient`
   ratchets the reads that remain (`ambient-context`), alongside bare spawns,
