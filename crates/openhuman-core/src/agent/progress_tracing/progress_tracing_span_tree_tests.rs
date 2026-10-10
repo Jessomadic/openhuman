@@ -237,6 +237,7 @@ fn subagent_lifecycle_nests_under_the_turn() {
                 worktree_path: Some("/private/should/not/leak".to_string()),
                 changed_files: vec!["secret_file.rs".to_string()],
                 dirty_status: Some(true),
+                stop: None,
             },
             40,
         ),
@@ -327,6 +328,7 @@ fn unknown_subagent_task_ids_are_ignored() {
             worktree_path: None,
             changed_files: vec![],
             dirty_status: None,
+            stop: None,
         },
         10,
     );

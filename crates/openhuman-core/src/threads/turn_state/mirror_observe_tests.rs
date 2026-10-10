@@ -529,6 +529,7 @@ fn subagent_lifecycle_records_and_clears_active() {
         worktree_path: None,
         changed_files: Vec::new(),
         dirty_status: None,
+        stop: None,
     });
     let s = m.snapshot();
     assert_eq!(s.tool_timeline[0].status, ToolTimelineStatus::Success);
@@ -720,6 +721,7 @@ fn subagent_completed_persists_capped_output_on_the_activity() {
         worktree_path: None,
         changed_files: Vec::new(),
         dirty_status: None,
+        stop: None,
     });
 
     let entry = m

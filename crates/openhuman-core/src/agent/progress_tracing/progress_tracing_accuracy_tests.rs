@@ -98,6 +98,7 @@ fn child_completed(task: &str, elapsed: u64) -> AgentProgress {
         worktree_path: None,
         changed_files: Vec::new(),
         dirty_status: None,
+        stop: None,
     }
 }
 

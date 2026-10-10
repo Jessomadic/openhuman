@@ -624,6 +624,7 @@ async fn subagent_completed_carries_parent_call_id_and_capped_output() {
         worktree_path: None,
         changed_files: Vec::new(),
         dirty_status: None,
+        stop: None,
     })
     .await
     .unwrap();
