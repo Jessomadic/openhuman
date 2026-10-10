@@ -24,8 +24,8 @@ import { Provider } from 'react-redux';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import Conversations from '../../features/conversations/Conversations';
 import { SidebarSlotOutlet, SidebarSlotProvider } from '../../components/layout/shell/SidebarSlot';
+import Conversations from '../../features/conversations/Conversations';
 // Type-only: erased at runtime, so it does not defeat `vi.hoisted`.
 import type { FlowApprovalRequest } from '../../hooks/useFlowApprovalRequests';
 import { chatSend } from '../../services/chatService';
@@ -346,10 +346,12 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     expect(plan.closest('[data-slot="task-card-dock"]')).not.toBeNull();
     expect(plan).toHaveAttribute('data-slot', 'task-card');
     expect(plan).toHaveAttribute('data-state', 'waiting');
+    expect(plan.querySelector('.animate-spin')).toBeNull();
     await act(async () => store.dispatch(markThreadInferenceActive(THREAD_ID)));
     expect(screen.getByTestId('todo-checklist')).toHaveAttribute('data-state', 'working');
     await act(async () => store.dispatch(clearThreadInferenceActive(THREAD_ID)));
     expect(screen.getByTestId('todo-checklist')).toHaveAttribute('data-state', 'waiting');
+    expect(screen.getByTestId('todo-checklist').querySelector('.animate-spin')).toBeNull();
 
     await act(async () =>
       store.dispatch(

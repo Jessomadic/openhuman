@@ -92,6 +92,9 @@ function TurnTaskCard({ task }: { task: TurnTask }) {
     )
   );
   const state = taskState(task, running);
+  const items = toAuiTodoItems(task.todos).map(item =>
+    state === 'waiting' && item.status === 'active' ? { ...item, status: 'pending' as const } : item
+  );
   return (
     <TaskCard
       data-testid="todo-checklist"
@@ -101,7 +104,7 @@ function TurnTaskCard({ task }: { task: TurnTask }) {
       open={open}
       onOpenChange={setOpen}
       className="max-w-none">
-      <TodoItems items={toAuiTodoItems(task.todos)} />
+      <TodoItems items={items} />
     </TaskCard>
   );
 }
