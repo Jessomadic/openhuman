@@ -2817,7 +2817,9 @@ const chatRuntimeSlice = createSlice({
         inputTokens: number;
         outputTokens: number;
         cachedTokens: number;
-        costUsd: number;
+        /** `null` when some turn's cost is not known. */
+        costUsd: number | null;
+        costSource?: CostSource;
         turns: number;
         contextWindow: number;
         lastTurnInputTokens: number;
@@ -2831,7 +2833,7 @@ const chatRuntimeSlice = createSlice({
           agentId: string;
           inputTokens: number;
           outputTokens: number;
-          costUsd: number;
+          costUsd: number | null;
           runs: number;
         }>;
       }>
@@ -2847,7 +2849,8 @@ const chatRuntimeSlice = createSlice({
           agentId: s.agentId,
           inputTokens: nonNeg(s.inputTokens),
           outputTokens: nonNeg(s.outputTokens),
-          costUsd: nonNeg(s.costUsd),
+          costUsd: nonNeg(s.costUsd ?? 0),
+          costSource: s.costUsd === null ? 'unknown' : 'charged',
           runs: nonNeg(s.runs),
         };
       }
@@ -2855,7 +2858,8 @@ const chatRuntimeSlice = createSlice({
         inputTokens: nonNeg(p.inputTokens),
         outputTokens: nonNeg(p.outputTokens),
         cachedTokens: nonNeg(p.cachedTokens),
-        costUsd: nonNeg(p.costUsd),
+        costUsd: nonNeg(p.costUsd ?? 0),
+        costSource: p.costUsd === null ? 'unknown' : (p.costSource ?? 'charged'),
         turns: nonNeg(p.turns),
         lastUpdated: Date.now(),
         lastTurnInputTokens: nonNeg(p.lastTurnInputTokens),
