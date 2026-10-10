@@ -395,6 +395,17 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
                 + repair_usage
                     .map(|usage| usage.charged_amount_usd)
                     .unwrap_or_default();
+            let loop_last_call = snapshot.lock().ok().map(|guard| {
+                (guard.last_call_input_tokens, guard.last_call_output_tokens)
+            });
+            (
+                observed.last_call_input_tokens,
+                observed.last_call_output_tokens,
+            ) = final_call_tokens(
+                loop_last_call,
+                close.as_ref().map(|close| &close.usage),
+                repair_usage,
+            );
             observed.duration = Some(started.elapsed());
             observed.tool_outcomes = outcome.tool_outcomes.clone();
             observed.hit_cap = outcome.hit_cap;
