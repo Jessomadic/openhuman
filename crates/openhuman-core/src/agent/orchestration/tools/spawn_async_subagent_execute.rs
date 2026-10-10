@@ -419,6 +419,9 @@ impl SpawnAsyncSubagentTool {
         // dispatch refusal, and cancellation. Approval/origin and workspace policy remain
         // task-local until B2h moves the security boundary onto this carrier, so propagation
         // below is a staging bridge for those two scopes only.
+        // Spawned scoped: the child keeps the caller's `CoreContext` (in SaaS, the user's
+        // profile), so recording its completion lands in that profile's tables and notes the
+        // profile as the owner the off-task delivery subscriber resolves.
         let detached_run_context = detached_parent.data.child();
         let mut abort_report = AbortReport::arm(progress_sink.clone(), &definition.id, &task_id);
         let join = crate::core::runtime::spawn_scoped(crate::agent::turn_origin::propagate(
