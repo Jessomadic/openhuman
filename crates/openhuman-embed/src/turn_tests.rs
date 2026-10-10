@@ -266,3 +266,66 @@ fn a_turn_outcome_carries_what_the_turn_spent() {
     };
     assert_ne!(unmetered, outcome);
 }
+
+#[test]
+fn approval_event_correlation_uses_the_web_chat_origin_without_replacing_session_identity() {
+    let origin = AgentTurnOrigin::WebChat {
+        thread_id: "approval-thread".into(),
+        client_id: "client".into(),
+        request_id: None,
+    };
+    let session = "durable-session";
+    assert_eq!(event_thread_id(Some(&origin), session), "approval-thread");
+    assert_eq!(
+        event_thread_id(Some(&AgentTurnOrigin::Cli), session),
+        session
+    );
+    assert_eq!(event_thread_id(None, session), session);
+}
+
+#[tokio::test]
+async fn runtime_tool_events_preserve_order_and_discard_tool_payloads() {
+    let hub = crate::events::EventHub::new(8);
+    let mut events = hub.subscribe();
+    let agent = Some("a".to_owned());
+    let private = "private-tool-content";
+    let started = crate::AgentProgress::ToolCallStarted {
+        call_id: private.into(),
+        tool_name: "host_tool".into(),
+        arguments: serde_json::json!({"input": private}),
+        iteration: 1,
+        display_label: Some(private.into()),
+        display_detail: Some(private.into()),
+    };
+    let completed = crate::AgentProgress::ToolCallCompleted {
+        call_id: private.into(),
+        tool_name: "host_tool".into(),
+        success: true,
+        output_chars: private.len(),
+        output: private.into(),
+        arguments: Some(serde_json::json!({"input": private})),
+        elapsed_ms: 1,
+        iteration: 1,
+        failure: None,
+        display_label: Some(private.into()),
+        display_detail: Some(private.into()),
+        structured: Some(serde_json::json!({"output": private})),
+    };
+    observe_progress(&hub, &agent, "turn-a", &started);
+    observe_progress(&hub, &agent, "turn-a", &completed);
+    for expected in [
+        crate::RuntimeEventKind::ToolStarted {
+            tool_name: "host_tool".into(),
+        },
+        crate::RuntimeEventKind::ToolEnded {
+            tool_name: "host_tool".into(),
+            success: true,
+        },
+    ] {
+        let event = events.recv().await.unwrap();
+        assert_eq!(event.agent_id.as_deref(), Some("a"));
+        assert_eq!(event.turn_id.as_deref(), Some("turn-a"));
+        assert_eq!(event.kind, expected);
+        assert!(!serde_json::to_string(&event).unwrap().contains(private));
+    }
+}

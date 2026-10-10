@@ -37,6 +37,9 @@ impl AgentInner {
     /// a remote host): the driver then fails to find the agent rather than
     /// sending the credential in the clear.
     pub(crate) fn host_agent(self: &Arc<Self>) -> Option<HostAgent> {
+        if *self.lifecycle.removed().borrow() {
+            return None;
+        }
         let mut config = self.config.clone();
         if let Some(model) = self.provider.model_id() {
             config.default_model = Some(model.to_string());

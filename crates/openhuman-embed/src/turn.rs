@@ -271,8 +271,10 @@ pub struct Turn {
     meter: Option<Box<dyn FnOnce(Option<LastTurnUsage>) + Send>>,
     response_format: Option<crate::complete::ResponseFormat>,
     max_tokens: Option<u32>,
+    top_p: Option<f64>,
+    cancellation: Option<crate::CancellationToken>,
     untrusted_input: bool,
-    cancellation: Option<crate::TurnCancellation>,
+    cancel_handle: Option<crate::TurnCancellation>,
     hooks: openhuman_core::agent::hooks::HookScope,
     tools: Option<openhuman_core::agent::HostTools>,
     tool_env: Option<openhuman_core::tools::timeout::CommandEnvironment>,
@@ -290,8 +292,10 @@ impl Turn {
             meter: None,
             response_format: None,
             max_tokens: None,
-            untrusted_input: false,
+            top_p: None,
             cancellation: None,
+            untrusted_input: false,
+            cancel_handle: None,
             hooks: Default::default(),
             tools: None,
             tool_env: None,
@@ -538,6 +542,27 @@ impl Turn {
         self
     }
 
+    /// Nucleus sampling for this turn; must be finite and between zero and one.
+    pub fn top_p(mut self, probability: f64) -> Self {
+        self.top_p = Some(probability);
+        self
+    }
+
+    /// Bind caller cancellation to the turn and its recursive tool/agent tree.
+    pub fn cancellation(mut self, token: crate::CancellationToken) -> Self {
+        self.cancellation = Some(token);
+        self
+    }
+
+    pub(crate) fn stream_cancellation(&self) -> crate::CancellationToken {
+        self.cancellation.clone().unwrap_or_default()
+    }
+
+    /// Start this configured turn as an owned stream, cancelled when dropped.
+    pub fn stream(self) -> crate::TurnStream {
+        crate::TurnStream::start(self)
+    }
+
     /// Stream live turn progress — tool calls, deltas, turn boundaries.
     ///
     /// The core **awaits** its sends, so the channel's capacity is real
@@ -555,7 +580,7 @@ impl Turn {
     /// Run the turn.
     ///
     /// Establishes the origin and progress scopes described in the module docs,
-    /// then dispatches through [`call`](super::call::call) so the
+    /// then dispatches through `call` so the
     /// `{result, logs}` envelope, [`DomainSet`](openhuman_core::core::runtime::DomainSet)
     /// gating and error classification are handled the same way as every other
     /// facade method.
@@ -586,29 +611,36 @@ impl Turn {
     async fn send_with_cancellation(mut self) -> Result<TurnOutcome, CoreError> {
         let session_id = self
             .session_id
-            .take()
+            .clone()
             .filter(|id| !id.trim().is_empty())
             .unwrap_or_else(|| format!("embed-{}", uuid::Uuid::new_v4()));
+        self.session_id = Some(session_id.clone());
         self.request.thread_id = Some(session_id.clone());
         // Drop the meter before publishing cancellation's finished phase.
-        let cancellation = self.cancellation.take();
+        let cancellation = self.cancel_handle.take();
         let _guard = cancellation.as_ref().map(crate::TurnCancellation::enter);
         let meter = crate::turn_meter::TurnMeter::new(self.meter.take());
+        let token = self.cancellation.take().unwrap_or_default();
         let Some(cancellation) = cancellation else {
-            return self.send_inner(&meter.usage).await;
+            return openhuman_core::agent::host_overrides::with_cancellation(
+                token,
+                self.send_observed(&meter.usage),
+            )
+            .await;
         };
         let outcome = cancellation
             .cleanup()
-            .scope(async {
+            .scope(openhuman_core::agent::host_overrides::with_cancellation(token.clone(), async {
                 tokio::select! {
                     biased;
                     _ = cancellation.cancelled() => {
+                        token.cancel();
                         log::debug!("[embed][agent] turn_cancelled session={session_id} method={AGENT_CHAT}");
                         Err(CoreError::TurnCancelled { method: AGENT_CHAT })
                     }
-                    outcome = Box::pin(self.send_inner(&meter.usage)) => outcome,
+                    outcome = Box::pin(self.send_observed(&meter.usage)) => outcome,
                 }
-            })
+            }))
             .await;
         // The dispatch future is dropped before waiting for its command
         // waiters. No new command can register after this point.
@@ -619,9 +651,57 @@ impl Turn {
     /// Obtain a cloneable handle that cancels only this turn and awaits its
     /// subprocess cleanup. Acquire it before moving the turn to `send()`.
     pub fn cancellation_handle(&mut self) -> crate::TurnCancellation {
-        self.cancellation
+        self.cancel_handle
             .get_or_insert_with(Default::default)
             .clone()
+    }
+
+    async fn send_observed(mut self, usage: &UsageSink) -> Result<TurnOutcome, CoreError> {
+        let (hub, agent_id) = match &self.target {
+            TurnTarget::Agent(agent) => (
+                Some(agent._runtime_guard.events.clone()),
+                Some(agent.id.clone()),
+            ),
+            TurnTarget::Runtime(_) => (None, None),
+        };
+        let Some(hub) = hub else {
+            return self.send_inner(usage).await;
+        };
+        let session_id = self
+            .session_id
+            .clone()
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or_else(|| format!("embed-{}", uuid::Uuid::new_v4()));
+        self.session_id = Some(session_id.clone());
+        let thread_id = event_thread_id(self.origin.as_ref(), &session_id);
+        let turn_id = hub.begin_turn(agent_id.clone(), &thread_id);
+        let mut end = ObservedTurn {
+            hub: hub.clone(),
+            agent_id: agent_id.clone(),
+            thread_id,
+            turn_id: turn_id.clone(),
+            success: false,
+        };
+        let forward = self.progress.take();
+        let cancellation = openhuman_core::agent::host_overrides::current_cancellation();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        self.progress = Some(tx);
+        let mut dispatch = Box::pin(self.send_inner(usage));
+        let outcome = loop {
+            tokio::select! {
+                biased;
+                item = rx.recv() => if let Some(item) = item { observe_progress(&hub, &agent_id, &turn_id, &item); if let Some(sink) = &forward { tokio::select! { _ = sink.send(item) => {}, _ = cancellation.cancelled() => {} } } } else { break dispatch.await; },
+                result = &mut dispatch => break result,
+            }
+        };
+        while let Ok(item) = rx.try_recv() {
+            observe_progress(&hub, &agent_id, &turn_id, &item);
+            if let Some(sink) = &forward {
+                tokio::select! { _ = sink.send(item) => {}, _ = cancellation.cancelled() => {} }
+            }
+        }
+        end.success = outcome.is_ok();
+        outcome
     }
 
     async fn send_inner(mut self, usage: &UsageSink) -> Result<TurnOutcome, CoreError> {
@@ -676,12 +756,21 @@ impl Turn {
                         .take()
                         .map(crate::complete::ResponseFormat::into_wire),
                     max_output_tokens: self.max_tokens,
+                    top_p: self.top_p,
                 },
             ),
             untrusted_input: self.untrusted_input,
             tools: self.tools.take(),
         };
-        let dispatch = dispatch(self.target, self.request, self.seed.take(), usage, options);
+        let dispatch: std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<AgentReply, CoreError>> + Send + '_>,
+        > = Box::pin(dispatch(
+            self.target,
+            self.request,
+            self.seed.take(),
+            usage,
+            options,
+        ));
 
         let reply = match (self.origin, self.progress) {
             (Some(origin), Some(sink)) => {
@@ -761,6 +850,15 @@ impl Turn {
                 expected_user_state: true,
             })
         };
+        if self
+            .top_p
+            .is_some_and(|p| !p.is_finite() || !(0.0..=1.0).contains(&p))
+        {
+            return refuse(
+                "top_p must be finite and between zero and one",
+                "invalid_model_parameter",
+            );
+        }
         let host_only = match &self.target {
             TurnTarget::Agent(agent) => agent.host_only,
             TurnTarget::Runtime(_) => {
@@ -770,7 +868,10 @@ impl Turn {
                         "turn_tools_unsupported",
                     );
                 }
-                if self.response_format.is_some() || self.max_tokens.is_some() {
+                if self.response_format.is_some()
+                    || self.max_tokens.is_some()
+                    || self.top_p.is_some()
+                {
                     return refuse(
                         "response_format and max_tokens need a runtime-owned Agent",
                         "turn_shape_unsupported",
@@ -951,3 +1052,52 @@ pub fn absolute(dir: impl AsRef<Path>) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 #[path = "turn_tests.rs"]
 mod tests;
+
+fn event_thread_id(origin: Option<&AgentTurnOrigin>, session_id: &str) -> String {
+    match origin {
+        Some(AgentTurnOrigin::WebChat { thread_id, .. }) => thread_id.clone(),
+        _ => session_id.to_owned(),
+    }
+}
+
+struct ObservedTurn {
+    hub: Arc<crate::events::EventHub>,
+    agent_id: Option<String>,
+    thread_id: String,
+    turn_id: String,
+    success: bool,
+}
+impl Drop for ObservedTurn {
+    fn drop(&mut self) {
+        self.hub.end_turn(
+            self.agent_id.clone(),
+            &self.thread_id,
+            &self.turn_id,
+            self.success,
+        );
+    }
+}
+fn observe_progress(
+    hub: &crate::events::EventHub,
+    agent_id: &Option<String>,
+    turn_id: &str,
+    item: &AgentProgress,
+) {
+    let kind = match item {
+        AgentProgress::ToolCallStarted { tool_name, .. } => {
+            Some(crate::RuntimeEventKind::ToolStarted {
+                tool_name: tool_name.clone(),
+            })
+        }
+        AgentProgress::ToolCallCompleted {
+            tool_name, success, ..
+        } => Some(crate::RuntimeEventKind::ToolEnded {
+            tool_name: tool_name.clone(),
+            success: *success,
+        }),
+        _ => None,
+    };
+    if let Some(kind) = kind {
+        hub.emit(agent_id.clone(), Some(turn_id.to_owned()), kind);
+    }
+}

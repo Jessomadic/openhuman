@@ -34,8 +34,15 @@ pub(crate) enum SkillsDest {
 /// Description of an agent to instantiate on a [`Runtime`](crate::Runtime).
 pub struct AgentSpec {
     id: String,
+    post_turn_hooks: Vec<std::sync::Arc<dyn crate::seams::PostTurnHook>>,
+    tool_hooks: Vec<std::sync::Arc<dyn crate::seams::ToolHook>>,
+    session_store: Option<std::sync::Arc<dyn crate::SessionStoreProvider>>,
+    approval_handler: Option<std::sync::Arc<dyn crate::ApprovalHandler>>,
     definition: AgentDefinitionSpec,
+    template: Option<String>,
+    model_defaults: crate::ModelDefaults,
     provider: Option<Provider>,
+    inherit_provider_route: bool,
     access: Option<Access>,
     tool_groups: Option<ToolGroups>,
     domains: Option<DomainSet>,
@@ -45,7 +52,7 @@ pub struct AgentSpec {
     skills_dir: Option<PathBuf>,
     #[cfg(feature = "skills")]
     skills_dest: SkillsDest,
-    include_user_skills: bool,
+    include_user_skills: Option<bool>,
     action_dir: Option<PathBuf>,
     trusted: Vec<(String, TrustedAccess)>,
     composio: Option<ComposioHostCredential>,
@@ -109,8 +116,15 @@ impl AgentSpec {
     pub fn new(id: impl Into<String>) -> Self {
         Self {
             id: id.into(),
+            post_turn_hooks: Vec::new(),
+            tool_hooks: Vec::new(),
+            session_store: None,
+            approval_handler: None,
             definition: AgentDefinitionSpec::new(),
+            template: None,
+            model_defaults: crate::ModelDefaults::default(),
             provider: None,
+            inherit_provider_route: false,
             access: None,
             tool_groups: None,
             domains: None,
@@ -120,7 +134,7 @@ impl AgentSpec {
             skills_dir: None,
             #[cfg(feature = "skills")]
             skills_dest: SkillsDest::AgentLocal,
-            include_user_skills: false,
+            include_user_skills: None,
             action_dir: None,
             trusted: Vec::new(),
             composio: None,
@@ -132,9 +146,44 @@ impl AgentSpec {
         }
     }
 
+    /// Register a post-turn hook local to this agent, in addition to runtime hooks.
+    pub fn post_turn_hook(mut self, hook: std::sync::Arc<dyn crate::seams::PostTurnHook>) -> Self {
+        self.post_turn_hooks.push(hook);
+        self
+    }
+
+    /// Register a tool hook local to this agent, in addition to runtime hooks.
+    pub fn tool_hook(mut self, hook: std::sync::Arc<dyn crate::seams::ToolHook>) -> Self {
+        self.tool_hooks.push(hook);
+        self
+    }
+
+    /// Override session storage for this agent; credentials and the bus remain shared.
+    pub fn session_store(mut self, store: std::sync::Arc<dyn crate::SessionStoreProvider>) -> Self {
+        self.session_store = Some(store);
+        self
+    }
+
+    /// Decide permissions through a callback rather than polling.
+    pub fn approval_handler(mut self, handler: std::sync::Arc<dyn crate::ApprovalHandler>) -> Self {
+        self.approval_handler = Some(handler);
+        self
+    }
+
     /// The id given to [`new`](Self::new).
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Extend a definition template registered on this runtime.
+    pub fn extends(mut self, template: impl Into<String>) -> Self {
+        self.template = Some(template.into());
+        self
+    }
+    /// Sampling defaults overriding the runtime; turn parameters override these.
+    pub fn model_defaults(mut self, defaults: crate::ModelDefaults) -> Self {
+        self.model_defaults = defaults;
+        self
     }
 
     /// What the agent is: prompt, tool scope, sandbox, iteration cap.
@@ -154,11 +203,15 @@ impl AgentSpec {
     /// runtime's API key when no route was given.
     pub fn provider(mut self, provider: Provider) -> Self {
         self.provider = Some(provider);
+        self.inherit_provider_route = false;
         self
     }
 
     /// Pin the model without changing the route.
     pub fn model(mut self, model: impl Into<String>) -> Self {
+        if self.provider.is_none() {
+            self.inherit_provider_route = true;
+        }
         let provider = self.provider.take().unwrap_or_else(Provider::inherit);
         self.provider = Some(provider.model(model));
         self
@@ -217,7 +270,7 @@ impl AgentSpec {
     /// embedded agent sees what its host installed, not what the machine's
     /// user did.
     pub fn include_user_skills(mut self, include: bool) -> Self {
-        self.include_user_skills = include;
+        self.include_user_skills = Some(include);
         self
     }
 
@@ -273,15 +326,6 @@ impl AgentSpec {
         self
     }
 
-    /// Add a tool callback to every turn of this agent alone.
-    ///
-    /// Runtime callbacks run first, then agent callbacks, then callbacks added
-    /// on the turn. Same-named callbacks are additive, never replaced globally.
-    pub fn tool_hook(mut self, hook: std::sync::Arc<dyn crate::seams::ToolHook>) -> Self {
-        self.hooks.push_tool(hook);
-        self
-    }
-
     /// Await the host's permission decision before each tool executes.
     /// The callback may wait for UI approval, then return `Proceed`, `Deny`,
     /// or `ProceedWith`. Returning `Ask` denies the call; this callback itself
@@ -304,13 +348,6 @@ impl AgentSpec {
     /// a budget policy can return `StopDecision::Stop`. Scoped to this agent; no runtime-global policy is replaced.
     pub fn stop_hook(mut self, hook: std::sync::Arc<dyn crate::seams::StopHook>) -> Self {
         self.hooks.push_stop(hook);
-        self
-    }
-
-    /// Add a completed-turn callback to this agent alone. Runs asynchronously
-    /// with an owned snapshot, after the runtime's callbacks.
-    pub fn post_turn_hook(mut self, hook: std::sync::Arc<dyn crate::seams::PostTurnHook>) -> Self {
-        self.hooks.push_post_turn(hook);
         self
     }
 
@@ -401,8 +438,15 @@ impl AgentSpec {
     pub(crate) fn into_parts(self) -> AgentSpecParts {
         AgentSpecParts {
             id: self.id,
+            post_turn_hooks: self.post_turn_hooks,
+            tool_hooks: self.tool_hooks,
+            session_store: self.session_store,
+            approval_handler: self.approval_handler,
             definition: self.definition,
+            template: self.template,
+            model_defaults: self.model_defaults,
             provider: self.provider,
+            inherit_provider_route: self.inherit_provider_route,
             access: self.access,
             tool_groups: self.tool_groups,
             domains: self.domains,
@@ -428,8 +472,15 @@ impl AgentSpec {
 /// The spec's fields, destructured for [`super::build::instantiate`].
 pub(crate) struct AgentSpecParts {
     pub(crate) id: String,
+    pub(crate) post_turn_hooks: Vec<std::sync::Arc<dyn crate::seams::PostTurnHook>>,
+    pub(crate) tool_hooks: Vec<std::sync::Arc<dyn crate::seams::ToolHook>>,
+    pub(crate) session_store: Option<std::sync::Arc<dyn crate::SessionStoreProvider>>,
+    pub(crate) approval_handler: Option<std::sync::Arc<dyn crate::ApprovalHandler>>,
     pub(crate) definition: AgentDefinitionSpec,
+    pub(crate) template: Option<String>,
+    pub(crate) model_defaults: crate::ModelDefaults,
     pub(crate) provider: Option<Provider>,
+    pub(crate) inherit_provider_route: bool,
     pub(crate) access: Option<Access>,
     pub(crate) tool_groups: Option<ToolGroups>,
     pub(crate) domains: Option<DomainSet>,
@@ -439,7 +490,7 @@ pub(crate) struct AgentSpecParts {
     pub(crate) skills_dir: Option<PathBuf>,
     #[cfg(feature = "skills")]
     pub(crate) skills_dest: SkillsDest,
-    pub(crate) include_user_skills: bool,
+    pub(crate) include_user_skills: Option<bool>,
     pub(crate) action_dir: Option<PathBuf>,
     pub(crate) trusted: Vec<(String, TrustedAccess)>,
     pub(crate) composio: Option<ComposioHostCredential>,

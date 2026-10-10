@@ -400,7 +400,7 @@ impl OpenHumanRunContext {
             subagent_usage: Arc::new(Mutex::new(Vec::new())),
             parent_subagent_usage: None,
             resolved_route: Arc::new(Mutex::new(None)),
-            cancellation: tinyagents_harness::cancel::CancellationToken::new(),
+            cancellation: crate::agent::host_overrides::current_cancellation(),
             thread_id: None,
             root_run_id: None,
             workspace: None,

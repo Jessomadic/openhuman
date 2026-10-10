@@ -15,7 +15,9 @@ pub use openhuman_core::core::runtime::{AGENT_WORKER_STACK_BYTES, MAX_BLOCKING_T
 /// the scoped future, await `wait()` before acknowledging cancellation.
 pub use openhuman_core::tools::timeout::ProcessCleanup as CommandCleanup;
 
+/// Sentry options and event scrubbing shared by desktop and terminal hosts.
 #[cfg(feature = "crash-reporting")]
+#[cfg_attr(docsrs, doc(cfg(feature = "crash-reporting")))]
 #[path = "process_sentry.rs"]
 pub mod sentry;
 

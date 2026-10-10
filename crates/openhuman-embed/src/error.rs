@@ -94,7 +94,7 @@ pub enum CoreError {
 
     /// The route would transmit a bearer credential over a non-TLS channel.
     ///
-    /// A [`super::agent::Route`] that names an `http://` (or other non-HTTPS)
+    /// A [`crate::Route`] that names an `http://` (or other non-HTTPS)
     /// endpoint while carrying an `api_key` is refused before any request is
     /// sent, so the credential can never ride cleartext on the wire.
     #[error("{method}: refusing to send a bearer credential over a non-HTTPS route ({endpoint})")]

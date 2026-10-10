@@ -160,8 +160,7 @@ for (const [directory, table] of [
   ["examples", "example"],
 ]) {
   const files = new Set(
-    fs
-      .readdirSync(directory)
+    (fs.existsSync(directory) ? fs.readdirSync(directory) : [])
       .filter((name) => name.endsWith(".rs"))
       .map((name) => name.slice(0, -3)),
   );
