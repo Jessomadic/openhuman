@@ -104,11 +104,7 @@ export function contextBreakdownSegments(
       tokens: toolSchemas,
       tint: 'bg-violet-500',
     },
-    {
-      label: t('conversations.composer.context.output'),
-      tokens: output,
-      tint: 'bg-emerald-500',
-    },
+    { label: t('conversations.composer.context.output'), tokens: output, tint: 'bg-emerald-500' },
     {
       label: t('conversations.composer.context.section.yourInput'),
       tokens: yourInput,
