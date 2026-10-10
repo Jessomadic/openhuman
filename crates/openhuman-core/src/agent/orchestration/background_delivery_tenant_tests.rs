@@ -95,7 +95,7 @@ async fn an_off_task_completion_drains_only_its_owners_thread() {
     assert_eq!(drained_thread, thread);
     assert_eq!(
         pending,
-        [task_a.clone()],
+        std::slice::from_ref(&task_a),
         "alice's drain reaches only her result"
     );
 

@@ -4670,6 +4670,7 @@ dependencies = [
  "env_logger",
  "log",
  "openhuman",
+ "reqwest",
  "sentry",
  "serde",
  "serde_json",
