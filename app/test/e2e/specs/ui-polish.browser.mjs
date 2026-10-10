@@ -24,8 +24,13 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
     );
   });
   await page.waitForFunction(() => {
-    const state=window.__OPENHUMAN_STORE__.getState().thread;
-    return state.selectedThreadId && !state.isLoadingThreads && !state.isLoadingMessages && location.hash.endsWith(state.selectedThreadId);
+    const state = window.__OPENHUMAN_STORE__.getState().thread;
+    return (
+      state.selectedThreadId &&
+      !state.isLoadingThreads &&
+      !state.isLoadingMessages &&
+      location.hash.endsWith(state.selectedThreadId)
+    );
   });
   mock.set(
     'llmForcedResponses',
@@ -72,7 +77,7 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
   await page.waitForFunction(
     () => document.querySelector('[data-testid="todo-checklist"]')?.dataset.state === 'done'
   );
-  await ui.testId('sidebar-nav-separator').waitFor({state: 'visible'});
+  await ui.testId('sidebar-nav-separator').waitFor({ state: 'visible' });
   assert.equal(await ui.slot('aui_thread-list-search').count(), 0);
   const geometry = await page.evaluate(() => {
     const card = document.querySelector('[data-testid="todo-checklist"]');
