@@ -117,6 +117,8 @@ pub mod process;
 #[cfg(feature = "channels")]
 pub mod profiles;
 pub mod repository;
+/// Explicit ordered fallback and truncation policies.
+pub mod routing;
 mod runtime;
 mod turn;
 

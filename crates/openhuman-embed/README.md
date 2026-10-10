@@ -747,3 +747,5 @@ Attachments are shared by clones, always directly advertised, and update only
 their managed system catalogue when a continuing conversation gains tools.
 See [agent attachment semantics and example](src/agent/README.md#attach-tools-to-an-existing-agent)
 for source identity, collision errors, policy composition, and runtime identity.
+
+Ordered fallback ladders and required agent exploration: [routing](ROUTING.md).

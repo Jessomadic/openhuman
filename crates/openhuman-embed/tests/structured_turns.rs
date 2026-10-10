@@ -179,7 +179,7 @@ fn a_tool_loop_ends_in_a_structured_answer() {
             assert_eq!(reads.load(Ordering::SeqCst), 1, "the host tool ran");
             assert_eq!(outcome.structured, Some(answer));
             assert_eq!(outcome.finish_reason.as_deref(), Some("stop"));
-            assert!(outcome.answered_model.is_some());
+            assert_eq!(outcome.answered_model.as_deref(), Some("fixture-answered"));
             assert_eq!(outcome.usage.expect("usage").reasoning_tokens, 7);
 
             let requests = chat_requests(&provider).await;

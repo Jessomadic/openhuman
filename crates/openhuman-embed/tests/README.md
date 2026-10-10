@@ -37,6 +37,8 @@ recorded on the wrong server.
 | [`memory_facade.rs`](memory_facade.rs) | `Runtime::memory` over TinyMemory's in-memory reference engine keeps two tenant roots apart. |
 | [`saas_profiles.rs`](saas_profiles.rs) | A `ProfileRuntime` (SaaS mode, in-process): two users on thread `t1` see only their own messages and ride their own credential, a held `ProfileHandle` keeps its profile from release, a relayed Telegram message lands on the user's `channel:` thread with its `channel_outbound` reply on that user's events only, and the process refuses any other core afterwards. Inference is `common::echo_inference` behind `common::PointedTransport`. |
 | [`repository_tools.rs`](repository_tools.rs), [`repository_host_only.rs`](repository_host_only.rs) | Host-backed repository queries validate before dispatch, require redaction, fence and bound output, and remain isolated from shell/write/network under HostOnly, read-only, untrusted-input turns. See [repository contract](../src/repository/README.md). |
+| [`completion_routing.rs`](completion_routing.rs) | Ordered endpoint fallback, bounded 2x/4x truncation retries, final unpinned gateway routing, images and accounting across all attempts. |
+| [`tool_required_routing.rs`](tool_required_routing.rs) | Native host tool metadata for GPT, Kimi and MiniMax model IDs; premature JSON refusal; required successful execution before final schema; gateway options survive. |
 | [`public_api.rs`](public_api.rs) | Compile-time check that the host-facing types and signatures stay exported. |
 
 ## Running

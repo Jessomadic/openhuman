@@ -258,6 +258,8 @@ pub struct Turn {
     response_format: Option<crate::complete::ResponseFormat>,
     structured_retries: u8,
     max_tokens: Option<u32>,
+    provider_options: serde_json::Value,
+    require_tool_call: bool,
     untrusted_input: bool,
 }
 
@@ -274,6 +276,8 @@ impl Turn {
             response_format: None,
             structured_retries: 0,
             max_tokens: None,
+            provider_options: serde_json::Value::Null,
+            require_tool_call: false,
             untrusted_input: false,
         }
     }
@@ -387,6 +391,22 @@ impl Turn {
     /// Set the requested structured output shape.
     pub fn response_format(mut self, format: crate::complete::ResponseFormat) -> Self {
         self.response_format = Some(format);
+        self
+    }
+
+    /// Pass gateway routing/reasoning options to every model call in this turn.
+    #[must_use]
+    pub fn provider_options(mut self, options: serde_json::Value) -> Self {
+        self.provider_options = options;
+        self
+    }
+
+    /// Require a successful tool execution before accepting the final answer.
+    /// The first calls advertise required tools and omit the final schema;
+    /// gateways that ignore the tool hint are refused deterministically.
+    #[must_use]
+    pub fn require_tool_call(mut self, required: bool) -> Self {
+        self.require_tool_call = required;
         self
     }
 
@@ -555,6 +575,8 @@ impl Turn {
                     max_output_tokens: self.max_tokens,
                     validator: wants_json.then(|| std::sync::Arc::new(validator) as std::sync::Arc<dyn openhuman_core::agent::tinyagents::response_shape::ResponseValidator>),
                     structured_retries: self.structured_retries,
+                    provider_options: self.provider_options.clone(),
+                    require_tool_call: self.require_tool_call,
                 },
             ),
             untrusted_input: self.untrusted_input,
@@ -667,6 +689,8 @@ impl Turn {
                 if self.response_format.is_some()
                     || self.max_tokens.is_some()
                     || self.structured_retries != 0
+                    || !self.provider_options.is_null()
+                    || self.require_tool_call
                 {
                     return refuse(
                         "response_format and max_tokens need a runtime-owned Agent",

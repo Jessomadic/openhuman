@@ -12,6 +12,7 @@
 //! Sub-agent turns never install it: the shape is the host's statement about
 //! *its* turn's answer.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -34,6 +35,10 @@ pub struct ResponseShape {
     pub response_format: Option<ResponseFormat>,
     /// Replaces the turn's per-call output cap.
     pub max_output_tokens: Option<u32>,
+    /// Provider routing/reasoning options, applied to every model call.
+    pub provider_options: serde_json::Value,
+    /// Require a successful tool execution before accepting terminal output.
+    pub require_tool_call: bool,
 }
 
 /// Validates terminal provider text without retrieving external resources.
@@ -75,6 +80,7 @@ pub struct FinalResponse {
 pub struct ResponseShapeScope {
     shape: ResponseShape,
     report: Mutex<FinalResponse>,
+    tool_succeeded: AtomicBool,
 }
 
 impl ResponseShapeScope {
@@ -84,6 +90,7 @@ impl ResponseShapeScope {
         Arc::new(Self {
             shape,
             report: Mutex::default(),
+            tool_succeeded: AtomicBool::new(false),
         })
     }
 
@@ -154,8 +161,23 @@ impl Middleware<(), OpenHumanRunContext> for ResponseShapeMiddleware {
         request: &mut ModelRequest,
     ) -> TaResult<()> {
         let shape = &self.0.shape;
-        if let Some(format) = &shape.response_format {
+        if shape.require_tool_call && !self.0.tool_succeeded.load(Ordering::Acquire) {
+            if request.tools.is_empty() {
+                return Err(
+                    tinyagents_harness::error::TinyAgentsError::StructuredOutput(
+                        "required_tool_call_has_no_tools".into(),
+                    ),
+                );
+            }
+            // Tool selection must remain free to emit function calls: asking
+            // for the final JSON shape here can make a model skip exploration.
+            request.response_format = None;
+            request.tool_choice = tinyinference_llm::model::ToolChoice::Required;
+        } else if let Some(format) = &shape.response_format {
             request.response_format = Some(format.clone());
+        }
+        if !shape.provider_options.is_null() {
+            request.provider_options = shape.provider_options.clone();
         }
         if let Some(cap) = shape.max_output_tokens {
             request.max_tokens = Some(cap);
@@ -183,6 +205,31 @@ impl Middleware<(), OpenHumanRunContext> for ResponseShapeMiddleware {
                 report.structured_attempts = report.structured_attempts.saturating_add(1);
                 report.validation_error = error;
             }
+        }
+        if self.0.shape.require_tool_call
+            && !self.0.tool_succeeded.load(Ordering::Acquire)
+            && response.tool_calls().is_empty()
+        {
+            // tool_choice is advisory on compatible gateways. Enforce the
+            // host requirement even when a provider ignores that wire hint.
+            return Err(
+                tinyagents_harness::error::TinyAgentsError::StructuredOutput(
+                    "required_tool_call_missing".into(),
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    async fn after_tool(
+        &self,
+        _ctx: &mut RunContext<OpenHumanRunContext>,
+        _state: &(),
+        _invocation: &tinyagents_harness::middleware::ToolInvocationIdentity,
+        result: &mut tinytools::ToolResult,
+    ) -> TaResult<()> {
+        if !result.is_error {
+            self.0.tool_succeeded.store(true, Ordering::Release);
         }
         Ok(())
     }
@@ -235,11 +282,20 @@ fn record(scope: &ResponseShapeScope, response: &ModelResponse) {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     report.finish_reason = response.finish_reason.clone();
     report.answered_model = response
-        .resolved_route
+        .raw
         .as_ref()
-        .map(|route| route.model.clone())
-        .or_else(|| response.resolved_model.as_ref().map(|m| m.name.clone()))
-        .filter(|model| !model.trim().is_empty());
+        .and_then(|raw| raw.get("model"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|model| !model.trim().is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            response
+                .resolved_route
+                .as_ref()
+                .map(|route| route.model.clone())
+                .or_else(|| response.resolved_model.as_ref().map(|m| m.name.clone()))
+                .filter(|model| !model.trim().is_empty())
+        });
     if !response.served_from_cache {
         if let Some(usage) = &response.usage {
             report.reasoning_tokens += usage.reasoning_tokens;
