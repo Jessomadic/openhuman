@@ -222,7 +222,15 @@ fn wait_until_serving(
 /// ago: a parallel test's core (or any socket) can take it before this core
 /// binds, and the core then silently listens elsewhere. When another process
 /// answers, this core is killed and started again on a fresh port.
-fn spawn_core(mut command: impl FnMut(u16) -> Command) -> (Server, String) {
+fn spawn_core(command: impl FnMut(u16) -> Command) -> (Server, String) {
+    spawn_core_with(command, String::new)
+}
+
+/// [`spawn_core`], appending `context()` (a log tail) to a startup failure.
+fn spawn_core_with(
+    mut command: impl FnMut(u16) -> Command,
+    context: impl Fn() -> String,
+) -> (Server, String) {
     const ATTEMPTS: usize = 5;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -241,7 +249,7 @@ fn spawn_core(mut command: impl FnMut(u16) -> Command) -> (Server, String) {
                     "[saas-e2e] port {port} is held by pid {pid:?}, not our core; retrying ({attempt}/{ATTEMPTS})"
                 );
             }
-            Err(error) => panic!("{error}"),
+            Err(error) => panic!("{error}\n{}", context()),
         }
     }
     panic!("no free port held for a SaaS core after {ATTEMPTS} attempts");
