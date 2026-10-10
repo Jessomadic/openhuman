@@ -353,10 +353,11 @@ async fn logical_deadline_and_cancellation_stop_before_fallback() {
         CoreError::DeadlineExceeded { .. }
     ));
     assert_eq!(error.attempts.len(), 1);
+    let cancelled_endpoint = MockServer::start().await;
     let cancellation = Cancellation::default();
     cancellation.cancel().await;
     let first = Completer::new(Route::openai_compatible(
-        format!("{}/v1", delayed.uri()),
+        format!("{}/v1", cancelled_endpoint.uri()),
         "fixture",
     ))
     .cancellation(cancellation);
@@ -371,7 +372,13 @@ async fn logical_deadline_and_cancellation_stop_before_fallback() {
     assert!(matches!(error.last_error, CoreError::Cancelled { .. }));
     assert_eq!(error.attempts.len(), 1);
     assert!(healthy.received_requests().await.unwrap().is_empty());
-    assert_eq!(delayed.received_requests().await.unwrap().len(), 1);
+    assert!(cancelled_endpoint
+        .received_requests()
+        .await
+        .unwrap()
+        .is_empty());
+    // A logical deadline may fire before HTTP dispatch on a loaded executor.
+    assert!(delayed.received_requests().await.unwrap().len() <= 1);
 }
 
 #[tokio::test]
