@@ -25,7 +25,7 @@ fn failed_tool_completed(call_id: &str, tool: &str, output: &str) -> AgentProgre
 /// A plain non-zero command exit and a harness failure both close as an error
 /// span, so the class rides the span (content-free, so not gated on capture):
 /// it is what separates "the program exited 1" from "the harness failed" in
-/// Langfuse until the exporter can set a WARNING level.
+/// Langfuse, and a plain exit is exported at WARNING instead of ERROR.
 #[test]
 fn failed_tool_span_carries_its_failure_class() {
     let mut c = collect(&[
@@ -68,6 +68,17 @@ fn failed_tool_span_carries_its_failure_class() {
     assert_eq!(class_of("c1"), Some(serde_json::json!("CommandFailed")));
     assert_eq!(class_of("c2"), Some(serde_json::json!("InvalidArguments")));
     assert_eq!(class_of("c3"), None, "a successful call carries no class");
+    let level_of = |call: &str| {
+        c.spans()
+            .iter()
+            .find(|s| s.attributes.get("tool.call_id") == Some(&serde_json::json!(call)))
+            .and_then(|s| s.attributes.get("observation.level").cloned())
+    };
+    // A program that exited non-zero exports at WARNING (Langfuse showed 27%
+    // of `shell` calls as errors, ~70% of them ordinary non-zero exits); a
+    // harness failure stays ERROR.
+    assert_eq!(level_of("c1"), Some(serde_json::json!("WARNING")));
+    assert_eq!(level_of("c2"), None);
 }
 
 /// Tool observations name the model whose call requested them, so tool errors

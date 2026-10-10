@@ -514,6 +514,7 @@ impl SpanCollector {
     ///   `InvalidArguments`, `NotFound`, …). Content-free, so not gated: it is
     ///   what separates a program that exited non-zero from a harness failure
     ///   on an error-level observation.
+    /// * `observation.level = WARNING` — for `CommandFailed` only.
     /// * `error.message` — the classified plain-language cause, truncated,
     ///   which Langfuse renders as the statusMessage. Gated on content capture
     ///   (it can quote user data / paths).
@@ -529,6 +530,15 @@ impl SpanCollector {
             extra.insert(
                 "tool.failure_class".to_string(),
                 serde_json::Value::String(class),
+            );
+        }
+        // A program that ran and exited non-zero is an expected outcome, not a
+        // harness failure: export it at WARNING so error rates count only the
+        // latter.
+        if failure.class == crate::tools::status::ToolFailureClass::CommandFailed {
+            extra.insert(
+                super::finish::LEVEL_ATTR.to_string(),
+                serde_json::Value::String("WARNING".to_string()),
             );
         }
         if self.ctx.capture_content {
