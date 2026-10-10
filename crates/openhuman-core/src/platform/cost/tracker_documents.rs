@@ -78,6 +78,33 @@ impl CostDocs {
         })
     }
 
+    /// Imports a legacy `state/costs.jsonl` into an empty ledger, then renames
+    /// it to `costs.jsonl.migrated` so it is not read twice. Returns how many
+    /// records were imported. Malformed lines are skipped, as readers skip them.
+    pub(super) fn import_legacy(&self, path: &std::path::Path) -> Result<usize> {
+        if !path.exists() || !self.all()?.is_empty() {
+            return Ok(0);
+        }
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read legacy cost ledger {}", path.display()))?;
+        let mut imported = 0;
+        for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            match serde_json::from_str::<CostRecord>(line) {
+                Ok(record) => {
+                    self.add(&record)?;
+                    imported += 1;
+                }
+                Err(error) => log::warn!("[cost::tracker] legacy import: skipping line: {error}"),
+            }
+        }
+        let migrated = path.with_extension("jsonl.migrated");
+        if let Err(error) = std::fs::rename(path, &migrated) {
+            log::warn!("[cost::tracker] legacy import: could not rename ledger: {error}");
+        }
+        log::debug!("[cost::tracker] legacy import: imported={imported}");
+        Ok(imported)
+    }
+
     /// Every record, oldest first. Documents that no longer parse are skipped
     /// with a warning, as malformed ledger lines are.
     pub(super) fn all(&self) -> Result<Vec<CostRecord>> {

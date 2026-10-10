@@ -492,6 +492,7 @@ impl CostStorage {
         F: FnMut(CostRecord),
     {
         if let Some(docs) = super::tracker_documents::current()? {
+            self.import_legacy_once(&docs)?;
             for record in docs.all()? {
                 if !is_legacy_host_duplicate(&record) {
                     on_record(record);
@@ -536,6 +537,23 @@ impl CostStorage {
         }
 
         Ok(())
+    }
+
+    /// The workspace's JSONL ledger predates the backend and belongs to the
+    /// single-user (`local`) scope; import it into that scope once.
+    fn import_legacy_once(&self, docs: &super::tracker_documents::CostDocs) -> Result<()> {
+        static DONE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+        if crate::storage::current_scope().ok() != Some(crate::storage::Scope::local()) {
+            return Ok(());
+        }
+        {
+            let mut done = DONE.lock();
+            if done.contains(&self.path) {
+                return Ok(());
+            }
+            done.push(self.path.clone());
+        }
+        docs.import_legacy(&self.path).map(|_| ())
     }
 
     fn rebuild_aggregates(&mut self, day: NaiveDate, year: i32, month: u32) -> Result<()> {

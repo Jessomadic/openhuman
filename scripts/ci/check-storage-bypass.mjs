@@ -149,10 +149,12 @@ export const ALLOW = new Map(
   ]),
 );
 
-/** Whether `finding` is the allowlisted site of its file. */
+/** Whether `finding` is the allowlisted site of its file (its first occurrence). */
 export function allowed(rel, finding) {
   const entry = ALLOW.get(rel);
-  return entry?.rule === finding.rule && entry.site === finding.text;
+  return (
+    entry?.rule === finding.rule && entry.site === finding.text && finding.occurrence === 1
+  );
 }
 
 /** Drops the allowlisted site from `rel`'s findings; anything else stays. */

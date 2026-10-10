@@ -48,3 +48,27 @@ fn scopes_do_not_see_each_others_costs() {
     assert_eq!(alice.all().unwrap().len(), 1);
     assert!(bob.all().unwrap().is_empty());
 }
+
+#[test]
+fn a_legacy_jsonl_ledger_is_imported_once_and_set_aside() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("costs.jsonl");
+    let first = record("a/model", 0.5, 30);
+    let second = record("b/model", 0.25, 10);
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n\nnot json\n{}\n",
+            serde_json::to_string(&first).unwrap(),
+            serde_json::to_string(&second).unwrap()
+        ),
+    )
+    .unwrap();
+    let docs = docs_in(&MemoryStorage::new(), "local");
+    assert_eq!(docs.import_legacy(&path).unwrap(), 2);
+    assert_eq!(docs.all().unwrap().len(), 2);
+    assert!(!path.exists());
+    assert!(dir.path().join("costs.jsonl.migrated").exists());
+    // Nothing left to import, and a ledger that already has records is not imported over.
+    assert_eq!(docs.import_legacy(&path).unwrap(), 0);
+}
