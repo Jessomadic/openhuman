@@ -43,10 +43,10 @@ use tinybus::EventHandler;
 use tinybus::SubscriptionHandle;
 
 use super::background_completions;
-use super::completion_notice::build_undelivered_notice;
 use super::busy_guard::is_busy;
 #[cfg(test)]
 use super::busy_guard::{busy, clear_busy_for_thread, TurnBusy};
+use super::completion_notice::build_undelivered_notice;
 use super::completion_owners;
 use crate::core::runtime::tenant;
 use crate::core::runtime::CoreContext;

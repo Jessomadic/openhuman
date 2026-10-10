@@ -12,8 +12,9 @@ use std::sync::Arc;
 #[cfg(test)]
 use tinyagents_tasks::CompletionStore;
 
+use super::background_completions::state;
 #[cfg(test)]
-use super::background_completions::{new_router, state, Entry};
+use super::background_completions::{new_router, Entry};
 
 use super::background_completions::{record_awaiting_input, record_completion, record_failure};
 
@@ -142,4 +143,29 @@ pub(crate) fn forget_workspace_for_test(workspace_dir: &Path) {
     st.recovered_workspaces.remove(workspace_dir);
     st.session_threads.clear();
     st.session_order.clear();
+}
+
+/// Claim `workspace_dir`'s boot recovery for this process. `true` exactly once
+/// per workspace, so the host can scan every workspace it opens (the bootstrap
+/// one, then any other a spawn later opens) without rescanning.
+pub(crate) fn claim_recovery(workspace_dir: &Path) -> bool {
+    state()
+        .recovered_workspaces
+        .insert(workspace_dir.to_path_buf())
+}
+
+/// Let `workspace_dir` be recovered again (a profile re-leased after release),
+/// and drop its cached router when nothing is using it so the next scan replays
+/// the log another holder may have appended to. A router still in use stays,
+/// so a log never has two writers.
+pub(crate) fn forget_recovery(workspace_dir: &Path) {
+    let mut st = state();
+    st.recovered_workspaces.remove(workspace_dir);
+    let idle = st
+        .routers
+        .get(workspace_dir)
+        .is_some_and(|e| Arc::strong_count(e) == 1 && Arc::strong_count(&e.router) == 1);
+    if idle {
+        st.routers.remove(workspace_dir);
+    }
 }

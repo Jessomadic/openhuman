@@ -102,4 +102,3 @@ pub(crate) fn clear_busy_for_thread(thread_id: &str) -> usize {
     }
     cleared
 }
-
