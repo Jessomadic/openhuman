@@ -12,6 +12,7 @@ import { EditMessage } from '@/components/assistant-ui/elements/edit-message';
 import { ErrorState } from '@/components/assistant-ui/elements/error-state';
 import { Image } from '@/components/assistant-ui/elements/image';
 import { MessageTiming } from '@/components/assistant-ui/elements/message-timing.aui';
+import { ScrollAnchor } from '@/components/assistant-ui/elements/scroll-anchor.aui';
 import { StoppedRun } from '@/components/assistant-ui/elements/stopped-run';
 import { ToolFallback } from '@/components/assistant-ui/elements/tool-fallback';
 import { File } from '@/components/assistant-ui/file';
@@ -57,7 +58,6 @@ import {
 import { LexicalComposerInput } from '@assistant-ui/react-lexical';
 import debugFactory from 'debug';
 import {
-  ArrowDownIcon,
   ArrowUpIcon,
   CheckIcon,
   ChevronLeftIcon,
@@ -460,6 +460,11 @@ const ThreadRoot: FC<{
         // cannot override a reader who intentionally scrolled into history.
         autoScroll={false}
         scrollToBottomOnRunStart={false}
+        // The host opens cached threads by their real id. Leaving the native
+        // initialize/switch triggers enabled plants a second pending scroll
+        // that can pull the reader down on a later content resize.
+        scrollToBottomOnInitialize={false}
+        scrollToBottomOnThreadSwitch={false}
         data-slot="aui_thread-viewport"
         className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth">
         {ConversationMap ? <ConversationMap /> : null}
@@ -506,7 +511,7 @@ const ThreadRoot: FC<{
               'aui-thread-viewport-footer relative z-10 flex flex-col gap-4 overflow-visible bg-transparent pb-4 md:pb-6',
               !isEmpty && 'sticky bottom-0 mt-auto rounded-t-(--composer-radius)'
             )}>
-            <ThreadScrollToBottom />
+            <ThreadScrollToBottom onJump={claimScroll} />
             <ThreadFollowupSuggestions />
             <ConnectionStateBanner />
             {HostComposer ? (
@@ -917,17 +922,10 @@ const ThreadMessage: FC = () => {
   return <AssistantMessageComponent />;
 };
 
-const ThreadScrollToBottom: FC = () => {
+const ThreadScrollToBottom: FC<{ onJump: () => void }> = ({ onJump }) => {
   const { t } = useT();
   return (
-    <ThreadPrimitive.ScrollToBottom asChild>
-      <TooltipIconButton
-        tooltip={t('chat.message.scrollToBottom')}
-        variant="outline"
-        className="aui-thread-scroll-to-bottom dark:border-border dark:bg-background dark:hover:bg-accent absolute -top-12 z-10 self-center rounded-full p-4 disabled:invisible">
-        <ArrowDownIcon />
-      </TooltipIconButton>
-    </ThreadPrimitive.ScrollToBottom>
+    <ScrollAnchor label={t('chat.message.scrollToBottom')} onJump={onJump} />
   );
 };
 
