@@ -1,7 +1,7 @@
 //! `channel_relay_inbound` parameters: what a relaying gateway sends, the
 //! limits it is held to, and the thread and message it becomes.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::channels::bus::derive_inbound_thread_id;
@@ -21,7 +21,7 @@ pub const RESERVED_CHANNELS: &[&str] = &["web", "cli", "relay"];
 pub const DEFAULT_RELAY_CLIENT_ID: &str = "channel-relay";
 
 /// One message a gateway relays from a hosted chat platform.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RelayInboundParams {
     /// The platform: lowercase `[a-z][a-z0-9_-]*` (`telegram`).
     pub channel: String,
@@ -30,7 +30,7 @@ pub struct RelayInboundParams {
     /// The platform's id for the sender.
     pub sender_id: String,
     /// The sender's display name, when the platform gives one.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_name: Option<String>,
     /// The platform's id for the message. A message already recorded on its
     /// thread is not run twice, so a gateway may retry safely.
@@ -39,15 +39,36 @@ pub struct RelayInboundParams {
     pub text: String,
     /// The `/events` client id the gateway listens on for this user's
     /// replies. Defaults to [`DEFAULT_RELAY_CLIENT_ID`].
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
     /// Reserved: attachments are not relayed yet, and a non-empty list is
     /// refused rather than silently dropped.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<Value>>,
 }
 
 impl RelayInboundParams {
+    /// A message with the five required facts and nothing optional: no
+    /// sender name, the default client id and no attachments.
+    pub fn new(
+        channel: impl Into<String>,
+        chat_id: impl Into<String>,
+        sender_id: impl Into<String>,
+        message_id: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
+        Self {
+            channel: channel.into(),
+            chat_id: chat_id.into(),
+            sender_id: sender_id.into(),
+            sender_name: None,
+            message_id: message_id.into(),
+            text: text.into(),
+            client_id: None,
+            attachments: None,
+        }
+    }
+
     /// Check every field against the relay's limits.
     pub fn validate(&self) -> Result<(), String> {
         validate_channel(&self.channel)?;

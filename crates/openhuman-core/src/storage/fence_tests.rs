@@ -196,6 +196,10 @@ fn the_registry_replaces_retires_and_prunes_dead_tombstones() {
     registry.register(Arc::clone(&second));
     assert_eq!(registry.lookup("profile:alice").unwrap().epoch(), 2);
 
+    // An older grant's fence never displaces a newer one.
+    registry.register(Arc::clone(&first));
+    assert_eq!(registry.lookup("profile:alice").unwrap().epoch(), 2);
+
     // Retiring a stale epoch leaves the current fence.
     registry.retire("alice", 1);
     assert_eq!(registry.lookup("profile:alice").unwrap().epoch(), 2);
