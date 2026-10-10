@@ -197,3 +197,19 @@ fn two_quarantines_in_one_second_keep_both_files() {
         [b"first".to_vec(), b"second".to_vec(), b"third".to_vec()]
     );
 }
+
+#[test]
+fn quarantine_never_replaces_a_name_another_process_reserved() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("secrets.enc");
+    std::fs::write(&path, b"mine").unwrap();
+    // Another process already holds every name this second could pick first.
+    let stamp = chrono::Utc::now().timestamp();
+    let taken = path.with_extension(format!("enc.corrupt.{stamp}"));
+    std::fs::write(&taken, b"theirs").unwrap();
+    let moved = quarantine_corrupt(&path, "enc").expect("moved aside");
+    assert_ne!(moved, taken);
+    assert!(!path.exists(), "the corrupt original is gone");
+    assert_eq!(std::fs::read(&moved).unwrap(), b"mine");
+    assert_eq!(std::fs::read(&taken).unwrap(), b"theirs");
+}
