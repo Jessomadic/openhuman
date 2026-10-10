@@ -1,4 +1,3 @@
-import { TurnTaskProvider, TurnTaskCards } from '../aui/TurnTaskCards';
 import { ConversationMapAui } from '@/components/assistant-ui/elements/conversation-map.aui';
 import { Thread, type ThreadComponents } from '@/components/assistant-ui/thread';
 import { type AssistantState, useAui, useAuiState } from '@assistant-ui/react';
@@ -17,6 +16,7 @@ import { ChatConversationMap } from '../aui/ChatConversationMap';
 import { ComposerTriggers } from '../aui/ComposerTriggers';
 import { ContextUsage } from '../aui/ContextUsage';
 import { InterruptedTurnNotice } from '../aui/InterruptedTurnNotice';
+import { TurnTaskCards, TurnTaskProvider } from '../aui/TurnTaskCards';
 import { ChatSources } from './aui/ChatSources';
 import { ChatToolFallback } from './ChatToolParts';
 
@@ -373,17 +373,17 @@ export function AssistantUiChat({
     <AssistantUiRuntimeProvider>
       <ComposerTextBridge value={inputValue} onChange={onInputValueChange} />
       <TurnTaskProvider>
-      <ChatConversationMap>
-        <Thread
-          components={components}
-          model={model}
-          onModelChange={onModelChange}
-          loadError={loadError}
-          onEscape={onEscape}
-          onRecallLastPrompt={onRecallLastPrompt}
-          composerPlaceholder={composerPlaceholder}
-        />
-      </ChatConversationMap>
+        <ChatConversationMap>
+          <Thread
+            components={components}
+            model={model}
+            onModelChange={onModelChange}
+            loadError={loadError}
+            onEscape={onEscape}
+            onRecallLastPrompt={onRecallLastPrompt}
+            composerPlaceholder={composerPlaceholder}
+          />
+        </ChatConversationMap>
       </TurnTaskProvider>
     </AssistantUiRuntimeProvider>
   );

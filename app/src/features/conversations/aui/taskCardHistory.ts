@@ -1,5 +1,5 @@
-import type { ThreadTodoItemView } from '../../../store/threadTodosSlice';
 import type { ThreadGoalView } from '../../../store/threadGoalSlice';
+import type { ThreadTodoItemView } from '../../../store/threadTodosSlice';
 
 export interface TurnTask {
   anchor: string;
@@ -7,13 +7,20 @@ export interface TurnTask {
   goal: ThreadGoalView | null;
 }
 export const taskFinished = (task: TurnTask) =>
-  task.goal ? task.goal.status === 'complete' : task.todos.length > 0 && task.todos.every(item => item.status === 'completed');
+  task.goal
+    ? task.goal.status === 'complete'
+    : task.todos.length > 0 && task.todos.every(item => item.status === 'completed');
 
 /** Preserve a completed turn's presentation when later turns begin. */
 export function updateTaskHistory(history: TurnTask[], next: TurnTask): TurnTask[] {
   if (!next.anchor || (!next.todos.length && !next.goal)) return history;
   const last = history.at(-1);
-  if (last && JSON.stringify({todos: last.todos, goal: last.goal}) === JSON.stringify({todos: next.todos, goal: next.goal})) return history;
+  if (
+    last &&
+    JSON.stringify({ todos: last.todos, goal: last.goal }) ===
+      JSON.stringify({ todos: next.todos, goal: next.goal })
+  )
+    return history;
   if (last && (!taskFinished(last) || last.anchor === next.anchor)) {
     return [...history.slice(0, -1), { ...next, anchor: last.anchor }];
   }

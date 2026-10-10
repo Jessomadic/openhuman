@@ -13,12 +13,8 @@ import { ArtifactCardAdapter } from '../../features/conversations/aui/ArtifactCa
 import { ContextUsage } from '../../features/conversations/aui/ContextUsage';
 import { PlanReviewCardCore } from '../../features/conversations/aui/PlanReviewPart';
 import { useRunMode } from '../../features/conversations/aui/useRunMode';
-import {
-  useLoadThreadGoal,
-} from '../../features/conversations/aui/useThreadGoal';
-import {
-  useLoadThreadTodos,
-} from '../../features/conversations/aui/useThreadTodos';
+import { useLoadThreadGoal } from '../../features/conversations/aui/useThreadGoal';
+import { useLoadThreadTodos } from '../../features/conversations/aui/useThreadTodos';
 import { AssistantUiChat } from '../../features/conversations/components/AssistantUiChat';
 import { TranscriptOverlays } from '../../features/conversations/components/aui/TranscriptOverlays';
 import {

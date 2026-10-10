@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { updateTaskHistory, type TurnTask } from './taskCardHistory';
-const task = (anchor: string, completed = false): TurnTask => ({anchor, goal: null, todos: [{content: 'Inspect UI', status: completed ? 'completed' : 'in_progress'}]});
+
+import { type TurnTask, updateTaskHistory } from './taskCardHistory';
+
+const task = (anchor: string, completed = false): TurnTask => ({
+  anchor,
+  goal: null,
+  todos: [{ content: 'Inspect UI', status: completed ? 'completed' : 'in_progress' }],
+});
 describe('turn task attachment', () => {
   it('keeps completion attached to its original turn as new messages arrive', () => {
     const running = updateTaskHistory([], task('first'));
