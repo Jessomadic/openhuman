@@ -161,6 +161,37 @@ async fn x402_guard_authorizes_the_complete_request_and_pins_destination() {
 }
 
 #[tokio::test]
+async fn x402_guard_discloses_possible_payment_proof_metadata() {
+    use crate::core::events::DomainEvent;
+    use crate::security::egress::DataKind;
+
+    let _env_lock = crate::config::TEST_ENV_LOCK.lock().await;
+    crate::core::bus::init().await.expect("bus init");
+    let mut events = crate::core::bus::BUS.get().unwrap().receiver();
+    let guard = HostRequestGuard {
+        security: Arc::new(SecurityPolicy::default()),
+        allowed_domains: vec![],
+    };
+
+    guard
+        .authorize(&proposed_request("https://1.1.1.1/"))
+        .await
+        .expect("public destination should be authorized");
+    loop {
+        match events.recv().await {
+            Some(DomainEvent::ExternalTransferPending { descriptor, .. })
+                if descriptor.service == "1.1.1.1" =>
+            {
+                assert!(descriptor.data_kinds.contains(&DataKind::Metadata));
+                break;
+            }
+            Some(_) => continue,
+            None => panic!("bus closed before x402 disclosure"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn x402_guard_rejects_readonly_and_private_destinations() {
     let _env_lock = crate::config::TEST_ENV_LOCK.lock().await;
     let readonly = HostRequestGuard {
