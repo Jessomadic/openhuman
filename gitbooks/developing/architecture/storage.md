@@ -50,13 +50,15 @@ The host opens the configured backend before the core boots and installs it with
 
 ## Scopes
 
-Every record lives in a scope, and two scopes on one backend never see each other's data. **The scope is the agent id.** `storage::scope_for_agent` is the single mapping, the one the session store uses, so every domain agrees.
+Every record lives in a scope, and two scopes on one backend never see each other's data. A single-user install scopes by **agent id**, and a SaaS host scopes by **profile** (the tenant). `storage::scope_for_agent` and `storage::scope_for_profile` are the single mappings, and the session store uses the same ones, so every domain agrees.
 
-`storage::current_scope()` resolves the scope of the current call:
+`storage::current_scope()` resolves the scope of the current call from the task's tenant (`storage::scope_from(profile, agent, saas)`), in this order:
 
-- Inside an agent's turn, the context names the agent (`CoreContext::session_agent`), and the scope is that agent's.
-- With no acting agent in single-user mode, the scope is `local`. This is the operator, the CLI and the desktop shell.
-- With no acting agent in SaaS mode, the call is refused instead of falling into a bucket every user would share.
+1. A **profile**, when the work runs for one: the scope is the profile's, whatever agent acts inside it. In SaaS mode the agents of one profile therefore share that profile's scope.
+2. Otherwise the acting **agent** (`CoreContext::session_agent`): the scope is that agent's.
+3. Otherwise `local`: the operator, the CLI and the desktop shell in single-user mode.
+
+In SaaS mode a call with no profile is refused instead of falling into a bucket other users could share, whether or not an agent acts.
 
 A backend decides how it enforces the scope. SQLite and the file driver keep each scope's data apart, and `local` is the scope a single-user install uses. MongoDB injects a scope key into every filter and every index prefix.
 

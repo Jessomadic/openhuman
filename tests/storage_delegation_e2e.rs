@@ -120,7 +120,9 @@ async fn the_delegation_checkpointer_resumes_and_keeps_scopes_apart(case: Case) 
             // A named checkpoint resolves in the same scope only.
             let first = checkpointer.get("run-1", Some("c1")).await.unwrap();
             assert_eq!(
-                first.and_then(|checkpoint| checkpoint.state.plan).as_deref(),
+                first
+                    .and_then(|checkpoint| checkpoint.state.plan)
+                    .as_deref(),
                 Some(named_c1),
                 "the named checkpoint is this agent's own"
             );
