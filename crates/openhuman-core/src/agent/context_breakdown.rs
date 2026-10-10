@@ -126,8 +126,9 @@ async fn cached_report(agent_id: &str, config: &Config) -> Result<PromptSizeRepo
     Ok(report)
 }
 
-/// Adds a `"history"` section sized from a thread's last-turn input tokens
-/// (`threads.token_usage`), when `thread_id` is given and that thread has
+/// Adds a `"history"` section sized from the context a thread's last turn
+/// ended with (`threads.token_usage`'s `last_turn_context_tokens`, one
+/// request, not the turn's summed spend), when `thread_id` is given and that thread has
 /// recorded usage. Silent no-op (no section added) on any lookup failure —
 /// a context breakdown must never fail just because the optional history
 /// enrichment couldn't be computed.
