@@ -568,6 +568,12 @@ pub enum DomainEvent {
         /// The embedded agent whose turn parked this call, if any.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent_id: Option<String>,
+        /// The park runs on a task detached from the chat turn it is routed
+        /// to (an async-delegated sub-agent, #5499), so it can outlive that
+        /// turn. The chat surface keeps a detached card across the turn's
+        /// `chat_done` and clears it on `ApprovalDecided` instead.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        detached: bool,
     },
     /// User decided a pending approval. Published by `approval_decide`
     /// RPC handler after the gate's parked future resolves.

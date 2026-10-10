@@ -549,6 +549,7 @@ fn approval_requested_does_not_surface_session_id() {
         tool_call_id: None,
         expires_at: None,
         agent_id: None,
+        detached: false,
     };
     let dbg = format!("{event:?}");
     assert!(
