@@ -30,6 +30,10 @@ import {
   maskKeyLabel,
 } from './aiPanelTypes';
 
+const normalizeProviderSlug = (slug: string) => slug.trim().toLowerCase();
+const isProviderSlug = (candidate: string, slug: string) =>
+  normalizeProviderSlug(candidate) === normalizeProviderSlug(slug);
+
 export type ConnectCredentialMode =
   | 'api_key'
   | 'oauth'
@@ -100,6 +104,7 @@ export function useProviderConnect({
       endpoint?: string | null;
       credentialMode: ConnectCredentialMode;
     }) => {
+      slug = normalizeProviderSlug(slug);
       const revision = (providerConnectRevisions.current.get(slug) ?? 0) + 1;
       providerConnectRevisions.current.set(slug, revision);
       const previousOperation = providerConnectQueue.current;
@@ -121,7 +126,7 @@ export function useProviderConnect({
       setBusyAction(`toggle-${localLabel ? localLabel.toLowerCase().replace(/\s/g, '') : slug}`);
       // A fresh attempt on THIS provider clears only its own prior advisory —
       // an advisory about a different provider must survive (#5341).
-      setProviderSaveNotice(prev => (prev?.slug === slug ? null : prev));
+      setProviderSaveNotice(prev => (prev && isProviderSlug(prev.slug, slug) ? null : prev));
 
       try {
         const trimmed = value.trim();
@@ -140,11 +145,11 @@ export function useProviderConnect({
           : defaultEndpointFor(slug);
 
         const initialSettings = latestSettings.current;
-        const initialProvider = initialSettings.draft.cloudProviders.find(
-          provider => provider.slug === slug
+        const initialProvider = initialSettings.draft.cloudProviders.find(provider =>
+          isProviderSlug(provider.slug, slug)
         );
-        const initialSavedProvider = initialSettings.saved.cloudProviders.find(
-          provider => provider.slug === slug
+        const initialSavedProvider = initialSettings.saved.cloudProviders.find(provider =>
+          isProviderSlug(provider.slug, slug)
         );
         const upserted: CloudProvider = {
           id: `p_${slug}_${Math.random().toString(36).slice(2, 7)}`,
@@ -187,11 +192,11 @@ export function useProviderConnect({
 
         if (slug !== 'openhuman') {
           const currentSettings = latestSettings.current;
-          const currentProvider = currentSettings.draft.cloudProviders.find(
-            provider => provider.slug === slug
+          const currentProvider = currentSettings.draft.cloudProviders.find(provider =>
+            isProviderSlug(provider.slug, slug)
           );
-          const currentSavedProvider = currentSettings.saved.cloudProviders.find(
-            provider => provider.slug === slug
+          const currentSavedProvider = currentSettings.saved.cloudProviders.find(provider =>
+            isProviderSlug(provider.slug, slug)
           );
           const currentUpserted = {
             ...upserted,
@@ -199,14 +204,14 @@ export function useProviderConnect({
           };
           const priorWireProviders = currentSettings.saved.cloudProviders.map(provider => ({
             id: provider.id,
-            slug: provider.slug,
+            slug: normalizeProviderSlug(provider.slug),
             label: provider.label,
             endpoint: provider.endpoint,
             ca_cert_pem: provider.caCertPem ?? '',
             auth_style: provider.authStyle,
           }));
           const nextWireProviders = [
-            ...priorWireProviders.filter(provider => provider.slug !== slug),
+            ...priorWireProviders.filter(provider => !isProviderSlug(provider.slug, slug)),
             {
               id: currentUpserted.id,
               slug: currentUpserted.slug,
@@ -223,17 +228,19 @@ export function useProviderConnect({
               await setCloudProviderKey(slug, trimmed);
             }
             const latestSettingsAfterKey = latestSettings.current;
-            const latestDraftProvider = latestSettingsAfterKey.draft.cloudProviders.find(
-              provider => provider.slug === slug
+            const latestDraftProvider = latestSettingsAfterKey.draft.cloudProviders.find(provider =>
+              isProviderSlug(provider.slug, slug)
             );
-            const latestSavedProvider = latestSettingsAfterKey.saved.cloudProviders.find(
-              provider => provider.slug === slug
+            const latestSavedProvider = latestSettingsAfterKey.saved.cloudProviders.find(provider =>
+              isProviderSlug(provider.slug, slug)
             );
             const latestCaCertPem =
               latestDraftProvider?.caCertPem ?? latestSavedProvider?.caCertPem ?? '';
             if (latestCaCertPem !== (currentUpserted.caCertPem ?? '')) {
               flushedProviders = flushedProviders.map(provider =>
-                provider.slug === slug ? { ...provider, ca_cert_pem: latestCaCertPem } : provider
+                isProviderSlug(provider.slug, slug)
+                  ? { ...provider, ca_cert_pem: latestCaCertPem }
+                  : provider
               );
               await flushCloudProviders(flushedProviders);
             }
@@ -284,11 +291,11 @@ export function useProviderConnect({
         }
 
         const currentSettings = latestSettings.current;
-        const currentProvider = currentSettings.draft.cloudProviders.find(
-          provider => provider.slug === slug
+        const currentProvider = currentSettings.draft.cloudProviders.find(provider =>
+          isProviderSlug(provider.slug, slug)
         );
-        const currentSavedProvider = currentSettings.saved.cloudProviders.find(
-          provider => provider.slug === slug
+        const currentSavedProvider = currentSettings.saved.cloudProviders.find(provider =>
+          isProviderSlug(provider.slug, slug)
         );
         const finalUpserted = {
           ...upserted,
@@ -298,7 +305,9 @@ export function useProviderConnect({
         const nextDraft = {
           ...currentSettings.draft,
           cloudProviders: [
-            ...currentSettings.draft.cloudProviders.filter(provider => provider.slug !== slug),
+            ...currentSettings.draft.cloudProviders.filter(
+              provider => !isProviderSlug(provider.slug, slug)
+            ),
             finalUpserted,
           ],
         };

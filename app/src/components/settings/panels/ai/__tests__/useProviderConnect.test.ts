@@ -69,6 +69,40 @@ describe('useProviderConnect', () => {
     );
   });
 
+  it('preserves a CA when reconnecting a provider with a legacy slug format', async () => {
+    const existing = {
+      id: 'provider-legacy',
+      slug: ' OpenAI ',
+      label: 'OpenAI',
+      endpoint: 'https://api.openai.com/v1',
+      authStyle: 'bearer' as const,
+      maskedKey: '••••old',
+      caCertPem: 'saved CA PEM',
+    };
+    const settings: AISettings = { ...EMPTY_SETTINGS, cloudProviders: [existing] };
+    const { result } = renderHook(() =>
+      useProviderConnect({
+        draft: settings,
+        saved: settings,
+        persist: vi.fn().mockResolvedValue(undefined),
+        t: key => key,
+        onConnected: vi.fn(),
+      })
+    );
+
+    await act(async () => {
+      await result.current.connectProvider({
+        slug: 'openai',
+        value: 'replacement-key',
+        credentialMode: 'api_key',
+      });
+    });
+
+    expect(api.flushCloudProviders).toHaveBeenCalledWith([
+      expect.objectContaining({ slug: 'openai', ca_cert_pem: 'saved CA PEM' }),
+    ]);
+  });
+
   it('uses the latest provider CA when a connection update is in flight', async () => {
     let finishKeyWrite!: () => void;
     api.setCloudProviderKey.mockImplementation(
