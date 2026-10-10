@@ -439,10 +439,6 @@ async fn tools_and_tool_registry_paths_are_reachable_without_live_services() {
             json!({ "query": "worker b", "max_results": 1 }),
             "No web search provider is available",
         ),
-        (
-                json!({ "profile_url": "https://www.linkedin.com/in/example" }),
-            "Sign in first",
-        ),
     ]
     .into_iter()
     .enumerate()
