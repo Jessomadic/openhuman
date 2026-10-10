@@ -180,7 +180,8 @@ async fn desktop_keys_are_the_bare_ids() {
     let desktop = CoreContext::for_test(DomainSet::full(), None);
     let ws = TestWorkspace::new();
     let thread = unique("t-desk");
-    let session = web_session(&thread);
+    let session = unique("desk-session");
+    background_completions::note_session_thread(&session, &thread);
 
     let turn = in_scope(&desktop, || TurnBusy::start(&session));
     assert_eq!(turn.key, session);

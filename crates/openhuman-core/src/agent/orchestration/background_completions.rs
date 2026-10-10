@@ -216,9 +216,20 @@ pub(crate) fn claim_recovery(workspace_dir: &Path) -> bool {
         .insert(workspace_dir.to_path_buf())
 }
 
-/// Let `workspace_dir` be recovered again (a profile re-leased after release).
+/// Let `workspace_dir` be recovered again (a profile re-leased after release),
+/// and drop its cached router when nothing is using it so the next scan replays
+/// the log another holder may have appended to. A router still in use stays,
+/// so a log never has two writers.
 pub(crate) fn forget_recovery(workspace_dir: &Path) {
-    state().recovered_workspaces.remove(workspace_dir);
+    let mut st = state();
+    st.recovered_workspaces.remove(workspace_dir);
+    let idle = st
+        .routers
+        .get(workspace_dir)
+        .is_some_and(|e| Arc::strong_count(e) == 1 && Arc::strong_count(&e.router) == 1);
+    if idle {
+        st.routers.remove(workspace_dir);
+    }
 }
 
 /// Remember that `session_id` is a turn on `thread_id`.

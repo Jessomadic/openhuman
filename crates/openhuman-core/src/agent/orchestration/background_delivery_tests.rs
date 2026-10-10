@@ -682,6 +682,20 @@ async fn boot_recovery_schedules_a_delivery_for_every_thread_with_undelivered_re
 }
 
 #[tokio::test]
+async fn recover_on_open_rescans_a_workspace_already_recovered() {
+    let _g = test_guard().await;
+    let ws = workspace();
+    let w = ws.path();
+    record(w, "bd-open", "sub-1", "left pending", "thread-open-resc").await;
+    forget_workspace_for_test(w);
+    scheduled_for_test().lock().expect("scheduled").clear();
+
+    assert_eq!(recover_on_boot(w), 1);
+    assert_eq!(recover_on_boot(w), 0, "boot recovery claims once");
+    assert_eq!(recover_on_open(w), 1, "a re-open scans again");
+}
+
+#[tokio::test]
 async fn a_cancelled_turn_does_not_leave_the_thread_busy() {
     // A cooperatively cancelled turn publishes no terminal event; Stop clears it.
     let _g = test_guard().await;

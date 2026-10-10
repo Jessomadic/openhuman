@@ -353,6 +353,16 @@ fn schedule_delivery_inner(thread_id: String, delay: Duration, wait_idle: bool) 
                 polls += 1;
                 tokio::time::sleep(RECOVERY_BUSY_POLL).await;
             }
+            if is_busy(&thread_id) {
+                // Still running past the ceiling: leave the record pending and
+                // wait again rather than overlap the user's turn.
+                log::debug!(
+                    "[background_delivery] recovered drain still busy; waiting again \
+                     thread_id={thread_id}"
+                );
+                schedule_delivery_inner(thread_id, RECOVERY_BUSY_POLL, true);
+                return;
+            }
         }
         try_deliver(thread_id).await;
     });
