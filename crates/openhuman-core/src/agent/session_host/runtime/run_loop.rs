@@ -144,12 +144,12 @@ impl OpenHumanSessionHost {
                         ],
                     );
                 }
-                drop(busy);
                 BUS.publish(DomainEvent::AgentError {
                     session_id: self.event_session_id().to_string(),
                     message: sanitized_message,
                     recoverable: false,
                 });
+                drop(busy);
                 Err(err)
             }
         }

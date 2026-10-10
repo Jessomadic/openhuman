@@ -184,10 +184,10 @@ async fn desktop_keys_are_the_bare_ids() {
 
     let turn = in_scope(&desktop, || TurnBusy::start(&session));
     assert_eq!(turn.key, session);
-    assert!(busy().lock().unwrap().contains(&session));
+    assert!(busy().lock().unwrap().contains_key(&session));
     assert!(in_scope(&desktop, || is_busy(&thread)));
     drop(turn);
-    assert!(!busy().lock().unwrap().contains(&session));
+    assert!(!busy().lock().unwrap().contains_key(&session));
 
     let router = router_for_workspace(ws.path());
     let slot = in_scope(&desktop, || DeliverySlot::claim(&thread, router)).expect("free");
@@ -195,4 +195,22 @@ async fn desktop_keys_are_the_bare_ids() {
     assert!(delivering().lock().unwrap().contains(&thread));
     drop(slot);
     assert!(!delivering().lock().unwrap().contains(&thread));
+}
+
+#[tokio::test]
+async fn an_older_guard_dropping_keeps_a_replacement_turn_busy() {
+    let _guard = crate::config::TEST_ENV_LOCK.lock().await;
+    let desktop = CoreContext::for_test(DomainSet::full(), None);
+    let thread = unique("t-interrupt");
+    let session = web_session(&thread);
+
+    let old = in_scope(&desktop, || TurnBusy::start(&session));
+    let new = in_scope(&desktop, || TurnBusy::start(&session));
+    drop(old);
+    assert!(
+        in_scope(&desktop, || is_busy(&thread)),
+        "replacement still running"
+    );
+    drop(new);
+    assert!(!in_scope(&desktop, || is_busy(&thread)));
 }

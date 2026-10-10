@@ -37,7 +37,12 @@ fn pending_ids(ws: &Path, thread: &str) -> Vec<String> {
 }
 
 fn mark_busy(session: &str) {
-    busy().lock().expect("busy").insert(session.to_string());
+    busy()
+        .lock()
+        .expect("busy")
+        .entry(session.to_string())
+        .or_default()
+        .insert(u64::MAX);
 }
 
 fn clear_busy(session: &str) {
