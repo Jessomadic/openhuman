@@ -431,9 +431,6 @@ const ThreadRoot: FC<{
     ActiveTasks,
   } = useContext(ThreadComponentsContext);
   const { isDraggingFiles, dropHandlers } = useThreadFileDrop();
-  return () => observer.disconnect();
-  }, []);
-
   return (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root bg-background @container flex h-full flex-col"
