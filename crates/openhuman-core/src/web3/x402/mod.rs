@@ -48,7 +48,7 @@ pub use schemas::all_registered_controllers as all_x402_registered_controllers;
 #[cfg(feature = "web3")]
 pub use tinywallet_x402::ledger::{PaymentRecord, PaymentStatus, SpendingBudget};
 #[cfg(feature = "web3")]
-pub use tinywallet_x402::protocol::{X402Client, X402Error, X402PaymentResult, handle_402};
+pub use tinywallet_x402::protocol::{handle_402, X402Client, X402Error, X402PaymentResult};
 #[cfg(feature = "web3")]
 pub use tinywallet_x402::wire::{
     EvmAuthorization, EvmPaymentProof, PaymentChain, PaymentPayload, PaymentProof, PaymentRequired,

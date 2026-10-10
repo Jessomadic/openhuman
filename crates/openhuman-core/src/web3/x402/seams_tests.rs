@@ -84,6 +84,100 @@ fn the_proxy_policy_yields_a_buildable_client() {
 }
 
 #[test]
+fn x402_direct_egress_requires_absent_runtime_and_environment_proxies() {
+    let service = "tool.x402_request";
+    let clear = |_: &str| false;
+    let mut config = crate::config::ProxyConfig::default();
+    assert!(direct_connection_allowed(&config, service, clear));
+
+    config.enabled = true;
+    config.http_proxy = Some("http://proxy.example:3128".into());
+    assert!(!direct_connection_allowed(&config, service, clear));
+
+    config.scope = crate::config::ProxyScope::Services;
+    config.services = vec!["tool.http_request".into()];
+    assert!(direct_connection_allowed(&config, service, clear));
+    config.services = vec!["tool.*".into()];
+    assert!(!direct_connection_allowed(&config, service, clear));
+
+    config.scope = crate::config::ProxyScope::Environment;
+    assert!(!direct_connection_allowed(&config, service, clear));
+
+    config.enabled = false;
+    for key in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "OPENHUMAN_HTTP_PROXY",
+        "OPENHUMAN_HTTPS_PROXY",
+        "OPENHUMAN_ALL_PROXY",
+    ] {
+        assert!(
+            !direct_connection_allowed(&config, service, |candidate| candidate == key),
+            "{key} must refuse direct egress"
+        );
+    }
+}
+
+fn proposed_request(url: &str) -> ProposedRequest {
+    ProposedRequest {
+        url: url.into(),
+        method: reqwest::Method::POST,
+        headers: vec![("x-custom".into(), "retained".into())],
+        body: Some("private body".into()),
+    }
+}
+
+#[tokio::test]
+async fn x402_guard_authorizes_the_complete_request_and_pins_destination() {
+    let guard = HostRequestGuard {
+        security: Arc::new(SecurityPolicy::default()),
+        allowed_domains: vec![],
+    };
+    let proposed = proposed_request("https://8.8.8.8/path");
+    let authorized = guard.authorize(&proposed).await.unwrap();
+    assert_eq!(authorized.request.url, proposed.url);
+    assert_eq!(authorized.request.method, proposed.method);
+    assert_eq!(authorized.request.headers, proposed.headers);
+    assert_eq!(authorized.request.body, proposed.body);
+    assert_eq!(authorized.host, "8.8.8.8");
+    assert_eq!(authorized.addrs.len(), 1);
+    assert_eq!(authorized.addrs[0].ip().to_string(), "8.8.8.8");
+    assert_eq!(authorized.addrs[0].port(), 443);
+}
+
+#[tokio::test]
+async fn x402_guard_rejects_readonly_and_private_destinations() {
+    let readonly = HostRequestGuard {
+        security: Arc::new(SecurityPolicy {
+            autonomy: crate::security::AutonomyLevel::ReadOnly,
+            ..SecurityPolicy::default()
+        }),
+        allowed_domains: vec![],
+    };
+    assert!(matches!(
+        readonly
+            .authorize(&proposed_request("https://8.8.8.8/"))
+            .await,
+        Err(RequestAuthorizationError::Denied(_))
+    ));
+
+    let guard = HostRequestGuard {
+        security: Arc::new(SecurityPolicy::default()),
+        allowed_domains: vec![],
+    };
+    assert!(matches!(
+        guard
+            .authorize(&proposed_request("http://127.0.0.1/"))
+            .await,
+        Err(RequestAuthorizationError::InvalidDestination(_))
+    ));
+}
+
+#[test]
 fn the_tool_is_built_from_the_host_seams() {
     use tinytools::Tool;
     let security = Arc::new(SecurityPolicy::default());

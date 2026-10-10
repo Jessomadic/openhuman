@@ -10,8 +10,8 @@
 //! - a `Transport`: [`OpenHumanTransport`](crate::web3::wallet::transport::OpenHumanTransport),
 //!   the failover-aware RPC adapter the wallet already uses, for the Solana
 //!   blockhash.
-//! - a [`ProxyPolicy`]: [`RuntimeProxyPolicy`] applies the runtime proxy
-//!   configuration to the tool's HTTP client.
+//! - a [`ProxyPolicy`]: [`RuntimeProxyPolicy`] refuses direct, address-pinned
+//!   requests when runtime or environment proxy policy requires a proxy.
 //! - a [`ThreadScope`]: [`TaskLocalThread`] names the chat thread running the
 //!   tool call, so the ledger can attribute the payment to it.
 //!
@@ -28,13 +28,15 @@ use tinytools_std::url_guard::validate_url_with_dns_check;
 use tinywallet_x402::crypto::{CryptoPayments, PaymentAccount, PaymentSigner, SignScheme};
 use tinywallet_x402::protocol::ProxyPolicy;
 use tinywallet_x402::thread::ThreadScope;
-use tinywallet_x402::tools::{AuthorizedUrl, RequestGuard, X402RequestTool};
+use tinywallet_x402::tools::{
+    AuthorizedRequest, ProposedRequest, RequestAuthorizationError, RequestGuard, X402RequestTool,
+};
 use tinywallet_x402::wire::PaymentChain;
 
-use crate::security::SecurityPolicy;
 use crate::security::approval::APPROVAL_CHAT_CONTEXT;
-use crate::web3::wallet::WalletChain;
+use crate::security::SecurityPolicy;
 use crate::web3::wallet::transport::OpenHumanTransport;
+use crate::web3::wallet::WalletChain;
 
 const LOG_PREFIX: &str = "[x402::seams]";
 
@@ -42,7 +44,7 @@ const LOG_PREFIX: &str = "[x402::seams]";
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct WalletPaymentSigner;
 
-/// The runtime proxy configuration, applied to x402's outbound HTTP.
+/// The runtime and environment proxy configuration for x402 outbound HTTP.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RuntimeProxyPolicy;
 
@@ -60,29 +62,42 @@ impl RequestGuard for HostRequestGuard {
 
     async fn authorize(
         &self,
-        url: &str,
-        has_body: bool,
-        has_headers: bool,
-    ) -> Result<AuthorizedUrl, String> {
+        request: &ProposedRequest,
+    ) -> Result<AuthorizedRequest, RequestAuthorizationError> {
         if !self.security.can_act() {
-            return Err("[policy-blocked] Action blocked: autonomy is read-only".into());
+            return Err(RequestAuthorizationError::Denied(
+                "Action blocked: autonomy is read-only".into(),
+            ));
         }
         if !self.security.record_action() {
-            return Err("Action blocked: rate limit exceeded".into());
+            return Err(RequestAuthorizationError::Denied(
+                "Action blocked: rate limit exceeded".into(),
+            ));
         }
-        let host = reqwest::Url::parse(url)
+        let host = reqwest::Url::parse(&request.url)
             .ok()
             .and_then(|parsed| parsed.host_str().map(str::to_string))
             .unwrap_or_else(|| "unknown".to_string());
         if let Some(reason) = self.security.local_only_block(&host) {
-            return Err(reason);
+            return Err(RequestAuthorizationError::Denied(
+                reason
+                    .strip_prefix("[policy-blocked] ")
+                    .unwrap_or(&reason)
+                    .to_string(),
+            ));
         }
-        let target = validate_url_with_dns_check(url, &self.allowed_domains)
+        let target = validate_url_with_dns_check(&request.url, &self.allowed_domains)
             .await
-            .map_err(|error| error.to_string())?;
-        self.security.disclose(&target.host, has_body, has_headers);
-        Ok(AuthorizedUrl {
-            url: target.url,
+            .map_err(|error| RequestAuthorizationError::InvalidDestination(error.to_string()))?;
+        self.security.disclose(
+            &target.host,
+            request.body.is_some(),
+            !request.headers.is_empty(),
+        );
+        let mut approved_request = request.clone();
+        approved_request.url = target.url;
+        Ok(AuthorizedRequest {
+            request: approved_request,
             host: target.host,
             addrs: target.addrs,
         })
@@ -233,6 +248,37 @@ impl ProxyPolicy for RuntimeProxyPolicy {
     fn apply(&self, builder: reqwest::ClientBuilder, service: &str) -> reqwest::ClientBuilder {
         crate::config::apply_runtime_proxy_to_builder(builder, service)
     }
+
+    fn allows_direct_connection(&self, service: &str) -> bool {
+        let config = crate::config::runtime_proxy_config();
+        direct_connection_allowed(&config, service, |key| {
+            std::env::var_os(key).is_some_and(|value| !value.is_empty())
+        })
+    }
+}
+
+/// A guarded request must connect to its vetted address directly. Treat any
+/// configured proxy for this service, including process proxy variables, as
+/// requiring the proxy until the host can pin an address through that proxy.
+fn direct_connection_allowed(
+    config: &crate::config::ProxyConfig,
+    service: &str,
+    env_has_value: impl Fn(&str) -> bool,
+) -> bool {
+    const PROXY_ENV_KEYS: &[&str] = &[
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "OPENHUMAN_HTTP_PROXY",
+        "OPENHUMAN_HTTPS_PROXY",
+        "OPENHUMAN_ALL_PROXY",
+    ];
+    !(config.enabled && config.scope == crate::config::ProxyScope::Environment)
+        && !config.should_apply_to_service(service)
+        && !PROXY_ENV_KEYS.iter().any(|key| env_has_value(key))
 }
 
 /// The crypto rail's payment builder, over OpenHuman's wallet and transport.
