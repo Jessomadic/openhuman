@@ -1,13 +1,13 @@
-import { useStore } from 'react-redux';
-import type { RootState } from '../../../store';
 /**
  * The thread's live todo list, read from `threadTodosSlice` (populated by the
  * `thread_todos_changed` socket event via `ChatRuntimeProvider`, and primed
  * on thread open by {@link useLoadThreadTodos}).
  */
 import { useEffect, useRef } from 'react';
+import { useStore } from 'react-redux';
 
 import { threadApi } from '../../../services/api/threadApi';
+import type { RootState } from '../../../store';
 import { useAppDispatch, useAppSelector } from '../../../store/hooks';
 import { setThreadTodos, type ThreadTodoItemView } from '../../../store/threadTodosSlice';
 

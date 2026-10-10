@@ -1,5 +1,3 @@
-import { useStore } from 'react-redux';
-import type { RootState } from '../../../store';
 /**
  * The thread's current goal, read from `threadGoalSlice` (populated by the
  * `thread_goal_updated` / `thread_goal_cleared` socket events via
@@ -7,8 +5,10 @@ import type { RootState } from '../../../store';
  * {@link useLoadThreadGoal}).
  */
 import { useEffect, useRef } from 'react';
+import { useStore } from 'react-redux';
 
 import { threadApi } from '../../../services/api/threadApi';
+import type { RootState } from '../../../store';
 import { useAppDispatch, useAppSelector } from '../../../store/hooks';
 import { setThreadGoal, type ThreadGoalView } from '../../../store/threadGoalSlice';
 

@@ -23,10 +23,12 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
       id && window.__OPENHUMAN_STORE__?.getState().socket?.byUser?.[id]?.status === 'connected'
     );
   });
-  const beforeThread = await page.evaluate(() => window.__OPENHUMAN_STORE__.getState().thread.selectedThreadId);
+  const beforeThread = await page.evaluate(
+    () => window.__OPENHUMAN_STORE__.getState().thread.selectedThreadId
+  );
   await ui.button('New Conversation').click();
   await page.waitForFunction(before => {
-    const state=window.__OPENHUMAN_STORE__.getState().thread;
+    const state = window.__OPENHUMAN_STORE__.getState().thread;
     return state.selectedThreadId && state.selectedThreadId !== before && !state.isLoadingMessages;
   }, beforeThread);
   mock.set(
@@ -108,7 +110,25 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
       { finish: 'stop' },
     ])
   );
-  await ui.textbox('Message input').fill('try now');
+  await page.evaluate(() => {
+    const viewport = document.querySelector('[data-slot="aui_thread-viewport"]');
+    viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight - 200);
+    window.__typingScroll = [];
+    window.__typingScrollListener = () => window.__typingScroll.push(viewport.scrollTop);
+    viewport.addEventListener('scroll', window.__typingScrollListener);
+    window.__typingScroll.push(viewport.scrollTop);
+  });
+  await ui.textbox('Message input').pressSequentially('try now', { delay: 60 });
+  const typingScroll = await page.evaluate(() => {
+    const viewport = document.querySelector('[data-slot="aui_thread-viewport"]');
+    window.__typingScroll.push(viewport.scrollTop);
+    viewport.removeEventListener('scroll', window.__typingScrollListener);
+    return window.__typingScroll;
+  });
+  assert.ok(
+    Math.max(...typingScroll) - Math.min(...typingScroll) <= 2,
+    'typing must not flicker or move the reading position'
+  );
   await ui.textbox('Message input').press('Enter');
   await ui.testId('stop-generation-button').waitFor({ state: 'visible' });
   const loader = await page.evaluate(

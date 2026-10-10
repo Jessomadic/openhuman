@@ -5,7 +5,7 @@ import { Provider } from 'react-redux';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { threadApi } from '../../../services/api/threadApi';
-import threadTodosReducer, {setThreadTodos} from '../../../store/threadTodosSlice';
+import threadTodosReducer, { setThreadTodos } from '../../../store/threadTodosSlice';
 import { useLoadThreadTodos, useThreadTodos } from './useThreadTodos';
 
 vi.mock('../../../services/api/threadApi', () => ({ threadApi: { getTodos: vi.fn() } }));
@@ -64,22 +64,41 @@ describe('useLoadThreadTodos', () => {
   });
 });
 
-
 it('refreshes the finished plan when a turn settles without a todo push', async () => {
-  const {store, wrapper} = setup();
-  vi.mocked(threadApi.getTodos).mockReset().mockResolvedValueOnce([{content: 'Step', status: 'in_progress'}]).mockResolvedValueOnce([{content: 'Step', status: 'completed'}]);
-  const {rerender} = renderHook(({revision}) => useLoadThreadTodos('t1', revision), {wrapper, initialProps: {revision: 'running'}});
-  await waitFor(() => expect(store.getState().threadTodos.byThread.t1?.[0].status).toBe('in_progress'));
-  rerender({revision: 'idle'});
-  await waitFor(() => expect(store.getState().threadTodos.byThread.t1?.[0].status).toBe('completed'));
+  const { store, wrapper } = setup();
+  vi.mocked(threadApi.getTodos)
+    .mockReset()
+    .mockResolvedValueOnce([{ content: 'Step', status: 'in_progress' }])
+    .mockResolvedValueOnce([{ content: 'Step', status: 'completed' }]);
+  const { rerender } = renderHook(({ revision }) => useLoadThreadTodos('t1', revision), {
+    wrapper,
+    initialProps: { revision: 'running' },
+  });
+  await waitFor(() =>
+    expect(store.getState().threadTodos.byThread.t1?.[0].status).toBe('in_progress')
+  );
+  rerender({ revision: 'idle' });
+  await waitFor(() =>
+    expect(store.getState().threadTodos.byThread.t1?.[0].status).toBe('completed')
+  );
 });
 
 it('does not let a delayed hydration overwrite a newer live todo event', async () => {
-  const {store, wrapper} = setup();
-  let resolve!: (todos: {content: string; status: 'pending'}[]) => void;
-  vi.mocked(threadApi.getTodos).mockReset().mockReturnValueOnce(new Promise(done => {resolve = done;}));
-  renderHook(() => useLoadThreadTodos('t1'), {wrapper});
-  await act(async () => store.dispatch(setThreadTodos({threadId: 't1', todos: [{content: 'Step', status: 'completed'}]})));
-  await act(async () => resolve([{content: 'Step', status: 'pending'}]));
+  const { store, wrapper } = setup();
+  let resolve!: (todos: { content: string; status: 'pending' }[]) => void;
+  vi.mocked(threadApi.getTodos)
+    .mockReset()
+    .mockReturnValueOnce(
+      new Promise(done => {
+        resolve = done;
+      })
+    );
+  renderHook(() => useLoadThreadTodos('t1'), { wrapper });
+  await act(async () =>
+    store.dispatch(
+      setThreadTodos({ threadId: 't1', todos: [{ content: 'Step', status: 'completed' }] })
+    )
+  );
+  await act(async () => resolve([{ content: 'Step', status: 'pending' }]));
   expect(store.getState().threadTodos.byThread.t1?.[0].status).toBe('completed');
 });
