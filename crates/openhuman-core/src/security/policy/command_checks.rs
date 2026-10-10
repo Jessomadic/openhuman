@@ -229,25 +229,18 @@ impl SecurityPolicy {
     /// guard for direct path arguments and source literals; arbitrary shell or
     /// interpreter code still needs a filesystem sandbox to enforce the floor.
     pub fn check_protected_path_literals(&self, input: &str) -> Result<(), String> {
-        let home = dirs::home_dir();
-        let mut expanded = strip_quoted_heredoc_bodies(input).into_owned();
-        if let Some(home) = home.as_ref().and_then(|p| p.to_str()) {
-            expanded = expanded.replace("${HOME}", home).replace("$HOME", home);
-            expanded = expanded.replace("%USERPROFILE%", home);
-        }
-
-        for word in expanded.split(|c: char| {
+        for word in strip_quoted_heredoc_bodies(input).split(|c: char| {
             c.is_whitespace() || matches!(c, '\'' | '"' | '(' | ')' | '[' | ']' | ',' | ';' | '=')
         }) {
             let word = word.trim_matches(|c: char| matches!(c, ':' | '<' | '>' | '&' | '|'));
             if word.is_empty() || word.contains("://") {
                 continue;
             }
-            let candidate = if word == "~" || word.starts_with("~/") {
-                PathBuf::from(self.expand_tilde(word))
-            } else {
-                PathBuf::from(word)
-            };
+            let word = ["${HOME}", "$HOME", "%USERPROFILE%"]
+                .iter()
+                .find_map(|prefix| word.strip_prefix(prefix).map(|rest| format!("~{rest}")))
+                .unwrap_or_else(|| word.to_string());
+            let candidate = PathBuf::from(self.expand_tilde(&word));
             let candidate = if candidate.is_absolute() {
                 candidate
             } else {
