@@ -93,6 +93,13 @@ const STORAGE_LIB_FILTERS = [
   "security::credentials::",
   "desktop::notifications::",
   "integrations::task_sources::",
+  "integrations::composio::file_store",
+  "agent::orchestration::",
+  "config::workspace::",
+  "desktop::app_state::",
+  "desktop::control::",
+  "platform::cost::",
+  "inference::tokenjuice::",
 ];
 
 /**
