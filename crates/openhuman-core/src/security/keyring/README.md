@@ -57,9 +57,9 @@ None. There is no `bus.rs`, and the module publishes and subscribes to no `Domai
 
 Secret storage backend, selected once and frozen in a `OnceLock`:
 
-- `os` (production default outside staging/prod special-casing): native OS credential store, macOS Keychain, Windows Credential Manager, or Linux Secret Service, under service name `"openhuman"`.
-- `encrypted_file` (staging/production, and via `OPENHUMAN_KEYRING_BACKEND=encrypted_file`): single ChaCha20-Poly1305 file `{workspace}/secrets.enc`, encrypted with a master key loaded once, from `OPENHUMAN_KEYRING_MASTER_KEY` / `OPENHUMAN_KEYRING_MASTER_KEY_FILE` when set, otherwise from the OS keychain (`openhuman` / `app:master_key`). Files are written `0600` on Unix via temp-file plus atomic rename.
-- `file` (dev default, `cfg(test)`, or `OPENHUMAN_KEYRING_BACKEND=file`): plaintext JSON `{workspace}/dev-keychain.json`. Not encrypted; test and debug use only.
+- `os` (via `OPENHUMAN_KEYRING_BACKEND=os`): native OS credential store, macOS Keychain, Windows Credential Manager, or Linux Secret Service, under service name `"openhuman"`.
+- `encrypted_file` (default unless development mode or a backend override is explicit): single ChaCha20-Poly1305 file `{workspace}/secrets.enc`, encrypted with a master key loaded once, from `OPENHUMAN_KEYRING_MASTER_KEY` / `OPENHUMAN_KEYRING_MASTER_KEY_FILE` when set, otherwise from the OS keychain (`openhuman` / `app:master_key`). Files are written `0600` on Unix via temp-file plus atomic rename.
+- `file` (explicit `OPENHUMAN_APP_ENV=dev`/`development`, `cfg(test)`, or `OPENHUMAN_KEYRING_BACKEND=file`): plaintext JSON `{workspace}/dev-keychain.json`. Not encrypted; test and debug use only.
 - `mock` (test-only): in-memory `HashMap`.
 
 `SecretStore` additionally manages a master encryption key: keychain-backed (slot `secretstore.master_key`) in normal builds with one-time migration from the legacy `{data_dir}/openhuman/.secret_key` file; the file path is retained only for unit tests. Decoded keys are cached process-wide, keyed by normalized path.

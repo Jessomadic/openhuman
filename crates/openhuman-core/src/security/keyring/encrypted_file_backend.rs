@@ -53,13 +53,13 @@ static KEYCHAIN_UNAVAILABLE: OnceLock<()> = OnceLock::new();
 // ── Public API for core startup ──────────────────────────────────────────────
 
 /// Initialize the keyring subsystem: set the workspace directory and load
-/// the master encryption key (staging/production only) — from
+/// the master encryption key (whenever encrypted storage is selected) — from
 /// [`MASTER_KEY_ENV`] or [`MASTER_KEY_FILE_ENV`] when an operator set one,
 /// otherwise from the OS keychain.
 ///
 /// Call this once at core startup before any keyring operations. In dev
-/// environments the master key is not loaded (the plain file backend is
-/// used instead). The result is cached process-wide; subsequent calls are
+/// environments that explicitly select the plain file backend, the master key
+/// is not loaded. The result is cached process-wide; subsequent calls are
 /// no-ops. Which source supplied the key is logged at `info`; the key never
 /// is.
 ///

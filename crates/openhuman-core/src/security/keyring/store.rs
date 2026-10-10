@@ -120,9 +120,9 @@ pub(super) fn build_backend_at(path: &Path) -> Box<dyn KeyringBackend> {
         return Box::new(backend::FileBackend::new(&path));
     }
 
-    // Priority 3: staging/production → encrypted file backend (master key in OS keychain).
-    // Dev builds → plain file backend (no keychain interaction, avoids codesign prompts).
-    if is_staging_or_production() {
+    // Priority 3: encrypt by default, including headless deployments where
+    // OPENHUMAN_APP_ENV is unset. Plain files require an explicit dev mode.
+    if default_to_encrypted_file(std::env::var("OPENHUMAN_APP_ENV").as_deref().ok()) {
         log::info!("[keyring] backend=encrypted_file path={}", path.display());
         Box::new(super::encrypted_file_backend::EncryptedFileBackend::new(
             &path,
@@ -135,10 +135,6 @@ pub(super) fn build_backend_at(path: &Path) -> Box<dyn KeyringBackend> {
         );
         Box::new(backend::FileBackend::new(&path))
     }
-}
-
-fn is_staging_or_production() -> bool {
-    is_staging_or_production_value(std::env::var("OPENHUMAN_APP_ENV").as_deref().ok())
 }
 
 pub(super) fn effective_backend_kind() -> BackendKind {
@@ -160,7 +156,7 @@ fn effective_backend_kind_for(
     if cfg_test {
         return BackendKind::File;
     }
-    if is_staging_or_production_value(app_env) {
+    if default_to_encrypted_file(app_env) {
         BackendKind::EncryptedFile
     } else {
         BackendKind::File
@@ -176,8 +172,8 @@ fn backend_kind_from_env_value(value: &str) -> Option<BackendKind> {
     }
 }
 
-fn is_staging_or_production_value(app_env: Option<&str>) -> bool {
-    matches!(app_env.map(str::trim), Some("staging") | Some("production"))
+fn default_to_encrypted_file(app_env: Option<&str>) -> bool {
+    !matches!(app_env.map(str::trim), Some("development") | Some("dev"))
 }
 
 /// Derive the directory for keyring files (`secrets.enc`, `dev-keychain.json`).
