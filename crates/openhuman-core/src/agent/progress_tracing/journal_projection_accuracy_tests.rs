@@ -98,7 +98,11 @@ fn completion_without_model_started_gets_its_own_iteration_and_start() {
         .collect();
     assert_eq!(
         timing,
-        vec![(1_000, Some(3_000)), (3_100, Some(5_000)), (5_200, Some(9_000))],
+        vec![
+            (1_000, Some(3_000)),
+            (3_100, Some(5_000)),
+            (5_200, Some(9_000))
+        ],
         "each call starts at its own started_at_ms"
     );
     for g in &gens {
@@ -113,7 +117,10 @@ fn completion_without_model_started_gets_its_own_iteration_and_start() {
         .iter()
         .filter(|s| s.kind == SpanKind::Iteration)
         .count();
-    assert_eq!(iterations, 3, "a lost ModelStarted still yields its iteration");
+    assert_eq!(
+        iterations, 3,
+        "a lost ModelStarted still yields its iteration"
+    );
 }
 
 #[test]
@@ -180,7 +187,10 @@ fn cancelled_run_is_a_warning() {
     let spans = spans_from_observations(ctx(), 10, &observations);
     let turn = spans.iter().find(|s| s.kind == SpanKind::Turn).unwrap();
     assert_eq!(turn.status, SpanStatus::Unset);
-    assert_eq!(turn.attributes["turn.outcome"], serde_json::json!("cancelled"));
+    assert_eq!(
+        turn.attributes["turn.outcome"],
+        serde_json::json!("cancelled")
+    );
 }
 
 #[test]
