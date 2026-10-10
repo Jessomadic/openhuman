@@ -8,6 +8,7 @@ use serde_json::json;
 use tokio::sync::mpsc::Sender;
 
 use crate::agent::progress::AgentProgress;
+use crate::agent::turn_stop::TurnStop;
 use tinytools_std::file_state;
 
 use super::types::{ParallelAgentResult, ParallelAgentStatus};
@@ -118,9 +119,9 @@ pub(crate) async fn project_spawn_parallel_result(
                         dirty_status: *dirty_status,
                         // An incomplete worker was stopped early (breaker /
                         // cap); its span closes at WARNING with that stop.
-                        stop: matches!(result.status, ParallelAgentStatus::Incomplete)
-                            .then(|| TurnStop::from_incomplete_reason(error.as_deref().unwrap_or("")))
-                            ,
+                        stop: matches!(result.status, ParallelAgentStatus::Incomplete).then(|| {
+                            TurnStop::from_incomplete_reason(error.as_deref().unwrap_or(""))
+                        }),
                     })
                     .await
                 {
