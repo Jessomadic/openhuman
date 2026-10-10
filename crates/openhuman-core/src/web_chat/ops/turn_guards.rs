@@ -8,33 +8,28 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::types::WebChatTaskResult;
 
+/// Default wall-clock backstop for a single web chat turn, in seconds.
+///
+/// This is the OUTER safety net (issue #4746). The primary, root-cause guard is
+/// the harness policy's `max_wall_clock_ms` (`tinyagents::run_policy_for`,
+/// default 600s), which interrupts a hung/slow model or tool/sub-agent call
+/// mid-flight and returns a proper `Timeout` → `chat_error`. This channel-level
+/// backstop sits ABOVE that (900s) and only fires if a turn wedges OUTSIDE the
+/// harness run entirely (e.g. session assembly / persistence plumbing), so the
+/// client still always gets a terminal event instead of an empty reply / an
+/// endless `inference_heartbeat` stream. Deliberately generous — a hang
+/// backstop, not a UX deadline. Override via `OPENHUMAN_WEB_TURN_TIMEOUT_SECS`;
+/// set it to `0` to disable the backstop.
+const DEFAULT_WEB_TURN_TIMEOUT_SECS: u64 = 900;
+
 /// Resolve the per-turn wall-clock backstop. Returns `None` when disabled
 /// (env `OPENHUMAN_WEB_TURN_TIMEOUT_SECS=0`).
-///
-/// This is the OUTER safety net (issue #4746), and the single source of truth
-/// for the turn's deadlines (`agent::turn_deadline`, default 900s). The
-/// harness derives two earlier points from it:
-///
-/// * **wind-down** at backstop minus `min(120s, backstop/5)`, 780s by default.
-///   The harness pauses the run at its next safe point, and the session driver
-///   writes the grounded close from the work already done, so a long turn
-///   still delivers an answer.
-/// * **hard stop** at backstop minus `min(60s, backstop/10)`, 840s by default.
-///   The harness policy's `max_wall_clock_ms` (`tinyagents::run_policy_for`,
-///   3600s on its own) is clamped to it, so a tool or sub-agent call that runs
-///   across the wind-down point ends in the harness's own typed `Timeout` →
-///   `chat_error`.
-///
-/// So this backstop only fires if a turn wedges OUTSIDE the harness run, e.g.
-/// in session assembly, the grounded close or the persistence plumbing. The
-/// client then still gets a terminal `turn_timeout` event instead of an empty
-/// reply or an endless `inference_heartbeat` stream. Before the derived
-/// deadlines existed, the harness ceiling sat at 3600s, *after* this 900s
-/// backstop. Long orchestrator turns were then dropped here, mid-work, with
-/// nothing delivered. Override via `OPENHUMAN_WEB_TURN_TIMEOUT_SECS`; set it to
-/// `0` to disable the backstop and the derived deadlines with it.
 fn web_turn_deadline() -> Option<Duration> {
-    crate::agent::turn_deadline::configured_backstop()
+    let secs = std::env::var("OPENHUMAN_WEB_TURN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_WEB_TURN_TIMEOUT_SECS);
+    (secs > 0).then(|| Duration::from_secs(secs))
 }
 
 /// Drive a chat-turn future under the wall-clock backstop.
@@ -52,25 +47,12 @@ where
     F: std::future::Future<Output = Result<WebChatTaskResult, String>>,
 {
     match deadline {
-        // Scope the deadline on the task so the session turn hands it to the
-        // harness (`agent::turn_deadline`), which winds down before `d`. The
-        // turn future is boxed: it is very large, and the scope wrapper would
-        // otherwise hold it inline a second time and overflow the worker stack.
-        Some(d) => match tokio::time::timeout(
-            d,
-            crate::agent::turn_deadline::with_turn_deadline(
-                Some(crate::agent::turn_deadline::TurnDeadline::starting_now(d)),
-                Box::pin(fut),
-            ),
-        )
-        .await
-        {
+        Some(d) => match tokio::time::timeout(d, fut).await {
             Ok(res) => res,
             Err(_elapsed) => {
                 log::warn!(
-                    "[web-channel] turn wall-clock backstop fired after {}s with no terminal event \
-                     (the harness wind-down did not close the turn in time); emitting graceful \
-                     turn_timeout chat_error (issue #4746)",
+                    "[web-channel] turn wall-clock backstop fired after {}s with no terminal event; \
+                     emitting graceful turn_timeout chat_error (issue #4746)",
                     d.as_secs()
                 );
                 Err(super::super::web_errors::turn_timeout_error_message(
@@ -184,7 +166,3 @@ pub(crate) fn timeout_bound_tag(detailed: &str) -> &'static str {
         "none"
     }
 }
-
-#[cfg(test)]
-#[path = "turn_guards_tests.rs"]
-mod tests;
