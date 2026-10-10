@@ -7,7 +7,6 @@
 //! and never answers ([`hanging_backend`]).
 
 use super::*;
-use std::process::Child;
 
 /// A backend that holds every inference request open without answering, so
 /// a turn that reaches inference stays in flight until it is cancelled or its
