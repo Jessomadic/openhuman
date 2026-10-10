@@ -211,3 +211,37 @@ fn empty_snapshot_failure_still_carries_the_typed_terminal_outcome() {
     );
     assert!(untyped.outcome.is_none());
 }
+
+/// The context gauge reads the turn's final call. Repair runs after the
+/// grounded close, which runs after the harness loop, so the newest of them
+/// that reached the provider wins; a step that made no call is skipped.
+#[test]
+fn final_call_tokens_prefer_the_newest_call_that_reached_the_provider() {
+    let call = |input: u64, output: u64| grounded_close::RepairUsage {
+        model_calls: 1,
+        last_call_input_tokens: input,
+        last_call_output_tokens: output,
+        ..Default::default()
+    };
+    let loop_last = Some((90_000, 400));
+
+    assert_eq!(final_call_tokens(loop_last, None, None), (90_000, 400));
+    assert_eq!(
+        final_call_tokens(loop_last, Some(&call(95_000, 300)), None),
+        (95_000, 300)
+    );
+    assert_eq!(
+        final_call_tokens(
+            loop_last,
+            Some(&call(95_000, 300)),
+            Some(&call(96_000, 200))
+        ),
+        (96_000, 200)
+    );
+    // A close that recorded no provider usage did not make the final call.
+    assert_eq!(
+        final_call_tokens(loop_last, Some(&grounded_close::RepairUsage::default()), None),
+        (90_000, 400)
+    );
+    assert_eq!(final_call_tokens(None, None, None), (0, 0));
+}
