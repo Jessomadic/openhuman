@@ -95,9 +95,7 @@ function StepList({
   bounded: boolean;
 }) {
   return (
-    <div
-      data-slot="reasoning-panel-scroll"
-      className={cn(bounded && 'max-h-80 overflow-y-auto')}>
+    <div data-slot="reasoning-panel-scroll" className={cn(bounded && 'max-h-80 overflow-y-auto')}>
       <ol className="flex flex-col gap-4 pt-3 pb-1">
         {steps.map((step, i) => {
           const active = streaming && i === steps.length - 1;

@@ -83,7 +83,8 @@ function persistedFeedback(msg: ThreadMessage): MessageFeedback | undefined {
 export const STREAMING_TAIL_ID = '__openhuman_streaming_tail__';
 
 /** Use the core reply identity from the first token through final persistence. */
-export const streamingMessageId = (requestId?: string) => requestId ? `agent:${requestId}` : STREAMING_TAIL_ID;
+export const streamingMessageId = (requestId?: string) =>
+  requestId ? `agent:${requestId}` : STREAMING_TAIL_ID;
 
 /**
  * Convert one persisted message.
@@ -997,7 +998,9 @@ export function streamingTailMessage(
   // state — the part itself has no status field of its own.
   const hasAwaitingSubagent = timeline.some(entry => entry.subagent?.status === 'awaiting_user');
   return {
-    id: approval?.detached ? `${STREAMING_TAIL_ID}:approval:${approval.requestId}` : streamingMessageId(requestId),
+    id: approval?.detached
+      ? `${STREAMING_TAIL_ID}:approval:${approval.requestId}`
+      : streamingMessageId(requestId),
     role: 'assistant',
     content: parts,
     status:
@@ -1150,7 +1153,7 @@ export function buildRuntimeMessages(
           detachedAfterTurn ? EMPTY_TIMELINE : (projection.liveTimeline ?? EMPTY_TIMELINE),
           detachedAfterTurn ? EMPTY_TRANSCRIPT : (projection.liveTranscript ?? EMPTY_TRANSCRIPT),
           pendingApproval,
-          detachedAfterTurn ? undefined : projection.liveRequestId ?? streaming?.requestId
+          detachedAfterTurn ? undefined : (projection.liveRequestId ?? streaming?.requestId)
         );
   // While the tail stands for the live turn, that turn's own persisted rows
   // (the reply appended before `turnSettled`, or segments delivered mid-turn)

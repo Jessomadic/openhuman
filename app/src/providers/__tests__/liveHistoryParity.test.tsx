@@ -44,7 +44,11 @@ import {
   TURN_THREAD,
 } from '../../test/fixtures/streamedTurn';
 import type { ThreadMessage } from '../../types/thread';
-import { buildRuntimeMessages, STREAMING_TAIL_ID, streamingMessageId } from '../assistantUiMessages';
+import {
+  buildRuntimeMessages,
+  STREAMING_TAIL_ID,
+  streamingMessageId,
+} from '../assistantUiMessages';
 import ChatRuntimeProvider from '../ChatRuntimeProvider';
 
 vi.mock('../../services/chatService', async () => {

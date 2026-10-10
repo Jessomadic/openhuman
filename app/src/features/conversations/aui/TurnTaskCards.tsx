@@ -24,12 +24,12 @@ export function TurnTaskProvider({ children }: PropsWithChildren) {
   const threadId = useAuiThreadId();
   const todos = useThreadTodos(threadId);
   const goal = useThreadGoal(threadId);
-  const anchor = useAuiState(
-    s =>
-      s.thread.messages.filter(message => message.role === 'user').at(-1)?.id ??
-      s.thread.messages[0]?.id ??
-      ''
-  );
+  const anchor = useAppSelector(state => {
+    const messages = threadId ? (state.thread.messagesByThreadId[threadId] ?? []) : [];
+    return (
+      messages.filter(message => message.sender === 'user').at(-1)?.id ?? messages[0]?.id ?? ''
+    );
+  });
   const [saved, setSaved] = useState<{
     threadId: string | null;
     ready: boolean;

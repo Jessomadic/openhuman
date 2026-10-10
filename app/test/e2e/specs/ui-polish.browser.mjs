@@ -14,6 +14,16 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
     { content: 'Verify the next turn', status: 'pending' },
   ];
   mock.set(
+    'llmKeywordRules',
+    JSON.stringify([{ keyword: '', content: 'FIRST_CANARY: the checklist is complete.' }])
+  );
+  await page.waitForFunction(() => {
+    const id = window.__OPENHUMAN_CORE_STATE__?.()?.snapshot?.auth?.userId;
+    return (
+      id && window.__OPENHUMAN_STORE__?.getState().socket?.byUser?.[id]?.status === 'connected'
+    );
+  });
+  mock.set(
     'llmForcedResponses',
     JSON.stringify([
       {

@@ -5,7 +5,7 @@ import { Provider } from 'react-redux';
 import { describe, expect, it, vi } from 'vitest';
 
 import chatRuntimeReducer from '../../store/chatRuntimeSlice';
-import threadReducer, {addMessageLocal} from '../../store/threadSlice';
+import threadReducer, { addMessageLocal } from '../../store/threadSlice';
 import { useOpenHumanExternalStore } from '../useOpenHumanExternalStore';
 
 vi.mock('../../services/api/threadApi', () => ({
@@ -32,12 +32,30 @@ describe('assistant-ui thread identity', () => {
   });
 });
 
-
 it('keeps the native message converter stable when the next turn changes the adapter', async () => {
-  const store = configureStore({reducer: {thread: threadReducer, chatRuntime: chatRuntimeReducer}});
-  const wrapper = ({children}: {children: ReactNode}) => <Provider store={store}>{children}</Provider>;
-  const {result} = renderHook(() => useOpenHumanExternalStore('test'), {wrapper});
+  const store = configureStore({
+    reducer: { thread: threadReducer, chatRuntime: chatRuntimeReducer },
+  });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <Provider store={store}>{children}</Provider>
+  );
+  const { result } = renderHook(() => useOpenHumanExternalStore('test'), { wrapper });
   const convert = result.current.convertMessage;
-  await act(async () => store.dispatch({type: addMessageLocal.fulfilled.type, payload: {threadId: 'test', message: {id: 'try-now', sender: 'user', type: 'text', content: 'try now', createdAt: '2026-10-10T00:00:00Z', extraMetadata: {}}}}));
+  await act(async () =>
+    store.dispatch({
+      type: addMessageLocal.fulfilled.type,
+      payload: {
+        threadId: 'test',
+        message: {
+          id: 'try-now',
+          sender: 'user',
+          type: 'text',
+          content: 'try now',
+          createdAt: '2026-10-10T00:00:00Z',
+          extraMetadata: {},
+        },
+      },
+    })
+  );
   expect(result.current.convertMessage).toBe(convert);
 });

@@ -548,7 +548,12 @@ export function useOpenHumanExternalStore(
       submit: ({ message, type }: { message: AuiThreadMessage; type: 'positive' | 'negative' }) => {
         // The live tail is not a persisted row; there is nothing to attach a
         // rating to until the turn settles.
-        if (!threadId || message.id === STREAMING_TAIL_ID || (message.metadata?.custom as {streaming?: boolean})?.streaming) return;
+        if (
+          !threadId ||
+          message.id === STREAMING_TAIL_ID ||
+          (message.metadata?.custom as { streaming?: boolean })?.streaming
+        )
+          return;
         const custom = message.metadata?.custom as
           | { extraMetadata?: Record<string, unknown> }
           | undefined;
