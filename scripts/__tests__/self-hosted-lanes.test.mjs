@@ -257,7 +257,7 @@ test("the storage area arms only the storage-drivers lane, with the sqlite and f
     const lane = plan.lanes.find((l) => l.name === "storage-drivers");
     assert.equal(lane.active, true, profile);
     for (const check of lane.checks) {
-      assert.match(check.run, /--features [a-z,-]*storage-sqlite,storage-file/);
+      assert.match(check.run, /--features [a-z,-]*storage-sqlite,storage-file(?:\s|$)/);
     }
     // Every root storage target runs in the lane, so a new one cannot be
     // forgotten: the targets on disk are exactly the targets in the command.

@@ -89,6 +89,13 @@ impl Driver {
                 let base = std::env::var(MONGO_URL_VAR)
                     .ok()
                     .filter(|url| !url.trim().is_empty())?;
+                if !is_loopback_mongo_url(base.trim()) {
+                    eprintln!(
+                        "skipped mongodb: {MONGO_URL_VAR} must name a local throwaway server \
+                         (localhost, 127.0.0.1 or ::1); the suite writes databases to it"
+                    );
+                    return None;
+                }
                 Some(mongo_url_with_database(
                     base.trim(),
                     &format!("oh_e2e_{}", uuid_like()),
@@ -96,6 +103,26 @@ impl Driver {
             }
         }
     }
+}
+
+/// Whether every host in a MongoDB URL is the local machine. The matrix
+/// creates and fills databases, so it only ever talks to a throwaway server
+/// on this host or in this job's own container (as `tinystoragedrivers`' CI
+/// does), never to a shared or remote deployment.
+pub fn is_loopback_mongo_url(url: &str) -> bool {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?']).next().unwrap_or_default();
+    let hosts = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    !hosts.is_empty()
+        && !url.starts_with("mongodb+srv://")
+        && hosts.split(',').all(|host| {
+            let name = if let Some(v6) = host.strip_prefix('[') {
+                v6.split(']').next().unwrap_or_default()
+            } else {
+                host.rsplit_once(':').map_or(host, |(name, _)| name)
+            };
+            matches!(name, "localhost" | "127.0.0.1" | "::1")
+        })
 }
 
 /// `base` (a `mongodb://` or `mongodb+srv://` URL, with or without a database
@@ -204,6 +231,11 @@ pub struct UrlCase {
 
 /// Runs a body that only needs the driver's URL (`driver_cases!(url body)`).
 pub fn run_url(driver: Driver, body: fn(UrlCase)) {
+    // Same lock as the in-process cases: the spawned cores and this process
+    // share the environment and, for MongoDB, one server.
+    let _lock = SLOT_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let data_dir = tempfile::tempdir().expect("temp dir");
     let Some(url) = driver.url(data_dir.path()) else {
         eprintln!("skipped {}: {MONGO_URL_VAR} is not set", driver.name());

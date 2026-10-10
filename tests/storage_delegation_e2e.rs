@@ -18,6 +18,9 @@ use openhuman_core::HostKind;
 use tinyagents_graph::checkpoint::{Checkpoint, Checkpointer};
 use tinyagents_graph::delegation::DelegationState;
 
+#[path = "support/tinyhumans_boot.rs"]
+mod tinyhumans_boot;
+
 #[macro_use]
 #[path = "support/storage_drivers.rs"]
 mod storage_drivers;
@@ -55,6 +58,7 @@ async fn the_delegation_checkpointer_resumes_and_keeps_scopes_apart(case: Case) 
         config_path: workspace.path().join("config.toml"),
         ..Config::default()
     };
+    tinyhumans_boot::boot();
     let _runtime = CoreBuilder::new(HostKind::Library)
         .config(config.clone())
         .services(ServiceSet::none())
@@ -104,9 +108,9 @@ async fn the_delegation_checkpointer_resumes_and_keeps_scopes_apart(case: Case) 
 
     // Resume: a fresh handle reads the latest checkpoint of the thread, in
     // its own scope.
-    for (context, expected, latest) in [
-        (&alpha, "alpha plan, step 2", "c2"),
-        (&beta, "beta plan", "c1"),
+    for (context, expected, latest, named_c1) in [
+        (&alpha, "alpha plan, step 2", "c2", "alpha plan, step 1"),
+        (&beta, "beta plan", "c1", "beta plan"),
     ] {
         CoreContext::scope(Arc::clone(context), async {
             let checkpointer = open_delegation_checkpointer(&config).unwrap();
@@ -115,7 +119,11 @@ async fn the_delegation_checkpointer_resumes_and_keeps_scopes_apart(case: Case) 
             assert_eq!(resumed.state.plan.as_deref(), Some(expected));
             // A named checkpoint resolves in the same scope only.
             let first = checkpointer.get("run-1", Some("c1")).await.unwrap();
-            assert!(first.is_some());
+            assert_eq!(
+                first.and_then(|checkpoint| checkpoint.state.plan).as_deref(),
+                Some(named_c1),
+                "the named checkpoint is this agent's own"
+            );
             assert_eq!(
                 checkpointer.list_threads().await.unwrap(),
                 vec!["run-1".to_string()]

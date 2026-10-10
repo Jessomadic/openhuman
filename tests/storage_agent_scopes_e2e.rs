@@ -20,6 +20,9 @@ use openhuman_core::storage::{self, Scope};
 use openhuman_core::HostKind;
 use serde_json::json;
 
+#[path = "support/tinyhumans_boot.rs"]
+mod tinyhumans_boot;
+
 #[macro_use]
 #[path = "support/storage_drivers.rs"]
 mod storage_drivers;
@@ -76,6 +79,22 @@ async fn flow_names(config: &Config) -> Vec<String> {
         .collect()
 }
 
+/// Waits (bounded) until the clock has reached the job's next run in the
+/// agent's scope, so the scheduler pass finds it due without a fixed sleep.
+async fn wait_until_due(ctx: &Arc<CoreContext>, config: &Config, id: &str) {
+    for _ in 0..200 {
+        let next_run = CoreContext::scope(Arc::clone(ctx), async {
+            cron::get_job(config, id).unwrap().next_run
+        })
+        .await;
+        if next_run <= chrono::Utc::now() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("job {id} never became due");
+}
+
 async fn two_agents_keep_cron_and_flows_apart(case: Case) {
     let workspace = tempfile::tempdir().unwrap();
     let config = Config {
@@ -83,6 +102,7 @@ async fn two_agents_keep_cron_and_flows_apart(case: Case) {
         config_path: workspace.path().join("config.toml"),
         ..Config::default()
     };
+    tinyhumans_boot::boot();
     let _runtime = CoreBuilder::new(HostKind::Library)
         .config(config.clone())
         .services(ServiceSet::none())
@@ -146,7 +166,9 @@ async fn two_agents_keep_cron_and_flows_apart(case: Case) {
     .await;
 
     // The scheduler's agent pass runs each agent's due job under that agent.
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    for (ctx, id) in [(&alpha, &alpha_job.id), (&beta, &beta_job.id)] {
+        wait_until_due(ctx, &config, id).await;
+    }
     cron::scheduler::run_live_agent_pass(2).await;
     for (agent, ctx, own, other) in [
         ("alpha", &alpha, &alpha_job.id, &beta_job.id),
@@ -193,6 +215,7 @@ async fn no_acting_agent_falls_back_to_the_local_scope(case: Case) {
         config_path: workspace.path().join("config.toml"),
         ..Config::default()
     };
+    tinyhumans_boot::boot();
     let _runtime = CoreBuilder::new(HostKind::Library)
         .config(config.clone())
         .services(ServiceSet::none())

@@ -21,6 +21,9 @@ use openhuman_core::cron::{self, Schedule};
 use openhuman_core::storage::agents::{find_owner, for_each_scope, within_agent};
 use openhuman_core::HostKind;
 
+#[path = "support/tinyhumans_boot.rs"]
+mod tinyhumans_boot;
+
 #[macro_use]
 #[path = "support/storage_drivers.rs"]
 mod storage_drivers;
@@ -42,6 +45,7 @@ async fn background_work_visits_every_agent_scope(case: Case) {
         config_path: workspace.path().join("config.toml"),
         ..Config::default()
     };
+    tinyhumans_boot::boot();
     let _runtime = CoreBuilder::new(HostKind::Library)
         .config(config.clone())
         .services(ServiceSet::none())
