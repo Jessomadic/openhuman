@@ -9,7 +9,7 @@ icon: gauge
 
 OpenHuman's Rust core runs in-process as a library, not as one OS process per agent. Most of the density numbers on this page come from that one decision. A fixed bootstrap cost (allocator warm-up, code paging, registries, detectors) is paid once per process and shared by every agent inside it.
 
-Everything below was measured on Apple Silicon macOS with a `--release` build and a deterministic mock inference provider (the `rss-bench` feature), not real network calls. Treat the absolute numbers as numbers for that machine. The ratios (density, marginal cost, binary delta) are the parts worth generalizing. The scripts to reproduce them are listed at the end.
+The original measurements below were made on Apple Silicon macOS with a `--release` build and a deterministic mock inference provider (the `rss-bench` feature), not real network calls. Treat the absolute numbers as numbers for that machine. The ratios (density, marginal cost, binary delta) are the parts worth generalizing. The scripts to reproduce them are listed at the end.
 
 ## Fleet: how many agents fit in one process
 
@@ -17,9 +17,9 @@ Everything below was measured on Apple Silicon macOS with a `--release` build an
 
 | N agents | Marginal KiB/agent | Settled MiB | Idle CPU ms/10s | Threads | FDs |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 50 | 221.65 MiB | 3.757 MiB | 192.94 MiB | 420 ms | 360 ms |
-| 100 | 372.51 MiB | 3.389 MiB | 352.93 MiB | 954 ms | 840 ms |
-| 500 | 1,504.13 MiB | 2.941 MiB | 1,572.43 MiB | 5,056 ms | 4,829 ms |
+| 50 | 1,985 | 223 | 3 | 71 | 420 |
+| 100 | 1,866 | 356 | 3 | 123 | 820 |
+| 500 | 1,770 | 1,393 | 3 | 211 | 3,220 |
 
 500 agents fit in one process at roughly 1.77 MiB marginal cost each. Idle CPU stays flat as N grows, which matters because an agent that is not mid-turn should not spend cycles. Thread count grows by about 0.35 per agent. Watch that line before pushing past 500 in production.
 
@@ -97,13 +97,13 @@ scripts/kernel-floor.sh flows
 
 ## Measurement conditions
 
-These numbers were gathered on macOS. It has no local cgroup memory limit and no `/proc/<pid>/smaps_rollup`, so there is no true PSS (proportional shared memory) reading. RSS overcounts shared pages, and the error grows with agent count. The fleet and instances numbers project from measured marginal cost. They are not a live test of surviving an OOM kill at N agents on a 2 GB / 2 vCPU Linux box. Every scenario also replaces network inference with a mock provider at fixed latency, so turn timings measure orchestration overhead, not real model latency. Validation under Linux cgroups has not been done yet.
+These numbers were gathered on macOS. It has no local cgroup memory limit and no `/proc/<pid>/smaps_rollup`, so there is no true PSS (proportional shared memory) reading. RSS overcounts shared pages, and the error grows with agent count. The fleet and instances numbers project from measured marginal cost. They are not a live test of surviving an OOM kill at N agents on a 2 GB / 2 vCPU Linux box. Every scenario also replaces network inference with a mock provider at fixed latency, so turn timings measure orchestration overhead, not real model latency. The Linux cgroup measurements in the following section use a different host and harness.
 
 For token cost instead of process footprint, see [Smart token compression](../features/token-compression.md). It is the other half of "cheap": it controls how much of what the harness assembles reaches the model.
 
 ## Linux runtime-owned agents (Medulla integration)
 
-Measured on 2026-10-10 at OpenHuman commit `e2224a22a3`, using the release
+Measured on 2026-10-10 at OpenHuman commit `b783b39e78`, using the release
 `openhuman-embed` example `linux_fleet` with default features disabled. This
 exercises one `Runtime` and N `AgentSpec`s, with two Tokio workers, ephemeral
 session storage, and a loopback HTTP chat-completions mock. Each agent
@@ -124,25 +124,28 @@ charged outside the new cgroup.
 
 | Concurrent agents | Process RSS after turns | Marginal RSS/agent | Cgroup peak | Fleet wall time | Turn p95 |
 | --- | --- | --- | --- | --- | --- |
-| 50 | 221.65 MiB | 3.757 MiB | 192.94 MiB | 420 ms | 360 ms |
-| 100 | 372.51 MiB | 3.389 MiB | 352.93 MiB | 954 ms | 840 ms |
-| 500 | 1,504.13 MiB | 2.941 MiB | 1,572.43 MiB | 5,056 ms | 4,829 ms |
+| 50 | 270.21 MiB | 4.702 MiB | 237.32 MiB | 1,527 ms | 1,462 ms |
+| 100 | 437.38 MiB | 4.028 MiB | 417.89 MiB | 3,537 ms | 3,370 ms |
+| 500 | 1,712.97 MiB | 3.355 MiB | 1,760.32 MiB | 20,784 ms | 19,450 ms |
 
-The 100- and 500-agent results are within twice the earlier macOS/mock
-1.77 MiB figure (3.54 MiB). The 50-agent result misses that target slightly:
-its three runs used 3.665–3.783 MiB per agent. These are different hosts and
-harness entry points, so the table is a capacity measurement rather than a
-controlled comparison of the platforms.
+The 500-agent median is within twice the earlier macOS/mock 1.77 MiB
+figure (3.54 MiB); the 50- and 100-agent medians miss that target. The
+500-agent runs ranged from 3.341 to 3.585 MiB per agent. These are different
+hosts and harness entry points, so the table is a capacity measurement rather
+than a controlled comparison of the platforms. This run also incorporates the
+upstream embed lifecycle-event and dynamic-agent APIs; results are higher than
+the earlier prerequisite-branch measurements recorded before that base update.
 
-Runtime boot took 256–262 ms. The first turn in each fresh process took
-14.9–23.8 ms, before launching the concurrent fleet. Both are within twice the
+Runtime boot took 259–263 ms. The first turn in each fresh process took
+49.9–87.4 ms, before launching the concurrent fleet. Both are within twice the
 earlier 476 ms bootstrap and 102 ms first-turn figures. “First turn” includes
 session/model/tool initialization, but excludes compiling and loading the
 executable; the OS page cache was warm.
 
 A separate 500-agent run with **swap disabled** (`MemorySwapMax=0`) completed
-in 5,070 ms, with 2.936 MiB marginal RSS per agent and a 1,570.99 MiB cgroup
-peak. Every run recorded zero `max`, `oom`, and `oom_kill` memory events.
+in 19,090 ms, with 3.541 MiB marginal RSS per agent and a
+1,884.52 MiB cgroup peak. Its marginal RSS narrowly exceeds the 3.54 MiB
+target. Every run recorded zero `max`, `oom`, and `oom_kill` memory events.
 This does not establish capacity for real providers, tool subprocesses, MCP
 servers, or 1,000 simultaneously active turns. Measure those workloads before
 sizing a production fleet.
