@@ -336,3 +336,46 @@ async fn failures_of_different_use_skill_tools_do_not_share_a_budget() {
     let summary = slot.lock().unwrap().clone().unwrap();
     assert!(summary.contains("tool_alpha"), "{summary}");
 }
+
+// ── web search timeouts (Langfuse, Oct 2026) ────────────────────────────────
+//
+// Production turns stopped with "failure class uncertain_side_effect still
+// blocks operation web_answer_tool … The action may already have happened":
+// a grounded answer outlived the 30 s bus timeout, and because the search
+// tools declared no policy and `web_answer_tool` carries no reading verb, the
+// timeout read as a possible side effect with zero retries.
+
+fn search_spec(name: &str) -> tinysearch_bus::ToolSpec {
+    tinysearch_bus::ToolSpec {
+        name: name.to_string(),
+        description: format!("{name} test spec"),
+        parameters: serde_json::json!({"type": "object"}),
+    }
+}
+
+#[test]
+fn a_web_search_tool_timeout_is_transient_not_an_uncertain_action() {
+    let tools: Vec<Box<dyn tinytools::Tool>> = ["web_answer_tool", "web_search_tool", "web_contents_tool"]
+        .into_iter()
+        .map(|name| {
+            Box::new(crate::search::tools::TinySearchTool::recorded(search_spec(name)))
+                as Box<dyn tinytools::Tool>
+        })
+        .collect();
+    let lookup = super::super::call_effect::tool_sets_lookup(vec![std::sync::Arc::new(tools)]);
+    for name in ["web_answer_tool", "web_search_tool", "web_contents_tool"] {
+        let args = serde_json::json!({"query": "what changed in the release"});
+        let effect = call_effect(Some(&lookup), name, &args);
+        assert_eq!(effect, CallEffect::ReadOnly, "{name}");
+        assert_eq!(
+            recovery_policy_with_effect(
+                name,
+                "search ExecuteTool failed: bus call timed out after 30s",
+                false,
+                effect
+            ),
+            Some(("transient", 2)),
+            "{name}"
+        );
+    }
+}
