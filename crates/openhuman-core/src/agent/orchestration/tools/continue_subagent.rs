@@ -599,7 +599,7 @@ impl ContinueSubagentTool {
                                         worktree_path: None,
                                         changed_files: Vec::new(),
                                         dirty_status: None,
-                                        stop: incomplete_stop(&reason),
+                                        stop: incomplete_stop(reason),
                                     })
                                     .await;
                             }
@@ -620,7 +620,7 @@ impl ContinueSubagentTool {
                             "continue_subagent",
                             &outcome.agent_id,
                             &outcome.task_id,
-                            &reason,
+                            reason,
                             envelope,
                         ))
                     }
