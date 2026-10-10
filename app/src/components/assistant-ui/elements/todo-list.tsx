@@ -95,7 +95,8 @@ export function TodoItems({ items, compact = false }: { items: readonly TodoItem
           <div className={cn('min-w-0 flex-1 break-words', compact ? 'leading-4' : 'leading-5')}>
             <span
               className={cn(
-                item.status === 'done' && 'text-foreground/35 line-through decoration-[1.5px]',
+                item.status === 'done' &&
+                  cn(compact ? 'text-foreground/55' : 'text-foreground/35', 'line-through decoration-[1.5px]'),
                 item.status === 'active' && 'text-foreground/90',
                 item.status === 'pending' && 'text-foreground/50',
                 item.status === 'failed' && 'text-red-600 dark:text-red-400'
