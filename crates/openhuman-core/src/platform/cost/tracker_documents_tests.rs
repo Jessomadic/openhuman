@@ -93,19 +93,31 @@ fn a_legacy_import_skips_ids_already_stored_or_repeated() {
 }
 
 #[test]
-fn a_failed_rename_fails_the_import_and_a_retry_creates_nothing_twice() {
+fn an_earlier_set_aside_ledger_is_kept_and_bad_utf8_lines_are_skipped() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("costs.jsonl");
     let rec = record("a/model", 0.5, 30);
-    std::fs::write(&path, format!("{}\n", serde_json::to_string(&rec).unwrap())).unwrap();
-    // A non-empty directory where the rename target goes blocks the rename.
-    let blocker = dir.path().join("costs.jsonl.migrated");
-    std::fs::create_dir_all(blocker.join("x")).unwrap();
+    let mut raw = b"\xff\xfe not utf-8\n".to_vec();
+    raw.extend_from_slice(serde_json::to_string(&rec).unwrap().as_bytes());
+    raw.push(b'\n');
+    std::fs::write(&path, raw).unwrap();
+    let earlier = dir.path().join("costs.jsonl.migrated");
+    std::fs::write(&earlier, "earlier").unwrap();
+
+    let docs = docs_in(&MemoryStorage::new(), "local");
+    assert_eq!(docs.import_legacy(&path).unwrap(), 1);
+    assert!(!path.exists());
+    assert_eq!(std::fs::read_to_string(&earlier).unwrap(), "earlier");
+    assert!(dir.path().join("costs.jsonl.migrated.1").exists());
+}
+
+#[test]
+fn a_ledger_another_core_already_set_aside_counts_as_done() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("costs.jsonl");
+    assert!(set_aside(&path).is_ok());
+    // An unreadable ledger (here a directory) fails the import instead.
+    std::fs::create_dir_all(&path).unwrap();
     let docs = docs_in(&MemoryStorage::new(), "local");
     assert!(docs.import_legacy(&path).is_err());
-    assert!(path.exists(), "the ledger stays for a retry");
-    std::fs::remove_dir_all(&blocker).unwrap();
-    assert_eq!(docs.import_legacy(&path).unwrap(), 0);
-    assert_eq!(docs.all().unwrap().len(), 1);
-    assert!(!path.exists());
 }
