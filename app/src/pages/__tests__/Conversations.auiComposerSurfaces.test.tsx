@@ -295,10 +295,17 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
 
   it('places live plan cards in an overlay above the composer rather than normal chat flow', async () => {
     const store = await renderChat();
-    await act(async () => store.dispatch(setThreadTodos({ threadId: THREAD_ID, todos: [
-      { content: 'Inspect the current UI', status: 'completed' },
-      { content: 'Verify overlay geometry', status: 'in_progress' },
-    ] })));
+    await act(async () =>
+      store.dispatch(
+        setThreadTodos({
+          threadId: THREAD_ID,
+          todos: [
+            { content: 'Inspect the current UI', status: 'completed' },
+            { content: 'Verify overlay geometry', status: 'in_progress' },
+          ],
+        })
+      )
+    );
     const plan = await screen.findByTestId('todo-checklist');
     const overlay = plan.closest('[data-slot="composer-overlays"]');
     expect(overlay).toHaveClass('absolute', 'bottom-full');

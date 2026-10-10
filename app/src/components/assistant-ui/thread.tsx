@@ -1504,9 +1504,7 @@ const EditComposer: FC = () => {
   const { t } = useT();
   const discardedReplies = useAuiState(selectDiscardedReplies);
   return (
-    <MessagePrimitive.Root
-      data-slot="aui_edit-composer-wrapper"
-      className="flex flex-col px-2">
+    <MessagePrimitive.Root data-slot="aui_edit-composer-wrapper" className="flex flex-col px-2">
       <ComposerPrimitive.Root
         data-slot="edit-message"
         className="bg-background border-border/60 ms-auto flex w-full flex-col gap-3 rounded-2xl border p-3.5">
