@@ -621,11 +621,10 @@ impl EventHandler<DomainEvent> for ApprovalSurfaceSubscriber {
                 tool_call_id,
                 expires_at,
                 agent_id: _,
-                detached,
             } => match (thread_id, client_id) {
                 (Some(thread_id), Some(client_id)) => {
                     log::info!(
-                        "[web-channel] approval-surface emitting approval_request request_id={request_id} thread_id={thread_id} client_id={client_id} tool={tool_name} detached={detached}"
+                        "[web-channel] approval-surface emitting approval_request request_id={request_id} thread_id={thread_id} client_id={client_id} tool={tool_name}"
                     );
                     publish_web_channel_event(approval_request_event(
                         request_id,
@@ -636,7 +635,7 @@ impl EventHandler<DomainEvent> for ApprovalSurfaceSubscriber {
                         client_id,
                         tool_call_id.as_deref(),
                         expires_at.as_deref(),
-                        *detached,
+                        crate::security::approval::is_detached_request(request_id),
                     ));
                 }
                 _ => {

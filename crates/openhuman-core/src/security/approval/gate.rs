@@ -112,6 +112,15 @@ const SUBAGENT_APPROVAL_TTL: Duration = Duration::from_secs(180);
 /// [`is_unanswered_approval_reason`].
 pub const APPROVAL_UNANSWERED_PHRASE: &str = "nobody answered the approval prompt";
 
+/// Whether the parked `request_id` was routed to its chat thread from a task
+/// detached from that turn (an async-delegated sub-agent, #5499), so its card
+/// can outlive the turn. Read by the web-channel surface when it bridges
+/// `ApprovalRequested` (the route is recorded before the event is published);
+/// `false` when no gate is installed or the request is unknown.
+pub fn is_detached_request(request_id: &str) -> bool {
+    ApprovalGate::try_global().is_some_and(|gate| gate.request_is_detached(request_id))
+}
+
 /// Whether a [`GateOutcome::Deny`] reason is a TTL expiry (the prompt went
 /// unanswered) rather than a refusal.
 pub fn is_unanswered_approval_reason(reason: &str) -> bool {

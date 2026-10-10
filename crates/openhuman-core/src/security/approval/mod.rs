@@ -22,7 +22,7 @@ mod store_documents;
 pub mod types;
 
 pub use gate::{
-    is_unanswered_approval_reason, parse_approval_reply, ApprovalChatContext, ApprovalError,
+    is_detached_request, is_unanswered_approval_reason, parse_approval_reply, ApprovalChatContext, ApprovalError,
     ApprovalGate, FlowRunContext, APPROVAL_CHAT_CONTEXT, APPROVAL_COPILOT_STREAM_CONTEXT,
     APPROVAL_FLOW_RUN_CONTEXT, APPROVAL_UNANSWERED_PHRASE,
 };

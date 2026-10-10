@@ -254,7 +254,8 @@ impl ApprovalGate {
         // from the chat turn that shows it — an async-delegated sub-agent. Such
         // a park can outlive that turn (the parent replies "I've asked the
         // image agent…" and its `chat_done` fires while the child still waits
-        // here), so the surface is told the card is `detached`: the frontend
+        // here), so the route records it as `detached` and the web surface
+        // (`is_detached_request`) marks the card: the frontend
         // keeps it across the parent's turn end instead of clearing it as a
         // park that "cannot outlive its turn" — the clear that left every
         // async `image_agent` / `video_agent` approval invisible until it
@@ -537,7 +538,6 @@ impl ApprovalGate {
             tool_call_id: tool_call_id.map(str::to_string),
             expires_at: expires_at.map(|t| t.to_rfc3339()),
             agent_id: agent_id.clone(),
-            detached,
         });
 
         // Flow-origin surface bridge (flow-approval-surface, PR3): a flow run
