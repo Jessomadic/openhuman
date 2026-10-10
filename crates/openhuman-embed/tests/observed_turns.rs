@@ -3,15 +3,15 @@
 
 mod common;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use common::{offline_config, runtime, stub_backend};
 use openhuman_embed::{
     Access, AgentDefinitionSpec, AgentSpec, HostTurnTools, Provider, Runtime, Tool, ToolScopeSpec,
     Workspace,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -129,7 +129,7 @@ async fn dispatch_on_worker(
     turn: openhuman_embed::Turn,
 ) -> Result<openhuman_embed::TurnOutcome, openhuman_embed::CoreError> {
     use openhuman_core::agent::tinyagents::response_shape::{
-        ResponseShape, ResponseShapeScope, with_response_shape,
+        with_response_shape, ResponseShape, ResponseShapeScope,
     };
     let shape = ResponseShapeScope::new(ResponseShape {
         observer: openhuman_core::agent::tinyagents::turn_observer::current_scope(),
@@ -141,7 +141,7 @@ async fn dispatch_on_worker(
 }
 #[test]
 fn model_and_tool_observations_capture_payloads_only_with_consent() {
-    use openhuman_embed::observe::{TraceContent, TurnObservation, observe_turn};
+    use openhuman_embed::observe::{observe_turn, TraceContent, TurnObservation};
     let _guard = RUNTIME_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

@@ -1,9 +1,9 @@
 //! Turn observers never receive payloads or raw errors by default.
 mod common;
-use openhuman_embed::CoreError;
 use openhuman_embed::observe::{
-    TraceContent, TurnObservation, TurnObserver, TurnTrace, observe_turn,
+    observe_turn, TraceContent, TurnObservation, TurnObserver, TurnTrace,
 };
+use openhuman_embed::CoreError;
 use std::sync::{Arc, Mutex};
 #[derive(Default)]
 struct Recorder(Mutex<Vec<String>>);

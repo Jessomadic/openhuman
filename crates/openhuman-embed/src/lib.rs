@@ -113,9 +113,9 @@ pub mod fanout;
 mod harness;
 pub mod identity;
 pub mod memory;
-pub mod observe;
 #[cfg(feature = "modules")]
 pub mod modules;
+pub mod observe;
 pub mod process;
 #[cfg(feature = "channels")]
 pub mod profiles;

@@ -1,7 +1,7 @@
 //! Ordered routing, capped truncation retries and provider-reported accounting.
 use openhuman_embed::routing::{CompletionLadder, CompletionRung, TruncationRetry};
 use openhuman_embed::{ChatMessage, Completer, CompletionRequest, Route};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
