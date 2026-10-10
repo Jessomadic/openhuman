@@ -38,6 +38,7 @@ import {
   type ChatThreadTodosChangedEvent,
   type ChatToolCallEvent,
   type ChatToolResultEvent,
+  type CostSource,
   type ProactiveMessageEvent,
   segmentText,
   subscribeChatEvents,
