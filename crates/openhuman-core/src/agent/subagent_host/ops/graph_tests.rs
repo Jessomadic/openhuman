@@ -16,7 +16,10 @@ fn subagent_transcript_keeps_cumulative_spend_separate_from_unknown_last_call() 
         input_tokens: 120,
         output_tokens: 30,
         cached_input_tokens: 40,
-        charged_amount_usd: 0.01,
+        cost: crate::agent::cost::CostTally {
+            known_usd: 0.01,
+            source: crate::agent::cost::CostSource::Charged,
+        },
     };
     super::transcript::persist_subagent_transcript(
         workspace.path(),

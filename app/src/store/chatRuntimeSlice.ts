@@ -3,6 +3,7 @@ import debug from 'debug';
 
 import { mapDisplayItems } from '../features/conversations/derived/mapDisplayItems';
 import { threadApi } from '../services/api/threadApi';
+import type { CostSource } from '../services/chatService';
 import type { DerivedTranscriptPage } from '../types/derivedTranscript';
 import type {
   AgentRun,
@@ -494,9 +495,37 @@ export interface SubAgentUsage {
   agentId: string;
   inputTokens: number;
   outputTokens: number;
+  /** Sum of the known costs; read with `costSource`. */
   costUsd: number;
+  /** `unknown` once any run's cost was not known: then show no price. */
+  costSource: CostSource;
   /** How many times this archetype was spawned across the session. */
   runs: number;
+}
+
+const COST_SOURCE_RANK: Record<CostSource, number> = { charged: 0, estimated: 1, unknown: 2 };
+
+/** The less certain of two cost sources. */
+export function worseCostSource(a: CostSource, b: CostSource): CostSource {
+  return COST_SOURCE_RANK[b] > COST_SOURCE_RANK[a] ? b : a;
+}
+
+/**
+ * Folds one reported cost into a running total. A `null` cost (the core did
+ * not know it) adds nothing and makes the total unknown; a number keeps its
+ * reported source (an older core sends no source: its number is a charge).
+ */
+function foldCost(
+  total: { costUsd: number; costSource: CostSource },
+  costUsd: number | null | undefined,
+  costSource: CostSource | undefined
+): void {
+  if (costUsd === null) {
+    total.costSource = 'unknown';
+    return;
+  }
+  total.costUsd += nonNeg(costUsd);
+  total.costSource = worseCostSource(total.costSource, costSource ?? 'charged');
 }
 
 /** Running per-session totals accumulated from `chat:done` events (#703). */
@@ -509,8 +538,14 @@ export interface SessionTokenUsage {
   lastTurnOutputTokens: number;
   /** Cached-input tokens accumulated across the session. */
   cachedTokens: number;
-  /** Total USD cost accumulated across the session (parent + sub-agents). */
+  /** Known USD cost accumulated across the session (parent + sub-agents). */
   costUsd: number;
+  /**
+   * How certain `costUsd` is: `charged` (all provider-billed), `estimated`
+   * (some list-price estimate), or `unknown` (some turn's cost is not known,
+   * so no price is shown at all).
+   */
+  costSource: CostSource;
   /**
    * Most recent known model context window (tokens). `0` until a turn reports a
    * real value; the UI falls back to a default when unknown.
@@ -538,6 +573,7 @@ export function emptySessionTokenUsage(): SessionTokenUsage {
     lastTurnOutputTokens: 0,
     cachedTokens: 0,
     costUsd: 0,
+    costSource: 'charged',
     contextWindow: 0,
     lastTurnContextUsed: 0,
     subAgents: {},
@@ -555,15 +591,24 @@ interface ChatTurnUsagePayload {
    */
   subAgentSpendOnly?: boolean;
   cachedTokens?: number;
-  costUsd?: number;
+  /** `null` when the core did not know the cost (never a guess). */
+  costUsd?: number | null;
+  costSource?: CostSource;
   contextWindow?: number;
+  /**
+   * Tokens the orchestrator's context held after the turn's final model call
+   * (`chat_done.usage.context_tokens`). `inputTokens` sums every call of the
+   * turn, so it is spend, not occupancy. Absent from an older core; the gauge
+   * then falls back to the turn totals.
+   */
+  contextTokens?: number;
   /** Thread the turn belongs to; routes the delta to that thread's bucket. */
   threadId?: string;
   subAgents?: Array<{
     agentId: string;
     inputTokens: number;
     outputTokens: number;
-    costUsd: number;
+    costUsd: number | null;
   }>;
 }
 
@@ -577,7 +622,7 @@ function applyTurnUsage(usage: SessionTokenUsage, payload: ChatTurnUsagePayload)
   usage.inputTokens += inTok;
   usage.outputTokens += outTok;
   usage.cachedTokens += nonNeg(payload.cachedTokens);
-  usage.costUsd += nonNeg(payload.costUsd);
+  foldCost(usage, payload.costUsd, payload.costSource);
   // A detached sub-agent's spend arrives on its own `subagent_completed`, after
   // the parent turn's `chat_done` has already been counted. It is more spend on
   // the SAME turn, not another turn, so counting it would inflate the turn
@@ -607,11 +652,12 @@ function applyTurnUsage(usage: SessionTokenUsage, payload: ChatTurnUsagePayload)
       inputTokens: 0,
       outputTokens: 0,
       costUsd: 0,
+      costSource: 'charged',
       runs: 0,
     };
     existing.inputTokens += subIn;
     existing.outputTokens += subOut;
-    existing.costUsd += nonNeg(sub.costUsd);
+    foldCost(existing, sub.costUsd, undefined);
     existing.runs += 1;
     usage.subAgents[sub.agentId] = existing;
   }
@@ -621,7 +667,9 @@ function applyTurnUsage(usage: SessionTokenUsage, payload: ChatTurnUsagePayload)
   // correctly. The parent's value already excludes children by design (#4271),
   // which is exactly what this delta must not disturb.
   if (!payload.subAgentSpendOnly) {
-    usage.lastTurnContextUsed = Math.max(0, inTok + outTok - subTurnTokens);
+    const contextTokens = nonNeg(payload.contextTokens);
+    usage.lastTurnContextUsed =
+      contextTokens > 0 ? contextTokens : Math.max(0, inTok + outTok - subTurnTokens);
   }
 }
 
@@ -2897,16 +2945,23 @@ const chatRuntimeSlice = createSlice({
         inputTokens: number;
         outputTokens: number;
         cachedTokens: number;
-        costUsd: number;
+        /** `null` when some turn's cost is not known. */
+        costUsd: number | null;
+        costSource?: CostSource;
         turns: number;
         contextWindow: number;
         lastTurnInputTokens: number;
         lastTurnOutputTokens: number;
+        /**
+         * Context the last turn ended with (one request, not the turn's summed
+         * spend). `0`/absent from an older core: fall back to the turn totals.
+         */
+        lastTurnContextTokens?: number;
         subAgents?: Array<{
           agentId: string;
           inputTokens: number;
           outputTokens: number;
-          costUsd: number;
+          costUsd: number | null;
           runs: number;
         }>;
       }>
@@ -2922,7 +2977,8 @@ const chatRuntimeSlice = createSlice({
           agentId: s.agentId,
           inputTokens: nonNeg(s.inputTokens),
           outputTokens: nonNeg(s.outputTokens),
-          costUsd: nonNeg(s.costUsd),
+          costUsd: nonNeg(s.costUsd ?? 0),
+          costSource: s.costUsd === null ? 'unknown' : 'charged',
           runs: nonNeg(s.runs),
         };
       }
@@ -2930,13 +2986,17 @@ const chatRuntimeSlice = createSlice({
         inputTokens: nonNeg(p.inputTokens),
         outputTokens: nonNeg(p.outputTokens),
         cachedTokens: nonNeg(p.cachedTokens),
-        costUsd: nonNeg(p.costUsd),
+        costUsd: nonNeg(p.costUsd ?? 0),
+        costSource: p.costUsd === null ? 'unknown' : (p.costSource ?? 'charged'),
         turns: nonNeg(p.turns),
         lastUpdated: Date.now(),
         lastTurnInputTokens: nonNeg(p.lastTurnInputTokens),
         lastTurnOutputTokens: nonNeg(p.lastTurnOutputTokens),
         contextWindow: nonNeg(p.contextWindow),
-        lastTurnContextUsed: nonNeg(p.lastTurnInputTokens) + nonNeg(p.lastTurnOutputTokens),
+        lastTurnContextUsed:
+          nonNeg(p.lastTurnContextTokens) > 0
+            ? nonNeg(p.lastTurnContextTokens)
+            : nonNeg(p.lastTurnInputTokens) + nonNeg(p.lastTurnOutputTokens),
         subAgents,
       };
     },

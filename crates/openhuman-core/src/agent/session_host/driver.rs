@@ -213,7 +213,6 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
                     &snapshot,
                     &sidecar,
                     started.elapsed(),
-                    &self.model_name,
                 ));
             }
         };
@@ -387,14 +386,26 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
                 + repair_usage
                     .map(|usage| usage.cached_input_tokens)
                     .unwrap_or_default();
-            observed.cost_usd = outcome.charged_amount_usd
-                + close
-                    .as_ref()
-                    .map(|close| close.usage.charged_amount_usd)
-                    .unwrap_or_default()
-                + repair_usage
-                    .map(|usage| usage.charged_amount_usd)
-                    .unwrap_or_default();
+            let mut cost = outcome.cost;
+            if let Some(close) = close.as_ref() {
+                cost.merge(close.usage.cost);
+            }
+            if let Some(repair) = repair_usage {
+                cost.merge(repair.cost);
+            }
+            observed.cost = cost;
+            let loop_last_call = snapshot
+                .lock()
+                .ok()
+                .map(|guard| (guard.last_call_input_tokens, guard.last_call_output_tokens));
+            (
+                observed.last_call_input_tokens,
+                observed.last_call_output_tokens,
+            ) = final_call_tokens(
+                loop_last_call,
+                close.as_ref().map(|close| &close.usage),
+                repair_usage,
+            );
             observed.duration = Some(started.elapsed());
             observed.driver_finished_at = Some(std::time::Instant::now());
             observed.tool_outcomes = outcome.tool_outcomes.clone();
@@ -433,6 +444,26 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
             outcome: None,
         })
     }
+}
+
+/// Input and output tokens of the turn's final model call.
+///
+/// The grounded close and the required-output repair both run after the
+/// harness loop, in that order, so the newest of them that reached the
+/// provider made the final call; without either, the loop's last answered
+/// call did.
+fn final_call_tokens(
+    loop_last_call: Option<(u64, u64)>,
+    close: Option<&grounded_close::RepairUsage>,
+    repair: Option<&grounded_close::RepairUsage>,
+) -> (u64, u64) {
+    [repair, close]
+        .into_iter()
+        .flatten()
+        .find(|usage| usage.last_call_input_tokens > 0)
+        .map(|usage| (usage.last_call_input_tokens, usage.last_call_output_tokens))
+        .or(loop_last_call)
+        .unwrap_or_default()
 }
 
 fn system_prefix_len(history: &[Message]) -> usize {
@@ -506,7 +537,6 @@ fn driver_error_with_snapshot(
         std::sync::Mutex<crate::agent::tinyagents::host::run_context::SessionTurnSidecar>,
     >,
     elapsed: std::time::Duration,
-    fallback_model: &str,
 ) -> DriverFailure {
     // Classify from the typed harness error when the chain carries one, rather
     // than matching on its rendered text.
@@ -541,24 +571,11 @@ fn driver_error_with_snapshot(
         observed.input_tokens = guard.input_tokens;
         observed.output_tokens = guard.output_tokens;
         observed.cached_input_tokens = guard.cached_input_tokens;
-        observed.cost_usd = if guard.charged_amount_usd > 0.0 {
-            guard.charged_amount_usd
-        } else {
-            let pricing_model = guard
-                .resolved_route
-                .as_ref()
-                .map(|route| route.route.as_str())
-                .filter(|route| !route.trim().is_empty())
-                .unwrap_or(fallback_model);
-            crate::agent::cost::estimate_call_cost_usd(
-                pricing_model,
-                &crate::inference::provider::BilledUsage::from_counts(
-                    guard.input_tokens,
-                    guard.output_tokens,
-                )
-                .with_cached_input_tokens(guard.cached_input_tokens),
-            )
-        };
+        observed.last_call_input_tokens = guard.last_call_input_tokens;
+        observed.last_call_output_tokens = guard.last_call_output_tokens;
+        // Each answered call was priced as it arrived (reported charge, else
+        // catalog estimate, else unknown); nothing is re-estimated here.
+        observed.cost = guard.cost;
         observed.duration = Some(elapsed);
         observed.tool_outcomes = guard.tool_outcomes.clone();
         observed.resolved_route = guard.resolved_route.clone();
