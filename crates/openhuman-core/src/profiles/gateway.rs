@@ -26,7 +26,7 @@ use std::sync::Arc;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2_011::Sha256;
 
-use super::host::{self, Profile};
+use super::host::{self, Profile, ProfileHost};
 use super::lease::OpenError;
 use super::types::ProfileId;
 
@@ -157,20 +157,35 @@ pub async fn resolve_scope(
         return Ok(GatewayScope::Operator);
     };
     let host = host::host().ok_or_else(|| GatewayRefusal::new(503, "this core serves no users"))?;
+    resolve_user_on(&host, user_id, signature, secret, now)
+        .await
+        .map(GatewayScope::User)
+}
+
+/// [`resolve_scope`] for a request that names `user_id`, on an explicit
+/// `host` rather than the process's: the profile that serves that user, or
+/// the refusal.
+pub async fn resolve_user_on(
+    host: &ProfileHost,
+    user_id: &str,
+    signature: Option<&str>,
+    secret: &str,
+    now: u64,
+) -> Result<Arc<Profile>, GatewayRefusal> {
     let profile = ProfileId::for_user(user_id, host.saas().profile_ids)
         .map_err(|e| GatewayRefusal::new(400, e))?;
     if host.saas().require_user_signature {
         let signature = signature
             .ok_or_else(|| GatewayRefusal::new(401, format!("missing {USER_SIG_HEADER}")))?;
         verify(secret, user_id, signature, now).map_err(|e| {
-            log::warn!("[profiles][gateway] refused profile={profile}: {e}");
+            log::warn!("[profiles][gateway] refused a scoped request: {e}");
             GatewayRefusal::new(401, e)
         })?;
     }
     match host.open(&profile).await {
         Ok(state) => {
-            log::debug!("[profiles][gateway] scoped request to profile={profile}");
-            Ok(GatewayScope::User(state))
+            log::debug!("[profiles][gateway] scoped request to an open profile");
+            Ok(state)
         }
         Err(error) => Err(GatewayRefusal::from_open_error(
             &profile,
@@ -183,3 +198,7 @@ pub async fn resolve_scope(
 #[cfg(test)]
 #[path = "gateway_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "gateway_proptest_tests.rs"]
+mod proptest_tests;
