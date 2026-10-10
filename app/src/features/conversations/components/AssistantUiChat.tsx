@@ -99,8 +99,8 @@ export function ComposerTextBridge({
 /**
  * The assistant-ui `Thread`, projected from OpenHuman's Redux transcript.
  *
- * The runtime is a read-only projection; Redux and the core remain authoritative
- * for messages, streaming and persistence. Composer sends are forwarded through
+ * The library runtime manages UI interaction; Redux and the core remain
+ * authoritative for messages, streaming and persistence. Composer sends go through
  * the chat-surface registration owned by `Conversations`, so this uses the same
  * send/cancel path as the legacy composer.
  */
