@@ -79,6 +79,7 @@ export async function fetchThreadTokenUsage(threadId: string): Promise<ThreadTok
     turnCount: d.turn_count,
     lastTurnInputTokens: d.last_turn_input_tokens,
     lastTurnOutputTokens: d.last_turn_output_tokens,
+    lastTurnContextTokens: d.last_turn_context_tokens ?? 0,
     contextWindow: d.context_window,
     model: d.model,
     updated: d.updated,
