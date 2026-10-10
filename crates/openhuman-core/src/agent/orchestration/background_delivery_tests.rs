@@ -176,33 +176,22 @@ async fn persistence_failure_releases_batch_without_terminal_announcement() {
 }
 
 #[tokio::test]
-async fn handler_tracks_busy_across_turn_and_error_events() {
-    let h = BackgroundDeliveryHandler;
+async fn a_turn_is_busy_until_its_guard_drops() {
     let sid = r#"{"client_id":"c","thread_id":"bd-turn-thread"}"#.to_string();
 
-    h.handle(&DomainEvent::AgentTurnStarted {
-        session_id: sid.clone(),
-        channel: "test".into(),
-    })
-    .await;
+    let turn = TurnBusy::start(&sid);
     assert!(is_busy("bd-turn-thread"));
-
-    h.handle(&DomainEvent::AgentTurnCompleted {
-        session_id: sid.clone(),
-        text_chars: 0,
-        iterations: 0,
-    })
-    .await;
+    drop(turn);
     assert!(!is_busy("bd-turn-thread"));
 
-    // A failed turn (AgentError) must also clear busy so delivery isn't stuck.
-    mark_busy(&sid);
-    h.handle(&DomainEvent::AgentError {
-        session_id: sid.clone(),
-        message: "boom".into(),
-        recoverable: true,
-    })
-    .await;
+    // The bus events no longer mark busy: the subscriber runs off-task and
+    // cannot tell which profile a session belongs to.
+    BackgroundDeliveryHandler
+        .handle(&DomainEvent::AgentTurnStarted {
+            session_id: sid.clone(),
+            channel: "test".into(),
+        })
+        .await;
     assert!(!is_busy("bd-turn-thread"));
 }
 
