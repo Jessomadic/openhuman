@@ -21,6 +21,7 @@
 
 mod compaction_carry;
 pub mod config;
+mod deadline_wind_down;
 pub mod discovery;
 mod embeddings;
 mod harness_assembly;
