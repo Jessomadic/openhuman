@@ -427,18 +427,16 @@ async fn dispatch(
                         route,
                     )
                     .await;
-                    // The session does not count reasoning tokens; the shape's
-                    // report does. Folded in before the meter or the outcome reads
-                    // the sink, on success and failure alike.
+                    // The shape preserves provider charges and root-call totals
+                    // absent from normalized session usage. Overlay before both
+                    // meter and outcome reads, retaining child/session metadata.
                     let report = options.shape.report();
                     {
                         let mut captured = usage
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        if captured.is_none() {
-                            if let Some(spent) = &report.usage {
-                                *captured = Some(spent.failure_usage());
-                            }
+                        if let Some(spent) = &report.usage {
+                            types::overlay_response_usage(&mut captured, spent);
                         }
                         if let Some(spent) = captured.as_mut() {
                             spent.reasoning_tokens = report.reasoning_tokens;

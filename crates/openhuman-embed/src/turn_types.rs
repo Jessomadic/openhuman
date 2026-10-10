@@ -1,6 +1,40 @@
 //! Credential-safe routes, wire turn requests and their typed outcomes.
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+#[path = "../tests/unit/turn_usage.rs"]
+mod usage_tests;
+
+/// Overlay root provider accounting while retaining session context and children.
+pub(super) fn overlay_response_usage(
+    captured: &mut Option<openhuman_core::agent::tinyagents::host::LastTurnUsage>,
+    reported: &openhuman_core::agent::tinyagents::response_shape::ResponseUsage,
+) {
+    let usage = captured.get_or_insert_with(Default::default);
+    let root = reported.failure_usage();
+    usage.input_tokens = root.input_tokens;
+    usage.output_tokens = root.output_tokens;
+    usage.cached_input_tokens = root.cached_input_tokens;
+    usage.reasoning_tokens = root.reasoning_tokens;
+    let mut cost = root.cost_usd;
+    let mut source = root.cost_source;
+    for child in &usage.subagents {
+        usage.input_tokens = usage.input_tokens.saturating_add(child.usage.input_tokens);
+        usage.output_tokens = usage
+            .output_tokens
+            .saturating_add(child.usage.output_tokens);
+        usage.cached_input_tokens = usage
+            .cached_input_tokens
+            .saturating_add(child.usage.cached_input_tokens);
+        cost = cost
+            .zip(child.usage.cost().usd())
+            .map(|(root, child)| root + child);
+        source = source.max(child.usage.cost_source);
+    }
+    usage.cost_usd = cost;
+    usage.cost_source = source;
+}
+
 /// The routed chat entry point.
 ///
 /// Deliberately not `openhuman.agent_chat`, which is the same op with the

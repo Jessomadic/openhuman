@@ -196,6 +196,61 @@ fn a_tool_loop_ends_in_a_structured_answer() {
 }
 
 #[test]
+fn successful_turn_preserves_reported_charges_and_invalid_buyer_cost_is_unknown() {
+    let _guard = RUNTIME_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    runtime().block_on(async {
+        tokio::spawn(async {
+            let backend = stub_backend().await;
+            let runtime = build_runtime(&backend).await;
+            for (index, buyer, expected) in [
+                (0, json!(7000), Some(0.007)),
+                (1, json!(-1), None),
+                (2, json!("invalid"), None),
+            ] {
+                let mut answer = completion(
+                    json!({"role":"assistant","content":"{\"verdict\":\"approve\"}"}),
+                    "stop",
+                    "fixture-answered",
+                    2,
+                );
+                answer["usage"]["buyer_cost_micro"] = buyer;
+                answer["usage"]["cost"] = json!(0.000207);
+                answer["usage"]["prompt_tokens_details"] = json!({"cached_tokens":3});
+                let provider = provider(vec![answer]).await;
+                let agent = runtime
+                    .agent(reviewer(
+                        &format!("reported-cost-{index}"),
+                        &provider,
+                        Arc::new(AtomicUsize::new(0)),
+                    ))
+                    .expect("agent");
+                let metered = Arc::new(std::sync::Mutex::new(None));
+                let sink = metered.clone();
+                let outcome = agent
+                    .turn("Review the diff.")
+                    .response_format(review_schema())
+                    .max_tokens(512)
+                    .meter(move |usage| *sink.lock().unwrap() = usage)
+                    .send()
+                    .await
+                    .expect("turn");
+                let usage = outcome.usage.expect("usage");
+                assert_eq!(usage.cost_usd, expected, "buyer selection case {index}");
+                assert_eq!(usage.input_tokens, 10);
+                assert_eq!(usage.output_tokens, 5);
+                assert_eq!(usage.cached_input_tokens, 3);
+                assert_eq!(usage.reasoning_tokens, 2);
+                assert_eq!(metered.lock().unwrap().as_ref().unwrap().cost_usd, expected);
+            }
+        })
+        .await
+        .expect("test task");
+    });
+}
+
+#[test]
 fn untrusted_input_passes_the_prompt_guard_only_on_a_host_only_agent() {
     let _guard = RUNTIME_LOCK
         .lock()

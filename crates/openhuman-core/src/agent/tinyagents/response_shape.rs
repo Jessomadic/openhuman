@@ -353,16 +353,16 @@ fn record(scope: &ResponseShapeScope, response: &ModelResponse) {
         });
     if !response.served_from_cache {
         let raw_cost = response.raw.as_ref().and_then(|raw| {
-            raw.pointer("/usage/buyer_cost_micro")
-                .and_then(serde_json::Value::as_f64)
-                .map(|value| value / 1_000_000.0)
-                .or_else(|| {
-                    raw.pointer("/usage/cost")
-                        .and_then(serde_json::Value::as_f64)
-                })
+            // Presence selects the authoritative source; malformed billing
+            // must remain unknown rather than fall through to an estimate.
+            if let Some(buyer) = raw.pointer("/usage/buyer_cost_micro") {
+                Some(buyer.as_f64().map(|value| value / 1_000_000.0))
+            } else {
+                raw.pointer("/usage/cost").map(serde_json::Value::as_f64)
+            }
         });
         let cost = raw_cost
-            .or_else(|| {
+            .unwrap_or_else(|| {
                 response
                     .usage
                     .and_then(|usage| usage.charged_amount)
