@@ -256,8 +256,8 @@ fn signature_bytes(signature: tinywallet_bus::wire::Signature) -> Result<Vec<u8>
 }
 
 impl ProxyPolicy for RuntimeProxyPolicy {
-    fn apply(&self, builder: reqwest::ClientBuilder, service: &str) -> reqwest::ClientBuilder {
-        crate::config::apply_runtime_proxy_to_builder(builder, service)
+    fn apply(&self, builder: reqwest13::ClientBuilder, service: &str) -> reqwest13::ClientBuilder {
+        super::proxy_compat::apply(builder, service, &crate::config::runtime_proxy_config())
     }
 
     fn allows_direct_connection(&self, service: &str) -> bool {

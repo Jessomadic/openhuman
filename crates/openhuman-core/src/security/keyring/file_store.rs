@@ -104,26 +104,33 @@ pub fn lock_path_for(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-/// Replace `path`'s contents with `bytes`, atomically and `0600`.
+fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+/// Replace `path`'s contents with `bytes`, atomically, durably, and `0600`.
 ///
 /// Staged through a temp file unique to this process and call, then renamed —
 /// so a concurrent writer can never observe, or rename into place, a partially
-/// written buffer. The temp file is removed if the rename fails, leaving no
-/// debris behind for the next run to trip over.
+/// written buffer. The temp file is synced before publication, and the rename
+/// is made durable before returning, so a verified encrypted migration can
+/// then remove its plaintext source. The temp file is removed if publication
+/// fails, leaving no debris behind for the next run to trip over.
 ///
 /// # Errors
 ///
 /// Returns [`KeyringError::Backend`] when the parent directory cannot be
 /// created, or the temp file cannot be written or renamed.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), KeyringError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            KeyringError::Backend(format!(
-                "could not create {} for a keyring write: {e}",
-                parent.display()
-            ))
-        })?;
-    }
+    let parent = parent_dir(path);
+    std::fs::create_dir_all(parent).map_err(|e| {
+        KeyringError::Backend(format!(
+            "could not create {} for a keyring write: {e}",
+            parent.display()
+        ))
+    })?;
 
     // A stale temp file can survive a crash. PID reuse then makes the first
     // sequence value collide, so keep allocating sequence values until a new
@@ -150,7 +157,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), KeyringError> {
         ))
     })?;
 
-    std::fs::rename(&tmp_path, path).map_err(|e| {
+    replace_durably(&tmp_path, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp_path);
         KeyringError::Backend(format!(
             "could not replace the keyring file at {}: {e}",
@@ -158,6 +165,110 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), KeyringError> {
         ))
     })
 }
+
+/// Publish the synced file and persist its directory entry before callers may
+/// remove a plaintext migration source. Unix requires syncing the parent
+/// directory after rename; Windows can request a write-through move.
+#[cfg(unix)]
+fn replace_durably(source: &Path, destination: &Path) -> std::io::Result<()> {
+    replace_durably_with_sync(source, destination, |parent| File::open(parent)?.sync_all())
+}
+
+/// Ensure a previously published encrypted file is durable before cleaning a
+/// matching plaintext migration source. The caller must hold `destination_lock`
+/// across the read, comparison, and cleanup; on Windows this also prevents a
+/// durability retry from republishing stale bytes over a newer write.
+///
+/// This retries an earlier publication that returned an error after the
+/// destination had already appeared.
+pub fn sync_parent_dir(path: &Path, destination_lock: &WriteLock) -> Result<(), KeyringError> {
+    #[cfg(unix)]
+    {
+        let _ = destination_lock;
+        let parent = parent_dir(path);
+        File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                KeyringError::Backend(format!(
+                    "could not sync keyring directory {}: {error}",
+                    parent.display()
+                ))
+            })
+    }
+    #[cfg(windows)]
+    {
+        // A failed MoveFileExW can leave the destination visible. Republish
+        // the same bytes with WRITE_THROUGH and verify the result before the
+        // caller deletes the last plaintext copy.
+        sync_parent_dir_with_republish(path, destination_lock, write_atomic)
+    }
+}
+
+#[cfg(windows)]
+fn sync_parent_dir_with_republish(
+    path: &Path,
+    _destination_lock: &WriteLock,
+    republish: impl FnOnce(&Path, &[u8]) -> Result<(), KeyringError>,
+) -> Result<(), KeyringError> {
+    let expected = std::fs::read(path).map_err(|source| KeyringError::MigrationReadFailed {
+        path: path.display().to_string(),
+        source,
+    })?;
+    republish(path, &expected)?;
+    let actual = std::fs::read(path).map_err(|source| KeyringError::MigrationReadFailed {
+        path: path.display().to_string(),
+        source,
+    })?;
+    if actual != expected {
+        return Err(KeyringError::Backend(format!(
+            "durable keyring publication at {} failed verification",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn replace_durably_with_sync(
+    source: &Path,
+    destination: &Path,
+    sync_parent: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    std::fs::rename(source, destination)?;
+    let parent = parent_dir(destination);
+    sync_parent(parent)
+}
+
+#[cfg(windows)]
+fn replace_durably(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // A directory handle cannot be flushed portably on Windows. The
+    // write-through move is the platform's durability barrier for the rename.
+    let moved = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+compile_error!("keyring durable replacement requires a platform implementation");
 
 /// Reserve a fresh temp file, advancing past leftovers from crashed writers.
 fn reserve_temp_file(

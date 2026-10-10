@@ -57,9 +57,9 @@ None. There is no `bus.rs`, and the module publishes and subscribes to no `Domai
 
 Secret storage backend, selected once and frozen in a `OnceLock`:
 
-- `os` (production default outside staging/prod special-casing): native OS credential store, macOS Keychain, Windows Credential Manager, or Linux Secret Service, under service name `"openhuman"`.
-- `encrypted_file` (staging/production, and via `OPENHUMAN_KEYRING_BACKEND=encrypted_file`): single ChaCha20-Poly1305 file `{workspace}/secrets.enc`, encrypted with a master key loaded once, from `OPENHUMAN_KEYRING_MASTER_KEY` / `OPENHUMAN_KEYRING_MASTER_KEY_FILE` when set, otherwise from the OS keychain (`openhuman` / `app:master_key`). Files are written `0600` on Unix via temp-file plus atomic rename.
-- `file` (dev default, `cfg(test)`, or `OPENHUMAN_KEYRING_BACKEND=file`): plaintext JSON `{workspace}/dev-keychain.json`. Not encrypted; test and debug use only.
+- `os` (via `OPENHUMAN_KEYRING_BACKEND=os`): native OS credential store, macOS Keychain, Windows Credential Manager, or Linux Secret Service, under service name `"openhuman"`.
+- `encrypted_file` (default unless development mode or a backend override is explicit): single ChaCha20-Poly1305 file `{workspace}/secrets.enc`, encrypted with a master key loaded once, from `OPENHUMAN_KEYRING_MASTER_KEY` / `OPENHUMAN_KEYRING_MASTER_KEY_FILE` when set, otherwise from the OS keychain (`openhuman` / `app:master_key`). Files are written `0600` on Unix via temp-file plus atomic rename.
+- `file` (explicit `OPENHUMAN_APP_ENV=dev`/`development`, `cfg(test)`, or `OPENHUMAN_KEYRING_BACKEND=file`): plaintext JSON `{workspace}/dev-keychain.json`. Not encrypted; test and debug use only.
 - `mock` (test-only): in-memory `HashMap`.
 
 `SecretStore` additionally manages a master encryption key: keychain-backed (slot `secretstore.master_key`) in normal builds with one-time migration from the legacy `{data_dir}/openhuman/.secret_key` file; the file path is retained only for unit tests. Decoded keys are cached process-wide, keyed by normalized path.
@@ -112,7 +112,7 @@ Discovered consumers (`crate::security::keyring::*`):
 - A corrupt file is never overwritten. `file` reads degrade to an empty map (so a missing token means "sign in again"), but a `set`/`delete` over an unparseable file quarantines it and returns an error. Returning empty on the write path is what turned a corrupt file into a wipe: the write that followed persisted a map holding nothing but the key being set.
 - Mutations hold a cross-process lock, on `<secrets file>.lock` rather than the secrets file itself, because `write_atomic` replaces the file by rename, so a lock on the old inode would guard nothing. Callers must hold it across the read and the write.
 - The `SecretStore` master-key file is write-once. On Windows it survives transient AV-scanner sharing violations via retry/backoff and attempts `icacls` ACL self-repair on permission errors. Decoded keys are cached so repeated decrypts (for example, snapshot polls) hit memory.
-- Legacy formats: `SecretStore` migrates `enc:` (XOR) to `enc2:` (ChaCha20-Poly1305) on decrypt; `EncryptedFileBackend` migrates plaintext `dev-keychain.json` to `secrets.enc` (renaming the legacy file `.json.migrated`).
+- Legacy formats: `SecretStore` migrates `enc:` (XOR) to `enc2:` (ChaCha20-Poly1305) on decrypt. `EncryptedFileBackend` writes `dev-keychain.json` into `secrets.enc`, reads back and verifies the encrypted map, then removes the plaintext source. It also removes older `.json.migrated` copies when their entries match the decrypted store. Invalid or divergent copies remain for manual recovery.
 - Errors never carry secret values, only namespaced keys. `diagnostic()` is safe to log and preserves the underlying `keyring::Error` variant and `OSStatus`.
 
 ## Further reading

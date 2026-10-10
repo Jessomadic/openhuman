@@ -8,6 +8,46 @@ use super::{
     write_atomic,
 };
 
+#[cfg(unix)]
+#[test]
+fn durable_replace_syncs_parent_after_rename_and_propagates_failure() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let source = dir.path().join("staged");
+    let destination = dir.path().join("secrets.enc");
+    std::fs::write(&source, b"encrypted").unwrap();
+
+    let error = super::replace_durably_with_sync(&source, &destination, |parent| {
+        assert_eq!(parent, dir.path());
+        assert_eq!(std::fs::read(&destination).unwrap(), b"encrypted");
+        Err(std::io::Error::other("directory sync failed"))
+    })
+    .unwrap_err();
+    assert_eq!(error.to_string(), "directory sync failed");
+    assert!(!source.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn existing_ciphertext_is_republished_and_verified_before_plaintext_cleanup() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("secrets.enc");
+    std::fs::write(&path, b"ciphertext").unwrap();
+
+    let destination_lock = lock_for_write(&path).unwrap();
+    super::sync_parent_dir_with_republish(&path, &destination_lock, |destination, bytes| {
+        assert_eq!(destination, path);
+        assert_eq!(bytes, b"ciphertext");
+        super::write_atomic(destination, bytes)
+    })
+    .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"ciphertext");
+}
+
+#[test]
+fn relative_keyring_paths_sync_the_current_directory() {
+    assert_eq!(super::parent_dir(Path::new("keyring")), Path::new("."));
+}
+
 #[test]
 fn write_atomic_replaces_contents() {
     let dir = tempfile::TempDir::new().unwrap();
