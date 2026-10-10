@@ -593,7 +593,7 @@ impl EncryptedFileBackend {
             key,
             legacy_path,
             destination_lock,
-            |path, lock| file_store::sync_parent_dir(path, lock),
+            file_store::sync_parent_dir,
         )
     }
 
