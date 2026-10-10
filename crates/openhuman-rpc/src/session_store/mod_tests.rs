@@ -49,8 +49,9 @@ fn recovery_interrupts_turns_left_in_flight() {
     );
 }
 
-/// The provider and storage slots are process-wide; these tests take turns.
-static SLOTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// The provider and storage slots are process-wide; these tests take turns
+/// with each other and with any test that stores a credential.
+use crate::STORAGE_SLOT_TEST_LOCK as SLOTS;
 
 /// Puts the process-global storage backend back as a test found it.
 fn restore_backend(previous: Option<Arc<dyn crate::core_host::storage::StorageBackend>>) {
