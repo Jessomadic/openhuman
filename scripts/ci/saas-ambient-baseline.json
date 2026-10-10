@@ -114,7 +114,7 @@
   {
     "rule": "ambient-context",
     "path": "crates/openhuman-core/src/agent/session_store/mod.rs",
-    "line": 211,
+    "line": 223,
     "text": "crate::core::runtime::CoreContext::current()",
     "occurrence": 1
   },
@@ -184,7 +184,7 @@
   {
     "rule": "bare-spawn",
     "path": "crates/openhuman-core/src/channels/runtime/startup/start_channels.rs",
-    "line": 370,
+    "line": 225,
     "text": "let provider_bridge = AbortOnDropHandle::new(tokio::spawn(async move {",
     "occurrence": 1
   },
@@ -604,7 +604,7 @@
   {
     "rule": "ambient-config",
     "path": "crates/openhuman-core/src/inference/provider/ops/models/catalog_listing.rs",
-    "line": 49,
+    "line": 66,
     "text": "let config = crate::config::Config::load_or_init()",
     "occurrence": 1
   },
@@ -807,7 +807,7 @@
   {
     "rule": "bare-spawn",
     "path": "crates/openhuman-core/src/modules/ops.rs",
-    "line": 256,
+    "line": 274,
     "text": "let found_on_search_path = tokio::task::spawn_blocking(move || {",
     "occurrence": 1
   },
@@ -947,7 +947,7 @@
   {
     "rule": "home-dir",
     "path": "crates/openhuman-core/src/skills/ops_discover/api.rs",
-    "line": 65,
+    "line": 72,
     "text": "dirs::home_dir()",
     "occurrence": 1
   },
@@ -1029,20 +1029,6 @@
     "occurrence": 1
   },
   {
-    "rule": "ambient-context",
-    "path": "crates/openhuman-core/src/skills/write_root.rs",
-    "line": 25,
-    "text": "let workspace = crate::core::runtime::CoreContext::current()?",
-    "occurrence": 1
-  },
-  {
-    "rule": "ambient-context",
-    "path": "crates/openhuman-core/src/storage/agents.rs",
-    "line": 179,
-    "text": "let acting = CoreContext::current().is_some_and(|context| context.session_agent().is_some());",
-    "occurrence": 1
-  },
-  {
     "rule": "bare-spawn",
     "path": "crates/openhuman-core/src/threads/ops/edit.rs",
     "line": 103,
@@ -1059,7 +1045,7 @@
   {
     "rule": "bare-spawn",
     "path": "crates/openhuman-core/src/threads/ops/edit.rs",
-    "line": 363,
+    "line": 379,
     "text": "let result = tokio::task::spawn_blocking(move || {",
     "occurrence": 1
   },
