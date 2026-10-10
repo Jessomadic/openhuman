@@ -37,8 +37,9 @@ fn harness_wall_clock_is_always_clamped_below_the_backstop() {
     let now = Instant::now();
     let deadline = TurnDeadline::new(now, backstop);
     let backstop_ms = backstop.as_millis() as u64;
-    let harness_default_ms = crate::agent::tinyagents::DEFAULT_AGENT_TURN_TIMEOUT_SECS * 1_000;
-    assert!(harness_default_ms > backstop_ms, "precondition: the default is later");
+    // The harness's default turn ceiling (`DEFAULT_AGENT_TURN_TIMEOUT_SECS`);
+    // `deadline_wind_down_tests.rs` pins that constant against this module.
+    let harness_default_ms = 3_600_000;
 
     let clamped = deadline
         .clamp_wall_clock_ms(Some(harness_default_ms), now)
