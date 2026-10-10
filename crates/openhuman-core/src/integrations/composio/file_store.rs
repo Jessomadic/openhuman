@@ -97,8 +97,18 @@ where
         let owned = path.to_path_buf();
         return tokio::task::spawn_blocking(move || docs.update(&owned, change))
             .await
-            .map_err(|error| format!("[composio:store] updating {} failed: {error}", path.display()))?
-            .map_err(|error| format!("[composio:store] updating {} failed: {error:#}", path.display()));
+            .map_err(|error| {
+                format!(
+                    "[composio:store] updating {} failed: {error}",
+                    path.display()
+                )
+            })?
+            .map_err(|error| {
+                format!(
+                    "[composio:store] updating {} failed: {error:#}",
+                    path.display()
+                )
+            });
     }
     let _guard = lock().await;
     let mut value: T = load(path).await?;

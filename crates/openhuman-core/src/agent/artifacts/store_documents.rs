@@ -137,7 +137,9 @@ impl Docs {
 
     pub(super) fn get_args(&self, id: &str) -> Result<Option<Value>> {
         let id = id.to_string();
-        let stored = self.0.run(|docs| async move { docs.get(ARGS, &id).await })?;
+        let stored = self
+            .0
+            .run(|docs| async move { docs.get(ARGS, &id).await })?;
         Ok(stored.and_then(|stored| stored.doc.get("args").cloned()))
     }
 

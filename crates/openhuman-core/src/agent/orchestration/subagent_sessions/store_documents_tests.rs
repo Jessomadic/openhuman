@@ -133,6 +133,9 @@ fn a_stale_snapshot_does_not_revert_a_newer_session() {
 
     let loaded = docs.load().unwrap();
     assert_eq!(loaded.len(), 2);
-    let a = loaded.iter().find(|s| s.subagent_session_id == "a").unwrap();
+    let a = loaded
+        .iter()
+        .find(|s| s.subagent_session_id == "a")
+        .unwrap();
     assert_eq!(a.status, DurableSubagentStatus::Failed);
 }
