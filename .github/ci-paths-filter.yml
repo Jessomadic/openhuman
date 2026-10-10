@@ -212,6 +212,7 @@ storage:
   - 'crates/openhuman-core/src/integrations/task_sources/**'
   - 'crates/openhuman-core/src/agent/orchestration/**'
   - 'crates/openhuman-core/src/agent/session_store/**'
+  - 'crates/openhuman-core/src/profiles/**'
   - 'crates/openhuman-core/src/integrations/composio/**'
   - 'crates/openhuman-core/src/config/workspace/**'
   - 'crates/openhuman-core/src/desktop/app_state/**'
