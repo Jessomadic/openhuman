@@ -110,28 +110,41 @@ change. A scope with one runs `LeaseFence::check` first:
    unreleased and unexpired; a moved record latches the fence, an
    unreadable one refuses the write without latching.
 
+A write the host check admits then goes to the driver through
+`StorageBackend::for_scope_fenced` with `LeaseFence::driver_fence`: the lease
+record (`cluster` scope, `leases` collection, id = the profile) must still
+match `epoch`, `owner` = this node and `released = false`. The driver checks
+it in the same statement or transaction as the write (tinystoragedrivers
+v0.5.0, `Capability::Fencing`), so a holder paused between its check and
+its write cannot land the write after a takeover. The driver answers
+`ErrorKind::Fenced`, and the host re-reads the record, latches the fence
+and returns `FenceError::Superseded`.
+
 A refusal is a `StorageError` of kind `Backend` (not retryable, so CAS loops
 do not spin) whose source is the typed `FenceError`; `fence::fence_error`
 recovers it. The lookup is per write rather than per bound scope because
 the session store caches its handles across a profile's open, fence and
 re-open.
 
-What it cannot do on the current ports: make the write itself conditional
-on the lease. `atomic_batch` is optional (`Capability::Transactions`, only
-MongoDB replica sets), it has no read-only guard op, and leases live in the
-`cluster` scope while the guarded data lives in the profile's; streams and
-blobs take no precondition at all. So a holder that passes the check and is
-then paused past the margin can still land one write. Closing that is
-upstream work in tinystoragedrivers: a fencing token on the ports (for
-example a `Precondition::Fence { scope_doc, epoch }` or a `WriteOp::Check`
-guard op, enforced by each driver in the same statement or transaction as
-the write, with an `ErrorKind::Fenced`).
+The write runs after the host check alone (and the paused-holder race stays
+open) where the driver cannot fence it:
+
+- a driver without `Capability::Fencing`: MongoDB without transactions (a
+  standalone server);
+- a write the driver answers `Unsupported(Fencing)`: MongoDB blob writes
+  (GridFS cannot join a transaction);
+- a named database (`StorageBackend::database`), which cannot see the lease
+  records in the default database;
+- a lease store with no record in the ports (`LocalLeases`).
 
 Tests: `fence_tests.rs` (matching, local expiry, latch, record checks,
 registry replace/retire/prune), `fenced_backend_tests.rs` (node A loses the
 lease to node B by a clock advance: A's writes on every port are refused,
 B's succeed; a paused node refuses its own writes inside the margin; named
-databases; a fence over `LocalLeases`).
+databases; a fence over `LocalLeases`; and the paused-holder race on the
+memory and SQLite drivers: A's check passes, B takes over, and the driver
+refuses A's write, plus the fallbacks for named databases and drivers
+without fencing).
 
 ## Consumers
 

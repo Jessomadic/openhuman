@@ -346,10 +346,13 @@ channel threads, `409`) and `crates/openhuman-embed/tests/saas_profiles.rs`
   completions and the sandbox stay as files under `users/<id>/workspace`, so a
   multi-node deployment needs `<root>` on a shared read-write-many volume and
   a remote memory engine. Moving those onto the storage ports is a follow-up.
-- The fence check and the write are two operations: a holder paused for
-  longer than the skew margin right after a passing check can still land one
-  write after a takeover. Closing that needs a driver-enforced conditional
-  write (see `storage/README.md`).
+- On drivers with `Capability::Fencing` (memory, SQLite, file, MongoDB
+  replica sets) the driver re-checks the lease record atomically with each
+  write, so a takeover cuts off a paused holder's writes at storage. Where it
+  cannot (MongoDB without transactions, MongoDB blobs, named databases) the
+  host check and the write are two operations: a holder paused for longer
+  than the skew margin right after a passing check can still land one write
+  after a takeover (see `storage/README.md`).
 - Only writes through the storage ports are fenced. Files a profile writes
   directly under `<root>/users/<id>/` (the memory job queue, the classic
   on-disk stores) are not; on a shared volume, stopping turns and jobs on
