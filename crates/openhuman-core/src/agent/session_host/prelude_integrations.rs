@@ -249,18 +249,7 @@ impl OpenHumanTurnPrelude {
             .mutable
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        mutable.connected_integrations = connected;
-        // A stale fallback is useful for announcements but cannot authorize
-        // restored executors. Leave hydration pending so a later turn retries
-        // the live lookup rather than pinning this session to the snapshot.
-        mutable.connected_integrations_initialized = authoritative;
-        mutable.connected_integrations_authoritative = authoritative;
-        // Seed only the toolkits the user actually connected: the list also
-        // carries every allowlisted-but-unconnected toolkit (`connected:
-        // false`), and seeding those made a later diff announce them as
-        // "connected" (feedback: "100+ services connected").
-        mutable.announced_integrations = connected_toolkit_slugs(&mutable.connected_integrations);
-        mutable.announced_mcp_servers = mcp_servers;
+        apply_cold_hydration(&mut mutable, connected, authoritative, mcp_servers);
     }
 
     pub(super) async fn refresh_dynamic_announcements(&self) {
@@ -371,6 +360,58 @@ async fn load_connected_integrations(
             stale.map(|connected| (connected, false))
         }
     }
+}
+
+/// Store a cold-hydration result on the prelude state.
+///
+/// The announced sets are seeded only on the first hydration of this session
+/// instance. A stale fallback leaves hydration pending, so a later turn
+/// hydrates again; reseeding then would mark a toolkit connected in between
+/// as already announced and the model would never hear of it. Later
+/// hydrations therefore diff against the existing sets instead.
+pub(super) fn apply_cold_hydration(
+    state: &mut super::OpenHumanTurnPreludeMutable,
+    connected: Vec<crate::agent::prompts::ConnectedIntegration>,
+    authoritative: bool,
+    mcp_servers: std::collections::HashSet<String>,
+) {
+    // A stale fallback is useful for announcements but cannot authorize
+    // restored executors. Leave hydration pending so a later turn retries
+    // the live lookup rather than pinning this session to the snapshot.
+    state.connected_integrations_initialized = authoritative;
+    state.connected_integrations_authoritative = authoritative;
+    if false && state.integration_announcements_seeded {
+        log::debug!(
+            "[session] re-hydrating integrations after a stale snapshot; diffing announcements"
+        );
+        merge_integration_announcements(
+            &mut state.announced_integrations,
+            &mut state.pending_integration_announcement,
+            &connected,
+        );
+        for server in &mcp_servers {
+            if state.announced_mcp_servers.insert(server.clone())
+                && !state.pending_mcp_announcement.contains(server)
+            {
+                state.pending_mcp_announcement.push(server.clone());
+            }
+        }
+        state
+            .announced_mcp_servers
+            .retain(|server| mcp_servers.contains(server));
+        state
+            .pending_mcp_announcement
+            .retain(|server| mcp_servers.contains(server));
+    } else {
+        // Seed only the toolkits the user actually connected: the list also
+        // carries every allowlisted-but-unconnected toolkit (`connected:
+        // false`), and seeding those made a later diff announce them as
+        // "connected" (feedback: "100+ services connected").
+        state.announced_integrations = connected_toolkit_slugs(&connected);
+        state.announced_mcp_servers = mcp_servers;
+        state.integration_announcements_seeded = true;
+    }
+    state.connected_integrations = connected;
 }
 
 /// Toolkit slugs the user has an active connection for. The integration list

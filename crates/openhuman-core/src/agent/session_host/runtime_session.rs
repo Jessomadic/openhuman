@@ -164,6 +164,9 @@ struct OpenHumanTurnPreludeMutable {
     connected_integrations: Vec<crate::agent::prompts::ConnectedIntegration>,
     connected_integrations_initialized: bool,
     connected_integrations_authoritative: bool,
+    /// Whether a cold hydration already seeded the announced sets. A later
+    /// hydration (after a stale snapshot) diffs instead of reseeding.
+    integration_announcements_seeded: bool,
     /// Integration action declarations this thread was already sent,
     /// restored by the tinyagents session on resume. Rebuilt into deferred
     /// executors whenever the live integrations list does not supply them
@@ -1051,6 +1054,7 @@ impl OpenHumanSessionHost {
                     // Builder-provided integrations have not been verified by
                     // this session's current authorization refresh.
                     connected_integrations_authoritative: false,
+                    integration_announcements_seeded: false,
                     recorded_integration_actions: Vec::new(),
                     workflows: self.workflows.clone(),
                     composio_events: None,
