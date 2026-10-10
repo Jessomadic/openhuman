@@ -78,6 +78,7 @@ pub(super) fn persist_subagent_transcript(
             cached_input: usage.cached_input_tokens,
             context_window,
             cost_usd: usage.charged_amount_usd,
+            ..Default::default()
         },
         ts: now.clone(),
         reasoning_content: None,

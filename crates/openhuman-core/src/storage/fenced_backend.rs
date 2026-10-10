@@ -3,14 +3,24 @@
 //! Wraps any backend. Every scope it hands out is the inner backend's, with
 //! the document, stream and blob handles wrapped so that each write first
 //! asks the [`FenceRegistry`] for the scope's fence and runs only if that
-//! fence passes ([`FenceRegistry::guard`]). Reads, `ensure_collection`
+//! fence passes ([`FenceRegistry::admit`]). Reads, `ensure_collection`
 //! (idempotent schema) and scopes with no fence go straight through.
+//!
+//! A write the host check admits then goes through the inner backend's
+//! fenced handles ([`StorageBackend::for_scope_fenced`] with
+//! [`LeaseFence::driver_fence`](super::fence::LeaseFence::driver_fence)), so
+//! the driver re-checks the lease record atomically with the write. A
+//! driver refusal ([`ErrorKind::Fenced`]) latches the fence and surfaces as
+//! [`FenceError::Superseded`](super::fence::FenceError::Superseded). Where
+//! the driver cannot fence (no [`Capability::Fencing`], a write it answers
+//! with `Unsupported(Fencing)`, a named database, or a lease store with no
+//! record in the ports) the write runs after the host check alone.
 //!
 //! The fence is looked up per write, not when the scope is bound, because
 //! long-lived consumers (the session store caches its per-agent handles)
 //! must follow the profile as it is opened, fenced and re-opened.
 //!
-//! See [`super::fence`] for what the check does and does not guarantee.
+//! See [`super::fence`] for what the checks do and do not guarantee.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -18,17 +28,22 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 use tinystoragedrivers::{
-    Blob, BlobMeta, BlobStore, Capabilities, CollectionSpec, Filter, Page, Precondition, Query,
-    Result, SearchHit, Sort, StreamEntry, StreamStore, Version, Versioned, WriteOp, WriteResult,
+    Blob, BlobMeta, BlobStore, Capabilities, Capability, CollectionSpec, ErrorKind, Filter, Page,
+    Precondition, Query, Result, SearchHit, Sort, StorageError, StreamEntry, StreamStore, Version,
+    Versioned, WriteOp, WriteResult,
 };
 
-use super::fence::FenceRegistry;
+use super::fence::{FenceRegistry, LeaseFence};
 use super::{DocumentStore, Scope, ScopedStorage, StorageBackend};
 
 /// A backend whose writes are fenced. See the module docs.
 pub struct FencedBackend {
     inner: Arc<dyn StorageBackend>,
     fences: Arc<FenceRegistry>,
+    /// Whether the driver can see the lease records: true for the default
+    /// database (where the cluster scope's leases live), false for a named
+    /// database ([`Self::database`]), whose writes get the host check only.
+    driver_fencing: bool,
 }
 
 impl std::fmt::Debug for FencedBackend {
@@ -42,7 +57,11 @@ impl std::fmt::Debug for FencedBackend {
 impl FencedBackend {
     /// `inner`, its writes checked against `fences`.
     pub fn new(inner: Arc<dyn StorageBackend>, fences: Arc<FenceRegistry>) -> Self {
-        Self { inner, fences }
+        Self {
+            inner,
+            fences,
+            driver_fencing: true,
+        }
     }
 }
 
@@ -63,8 +82,9 @@ impl StorageBackend for FencedBackend {
     fn for_scope(&self, scope: &Scope) -> Result<ScopedStorage> {
         let scoped = self.inner.for_scope(scope)?;
         let guard = Guard {
-            scope: scope.as_str().to_string(),
+            scope: scope.clone(),
             fences: Arc::clone(&self.fences),
+            backend: self.driver_fencing.then(|| Arc::clone(&self.inner)),
         };
         Ok(ScopedStorage::new(
             scope.clone(),
@@ -85,23 +105,96 @@ impl StorageBackend for FencedBackend {
     }
 
     fn database(&self, name: &str) -> Result<Arc<dyn StorageBackend>> {
-        Ok(Arc::new(Self::new(
-            self.inner.database(name)?,
-            Arc::clone(&self.fences),
-        )))
+        Ok(Arc::new(Self {
+            inner: self.inner.database(name)?,
+            fences: Arc::clone(&self.fences),
+            driver_fencing: false,
+        }))
     }
 }
 
 #[derive(Clone)]
 struct Guard {
-    scope: String,
+    scope: Scope,
     fences: Arc<FenceRegistry>,
+    /// The inner backend, when its driver may enforce the fence (see
+    /// [`FencedBackend::driver_fencing`]).
+    backend: Option<Arc<dyn StorageBackend>>,
 }
 
 impl Guard {
-    async fn check(&self, op: &'static str) -> Result<()> {
-        self.fences.guard(&self.scope, op).await
+    /// The host check. `Ok(Some(..))` when the driver should enforce the
+    /// fence too: the fence and the scope's fenced handles to write through.
+    async fn admit(&self, op: &'static str) -> Result<Option<(Arc<LeaseFence>, ScopedStorage)>> {
+        let Some(lease) = self.fences.admit(self.scope.as_str(), op).await? else {
+            return Ok(None);
+        };
+        let Some(backend) = &self.backend else {
+            return Ok(None);
+        };
+        if !backend.capabilities().contains(Capability::Fencing) {
+            return Ok(None);
+        }
+        let Some(fence) = lease.driver_fence() else {
+            return Ok(None);
+        };
+        match backend.for_scope_fenced(&self.scope, &fence) {
+            Ok(scoped) => Ok(Some((lease, scoped))),
+            Err(error) if unfenceable(&error) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
+
+    /// What a driver-fenced write's refusal means: a [`ErrorKind::Fenced`]
+    /// becomes the latched fence's error; anything else passes through.
+    async fn settle<T>(
+        &self,
+        lease: &LeaseFence,
+        op: &'static str,
+        outcome: Result<T>,
+    ) -> Result<T> {
+        match outcome {
+            Err(error) if error.kind() == ErrorKind::Fenced => {
+                Err(self.fences.driver_refused(lease, op).await)
+            }
+            other => other,
+        }
+    }
+}
+
+/// The driver cannot make this write atomic with the fence.
+fn unfenceable(error: &StorageError) -> bool {
+    error.kind() == ErrorKind::Unsupported(Capability::Fencing)
+}
+
+/// One fenced write: the host check, then `$port.$method(args)` through the
+/// driver's fenced handles when it can enforce the fence, else (or when it
+/// answers `Unsupported(Fencing)` for this write) through `$self.inner`.
+/// Arguments are cloned for the fenced attempt so the fallback can reuse
+/// them.
+macro_rules! fenced_write {
+    ($self:ident, $op:literal, $port:ident . $method:ident ( $($arg:expr),* $(,)? )) => {{
+        match $self.guard.admit($op).await? {
+            None => $self.inner.$method($($arg),*).await,
+            Some((lease, scoped)) => {
+                // `&str` and `Copy` arguments clone trivially; the owned ones
+                // must survive for the fallback.
+                #[allow(clippy::clone_on_copy)]
+                let outcome = scoped.$port().$method($(Clone::clone(&$arg)),*).await;
+                match outcome {
+                    Err(error) if unfenceable(&error) => {
+                        tracing::debug!(
+                            target: "openhuman::storage::fence",
+                            op = $op,
+                            "[storage][fence] driver cannot fence this write; host check only"
+                        );
+                        $self.inner.$method($($arg),*).await
+                    }
+                    outcome => $self.guard.settle(&lease, $op, outcome).await,
+                }
+            }
+        }
+    }};
 }
 
 struct FencedDocuments {
@@ -138,13 +231,19 @@ impl DocumentStore for FencedDocuments {
         doc: Value,
         precondition: Precondition,
     ) -> Result<Version> {
-        self.guard.check("documents.put").await?;
-        self.inner.put(collection, id, doc, precondition).await
+        fenced_write!(
+            self,
+            "documents.put",
+            documents.put(collection, id, doc, precondition)
+        )
     }
 
     async fn delete(&self, collection: &str, id: &str, precondition: Precondition) -> Result<bool> {
-        self.guard.check("documents.delete").await?;
-        self.inner.delete(collection, id, precondition).await
+        fenced_write!(
+            self,
+            "documents.delete",
+            documents.delete(collection, id, precondition)
+        )
     }
 
     async fn query(&self, collection: &str, query: &Query) -> Result<Page<Versioned<Value>>> {
@@ -156,8 +255,11 @@ impl DocumentStore for FencedDocuments {
     }
 
     async fn delete_where(&self, collection: &str, filter: &Filter) -> Result<u64> {
-        self.guard.check("documents.delete_where").await?;
-        self.inner.delete_where(collection, filter).await
+        fenced_write!(
+            self,
+            "documents.delete_where",
+            documents.delete_where(collection, filter)
+        )
     }
 
     async fn claim(
@@ -167,13 +269,15 @@ impl DocumentStore for FencedDocuments {
         sort: &[Sort],
         patch: &Value,
     ) -> Result<Option<Versioned<Value>>> {
-        self.guard.check("documents.claim").await?;
-        self.inner.claim(collection, filter, sort, patch).await
+        fenced_write!(
+            self,
+            "documents.claim",
+            documents.claim(collection, filter, sort, patch)
+        )
     }
 
     async fn atomic_batch(&self, ops: Vec<WriteOp>) -> Result<Vec<WriteResult>> {
-        self.guard.check("documents.atomic_batch").await?;
-        self.inner.atomic_batch(ops).await
+        fenced_write!(self, "documents.atomic_batch", documents.atomic_batch(ops))
     }
 
     async fn search(&self, collection: &str, text: &str, limit: usize) -> Result<Vec<SearchHit>> {
@@ -181,8 +285,11 @@ impl DocumentStore for FencedDocuments {
     }
 
     async fn drop_collection(&self, collection: &str) -> Result<()> {
-        self.guard.check("documents.drop_collection").await?;
-        self.inner.drop_collection(collection).await
+        fenced_write!(
+            self,
+            "documents.drop_collection",
+            documents.drop_collection(collection)
+        )
     }
 }
 
@@ -202,13 +309,15 @@ impl std::fmt::Debug for FencedStreams {
 #[async_trait]
 impl StreamStore for FencedStreams {
     async fn append(&self, stream: &str, value: Value) -> Result<u64> {
-        self.guard.check("streams.append").await?;
-        self.inner.append(stream, value).await
+        fenced_write!(self, "streams.append", streams.append(stream, value))
     }
 
     async fn append_batch(&self, stream: &str, values: Vec<Value>) -> Result<u64> {
-        self.guard.check("streams.append_batch").await?;
-        self.inner.append_batch(stream, values).await
+        fenced_write!(
+            self,
+            "streams.append_batch",
+            streams.append_batch(stream, values)
+        )
     }
 
     async fn read_window(&self, stream: &str, from: u64, limit: usize) -> Result<Vec<StreamEntry>> {
@@ -220,13 +329,15 @@ impl StreamStore for FencedStreams {
     }
 
     async fn truncate_before(&self, stream: &str, offset: u64) -> Result<u64> {
-        self.guard.check("streams.truncate_before").await?;
-        self.inner.truncate_before(stream, offset).await
+        fenced_write!(
+            self,
+            "streams.truncate_before",
+            streams.truncate_before(stream, offset)
+        )
     }
 
     async fn delete_stream(&self, stream: &str) -> Result<bool> {
-        self.guard.check("streams.delete_stream").await?;
-        self.inner.delete_stream(stream).await
+        fenced_write!(self, "streams.delete_stream", streams.delete_stream(stream))
     }
 
     async fn streams(&self, prefix: &str) -> Result<Vec<String>> {
@@ -250,8 +361,7 @@ impl std::fmt::Debug for FencedBlobs {
 #[async_trait]
 impl BlobStore for FencedBlobs {
     async fn put(&self, key: &str, bytes: Vec<u8>, content_type: Option<&str>) -> Result<BlobMeta> {
-        self.guard.check("blobs.put").await?;
-        self.inner.put(key, bytes, content_type).await
+        fenced_write!(self, "blobs.put", blobs.put(key, bytes, content_type))
     }
 
     async fn get(&self, key: &str) -> Result<Option<Blob>> {
@@ -267,8 +377,7 @@ impl BlobStore for FencedBlobs {
     }
 
     async fn delete(&self, key: &str) -> Result<bool> {
-        self.guard.check("blobs.delete").await?;
-        self.inner.delete(key).await
+        fenced_write!(self, "blobs.delete", blobs.delete(key))
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<BlobMeta>> {
