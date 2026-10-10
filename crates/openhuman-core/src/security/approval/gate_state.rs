@@ -369,6 +369,50 @@ impl ApprovalGate {
             .then_some(row)
     }
 
+    /// Every approval still parked on `thread_id` by the ambient context's
+    /// agent, oldest first.
+    ///
+    /// [`Self::parked_request_for_thread`] follows the single thread route,
+    /// which holds only the newest park. Several async-delegated sub-agents can
+    /// park on the same parent thread at once; each keeps its own waiter and
+    /// [`RequestRoute`], so replay reads those instead and a rejoining client
+    /// can rebuild every card, not only the last one raised.
+    pub fn parked_requests_for_thread(&self, thread_id: &str) -> Vec<PendingApproval> {
+        let agent = crate::core::runtime::agent_scope::current_agent_id();
+        let parked_here = |route: &RequestRoute| {
+            route.thread_id.as_deref() == Some(thread_id)
+                && route.agent_id.as_deref() == agent.as_deref()
+        };
+        let ids: std::collections::HashSet<String> = self
+            .request_routes
+            .lock()
+            .iter()
+            .filter(|(_, route)| parked_here(route))
+            .map(|(id, _)| id.clone())
+            .collect();
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let mut rows: Vec<PendingApproval> = match self.list_pending() {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|row| ids.contains(&row.request_id))
+                .collect(),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "[approval::gate] parked_requests_for_thread: store read failed"
+                );
+                return Vec::new();
+            }
+        };
+        // Re-check after the unlocked store read, as `parked_request_for_thread`
+        // does: a request decided in between must not be replayed.
+        let routes = self.request_routes.lock();
+        rows.retain(|row| routes.get(&row.request_id).is_some_and(parked_here));
+        rows
+    }
+
     /// Whether the parked `request_id` was routed to its chat thread from a
     /// detached task (an async-delegated sub-agent), so the replayed card keeps
     /// the live event's `detached` flag. `false` for an unknown request.
