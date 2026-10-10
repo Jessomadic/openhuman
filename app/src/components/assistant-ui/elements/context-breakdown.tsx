@@ -18,6 +18,7 @@ import type { ComponentProps } from 'react';
 
 import { announced, pct } from '../utils/range';
 import { mono, paper } from './surfaces';
+import { formatTokenCount } from './context-display';
 
 const fmt = (n: number) => n.toLocaleString('en-US');
 
@@ -69,7 +70,7 @@ export function ContextBreakdown({
             'tabular-nums',
             pressure > 0.85 ? 'text-amber-600 dark:text-amber-400' : 'text-foreground/35'
           )}>
-          {fmt(used)} / {fmt(limit)}
+          {formatTokenCount(used)} / {formatTokenCount(limit)}
         </span>
       </div>
 

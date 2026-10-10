@@ -1641,7 +1641,7 @@ const messages: TranslationMap = {
   'mic.startRecording': 'রেকর্ডিং শুরু করুন',
   'mic.deviceSelector': 'মাইক্রোফোন ডিভাইস',
   'mic.tapToSendCountdown': 'পাঠাতে ট্যাপ করুন ({seconds}স)',
-  'token.costTitle': 'এই সেশনের আনুমানিক খরচ (USD)',
+  'token.costTitle': 'খরচ',
   'token.popCacheHit': 'ক্যাশ হিট',
   'navigator.recent': 'সাম্প্রতিক',
   'navigator.today': 'আজ',

@@ -1525,7 +1525,7 @@ const messages: TranslationMap = {
   'mic.startRecording': '开始录音',
   'mic.deviceSelector': '麦克风装置',
   'mic.tapToSendCountdown': '点击发送 ({seconds}秒)',
-  'token.costTitle': '本次会话的预估费用（美元）',
+  'token.costTitle': '费用',
   'token.popCacheHit': '缓存命中',
   'navigator.recent': '最近',
   'navigator.today': '今天',

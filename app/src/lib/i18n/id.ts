@@ -1657,7 +1657,7 @@ const messages: TranslationMap = {
   'mic.startRecording': 'Mulai merekam',
   'mic.deviceSelector': 'Perangkat mikrofon',
   'mic.tapToSendCountdown': 'Ketuk untuk mengirim ({seconds}d)',
-  'token.costTitle': 'Perkiraan biaya sesi ini (USD)',
+  'token.costTitle': 'Biaya',
   'token.popCacheHit': 'Cache terkena',
   'navigator.recent': 'Terbaru',
   'navigator.today': 'Hari Ini',

@@ -1678,7 +1678,7 @@ const messages: TranslationMap = {
   'mic.startRecording': 'Iniciar grabación',
   'mic.deviceSelector': 'Dispositivo de micrófono',
   'mic.tapToSendCountdown': 'Toca para enviar ({seconds}s)',
-  'token.costTitle': 'Costo estimado de esta sesión (USD)',
+  'token.costTitle': 'Costo',
   'token.popCacheHit': 'Acierto de caché',
   'navigator.recent': 'Reciente',
   'navigator.today': 'Hoy',

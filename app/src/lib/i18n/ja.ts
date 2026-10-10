@@ -1869,7 +1869,7 @@ const messages: TranslationMap = {
   'mic.tapToSendCountdown': 'タップして送信 ({seconds}秒)',
 
   // Token
-  'token.costTitle': 'このセッションの推定コスト (USD)',
+  'token.costTitle': '費用',
   'token.popCacheHit': 'キャッシュヒット',
 
   // Navigator

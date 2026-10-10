@@ -1877,7 +1877,7 @@ const en: TranslationMap = {
   'mic.tapToSendCountdown': 'Tap to send ({seconds}s)',
 
   // Token
-  'token.costTitle': 'Estimated cost this session (USD)',
+  'token.costTitle': 'Cost',
   'token.popCacheHit': 'Cache hit',
 
   // Navigator

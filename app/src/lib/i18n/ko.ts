@@ -1630,7 +1630,7 @@ const messages: TranslationMap = {
   'mic.startRecording': '녹음 시작',
   'mic.deviceSelector': '마이크 장치',
   'mic.tapToSendCountdown': '탭하여 보내기 ({seconds}초)',
-  'token.costTitle': '이 세션의 예상 비용 (USD)',
+  'token.costTitle': '비용',
   'token.popCacheHit': '캐시 적중',
   'navigator.recent': '최근',
   'navigator.today': '오늘',
