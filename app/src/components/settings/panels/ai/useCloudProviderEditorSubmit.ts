@@ -75,21 +75,23 @@ export function useCloudProviderEditorSubmit({
             ca_cert_pem: p.caCertPem ?? '',
             auth_style: p.authStyle,
           }));
-        await flushCloudProviders(nextWireProviders);
-        // The provider must be configured before probing, and its CA has now
-        // passed Rust-side validation. Let key-write failures surface inline.
-        if (apiKey) {
-          try {
+        try {
+          await flushCloudProviders(nextWireProviders);
+          // The provider must be configured before probing, and its CA has now
+          // passed Rust-side validation. Let key-write failures surface inline.
+          if (apiKey) {
             await setCloudProviderKey(upserted.slug, apiKey);
-          } catch (keyError) {
-            await flushCloudProviders(priorWireProviders).catch(rollbackErr =>
-              console.warn(
-                `[ai-settings] rollback flush after key-write failure slug=${upserted.slug}`,
-                rollbackErr
-              )
-            );
-            throw keyError;
           }
+        } catch (writeError) {
+          // A flush may have applied before a transport error, so restore the
+          // previous list for either a failed flush or a failed key write.
+          await flushCloudProviders(priorWireProviders).catch(rollbackErr =>
+            console.warn(
+              `[ai-settings] rollback flush after provider write failure slug=${upserted.slug}`,
+              rollbackErr
+            )
+          );
+          throw writeError;
         }
         // `skipProbe` is the user's explicit "add it anyway" after a failed
         // verification. A provider whose `/models` listing is absent or

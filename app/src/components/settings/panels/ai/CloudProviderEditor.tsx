@@ -234,6 +234,8 @@ export const CloudProviderEditor = ({
           onChange={event => {
             const file = event.target.files?.[0];
             if (!file) return;
+            // Allow choosing the same file again after a read error or clear.
+            event.currentTarget.value = '';
             const sequence = ++certReadSequence.current;
             if (file.size > 256 * 1024) {
               setReadingCert(false);

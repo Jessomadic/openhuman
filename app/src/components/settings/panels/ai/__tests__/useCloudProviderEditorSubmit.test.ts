@@ -55,12 +55,13 @@ describe('useCloudProviderEditorSubmit', () => {
       ).rejects.toThrow('invalid CA bundle');
     });
 
-    expect(api.flushCloudProviders).toHaveBeenCalledTimes(1);
+    expect(api.flushCloudProviders).toHaveBeenCalledTimes(2);
     expect(api.flushCloudProviders).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ slug: 'private-provider', ca_cert_pem: 'invalid PEM' }),
       ])
     );
+    expect(api.flushCloudProviders).toHaveBeenNthCalledWith(2, []);
     expect(api.setCloudProviderKey).not.toHaveBeenCalled();
     expect(api.listProviderModels).not.toHaveBeenCalled();
   });
@@ -112,6 +113,51 @@ describe('useCloudProviderEditorSubmit', () => {
         expect.objectContaining({ endpoint: 'https://old.example/v1', ca_cert_pem: 'old CA' }),
       ])
     );
+    expect(api.listProviderModels).not.toHaveBeenCalled();
+  });
+
+  it('restores the previous provider list when the eager flush fails', async () => {
+    api.flushCloudProviders
+      .mockRejectedValueOnce(new Error('settings write failed'))
+      .mockResolvedValueOnce(undefined);
+    const previous = {
+      id: 'old-provider',
+      slug: 'private-provider',
+      label: 'Old provider',
+      endpoint: 'https://old.example/v1',
+      authStyle: 'bearer' as const,
+      maskedKey: '••••old',
+      caCertPem: 'old CA',
+    };
+    const saved = { ...EMPTY_SETTINGS, cloudProviders: [previous] };
+    const { result } = renderHook(() =>
+      useCloudProviderEditorSubmit({
+        editing: previous,
+        draft: saved,
+        saved,
+        persist: vi.fn(),
+        t: key => key,
+        onDone: vi.fn(),
+      })
+    );
+
+    await act(async () => {
+      await expect(
+        result.current(
+          { ...previous, endpoint: 'https://new.example/v1', caCertPem: 'new CA' },
+          'replacement-key'
+        )
+      ).rejects.toThrow('settings write failed');
+    });
+
+    expect(api.flushCloudProviders).toHaveBeenCalledTimes(2);
+    expect(api.flushCloudProviders).toHaveBeenNthCalledWith(
+      2,
+      expect.arrayContaining([
+        expect.objectContaining({ endpoint: 'https://old.example/v1', ca_cert_pem: 'old CA' }),
+      ])
+    );
+    expect(api.setCloudProviderKey).not.toHaveBeenCalled();
     expect(api.listProviderModels).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { listConnections as listComposioConnections } from '../../../../lib/composio/composioApi';
@@ -1841,6 +1841,10 @@ describe('AIPanel', () => {
         expect.arrayContaining([expect.objectContaining({ ca_cert_pem: pem })])
       )
     );
+    await waitFor(() => expect(vi.mocked(listProviderModels)).toHaveBeenCalled());
+    expect(vi.mocked(flushCloudProviders).mock.invocationCallOrder.at(-1)).toBeLessThan(
+      vi.mocked(listProviderModels).mock.invocationCallOrder.at(-1) ?? Number.MAX_SAFE_INTEGER
+    );
   });
 
   it('keeps the most recently selected CA when an older file read finishes later', async () => {
@@ -1866,7 +1870,10 @@ describe('AIPanel', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Remove CA certificate' })).toBeInTheDocument()
     );
-    resolveFirst('-----BEGIN CERTIFICATE-----\nfirst\n-----END CERTIFICATE-----');
+    await act(async () => {
+      resolveFirst('-----BEGIN CERTIFICATE-----\nfirst\n-----END CERTIFICATE-----');
+      await Promise.resolve();
+    });
     fireEvent.click(screen.getByRole('button', { name: /Add provider/i }));
 
     await waitFor(() =>

@@ -142,13 +142,10 @@ pub async fn list_configured_models_from_config(
     );
 
     use crate::config::schema::cloud_providers::AuthStyle;
-    let service_key = match entry.auth_style {
-        AuthStyle::Anthropic => "provider.anthropic",
-        _ => "provider.compatible",
-    };
+    let service_key = "providers.list_models";
     let client = if let Some(pem) = config
         .cloud_provider_ca_certs
-        .get(&entry.slug)
+        .get(entry.slug.trim())
         .filter(|pem| !pem.is_empty())
     {
         crate::util::tls::client_with_ca_bundle_with_timeouts(pem, service_key, 30, 10)?
