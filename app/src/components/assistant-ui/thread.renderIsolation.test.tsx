@@ -7,7 +7,7 @@ const convertMessage = (message: ThreadMessageLike) => message;
 const onNew = async () => {};
 function Harness({messages, components, poll}: {messages: ThreadMessageLike[]; components: ThreadComponents; poll: number}) {
   const runtime = useExternalStoreRuntime({messages, convertMessage, onNew});
-  return <AssistantRuntimeProvider runtime={runtime}><span>{poll}</span><Thread components={components} /></AssistantRuntimeProvider>;
+  return <AssistantRuntimeProvider runtime={runtime}><span>{poll}</span><Thread components={{...components, ComposerHeader: () => <span>Composer refresh {poll}</span>}} /></AssistantRuntimeProvider>;
 }
 describe('conversation render isolation', () => {
   it('skips unchanged messages on a host refresh while continuing to render message updates', () => {
