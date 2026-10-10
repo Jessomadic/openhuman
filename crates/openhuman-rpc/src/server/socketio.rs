@@ -1253,7 +1253,7 @@ fn replay_parked_approval(socket: &SocketRef, thread_id: &str) {
     };
     let client_id = socket.id.to_string();
     for row in gate.parked_requests_for_thread(thread_id) {
-        replay_one_parked_approval(socket, gate, &row, thread_id, &client_id);
+        replay_one_parked_approval(socket, &gate, &row, thread_id, &client_id);
     }
 }
 
