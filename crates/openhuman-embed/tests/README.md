@@ -36,6 +36,7 @@ recorded on the wrong server.
 | [`composio_agents.rs`](composio_agents.rs) | Two agents with their own `ComposioHostCredential` reach Composio with their own key only. |
 | [`memory_facade.rs`](memory_facade.rs) | `Runtime::memory` over TinyMemory's in-memory reference engine keeps two tenant roots apart. |
 | [`saas_profiles.rs`](saas_profiles.rs) | A `ProfileRuntime` (SaaS mode, in-process): two users on thread `t1` see only their own messages and ride their own credential, a held `ProfileHandle` keeps its profile from release, a relayed Telegram message lands on the user's `channel:` thread with its `channel_outbound` reply on that user's events only, and the process refuses any other core afterwards. Inference is `common::echo_inference` behind `common::PointedTransport`. |
+| [`repository_tools.rs`](repository_tools.rs), [`repository_host_only.rs`](repository_host_only.rs) | Host-backed repository queries validate before dispatch, require redaction, fence and bound output, and remain isolated from shell/write/network under HostOnly, read-only, untrusted-input turns. See [repository contract](../src/repository/README.md). |
 | [`public_api.rs`](public_api.rs) | Compile-time check that the host-facing types and signatures stay exported. |
 
 ## Running
