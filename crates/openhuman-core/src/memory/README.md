@@ -300,7 +300,9 @@ The agent `memory` tool applies the same confinement and overwrites any
   call, and `source.kind = agent`.
   `MemoryTool` bounds optional engine work with [`tool_budget.rs`](./tool_budget.rs):
   15 seconds per call, 30 seconds of aggregate engine time and eight attempts
-  per harness run. Concurrent reads reserve from the same time budget. A timeout
+  per tracked harness run. The bounded tracker retains 128 run records and never
+  evicts an outstanding reservation; idle records may age out under run churn.
+  Concurrent reads reserve from the same time budget. A timeout
   disables further memory calls in that run and returns a tool error asking the
   model to continue without memory; the next run starts fresh. A timed-out write
   can already have reached the server, so the error warns against retrying it.
