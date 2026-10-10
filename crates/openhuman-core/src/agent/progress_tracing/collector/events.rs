@@ -519,7 +519,10 @@ impl SpanCollector {
             return;
         };
         if let Ok(serde_json::Value::String(class)) = serde_json::to_value(failure.class) {
-            extra.insert("tool.failure_class".to_string(), serde_json::Value::String(class));
+            extra.insert(
+                "tool.failure_class".to_string(),
+                serde_json::Value::String(class),
+            );
         }
         if self.ctx.capture_content {
             extra.insert(

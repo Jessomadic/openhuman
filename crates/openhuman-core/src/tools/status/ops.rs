@@ -65,7 +65,10 @@ fn classify_class(error_text: &str, timed_out: bool) -> ToolFailureClass {
     //     The `timed_out` flag is not consulted here: the only live caller
     //     derives it by sniffing the same text.
     if let Some(class) = structural_class(&text) {
-        tracing::debug!(?class, "[tool_status::classify] matched structural result shape");
+        tracing::debug!(
+            ?class,
+            "[tool_status::classify] matched structural result shape"
+        );
         return class;
     }
 
@@ -275,11 +278,7 @@ fn structural_class(text: &str) -> Option<ToolFailureClass> {
         // The exit line is the renderer's own; 127 and 126 are the shell's
         // codes for a missing program and a non-executable one, which the
         // user can act on. Every other code is the program's verdict.
-        let exit_line = text
-            .trim_start()
-            .lines()
-            .next()
-            .unwrap_or_default();
+        let exit_line = text.trim_start().lines().next().unwrap_or_default();
         let code = exit_line
             .split_once("exit code ")
             .map(|(_, rest)| {

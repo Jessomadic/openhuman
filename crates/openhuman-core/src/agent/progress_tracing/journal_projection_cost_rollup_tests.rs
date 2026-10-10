@@ -262,7 +262,8 @@ fn cache_creation_tokens_reach_the_projected_generation_span() {
 }
 
 /// The answer the crate injects for an unknown tool (`unknown_tool_message`).
-const UNKNOWN_TOOL_ANSWER: &str = "unknown tool `send_fax` (arguments: {\"to\":\"1234\"}): no tool \
+const UNKNOWN_TOOL_ANSWER: &str =
+    "unknown tool `send_fax` (arguments: {\"to\":\"1234\"}): no tool \
      with that name is available to you, and calling it again will fail the same way.";
 
 /// The crate's recovered pair for an unknown tool (TOOL-11 `recover_tool_call`):
@@ -334,20 +335,22 @@ fn unknown_tool_call_projects_exactly_one_failed_tool_span() {
         ),
     ];
     observations.extend(recovered_unknown_tool_pair(10, 1_021));
-    observations.push(
-        obs(
-            3,
-            1_030,
-            AgentEvent::RunCompleted {
-                run_id: RunId::new("run-1"),
-                outcome: None,
-            },
-        ),
-    );
+    observations.push(obs(
+        3,
+        1_030,
+        AgentEvent::RunCompleted {
+            run_id: RunId::new("run-1"),
+            outcome: None,
+        },
+    ));
 
     let spans = spans_from_observations(ctx().with_capture_content(true), 10, &observations);
     let tools: Vec<&TraceSpan> = spans.iter().filter(|s| s.kind == SpanKind::Tool).collect();
-    assert_eq!(tools.len(), 1, "exactly one tool span per unknown-tool call");
+    assert_eq!(
+        tools.len(),
+        1,
+        "exactly one tool span per unknown-tool call"
+    );
     let tool = tools[0];
     assert_eq!(tool.name, "tool.send_fax");
     assert_eq!(tool.attributes["tool.success"], serde_json::json!(false));

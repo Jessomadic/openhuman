@@ -256,7 +256,8 @@ async fn tool_completed_projects_output_arguments_and_elapsed() {
 }
 
 /// The answer the crate injects for an unknown tool (`unknown_tool_message`).
-const UNKNOWN_TOOL_ANSWER: &str = "unknown tool `search_files` (arguments: {\"query\":\"config\"}): \
+const UNKNOWN_TOOL_ANSWER: &str =
+    "unknown tool `search_files` (arguments: {\"query\":\"config\"}): \
      no tool with that name is available to you, and calling it again will fail the same way.";
 
 /// Emit what the crate emits for an unknown-tool call since TOOL-11: the typed
@@ -335,7 +336,10 @@ async fn unknown_tool_call_projects_exactly_one_failed_timeline_row() {
     let (tool_name, success, failure, output, label) = completed.remove(0);
     assert_eq!(tool_name, "search_files");
     assert!(!success, "the attempted tool is projected as a failed call");
-    assert_eq!(output, UNKNOWN_TOOL_ANSWER, "the row carries the error text");
+    assert_eq!(
+        output, UNKNOWN_TOOL_ANSWER,
+        "the row carries the error text"
+    );
     assert_eq!(label.as_deref(), Some("Search Files (unavailable)"));
     // #6277: a tool the agent does not have fails identically on every retry,
     // so the timeline must not tell the user to "try again / run diagnostics".
@@ -412,7 +416,10 @@ async fn unknown_tool_call_in_a_child_run_projects_one_subagent_row() {
         }
     }
     assert_eq!((started, completed), (1, 1));
-    assert_eq!(class, Some(crate::tools::status::ToolFailureClass::NotFound));
+    assert_eq!(
+        class,
+        Some(crate::tools::status::ToolFailureClass::NotFound)
+    );
 }
 
 /// W2-budget-dedupe: two `UsageRecorded` events for the *same* model call

@@ -390,7 +390,10 @@ fn structural_prefixes_only_count_where_the_producer_puts_them() {
 
 #[test]
 fn structural_classes_carry_their_own_copy() {
-    let invalid = classify("invalid arguments for tool `shell`: missing `command`", false);
+    let invalid = classify(
+        "invalid arguments for tool `shell`: missing `command`",
+        false,
+    );
     assert_eq!(invalid.class, ToolFailureClass::InvalidArguments);
     assert!(!invalid.recoverable);
     assert!(!invalid.cause_plain.contains("took too long"));
