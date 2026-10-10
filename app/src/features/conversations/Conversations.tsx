@@ -1769,8 +1769,9 @@ const Conversations = ({
   // `thread_goal_updated` core events (`aui/useThreadTodos.ts` /
   // `aui/useThreadGoal.ts`), primed on thread open by the RPC pair below.
   // Progress cards are presented in the transcript by TurnTaskProvider.
-  useLoadThreadTodos(selectedThreadId ?? null);
-  useLoadThreadGoal(selectedThreadId ?? null);
+  const harnessStateRevision = selectedThreadId ? inferenceTurnLifecycleByThread[selectedThreadId] ?? 'idle' : '';
+  useLoadThreadTodos(selectedThreadId ?? null, harnessStateRevision);
+  useLoadThreadGoal(selectedThreadId ?? null, harnessStateRevision);
   // A plan the orchestrator parked for interactive review (request_plan_review
   // gate). When present, the PlanReviewCard renders above the composer and
   // resolves the parked turn.
