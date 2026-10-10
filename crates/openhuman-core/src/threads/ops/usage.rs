@@ -22,11 +22,15 @@ pub struct ThreadTokenUsageResponse {
     pub cached_input_tokens: u64,
     pub cost_usd: f64,
     pub turn_count: usize,
-    /// Tokens of the most recent turn — numerator for the context-window gauge.
-    /// The orchestrator's own, excluding sub-agents: each child runs in its own
-    /// context window, so folding them in let the gauge exceed 100% (#4271).
+    /// Spend of the most recent turn, the orchestrator's own: every model call
+    /// of that turn summed, so a long tool loop reports many times its context.
     pub last_turn_input_tokens: u64,
     pub last_turn_output_tokens: u64,
+    /// Tokens the orchestrator's context held after the most recent turn's
+    /// final model call — the numerator for the context-window gauge. One
+    /// request, not a sum, and excluding sub-agents: each child runs in its own
+    /// context window, so folding them in let the gauge exceed 100% (#4271).
+    pub last_turn_context_tokens: u64,
     /// Context window (tokens) inferred from the last model; `0` when unknown.
     pub context_window: u64,
     pub model: Option<String>,
