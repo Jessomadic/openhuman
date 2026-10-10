@@ -106,7 +106,9 @@ pub async fn open(url: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
     );
     // Every opened backend checks the process's lease fences on write; with
     // no fence registered (every single-user host) that is a pass-through.
-    Ok(fenced_backend::wrap(tinystoragedrivers::open(&parsed).await?))
+    Ok(fenced_backend::wrap(
+        tinystoragedrivers::open(&parsed).await?,
+    ))
 }
 
 /// Makes `backend` the process's storage backend; returns the previous one.

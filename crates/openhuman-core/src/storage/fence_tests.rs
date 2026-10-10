@@ -102,7 +102,10 @@ async fn a_released_or_missing_record_supersedes_the_fence() {
     a.release(grant.clone()).await.unwrap();
     assert!(matches!(
         f.check(1).await,
-        Err(FenceError::Superseded { stored: Some(1), .. })
+        Err(FenceError::Superseded {
+            stored: Some(1),
+            ..
+        })
     ));
 
     let other = LeaseFence::new(Arc::clone(&a), "nobody", "node-a", 1, u64::MAX, 0, scopes());
@@ -144,7 +147,15 @@ impl LeaseStore for Unreachable {
 
 #[tokio::test]
 async fn an_unreadable_record_refuses_the_write_without_latching() {
-    let f = LeaseFence::new(Arc::new(Unreachable), "alice", "a", 1, u64::MAX, 0, scopes());
+    let f = LeaseFence::new(
+        Arc::new(Unreachable),
+        "alice",
+        "a",
+        1,
+        u64::MAX,
+        0,
+        scopes(),
+    );
     assert!(matches!(f.check(1).await, Err(FenceError::Unverified(_))));
     assert!(!f.is_fenced(), "a storage hiccup is not a lost lease");
 }
@@ -213,8 +224,6 @@ async fn the_guard_passes_unfenced_scopes_and_refuses_with_a_typed_error() {
     let refused = registry.guard("profile:alice", "test").await.unwrap_err();
     assert_eq!(
         fence_error(&refused),
-        Some(&FenceError::Expired {
-            epoch: grant.epoch
-        })
+        Some(&FenceError::Expired { epoch: grant.epoch })
     );
 }

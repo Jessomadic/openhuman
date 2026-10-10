@@ -97,7 +97,10 @@ async fn a_node_that_lost_the_lease_cannot_write_and_the_new_holder_can() {
     let refused = a.put("profile:alice", "n2").await.unwrap_err();
     assert!(matches!(
         fence_error(&refused),
-        Some(FenceError::Superseded { held: 1, stored: Some(2) })
+        Some(FenceError::Superseded {
+            held: 1,
+            stored: Some(2)
+        })
     ));
     // Every write port, and every session scope of the profile, is fenced.
     let session = a.scoped("alice~default");
@@ -109,7 +112,12 @@ async fn a_node_that_lost_the_lease_cannot_write_and_the_new_holder_can() {
         .await
         .is_err());
     // Reads are not.
-    assert!(session.documents().get("notes", "n1").await.unwrap().is_some());
+    assert!(session
+        .documents()
+        .get("notes", "n1")
+        .await
+        .unwrap()
+        .is_some());
     // Other profiles' scopes are untouched.
     a.put("profile:bob", "n1").await.unwrap();
 

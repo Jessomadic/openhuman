@@ -58,17 +58,21 @@ fn the_margin_is_a_sixth_of_the_ttl() {
 fn a_profiles_fence_covers_its_scope_and_its_sessions() {
     let id = profile("alice");
     let scopes = scopes_of(&id);
-    let covers = |s: &str| scopes.iter().any(|m| match m {
-        ScopeMatch::Exact(e) => e == s,
-        ScopeMatch::Prefix(p) => s.starts_with(p.as_str()),
-    });
+    let covers = |s: &str| {
+        scopes.iter().any(|m| match m {
+            ScopeMatch::Exact(e) => e == s,
+            ScopeMatch::Prefix(p) => s.starts_with(p.as_str()),
+        })
+    };
     assert!(covers(crate::storage::scope_for_profile("alice").as_str()));
     let tenant = crate::core::runtime::Tenant {
         profile: Some("alice".into()),
         agent: None,
     };
     assert!(covers(&crate::core::runtime::session_key(&tenant)));
-    assert!(!covers(crate::storage::scope_for_profile("alice2").as_str()));
+    assert!(!covers(
+        crate::storage::scope_for_profile("alice2").as_str()
+    ));
 }
 
 #[tokio::test]
@@ -149,11 +153,16 @@ async fn background_jobs_are_not_started_for_a_superseded_profile() {
     let alice = profile("alice");
     a.provision(&alice).await.unwrap();
     let state = a.open(&alice).await.unwrap();
-    DocumentLeases::cluster(backend.as_ref(), "node-b", None, Duration::from_secs(TTL_SECS))
-        .unwrap()
-        .acquire(alice.as_str(), now_ms() + 2 * TTL_SECS * 1_000)
-        .await
-        .unwrap();
+    DocumentLeases::cluster(
+        backend.as_ref(),
+        "node-b",
+        None,
+        Duration::from_secs(TTL_SECS),
+    )
+    .unwrap()
+    .acquire(alice.as_str(), now_ms() + 2 * TTL_SECS * 1_000)
+    .await
+    .unwrap();
     // The check the background loop runs before a profile's jobs.
     assert!(state.lease_fence().check(now_ms()).await.is_err());
     tokio::time::timeout(Duration::from_secs(1), state.lease_fence().fenced())
