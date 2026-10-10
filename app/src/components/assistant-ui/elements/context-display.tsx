@@ -257,10 +257,10 @@ function ContextDisplayContent({
             {formatTokenCount(modelContextWindow)}
           </span>
         </div>
-        <div className="bg-muted mt-2.5 h-1 overflow-hidden rounded-full">
+        <div className="bg-muted inset-ring-border mt-2.5 h-1 overflow-hidden rounded-full inset-ring forced-colors:border">
           <div
             className={cn(
-              'h-full w-(--usage-width) rounded-full transition-[width] duration-300',
+              "h-full w-(--usage-width) rounded-full transition-[width] duration-300 forced-color-adjust-none",
               totalTokens > 0 && 'min-w-1',
               getBarColor(percent)
             )}
@@ -268,7 +268,7 @@ function ContextDisplayContent({
           />
         </div>
         {segments.length > 0 && (
-          <div className="flex items-baseline justify-between gap-6">
+          <div className="mt-3 grid gap-1.5">
             {segments.map(segment => (
               <div key={segment.label} className="flex items-baseline justify-between gap-6">
                 <span className="text-muted-foreground">{segment.label}</span>
@@ -303,7 +303,7 @@ function RingVisual() {
         r={RING_RADIUS}
         fill="none"
         strokeWidth={RING_STROKE}
-        className="stroke-border"
+        className="stroke-muted"
       />
       <circle
         cx={RING_SIZE / 2}

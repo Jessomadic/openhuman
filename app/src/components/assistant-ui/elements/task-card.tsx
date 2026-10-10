@@ -151,7 +151,7 @@ export function TaskCard({
       {isRenderable(result) && (
         <div
           data-slot="task-card-result"
-          className="border-border/60 text-foreground/70 border-t px-3.5 py-2 text-xs leading-relaxed">
+          className="border-border/60 text-muted-foreground border-t px-3.5 py-2 text-xs leading-relaxed">
           {result}
         </div>
       )}

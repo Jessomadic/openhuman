@@ -48,7 +48,7 @@ export function MemoryChips({
       {...props}>
       <div className="flex items-center gap-1.5">
         <BrainIcon className="text-muted-foreground size-3.5" />
-        <span className={cn(mono, "text-muted-foreground")}>
+        <span className={cn(mono, 'text-muted-foreground')}>
           {fresh > 0 ? headingRememberedLabel(fresh) : headingIdleLabel}
         </span>
       </div>

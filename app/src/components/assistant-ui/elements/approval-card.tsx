@@ -96,7 +96,7 @@ export function ApprovalCard({
       className={cn(paper, 'flex w-full max-w-sm flex-col gap-3.5 rounded-[20px] p-4', className)}
       {...props}>
       <div className="flex items-center gap-3">
-        <span className="bg-foreground/[0.05] text-foreground/45 flex size-9 shrink-0 items-center justify-center rounded-xl">
+        <span className="bg-foreground/[0.05] text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-xl">
           <TerminalIcon className="size-4" />
         </span>
         <div className="flex flex-col">
@@ -106,11 +106,11 @@ export function ApprovalCard({
         </div>
       </div>
 
-      <div className={cn(field, 'text-foreground/70 rounded-xl px-3.5 py-2.5 font-mono text-xs')}>
+      <div className={cn(field, 'text-muted-foreground rounded-xl px-3.5 py-2.5 font-mono text-xs')}>
         {command}
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-4 text-xs">
+      <div className="flex min-h-8 flex-wrap items-center justify-end gap-2">
         {state === 'request' ? (
           <>
             {onDeny && (
@@ -119,7 +119,7 @@ export function ApprovalCard({
                 onClick={onDeny}
                 {...denyProps}
                 className={cn(
-                  'text-foreground/55 hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3.5 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]',
+                  'text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3.5 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]',
                   denyProps?.className
                 )}>
                 {denyLabel}
@@ -131,7 +131,7 @@ export function ApprovalCard({
                 onClick={onAlwaysAllow}
                 {...alwaysAllowProps}
                 className={cn(
-                  'text-foreground/55 hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3.5 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]',
+                  'text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3.5 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]',
                   alwaysAllowProps?.className
                 )}>
                 {alwaysAllowLabel}
@@ -144,7 +144,7 @@ export function ApprovalCard({
                 {...allowOnceProps}
                 className={cn(
                   inkButton,
-                  'flex h-8 items-center rounded-full px-3.5 text-xs font-medium',
+                  "h-8 px-3.5 text-xs font-medium whitespace-nowrap",
                   allowOnceProps?.className
                 )}>
                 {allowOnceLabel}
@@ -154,7 +154,7 @@ export function ApprovalCard({
         ) : (
           <div
             key={state}
-            className="flex min-h-8 flex-wrap items-center justify-end gap-2">
+            className="fade-in animate-in text-muted-foreground flex items-center gap-2 text-xs duration-300 motion-reduce:animate-none">
             {state === 'running' ? (
               <>
                 <Loader2Icon className="text-muted-foreground size-3.5 animate-spin motion-reduce:animate-none" />

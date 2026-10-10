@@ -70,7 +70,7 @@ export function AgentStatus({
         {label}
       </span>
       {elapsed !== undefined && state !== 'done' && state !== 'failed' && (
-        <span className={cn(mono, "fade-in blur-in-[2px] animate-in max-w-44 truncate text-xs duration-300 motion-reduce:animate-none")}>{elapsed}</span>
+        <span className={cn(mono, 'text-muted-foreground tabular-nums')}>{elapsed}</span>
       )}
       <span
         aria-hidden

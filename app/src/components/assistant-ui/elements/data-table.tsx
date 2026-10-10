@@ -59,20 +59,20 @@ export function DataTable<TRow>({
       data-slot="data-table"
       className={cn(paper, "@container w-full overflow-hidden rounded-2xl", className)}
       {...props}>
-      <div className="space-y-2 p-2.5 @md:hidden">
+      <div className="flex items-center px-4 pt-3 pb-2">
         {columns.map(column => (
           <span
             key={column.key}
             className={cn(
               mono,
-              'text-foreground/35',
+              'text-muted-foreground',
               column.align === 'end' ? 'w-16 text-end' : 'flex-1'
             )}>
             {column.header}
           </span>
         ))}
       </div>
-      <div className="text-muted-foreground px-2 py-3 text-center text-[13px]" />
+      <div className="bg-foreground/[0.06] mx-4 h-px" />
       <div key={cycle}>
         {rows.map((row, index) => {
           const key = rowKey?.(row, index) ?? String(index);
@@ -85,9 +85,9 @@ export function DataTable<TRow>({
           return (
             <div
               key={key}
-              className="bg-foreground/[0.025] hover:bg-foreground/[0.04] rounded-xl px-3 py-2 transition-colors motion-reduce:transition-none"
+              className="fade-in slide-in-from-bottom-1 animate-in fill-mode-both hover:bg-foreground/[0.03] flex items-center gap-2.5 px-4 py-2.5 transition-colors duration-300"
               style={{ animationDelay: `${index * 80}ms` }}>
-              <span className="bg-foreground/[0.06] text-foreground/45 flex size-5 shrink-0 items-center justify-center rounded-md text-[9px] font-medium">
+              <span className="bg-foreground/[0.06] text-muted-foreground flex size-5 shrink-0 items-center justify-center rounded-md text-[9px] font-medium">
                 {avatarLetter}
               </span>
               {columns.map(column => (
@@ -96,7 +96,7 @@ export function DataTable<TRow>({
                   className={cn(
                     column === avatarColumn
                       ? 'text-foreground/90 truncate'
-                      : cn(mono, 'text-foreground/55 tabular-nums'),
+                      : cn(mono, 'text-muted-foreground tabular-nums'),
                     column.align === 'end' ? 'w-16 text-end' : 'flex-1'
                   )}>
                   {column.cell(row, index)}

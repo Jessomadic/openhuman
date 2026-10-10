@@ -103,12 +103,12 @@ export function ToolCall({
             data-slot="tool-call-query"
             className={cn(
               mono,
-              'bg-foreground/[0.06] text-foreground/70 min-w-0 truncate rounded-md px-1.5 py-0.5'
+              'bg-foreground/[0.06] text-muted-foreground min-w-0 truncate rounded-md px-1.5 py-0.5'
             )}>
             {query}
           </span>
         ) : null}
-        <span className="bg-foreground/[0.06] text-foreground/70 min-w-0 truncate rounded-md px-1.5 py-0.5">
+        <span className="ms-auto flex w-4 shrink-0 items-center justify-end">
           {meta}
           {!running && outcome === 'success' ? (
             <CheckIcon className="fade-in zoom-in-90 animate-in size-3.5 text-emerald-500 duration-200" />
@@ -125,18 +125,18 @@ export function ToolCall({
             <div className={cn(field, 'mt-2 overflow-hidden rounded-2xl text-xs')}>
               {request != null ? (
                 <div className="px-3.5 pt-2.5 pb-2">
-                  <p className={cn(mono, "text-muted-foreground mb-1")}>{requestLabel}</p>
-                  <div className="bg-foreground/[0.06] mx-3.5 h-px">
+                  <p className={cn(mono, 'text-muted-foreground mb-1')}>{requestLabel}</p>
+                  <div className="text-muted-foreground max-h-48 overflow-auto font-mono">
                     {request}
                   </div>
                 </div>
               ) : null}
               {request != null && result != null ? (
-                <div className="px-3.5 pt-2 pb-2.5" />
+                <div className="bg-foreground/[0.06] mx-3.5 h-px" />
               ) : null}
               {result != null ? (
                 <div className="px-3.5 pt-2 pb-2.5">
-                  <p className={cn(mono, "text-muted-foreground font-mono break-words")}>{resultLabel}</p>
+                  <p className={cn(mono, 'text-muted-foreground mb-1')}>{resultLabel}</p>
                   <div className="text-foreground/90 max-h-64 overflow-auto">{result}</div>
                 </div>
               ) : null}

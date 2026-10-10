@@ -173,9 +173,9 @@ const FileImpl: FileMessagePartComponent = ({ filename, data, mimeType, sourceTy
   return (
     <FileRoot>
       <FileIconDisplay mimeType={mimeType} />
-      <div className="flex w-full max-w-xl flex-col gap-2">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <FileName>{filename}</FileName>
-        {showSize && <FileSize bytes={getBase64Size(data)} className="text-muted-foreground text-[11px]" />}
+        {showSize && <FileSize bytes={getBase64Size(data)} className="text-xs" />}
       </div>
       <FileDownload
         data={data}

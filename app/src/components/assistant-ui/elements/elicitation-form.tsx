@@ -92,7 +92,7 @@ export function ElicitationForm({
           <PlugIcon className="size-3.5" />
         </span>
         <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{server}</span>
-        <span className={cn(mono, "text-muted-foreground shrink-0")}>{needsInputLabel}</span>
+        <span className={cn(mono, 'text-muted-foreground shrink-0')}>{needsInputLabel}</span>
       </div>
 
       <p className="text-muted-foreground text-xs leading-relaxed">{message}</p>
@@ -100,7 +100,7 @@ export function ElicitationForm({
       <div className="flex flex-col gap-2.5">
         {fields.map(item => (
           <div key={item.name} className="flex flex-col gap-1">
-            <span className={cn(mono, "text-muted-foreground")}>
+            <span className={cn(mono, 'text-muted-foreground')}>
               {item.label}
               {item.required && <span className="text-muted-foreground"> *</span>}
             </span>
@@ -113,7 +113,7 @@ export function ElicitationForm({
                       'rounded-full px-2.5 py-1 text-xs transition-colors',
                       option === item.value
                         ? 'bg-foreground text-background'
-                        : cn(field, 'text-foreground/55')
+                        : cn(field, "text-muted-foreground")
                     )}>
                     {option}
                   </span>
@@ -134,7 +134,7 @@ export function ElicitationForm({
                     )}
                   />
                 </span>
-                <span className="fade-in animate-in text-muted-foreground flex items-center gap-2 text-xs duration-300">
+                <span className="text-muted-foreground text-xs">
                   {item.value === 'true' ? 'On' : 'Off'}
                 </span>
               </span>
@@ -167,7 +167,7 @@ export function ElicitationForm({
               onClick={onDecline}
               {...declineProps}
               className={cn(
-                'text-foreground/55 hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3.5 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]',
+                "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3.5 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]",
                 declineProps?.className
               )}>
               {declineLabel}
@@ -178,7 +178,7 @@ export function ElicitationForm({
               {...acceptProps}
               className={cn(
                 inkButton,
-                "focus-visible:ring-foreground/20 flex w-fit items-center gap-2 rounded-lg outline-none focus-visible:ring-1",
+                "flex h-8 items-center rounded-full px-3.5 text-xs font-medium disabled:pointer-events-none disabled:opacity-40",
                 acceptProps?.className
               )}>
               {sendLabel}
@@ -187,7 +187,7 @@ export function ElicitationForm({
         ) : (
           <span
             key={state}
-            className="fade-in animate-in text-foreground/55 flex items-center gap-2 text-xs duration-300">
+            className="fade-in animate-in text-muted-foreground flex items-center gap-2 text-xs duration-300">
             {state === 'accepted' ? (
               <>
                 <CheckIcon className="size-3.5 text-emerald-500" />

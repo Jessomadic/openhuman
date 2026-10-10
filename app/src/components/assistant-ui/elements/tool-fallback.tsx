@@ -223,10 +223,10 @@ function ToolFallbackContent({
       className={cn(
         "aui-tool-fallback-content relative overflow-hidden text-sm outline-none",
         'group/collapsible-content ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:animate-none',
-        'data-closed:animate-collapsible-up',
-        'data-open:animate-collapsible-down',
-        'data-closed:fill-mode-forwards',
-        'data-closed:pointer-events-none',
+        "data-[state=closed]:animate-collapsible-up",
+        "data-[state=open]:animate-collapsible-down",
+        "data-[state=closed]:fill-mode-forwards",
+        "data-[state=closed]:pointer-events-none",
         '[--tw-duration:var(--animation-duration)]',
         className
       )}
@@ -328,7 +328,7 @@ function ToolFallbackError({
       <p className="aui-tool-fallback-error-header text-muted-foreground font-semibold">
         {headerText}
       </p>
-      <p className="aui-tool-fallback-error-reason text-muted-foreground break-words whitespace-pre-line">{errorText}</p>
+      <p className="aui-tool-fallback-error-reason text-muted-foreground">{errorText}</p>
     </div>
   );
 }

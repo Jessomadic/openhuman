@@ -99,7 +99,7 @@ export function BackgroundInbox({
                 {run.title}
               </span>
               {run.summary && (
-                <span className={cn(mono, "text-muted-foreground truncate")}>{run.summary}</span>
+                <span className={cn(mono, 'text-muted-foreground truncate')}>{run.summary}</span>
               )}
             </span>
 

@@ -58,13 +58,13 @@ export function MessageQueue({
           <span className="relative inline-flex size-2 rounded-full bg-blue-500 dark:bg-blue-400" />
         </span>
         <span className="text-foreground/90 min-w-0 flex-1 truncate text-[13.5px]">{running}</span>
-        <span className={cn(mono, "text-muted-foreground shrink-0")}>{runningLabel}</span>
+        <span className={cn(mono, 'text-muted-foreground shrink-0')}>{runningLabel}</span>
       </div>
 
       {queuedCount > 0 && (
         <div className="flex items-baseline justify-between px-1">
-          <span className={cn(mono, "text-muted-foreground")}>{queuedLabel(queuedCount)}</span>
-          <span className={cn(mono, "text-muted-foreground")}>{pendingHint}</span>
+          <span className={cn(mono, 'text-muted-foreground')}>{queuedLabel(queuedCount)}</span>
+          <span className={cn(mono, 'text-muted-foreground')}>{pendingHint}</span>
         </div>
       )}
 
@@ -109,9 +109,9 @@ export function MessageQueueItem({
         field,
         'fade-in slide-in-from-bottom-1 animate-in fill-mode-both flex items-center gap-2.5 rounded-2xl py-2 pr-2 pl-3 duration-300'
       )}>
-      <span className={cn(mono, 'text-foreground/30 w-3 shrink-0 tabular-nums')}>{position}</span>
-      <span className="text-foreground/60 min-w-0 flex-1 truncate text-[13.5px]">{text}</span>
-      <ArrowUpIcon aria-hidden className="text-foreground/25 size-3 shrink-0" />
+      <span className={cn(mono, 'text-muted-foreground w-3 shrink-0 tabular-nums')}>{position}</span>
+      <span className="text-muted-foreground min-w-0 flex-1 truncate text-[13.5px]">{text}</span>
+      <ArrowUpIcon aria-hidden className="text-muted-foreground size-3 shrink-0" />
       {action}
     </li>
   );

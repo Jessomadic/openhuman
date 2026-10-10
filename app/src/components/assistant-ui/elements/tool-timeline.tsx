@@ -84,7 +84,7 @@ export function ToolTimeline({
       className={cn('w-full max-w-sm', className)}
       {...props}>
       <CollapsibleTrigger className="group/trigger text-muted-foreground hover:text-foreground/90 flex items-center gap-1.5 rounded-md py-1 text-[13.5px] transition-colors outline-none">
-        <ChevronRightIcon className={cn("size-3.5 shrink-0 opacity-60 transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-open/trigger:rotate-90 group-data-panel-open/trigger:rotate-90 motion-reduce:transition-none", openRotate)} />
+        <ChevronRightIcon className={cn('size-3.5 shrink-0 opacity-60', openRotate)} />
         <SwapLabel active={streaming ? 0 : 1} className="text-start tabular-nums">
           <ShimmerLabel active={streaming} className="relative inline-block leading-none">
             {activeLabel}
@@ -107,7 +107,7 @@ export function ToolTimeline({
                   <ShimmerLabel active={active} className="relative inline-block leading-none">
                     {step.verb}
                   </ShimmerLabel>
-                  <span className="bg-foreground/[0.06] text-foreground/70 rounded-md px-1.5 py-0.5 font-mono text-[11px]">
+                  <span className="bg-foreground/[0.06] text-muted-foreground rounded-md px-1.5 py-0.5 font-mono text-[11px]">
                     {step.chip}
                   </span>
                 </div>
@@ -118,7 +118,7 @@ export function ToolTimeline({
               {stats.map(stat => (
                 <span
                   key={stat.file}
-                  className="bg-foreground/[0.06] text-foreground/70 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[11px]">
+                  className="bg-foreground/[0.06] text-muted-foreground inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[11px]">
                   <span>{stat.file}</span>
                   {stat.added !== undefined && (
                     <span className="text-emerald-600 dark:text-emerald-400">+{stat.added}</span>

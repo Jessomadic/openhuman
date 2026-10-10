@@ -74,7 +74,7 @@ export function JobProgress({
             aria-label={cancelLabel}
             onClick={onCancel}
             className={cn(ghostButton, 'size-6 shrink-0')}>
-            <XIcon className="size-3.5 shrink-0 text-red-600 dark:text-red-400" />
+            <XIcon className="size-3.5" />
           </button>
         )}
       </div>
@@ -95,17 +95,17 @@ export function JobProgress({
         />
       </span>
 
-      <div className="flex flex-col gap-0.5">
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
         {stages.map((item, i) => (
           <span
             key={item.name}
             className={cn(
               mono,
               i < stage
-                ? 'text-foreground/35'
+                ? 'text-muted-foreground'
                 : i === stage
                   ? 'text-foreground/90'
-                  : 'text-foreground/20'
+                  : 'text-muted-foreground'
             )}>
             {item.name}
           </span>

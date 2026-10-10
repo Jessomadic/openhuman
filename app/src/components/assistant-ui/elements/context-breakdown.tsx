@@ -101,7 +101,7 @@ export function ContextBreakdown({
         {segments.map(segment => (
           <div key={segment.label} className="flex items-center gap-2">
             <span aria-hidden className={cn("size-2 shrink-0 rounded-full forced-color-adjust-none", segment.tint)} />
-            <span className="text-foreground/70 min-w-0 flex-1 truncate text-[13px]">
+            <span className="text-muted-foreground min-w-0 flex-1 truncate text-[13px]">
               {segment.label}
             </span>
             <span className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}>
@@ -121,8 +121,8 @@ export function ContextBreakdown({
         {stats.length > 0 && <div className="border-foreground/10 my-1 border-t" />}
         {stats.map(stat => (
           <div key={stat.label} className="flex items-center justify-between gap-4">
-            <span className="text-foreground/55 min-w-0 truncate text-[12px]">{stat.label}</span>
-            <span className={cn(mono, 'text-foreground/45 shrink-0 tabular-nums')}>
+            <span className="text-muted-foreground min-w-0 truncate text-[12px]">{stat.label}</span>
+            <span className={cn(mono, 'text-muted-foreground shrink-0 tabular-nums')}>
               {stat.value}
             </span>
           </div>

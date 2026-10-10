@@ -575,7 +575,7 @@ const ThreadWelcome: FC = () => {
 
 const ThreadSuggestions: FC = () => {
   return (
-    <div className="aui-thread-welcome-suggestions flex w-full flex-col">
+    <div className="aui-thread-welcome-suggestions flex w-full flex-wrap items-center justify-center gap-2 px-4">
       <ThreadPrimitive.Suggestions>{() => <ThreadSuggestionItem />}</ThreadPrimitive.Suggestions>
     </div>
   );
@@ -588,7 +588,7 @@ const ThreadSuggestionItem: FC = () => {
         <Button
           variant="ghost"
           className="aui-thread-welcome-suggestion text-foreground hover:bg-muted border-border/60 h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap transition-colors">
-          <SuggestionPrimitive.Title className="aui-thread-welcome-suggestion-text-1 text-foreground" />
+          <SuggestionPrimitive.Title className="aui-thread-welcome-suggestion-text-1" />
           <SuggestionPrimitive.Description className="aui-thread-welcome-suggestion-text-2 text-muted-foreground empty:hidden" />
         </Button>
       </SuggestionPrimitive.Trigger>
@@ -859,7 +859,7 @@ const ComposerAction: FC<{
             aria-label={t('composer.voiceMode', 'Voice mode')}
             disabled={isRunning}
             onClick={onSwitchToMicCloud}>
-            <MicIcon className="size-4" />
+            <MicIcon className="aui-composer-dictate-icon size-4" />
           </TooltipIconButton>
         )}
         {/*
@@ -881,7 +881,7 @@ const ComposerAction: FC<{
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="aui-composer-dictate text-destructive size-7 rounded-full"
+                className="aui-composer-dictate size-7 rounded-full"
                 aria-label={t('assistantUi.thread.startVoiceInput', 'Start voice input')}>
                 <MicIcon className="aui-composer-dictate-icon size-4" />
               </TooltipIconButton>
@@ -895,7 +895,7 @@ const ComposerAction: FC<{
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="aui-composer-stop-dictation size-7 rounded-full"
+                className="aui-composer-stop-dictation text-destructive size-7 rounded-full"
                 aria-label={t('assistantUi.thread.stopVoiceInput', 'Stop voice input')}>
                 <SquareIcon className="aui-composer-stop-dictation-icon size-3.5 animate-pulse fill-current" />
               </TooltipIconButton>
@@ -1300,7 +1300,7 @@ const AssistantActionBar: FC = () => {
         <TooltipIconButton
           tooltip={t('chat.message.goodResponse')}
           data-testid="assistant-feedback-positive"
-          className="data-[submitted=true]:bg-accent data-[submitted=true]:text-accent-foreground">
+          className="data-[submitted=true]:text-primary-600 dark:data-[submitted=true]:text-primary-400">
           <ThumbsUpIcon />
         </TooltipIconButton>
       </ActionBarPrimitive.FeedbackPositive>
@@ -1308,7 +1308,7 @@ const AssistantActionBar: FC = () => {
         <TooltipIconButton
           tooltip={t('chat.message.badResponse')}
           data-testid="assistant-feedback-negative"
-          className="data-[submitted=true]:bg-accent data-[submitted=true]:text-accent-foreground">
+          className="data-[submitted=true]:text-coral-600 dark:data-[submitted=true]:text-coral-400">
           <ThumbsDownIcon />
         </TooltipIconButton>
       </ActionBarPrimitive.FeedbackNegative>
@@ -1513,10 +1513,10 @@ const EditComposer: FC = () => {
           rows={2}
           autoFocus
           aria-label={t('conversations.assistantUi.edit.ariaLabel')}
-          className="text-foreground min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base outline-none"
+          className="bg-foreground/[0.04] text-foreground/90 min-h-16 resize-none rounded-xl px-3 py-2.5 text-sm leading-relaxed outline-none focus-visible:ring-1 focus-visible:ring-ring"
         />
         {discardedReplies > 0 && (
-          <div className="mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
+          <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
             <AlertTriangleIcon aria-hidden className="size-3.5 shrink-0" />
             <span className="font-mono text-[11px] tabular-nums">
               {t(
@@ -1529,12 +1529,12 @@ const EditComposer: FC = () => {
         )}
         <div className="flex items-center justify-end gap-2">
           <ComposerPrimitive.Cancel asChild>
-            <Button variant="ghost" size="sm" className="h-8 px-3">
+            <Button variant="ghost" size="sm" className="rounded-full">
               {t('common.cancel')}
             </Button>
           </ComposerPrimitive.Cancel>
           <ComposerPrimitive.Send asChild>
-            <Button size="sm" className="h-8 px-3">
+            <Button size="sm" className="rounded-full">
               {t('chat.elicitation.send')}
             </Button>
           </ComposerPrimitive.Send>

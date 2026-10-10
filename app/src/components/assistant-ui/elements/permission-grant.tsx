@@ -98,9 +98,9 @@ export function PermissionGrant({
       </div>
 
       <div className="flex flex-col gap-1">
-        <span className={cn(mono, "text-muted-foreground")}>{reachLabel}</span>
+        <span className={cn(mono, 'text-muted-foreground')}>{reachLabel}</span>
         {reach.map(item => (
-          <span key={item} className="text-foreground/60 flex items-baseline gap-2 text-xs">
+          <span key={item} className="text-muted-foreground flex items-baseline gap-2 text-xs">
             <span aria-hidden className="bg-foreground/20 size-1 rounded-full" />
             {item}
           </span>

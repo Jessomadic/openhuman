@@ -52,7 +52,7 @@ export function TodoList({
       {...props}>
       <div className="flex items-start justify-between gap-3">
         <span className="text-[13.5px] font-medium">{title}</span>
-        <span className={cn(mono, "text-muted-foreground shrink-0 whitespace-nowrap tabular-nums")}>
+        <span className={cn(mono, 'text-muted-foreground tabular-nums')}>
           {revision === undefined
             ? `${done}/${items.length}`
             : `${done}/${items.length} · rev ${revision}`}
@@ -90,7 +90,7 @@ export function TodoItems({
             )}>
             {item.status === 'done' ? (
               <span className="border-foreground/20 bg-foreground/[0.06] flex size-3.5 items-center justify-center rounded-[5px] border">
-                <CheckIcon className="text-foreground/45 size-2.5" />
+                <CheckIcon className="text-muted-foreground size-2.5" />
               </span>
             ) : item.status === 'failed' ? (
               <span className="flex size-3.5 items-center justify-center rounded-[5px] border border-red-600/25 bg-red-600/[0.08] dark:border-red-400/25 dark:bg-red-400/[0.08]">
@@ -108,17 +108,17 @@ export function TodoItems({
               className={cn(
                 item.status === 'done' &&
                   cn(
-                    compact ? 'text-foreground/55' : 'text-foreground/35',
+                    compact ? 'text-muted-foreground' : 'text-muted-foreground',
                     'line-through decoration-[1.5px]'
                   ),
                 item.status === 'active' && 'text-foreground/90',
-                item.status === 'pending' && 'text-foreground/50',
+                item.status === 'pending' && 'text-muted-foreground',
                 item.status === 'failed' && 'text-red-600 dark:text-red-400'
               )}>
               {item.text}
             </span>
             {item.status === 'failed' && item.reason ? (
-              <p className="text-foreground/45 text-xs leading-4 break-words">{item.reason}</p>
+              <p className="text-muted-foreground text-xs leading-4 break-words">{item.reason}</p>
             ) : null}
           </div>
         </li>
@@ -173,7 +173,7 @@ function ProgressMarker({ progress }: { progress: TodoProgress }) {
       />
     );
   }
-  return <ListChecksIcon aria-hidden className="text-foreground/40 size-3.5 shrink-0" />;
+  return <ListChecksIcon aria-hidden className="text-muted-foreground size-3.5 shrink-0" />;
 }
 
 /**
@@ -226,7 +226,7 @@ export function TodoProgressCard({
         </span>
         <span
           data-testid="todo-progress-count"
-          className={cn(mono, 'text-foreground/40 shrink-0 tabular-nums')}>
+          className={cn(mono, 'text-muted-foreground shrink-0 tabular-nums')}>
           {progress.allDone
             ? completedLabel
             : open
@@ -236,7 +236,7 @@ export function TodoProgressCard({
         <ChevronRightIcon
           aria-hidden
           className={cn(
-            'text-foreground/30 size-3 shrink-0 transition-transform duration-200 motion-reduce:transition-none',
+            'text-muted-foreground size-3 shrink-0 transition-transform duration-200 motion-reduce:transition-none',
             open && 'rotate-90'
           )}
         />
@@ -281,7 +281,7 @@ export function TodoReceipt({
         aria-expanded={open}
         data-analytics-id="chat-todo-receipt-toggle"
         onClick={() => onOpenChange(!open)}
-        className="text-foreground/50 hover:text-foreground/80 flex min-w-0 items-center gap-1.5 py-0.5 text-start text-[12.5px] transition-colors">
+        className="text-muted-foreground hover:text-foreground/80 flex min-w-0 items-center gap-1.5 py-0.5 text-start text-[12.5px] transition-colors">
         <ListChecksIcon aria-hidden className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">
           {label}

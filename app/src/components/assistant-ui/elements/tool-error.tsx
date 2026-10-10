@@ -62,7 +62,7 @@ export function ToolError({
       {...props}>
       <div className="flex items-center gap-2.5">
         <AlertCircleIcon className="size-3.5 shrink-0 text-red-500" />
-        <span className={cn(mono, "text-muted-foreground min-w-0 wrap-anywhere")}>{name}</span>
+        <span className={cn(mono, 'text-muted-foreground shrink-0')}>{name}</span>
         <span className="text-foreground/80 min-w-0 flex-1 truncate text-[13px]">{target}</span>
         <span className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}>
           {attempt}/{maxAttempts}
@@ -89,7 +89,7 @@ export function ToolError({
           type="button"
           onClick={onRetry}
           disabled={retrying || !onRetry}
-          className="text-foreground/70 hover:bg-foreground/[0.06] hover:text-foreground/95 flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96] disabled:pointer-events-none">
+          className="text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground/95 flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96] disabled:pointer-events-none">
           {retrying ? (
             <Loader2Icon className="size-3 animate-spin motion-reduce:animate-none" />
           ) : (

@@ -124,7 +124,7 @@ function PanelLabel({
         {elapsed !== undefined && (
           <span
             data-slot="reasoning-panel-elapsed"
-            className={cn(mono, 'text-foreground/30 tabular-nums')}>
+            className={cn(mono, 'text-muted-foreground tabular-nums')}>
             {elapsed}
           </span>
         )}
@@ -175,7 +175,7 @@ function StepList({
                 {step.body ? (
                   <div
                     data-slot="reasoning-step-body"
-                    className="text-foreground/50 mt-0.5 text-[13px] leading-relaxed break-words">
+                    className="text-muted-foreground mt-0.5 text-[13px] leading-relaxed break-words">
                     <TextMessagePartProvider text={step.body} isRunning={active}>
                       <MarkdownText />
                     </TextMessagePartProvider>
@@ -245,7 +245,7 @@ export function ReasoningPanel({
         data-testid={testId}
         aria-busy={streaming || undefined}
         className={cn('w-full', className)}>
-        <div className="text-foreground/55 flex items-center gap-1.5 py-1 text-[13.5px]">
+        <div className="text-muted-foreground flex items-center gap-1.5 py-1 text-[13.5px]">
           {label}
         </div>
         {shown.length > 0 && <StepList steps={shown} streaming={streaming} bounded={streaming} />}

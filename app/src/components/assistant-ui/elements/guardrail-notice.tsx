@@ -44,27 +44,27 @@ export function GuardrailNotice({
           <ShieldIcon className="size-3.5" />
         </span>
         <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{title}</span>
-        <span className={cn(mono, "text-muted-foreground shrink-0")}>{policy}</span>
+        <span className={cn(mono, 'text-muted-foreground shrink-0')}>{policy}</span>
       </div>
 
-      <p className="text-foreground/60 text-xs leading-relaxed">{explanation}</p>
+      <p className="text-muted-foreground text-xs leading-relaxed">{explanation}</p>
 
       {alternatives.length > 0 && (
         <div className="flex flex-col gap-1.5">
-          <span className={cn(mono, "text-muted-foreground")}>{alternativesLabel}</span>
+          <span className={cn(mono, 'text-muted-foreground')}>{alternativesLabel}</span>
           {alternatives.map(alternative =>
             onPick ? (
               <button
                 key={alternative}
                 type="button"
                 onClick={() => onPick(alternative)}
-                className="hover:bg-foreground/[0.04] text-foreground/70 hover:text-foreground/95 -mx-1.5 rounded-lg px-1.5 py-1 text-start text-[13px] transition-colors">
+                className="hover:bg-foreground/[0.04] text-muted-foreground hover:text-foreground/95 -mx-1.5 rounded-lg px-1.5 py-1 text-start text-[13px] transition-colors">
                 {alternative}
               </button>
             ) : (
               <span
                 key={alternative}
-                className="text-foreground/70 -mx-1.5 rounded-lg px-1.5 py-1 text-start text-[13px]">
+                className="text-muted-foreground -mx-1.5 rounded-lg px-1.5 py-1 text-start text-[13px]">
                 {alternative}
               </span>
             )

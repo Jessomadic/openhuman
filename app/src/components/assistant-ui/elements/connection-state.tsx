@@ -64,7 +64,7 @@ export function ConnectionState({
           <button
             type="button"
             onClick={onRetry}
-            className="text-foreground/70 hover:bg-foreground/[0.06] hover:text-foreground/95 shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]">
+            className="text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground/95 shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]">
             {retryLabel}
           </button>
         </>

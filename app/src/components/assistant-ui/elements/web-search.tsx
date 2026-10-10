@@ -71,13 +71,13 @@ export function WebSearch({
           data-slot="web-search-query"
           className={cn(
             field,
-            'text-foreground/70 inline-flex w-fit max-w-full items-center gap-1.5 rounded-full px-3.5 py-2 text-xs'
+            "text-muted-foreground inline-flex w-fit items-center gap-1.5 rounded-full px-3.5 py-2 text-xs"
           )}>
-          <SearchIcon className="text-muted-foreground size-3" />
-          <span className="text-foreground/70 inline-flex w-fit items-center gap-1.5 rounded-full px-3.5 py-2 text-xs">{query}</span>
+          <SearchIcon className="text-muted-foreground size-3 shrink-0" />
+          <span className="truncate">{query}</span>
         </span>
       ) : null}
-      <div data-slot="web-search-status" className="text-foreground/45 text-xs">
+      <div data-slot="web-search-status" className="text-muted-foreground text-xs">
         {searching ? (
           <ShimmerLabel className="relative inline-block leading-none">
             {searchingLabel}
@@ -87,7 +87,7 @@ export function WebSearch({
         )}
       </div>
       {shown.length > 0 ? (
-        <div data-slot="web-search-results" className="flex flex-col">
+        <div data-slot="web-search-results" className="flex min-h-[5.75rem] flex-col">
           {shown.map(result => {
             const content = (
               <>
@@ -97,7 +97,7 @@ export function WebSearch({
                 <span className="text-foreground/90 min-w-0 flex-1 truncate text-[13.5px]">
                   {result.title}
                 </span>
-                <span className={cn(mono, "text-muted-foreground shrink-0")}>{result.domain}</span>
+                <span className={cn(mono, 'text-muted-foreground shrink-0')}>{result.domain}</span>
               </>
             );
             const key = `${cycle}-${result.url ?? result.domain}-${result.title}`;

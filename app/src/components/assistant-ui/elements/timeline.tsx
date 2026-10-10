@@ -51,7 +51,7 @@ export function Timeline({
             className={cn(
               mono,
               'pt-[3px] text-end tabular-nums',
-              event.when === 'future' ? 'text-foreground/25' : 'text-foreground/40'
+              event.when === 'future' ? 'text-muted-foreground' : 'text-muted-foreground'
             )}>
             {event.time}
           </span>

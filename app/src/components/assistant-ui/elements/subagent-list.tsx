@@ -65,7 +65,7 @@ export function SubagentList({
                 <Loader2Icon className="text-muted-foreground size-3.5 shrink-0 animate-spin motion-reduce:animate-none" />
               )}
               <span className="flex-1 truncate text-[13.5px]">{agent.name}</span>
-              <span className={cn(mono, "text-muted-foreground")}>{agent.model}</span>
+              <span className={cn(mono, 'text-muted-foreground')}>{agent.model}</span>
             </div>
             <span
               role="progressbar"
@@ -94,7 +94,7 @@ export function SubagentList({
           <div className="flex items-center gap-2">
             <Loader2Icon className="text-muted-foreground size-3.5 shrink-0 animate-spin motion-reduce:animate-none" />
             <span className="flex-1 truncate text-[13.5px]">{summaryAgent.name}</span>
-            <span className={cn(mono, "text-muted-foreground")}>{summaryAgent.model}</span>
+            <span className={cn(mono, 'text-muted-foreground')}>{summaryAgent.model}</span>
           </div>
           <span
             role="progressbar"

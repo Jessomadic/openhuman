@@ -69,7 +69,7 @@ export function TerminalBlock({
             <span
               className={cn(
                 mono,
-                ink ? "text-background/40 dark:text-muted-foreground" : "text-muted-foreground"
+                ink ? 'text-background/40 dark:text-muted-foreground' : 'text-muted-foreground'
               )}>
               {exitLabel}
             </span>
@@ -87,7 +87,7 @@ export function TerminalBlock({
         className={cn(
           'flex max-h-72 flex-col gap-1 overflow-auto px-4 pt-1 pb-3.5 whitespace-pre-wrap break-all',
           !done && 'min-h-[8.5rem]',
-          ink ? 'text-background/55 dark:text-foreground/50' : 'text-foreground/50'
+          ink ? 'text-background/55 dark:text-muted-foreground' : 'text-muted-foreground'
         )}>
         {take(lines, visibleCount).map((line, i) => {
           const isLast = i === lines.length - 1;
