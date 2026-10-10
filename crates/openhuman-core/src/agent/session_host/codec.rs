@@ -162,6 +162,7 @@ impl TranscriptCodec<OpenHumanRunContext> for OpenHumanTranscriptCodec {
                 cached_input: sidecar.cached_input_tokens,
                 context_window: sidecar.context_window,
                 cost_usd: sidecar.cost_usd,
+                ..Default::default()
             },
             ts: chrono::Utc::now().to_rfc3339(),
             reasoning_content: None,
@@ -291,6 +292,7 @@ fn attach_text_dialect_rounds(
                 cached_input: 0,
                 context_window: 0,
                 cost_usd: 0.0,
+                ..Default::default()
             },
             ts: chrono::Utc::now().to_rfc3339(),
             reasoning_content: None,
