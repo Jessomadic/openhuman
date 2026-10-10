@@ -106,7 +106,7 @@ cargo test -p openhuman-cli --features storage-mongodb --test storage_approvals_
 
 CI has two lanes for this:
 
-- The `storage-drivers` lane in `scripts/ci/self-hosted/lanes-plan.mjs` builds with `storage-sqlite,storage-file`. It runs every storage target plus the lib tests of the domains on the ports. The `storage` area in `.github/ci-paths-filter.yml` arms it when storage, cron, flows, approvals, devices, notifications, task sources, keyring or credentials, orchestration or the rpc session store change.
+- The `storage-drivers` lane in `scripts/ci/self-hosted/lanes-plan.mjs` builds with `storage-sqlite,storage-file`. It runs every storage target plus the lib tests of the domains on the ports. The `storage` area in `.github/ci-paths-filter.yml` arms it when storage, cron, flows, approvals, devices, notifications, task sources, keyring or credentials, orchestration, the cost tracker, app and desktop-control state or the rpc session store change.
 - `.github/workflows/storage-mongodb.yml` builds with `storage-mongodb` against a real replica set. It runs on pull requests that touch the same paths, nightly on `main` and on demand.
 
 ## Where to read next
