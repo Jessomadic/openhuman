@@ -3,15 +3,31 @@ use super::*;
 use crate::config::Config;
 use crate::storage::{MemoryStorage, Scope, ScopedStorage, StorageBackend};
 use std::sync::Arc;
+use tinystoragedrivers::secrets::{crypto, DerivedKeys, KeyProvider};
+use zeroize::Zeroizing;
+
+fn keys(byte: u8) -> Arc<dyn KeyProvider> {
+    Arc::new(DerivedKeys::new(Zeroizing::new([byte; 32])))
+}
 
 fn scoped(storage: &MemoryStorage, scope: &str) -> ScopedStorage {
     storage.for_scope(&Scope::new(scope).unwrap()).unwrap()
 }
 
 fn document_source(storage: &MemoryStorage, scope: &str, file: &Path) -> DocumentConfigSource {
+    document_source_keyed(storage, scope, file, keys(1))
+}
+
+fn document_source_keyed(
+    storage: &MemoryStorage,
+    scope: &str,
+    file: &Path,
+    keys: Arc<dyn KeyProvider>,
+) -> DocumentConfigSource {
     DocumentConfigSource::new(
         Arc::clone(scoped(storage, scope).documents()),
-        scope.to_string(),
+        Scope::new(scope).unwrap(),
+        keys,
         FileConfigSource::new(file),
     )
 }
@@ -32,10 +48,10 @@ async fn the_file_source_round_trips_hand_edits_and_commits_atomically() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("config.toml");
     let source = FileConfigSource::new(&path);
-    assert!(!source.exists().await);
+    assert!(!source.exists().await.unwrap());
 
     source.write("default_model = \"one\"\n").await.unwrap();
-    assert!(source.exists().await);
+    assert!(source.exists().await.unwrap());
 
     // A hand edit (with a comment) is read back verbatim.
     std::fs::write(&path, "# my note\ndefault_model = \"hand-edited\"\n").unwrap();
@@ -92,25 +108,64 @@ async fn a_save_keeps_hand_edits_but_not_comments() {
 // ── Document source ──────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn a_document_never_holds_the_bootstrap_tables() {
+async fn a_document_holds_no_plaintext_and_no_bootstrap_tables() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("config.toml");
     let storage = MemoryStorage::new();
     let source = document_source(&storage, "alice", &file);
 
     source
-        .write("default_model = \"m\"\n[storage]\nurl = \"mongodb://u:pw@db/x\"\n")
+        .write("default_model = \"m\"\napi_key = \"sk-very-secret\"\n[storage]\nurl = \"mongodb://u:pw@db/x\"\n")
         .await
         .unwrap();
 
     let docs = Arc::clone(scoped(&storage, "alice").documents());
     let stored = docs.get("config", "alice").await.unwrap().unwrap();
-    let body = stored.doc["toml"].as_str().unwrap().to_string();
-    assert!(body.contains("default_model"));
-    assert!(
-        !body.contains("mongodb") && !body.contains("[storage]"),
-        "{body}"
-    );
+    let raw = serde_json::to_string(&stored.doc).unwrap();
+    assert!(raw.contains("enc2:"), "{raw}");
+    for leaked in ["sk-very-secret", "mongodb", "default_model", "[storage]"] {
+        assert!(!raw.contains(leaked), "{leaked} leaked into {raw}");
+    }
+    // It decrypts back to the text without the bootstrap table.
+    let read = source.read().await.unwrap().contents;
+    assert!(read.contains("sk-very-secret") && !read.contains("mongodb"));
+    assert!(source.encrypts_body());
+}
+
+#[tokio::test]
+async fn a_document_does_not_decrypt_under_another_scope_or_master_key() {
+    let tmp = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let alice = document_source(&storage, "alice", &tmp.path().join("a.toml"));
+    alice.write("default_model = \"m\"\n").await.unwrap();
+
+    // Another master key fails closed.
+    let wrong_key =
+        document_source_keyed(&storage, "alice", &tmp.path().join("a.toml"), keys(2));
+    assert!(wrong_key.read().await.is_err());
+
+    // Another scope's data key cannot open alice's ciphertext even when the
+    // sealed value is copied across (per-scope key derivation).
+    let docs = Arc::clone(scoped(&storage, "alice").documents());
+    let sealed = docs.get("config", "alice").await.unwrap().unwrap().doc;
+    let bob_docs = Arc::clone(scoped(&storage, "bob").documents());
+    bob_docs
+        .put("config", "bob", sealed, tinystoragedrivers::Precondition::None)
+        .await
+        .unwrap();
+    let bob = document_source(&storage, "bob", &tmp.path().join("b.toml"));
+    assert!(bob.read().await.is_err(), "copied ciphertext must not open");
+}
+
+#[tokio::test]
+async fn a_malformed_bootstrap_file_is_an_error_not_an_empty_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("config.toml");
+    let storage = MemoryStorage::new();
+    let source = document_source(&storage, "alice", &file);
+    source.write("default_model = \"m\"\n").await.unwrap();
+    std::fs::write(&file, "[storage\n").unwrap();
+    assert!(source.read().await.is_err());
 }
 
 #[tokio::test]
@@ -129,10 +184,12 @@ async fn a_document_read_takes_its_bootstrap_tables_from_the_file() {
 
     // Even a document that somehow carries a [storage] table is overruled.
     let docs = Arc::clone(scoped(&storage, "alice").documents());
+    let key = keys(1).data_key(&Scope::new("alice").unwrap()).unwrap();
+    let sealed = crypto::encrypt_enc2(&key, b"[storage]\nurl = \"evil\"\n").unwrap();
     docs.put(
         "config",
         "alice",
-        serde_json::json!({"toml": "[storage]\nurl = \"evil\"\n"}),
+        serde_json::json!({ "toml_enc": sealed }),
         tinystoragedrivers::Precondition::None,
     )
     .await
@@ -148,10 +205,10 @@ async fn without_a_document_the_source_reads_the_file() {
     let file = tmp.path().join("config.toml");
     let storage = MemoryStorage::new();
     let source = document_source(&storage, "alice", &file);
-    assert!(!source.exists().await);
+    assert!(!source.exists().await.unwrap());
 
     std::fs::write(&file, "default_model = \"from-file\"\n").unwrap();
-    assert!(source.exists().await);
+    assert!(source.exists().await.unwrap());
     assert_eq!(
         source.read().await.unwrap().contents,
         "default_model = \"from-file\"\n"
@@ -170,8 +227,8 @@ async fn two_scopes_keep_their_config_apart() {
         .write("default_model = \"alice-model\"\n")
         .await
         .unwrap();
-    assert!(alice.exists().await);
-    assert!(!bob.exists().await, "bob sees nothing of alice's config");
+    assert!(alice.exists().await.unwrap());
+    assert!(!bob.exists().await.unwrap(), "bob sees nothing of alice's config");
 
     bob.write("default_model = \"bob-model\"\n").await.unwrap();
     assert!(alice.read().await.unwrap().contents.contains("alice-model"));
@@ -185,7 +242,11 @@ async fn two_scopes_keep_their_config_apart() {
 async fn config_save_and_reload_use_the_document_on_a_shared_backend() {
     let tmp = tempfile::tempdir().unwrap();
     let storage = MemoryStorage::new();
-    let _forced = ForcedDocumentSource::new(scoped(&storage, "tenant-a"), "tenant-a");
+    let _forced = ForcedDocumentSource::new(
+        scoped(&storage, "tenant-a"),
+        Scope::new("tenant-a").unwrap(),
+        keys(3),
+    );
 
     let mut config = config_at(tmp.path(), "doc-model");
     config.storage.url = Some("sqlite:/bootstrap".to_string());
@@ -215,5 +276,5 @@ async fn without_a_shared_backend_config_stays_on_the_file() {
     let config = config_at(tmp.path(), "file-model");
     config.save().await.unwrap();
     assert!(config.config_path.exists());
-    assert_eq!(for_config(&config.config_path).label(), "file");
+    assert_eq!(for_config(&config.config_path).unwrap().label(), "file");
 }
