@@ -66,7 +66,7 @@ type BreakdownState =
 export function contextBreakdownSegments(
   data: ContextBreakdownData,
   t: (key: string) => string,
-  usage: Pick<SessionTokenUsage, 'lastTurnInputTokens' | 'lastTurnOutputTokens'> = EMPTY_USAGE
+  usage: Pick<SessionTokenUsage, 'lastTurnContextUsed' | 'lastTurnOutputTokens'> = EMPTY_USAGE
 ): readonly ContextSegment[] {
   let systemPrompt = 0;
   let toolSchemas = 0;
