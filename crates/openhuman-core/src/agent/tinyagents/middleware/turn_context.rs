@@ -286,6 +286,12 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
             guard
                 .messages
                 .push(Message::Assistant(response.message.clone()));
+            // A cache replay spent nothing, but its request was still this
+            // size, so the context figure follows every answered call.
+            if let Some(usage) = response.usage.as_ref() {
+                guard.last_call_input_tokens = usage.input_tokens;
+                guard.last_call_output_tokens = usage.output_tokens;
+            }
             // A cache replay consumed no provider tokens.
             if let Some(usage) = response
                 .usage
