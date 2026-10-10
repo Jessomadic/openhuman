@@ -15,8 +15,13 @@ use support::*;
 
 #[path = "saas_mode/cluster.rs"]
 mod cluster;
+#[path = "saas_mode/delivery_recovery.rs"]
+mod delivery_recovery;
 #[path = "saas_mode/memory.rs"]
 mod memory;
+#[path = "saas_mode/mock_llm.rs"]
+#[allow(dead_code)]
+mod mock_llm;
 #[path = "saas_mode/mock_memory.rs"]
 mod mock_memory;
 
