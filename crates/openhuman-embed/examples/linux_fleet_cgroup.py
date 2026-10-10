@@ -10,7 +10,7 @@ binary = pathlib.Path(__file__).resolve().parents[3] / 'target/release/examples/
 r=subprocess.run([str(binary), count],capture_output=True,text=True)
 if r.returncode:
  print(r.stderr, file=sys.stderr);sys.exit(r.returncode)
-record=json.loads(r.stdout)
+record=json.loads(next(line for line in r.stdout.splitlines() if line.startswith("{")))
 path=next(line.split('::',1)[1] for line in pathlib.Path('/proc/self/cgroup').read_text().splitlines() if line.startswith('0::'))
 cg=pathlib.Path('/sys/fs/cgroup')/path.lstrip('/')
 for name in ['memory.peak','memory.max','cpu.max','memory.events']:

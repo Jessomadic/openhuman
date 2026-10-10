@@ -1,5 +1,7 @@
-//! Reproducible Linux RSS and cold-turn measurement of runtime-owned agents.
-//! Run the release binary in a fresh cgroup; inference is a loopback HTTP mock.
+//! Title: Linux agent fleet memory and latency
+//! Summary: Measure retained runtime-owned agents using loopback inference and two worker threads.
+//! Run: offline on Linux; use a fresh constrained cgroup for release measurements.
+//! Feature: default
 
 #![recursion_limit = "512"]
 
@@ -24,6 +26,7 @@ fn rss_kib() -> anyhow::Result<u64> {
         .parse()?)
 }
 
+// ANCHOR: linux-fleet
 fn main() -> anyhow::Result<()> {
     let count: usize = std::env::args()
         .nth(1)
@@ -33,8 +36,11 @@ fn main() -> anyhow::Result<()> {
     openhuman_embed::process::tokio_runtime_builder()
         .worker_threads(2)
         .build()?
-        .block_on(measure(count))
+        .block_on(measure(count))?;
+    println!("EXAMPLE_OK linux_fleet");
+    Ok(())
 }
+// ANCHOR_END: linux-fleet
 
 async fn measure(count: usize) -> anyhow::Result<()> {
     let mock = MockServer::builder()
