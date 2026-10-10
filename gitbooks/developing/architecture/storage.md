@@ -35,12 +35,12 @@ The storage URL is the first of these that is set. Blank values count as unset.
 
 `[storage]` is bootstrap configuration. It is always read from the environment or the file and never from storage itself.
 
-| URL                                                                       | Driver                                      | Cargo feature     |
-| ------------------------------------------------------------------------- | ------------------------------------------- | ----------------- |
-| `memory`                                                                  | In-process maps, keeps nothing              | Always            |
-| `sqlite:<path>` (a `.db` file, or a directory with one file per database) | SQLite                                      | `storage-sqlite`  |
-| `file:<dir>`                                                              | JSON documents, JSONL streams and raw files | `storage-file`    |
-| `mongodb://…/<db>`, `mongodb+srv://…/<db>`                                | MongoDB, one database shared by every scope | `storage-mongodb` |
+| URL                                                                    | Driver                                                                                                                                                                                                               | Cargo feature     |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `memory`                                                               | In-process maps, keeps nothing                                                                                                                                                                                       | Always            |
+| `sqlite:<path>` (a `.db` file, or a directory that holds `storage.db`) | SQLite                                                                                                                                                                                                               | `storage-sqlite`  |
+| `file:<dir>`                                                           | `<dir>/scopes/<scope>/docs/<collection>/<id>.json` for documents, with collection metadata in `<dir>/_meta/collections/<collection>.json`. Streams are JSONL and blobs are raw files under the same scope directory. |
+| `mongodb://…/<db>`, `mongodb+srv://…/<db>`                             | MongoDB, one database shared by every scope                                                                                                                                                                          | `storage-mongodb` |
 
 A URL for a driver the build lacks fails at `storage::open`, and the error names the Cargo feature. A misconfigured deployment therefore stops at boot rather than at its first write. Credentials in a URL are redacted in logs and in `Debug` output.
 
@@ -68,13 +68,13 @@ On a shared backend (MongoDB) other processes may write the same records, so boo
 
 ## Drivers and on-disk layout
 
-| Driver             | Where the data lives                                                                                                                                                                             |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `memory`           | Nowhere. Records last as long as the backend value.                                                                                                                                              |
-| `sqlite:<dir>`     | One SQLite file per named database inside `<dir>`, in WAL mode, with a single writer and a reader pool per file. The large relational stores keep their tables through the driver's native mode. |
-| `sqlite:<file>.db` | One database file for everything.                                                                                                                                                                |
-| `file:<dir>`       | JSON documents, JSONL streams and blobs as files under `<dir>`.                                                                                                                                  |
-| `mongodb://…/<db>` | One database. Each named database is a collection prefix, and every record carries its scope.                                                                                                    |
+| Driver             | Where the data lives                                                                                                                                                                                                 |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memory`           | Nowhere. Records last as long as the backend value.                                                                                                                                                                  |
+| `sqlite:<dir>`     | `<dir>/storage.db` in WAL mode (with its `-wal` and `-shm` files). The scope is a column on every row. The large relational stores keep their tables through the driver's native mode.                               |
+| `sqlite:<file>.db` | That file, laid out the same way.                                                                                                                                                                                    |
+| `file:<dir>`       | `<dir>/scopes/<scope>/docs/<collection>/<id>.json` for documents, with collection metadata in `<dir>/_meta/collections/<collection>.json`. Streams are JSONL and blobs are raw files under the same scope directory. |
+| `mongodb://…/<db>` | One database. Each named database is a collection prefix, and every record carries its scope.                                                                                                                        |
 
 Without a URL, the classic layout is unchanged: per-domain SQLite databases (`approval/approval.db`, `devices/devices.db`, `notifications/notifications.db`, `task_sources/sources.db`, `cron/jobs.db`, `flows/flows.db`, `graph_checkpoints.db`), JSON and JSONL files, and the OS keyring or `secrets.enc`. Records written to a configured backend are not copied back to those files, and the files are not imported into the backend.
 
