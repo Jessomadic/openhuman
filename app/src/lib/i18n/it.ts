@@ -3452,7 +3452,6 @@ const messages: TranslationMap = {
     'Procedure riutilizzabili ed eseguibili: un obiettivo e i passi per raggiungerlo.',
   'activity.tabs.alerts': 'Avvisi',
 
-
   'harnessInit.title': 'Preparazione in corso',
 
   'announcement.gotIt': 'Ho capito',

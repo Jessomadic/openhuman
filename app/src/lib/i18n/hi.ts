@@ -3392,7 +3392,6 @@ const messages: TranslationMap = {
     'पुन: उपयोग योग्य, चलाने योग्य प्रक्रियाएँ: एक लक्ष्य और उसे प्राप्त करने के चरण।',
   'activity.tabs.alerts': 'अलर्ट',
 
-
   'harnessInit.title': 'सेटअप किया जा रहा है',
 
   'announcement.gotIt': 'समझ गया',

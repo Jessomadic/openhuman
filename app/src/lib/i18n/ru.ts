@@ -3430,7 +3430,6 @@ const messages: TranslationMap = {
     'Многократно используемые, запускаемые процедуры: цель и шаги для её достижения.',
   'activity.tabs.alerts': 'Уведомления',
 
-
   'harnessInit.title': 'Идёт настройка',
 
   'announcement.gotIt': 'Понятно',

@@ -3407,7 +3407,6 @@ const messages: TranslationMap = {
     'Wielokrotnego użytku, uruchamialne procedury: cel i kroki do jego osiągnięcia.',
   'activity.tabs.alerts': 'Alerty',
 
-
   // Chat: agent-generated artifacts (#2779)
   'chat.artifact.ready': 'Gotowe',
   'chat.artifact.failed': 'Generowanie nie powiodło się',

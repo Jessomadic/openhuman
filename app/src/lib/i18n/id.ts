@@ -3417,7 +3417,6 @@ const messages: TranslationMap = {
     'Prosedur yang dapat digunakan kembali dan dijalankan: tujuan beserta langkah-langkah untuk mencapainya.',
   'activity.tabs.alerts': 'Peringatan',
 
-
   'harnessInit.title': 'Menyiapkan semuanya',
 
   'announcement.gotIt': 'Mengerti',

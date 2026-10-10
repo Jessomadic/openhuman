@@ -3389,7 +3389,6 @@ const messages: TranslationMap = {
     'পুনর্ব্যবহারযোগ্য, রানযোগ্য পদ্ধতি: একটি লক্ষ্য এবং সেখানে পৌঁছানোর ধাপগুলি।',
   'activity.tabs.alerts': 'সতর্কতা',
 
-
   // Keyring consent & security
   'harnessInit.title': 'সেটআপ করা হচ্ছে',
   'announcement.gotIt': 'বুঝেছি',

@@ -3474,7 +3474,6 @@ const messages: TranslationMap = {
     "Procédures réutilisables et exécutables: un objectif et les étapes pour l'atteindre.",
   'activity.tabs.alerts': 'Alertes',
 
-
   'harnessInit.title': 'Configuration en cours',
 
   'announcement.gotIt': 'Compris',

@@ -3356,7 +3356,6 @@ const messages: TranslationMap = {
     '재사용 가능하고 실행 가능한 절차: 목표와 그것을 달성하기 위한 단계.',
   'activity.tabs.alerts': '알림',
 
-
   'harnessInit.title': '설정하는 중',
 
   'announcement.gotIt': '확인',

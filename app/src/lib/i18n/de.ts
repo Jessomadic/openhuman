@@ -3491,7 +3491,6 @@ const messages: TranslationMap = {
     'Wiederverwendbare, ausführbare Abläufe: ein Ziel und die Schritte dorthin.',
   'activity.tabs.alerts': 'Benachrichtigungen',
 
-
   'harnessInit.title': 'Einrichtung läuft',
 
   'announcement.gotIt': 'Verstanden',

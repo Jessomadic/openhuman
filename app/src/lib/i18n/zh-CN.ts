@@ -3198,7 +3198,6 @@ const messages: TranslationMap = {
   'activity.tabs.automationsDescription': '可复用、可运行的流程：目标及达成目标的步骤。',
   'activity.tabs.alerts': '提醒',
 
-
   'harnessInit.title': '正在进行设置',
 
   'announcement.gotIt': '知道了',

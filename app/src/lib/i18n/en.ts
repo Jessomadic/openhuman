@@ -596,13 +596,11 @@ const en: TranslationMap = {
   'memory.outOfCredits.title': 'Out of credits',
   'memory.outOfCredits.action': 'Top up',
 
-
   // Activity surface: Phase 3 renamed tabs
   'activity.tabs.automations': 'Automations',
   'activity.tabs.automationsDescription':
     'Reusable, runnable procedures: a goal plus the steps to reach it. Create one, install from a URL, or open a workflow to run it.',
   'activity.tabs.alerts': 'Alerts',
-
 
   // Notifications / Alerts
   'alerts.title': 'Alerts',

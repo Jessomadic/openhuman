@@ -580,13 +580,11 @@ const messages: TranslationMap = {
   // Intelligence / Memory
   'memory.search': 'メモリーを検索...',
 
-
   // Activity surface: Phase 3 renamed tabs
   'activity.tabs.automations': '自動化',
   'activity.tabs.automationsDescription':
     '再利用・実行可能な手順：目標と達成ステップを定義します。作成、URLからのインストール、またはワークフローを開いて実行できます。',
   'activity.tabs.alerts': 'アラート',
-
 
   // Notifications / Alerts
   'alerts.title': 'アラート',

@@ -3320,7 +3320,6 @@ const messages: TranslationMap = {
     'إجراءات قابلة لإعادة الاستخدام والتشغيل: هدف مع الخطوات للوصول إليه.',
   'activity.tabs.alerts': 'التنبيهات',
 
-
   'harnessInit.title': 'جارٍ الإعداد',
 
   'announcement.gotIt': 'حسناً',
