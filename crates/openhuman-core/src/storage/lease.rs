@@ -166,6 +166,16 @@ pub trait LeaseStore: Send + Sync {
     ///
     /// [`LeaseError::Storage`].
     async fn holder(&self, key: &str) -> Result<Option<LeaseRecord>, LeaseError>;
+
+    /// The storage scope whose [`LEASE_COLLECTION`] holds this store's
+    /// records (document id = key), when they live in the storage ports at
+    /// all. A storage driver with fencing can then check a write against the
+    /// record in the same atomic step ([`super::fence::LeaseFence::driver_fence`]).
+    /// `None` (the default) for stores that keep records elsewhere, such as
+    /// file locks.
+    fn record_scope(&self) -> Option<tinystoragedrivers::Scope> {
+        None
+    }
 }
 
 /// Rejects keys that could escape a directory or a document id: empty,
