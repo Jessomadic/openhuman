@@ -969,3 +969,23 @@ describe('next-turn history stability', () => {
     expect(after[1]).toBe(before[1]);
   });
 });
+
+
+it('simulates repeated next turns without changing settled part order or identities', () => {
+  const history: ThreadMessage[] = [];
+  let previous: ReturnType<typeof buildRuntimeMessages> = [];
+  for (let turn = 0; turn < 12; turn++) {
+    history.push(msg({id: `user-${turn}`, content: turn ? 'try now' : 'first turn'}));
+    for (const text of ['Thinking', 'Working', 'Finished']) {
+      const running = buildRuntimeMessages(history, {requestId: `r${turn}`, content: text, thinking: ''}, {isRunning: true, liveRequestId: `r${turn}`});
+      previous.forEach((message, index) => expect(running[index]).toBe(message));
+      expect(running.at(-2)?.id).toBe(`user-${turn}`);
+      expect(running.at(-1)?.id).toBe(STREAMING_TAIL_ID);
+    }
+    history.push(msg({id: `agent-${turn}`, sender: 'agent', content: `Completed turn ${turn}`, extraMetadata: {requestId: `r${turn}`}}));
+    const settled = buildRuntimeMessages(history, null, {isRunning: false});
+    previous.forEach((message, index) => expect(settled[index]).toBe(message));
+    expect(settled.map(message => message.role)).toEqual(Array.from({length: turn + 1}, () => ['user', 'assistant']).flat());
+    previous = settled;
+  }
+});

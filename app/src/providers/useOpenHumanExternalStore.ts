@@ -159,9 +159,10 @@ export function useCoreTranscriptProjection(
     }
     let cancelled = false;
     const skipRequestIds = liveRequestId ? new Set([liveRequestId]) : undefined;
-    const project = (items: DerivedDisplayItem[]) => {
+    const project = (items: DerivedDisplayItem[], partial = false) => {
       const mapped = mapDisplayItems(items, { skipRequestIds });
       setProjection(previous => {
+        if (partial && previous.threadId === threadId && Object.keys(previous.timelines).length > 0) return previous;
         if (previous.threadId !== threadId) {
           return { threadId, timelines: mapped.timelines, transcripts: mapped.transcripts };
         }
@@ -189,7 +190,7 @@ export function useCoreTranscriptProjection(
         // page that begins mid-turn hides that turn's leading tool calls until
         // its boundary is in view — both only resolve with the full list.
         let items = first.items;
-        project(items);
+        project(items, first.hasMore);
         let cursor = first.hasMore ? first.nextCursor : undefined;
         let pages = 1;
         while (cursor && pages < DERIVED_TRANSCRIPT_MAX_PAGES) {
@@ -208,9 +209,8 @@ export function useCoreTranscriptProjection(
       } catch {
         // A missing/older core has no settled process trail; message text and
         // the live socket projection remain usable. Navigation must not fail.
-        if (!cancelled) {
-          setProjection({ threadId, timelines: EMPTY_TURN_MAP, transcripts: EMPTY_TURN_MAP });
-        }
+        // A transient refresh failure must not erase the last complete trail.
+        // The return below already masks projections belonging to another thread.
       }
     })();
     return () => {
