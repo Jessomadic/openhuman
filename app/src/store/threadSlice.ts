@@ -518,6 +518,7 @@ const threadSlice = createSlice({
       state.threads = state.threads.filter(thread => thread.id !== threadId);
       delete state.messagesByThreadId[threadId];
       if (state.selectedThreadId === threadId) {
+        state.selectionIntentVersion = (state.selectionIntentVersion ?? 0) + 1;
         state.selectedThreadId = null;
         state.messages = [];
         state.messagesError = null;
@@ -528,6 +529,7 @@ const threadSlice = createSlice({
       }
     },
     clearAllThreads: state => {
+      state.selectionIntentVersion = (state.selectionIntentVersion ?? 0) + 1;
       state.threads = [];
       state.messagesByThreadId = {};
       state.selectedThreadId = null;

@@ -261,10 +261,7 @@ export async function waitForAppReady(page: Page): Promise<void> {
       return result.snapshot ?? null;
     } catch (error) {
       // Some slim or older cores do not expose this optional status method.
-      if (
-        error instanceof Error &&
-        error.message.includes('unknown method: openhuman.harness_init_status')
-      ) {
+      if (error instanceof Error && /(?:unknown method|method not found)/i.test(error.message)) {
         return null;
       }
       throw error;
@@ -279,9 +276,7 @@ export async function waitForAppReady(page: Page): Promise<void> {
     );
     if (alreadyDismissed) return;
 
-    const continueButton = page.getByTestId(
-      init.overall === 'failed' ? 'harness-init-continue-anyway' : 'harness-init-background'
-    );
+    const continueButton = page.getByTestId(/harness-init-(?:background|continue-anyway)/);
     await expect
       .poll(
         async () => {

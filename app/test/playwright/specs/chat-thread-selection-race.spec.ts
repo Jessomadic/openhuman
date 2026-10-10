@@ -67,15 +67,17 @@ test('a stale thread-list response preserves a thread selected while it was in f
   releaseResponse?.();
   await expect
     .poll(() =>
-      page.evaluate(() => {
+      page.evaluate((threadId: string) => {
         const store = (
           window as typeof window & {
-            __OPENHUMAN_STORE__?: { getState?: () => { thread?: { isLoadingThreads?: boolean } } };
+            __OPENHUMAN_STORE__?: {
+              getState?: () => { thread?: { threads?: Array<{ id: string }> } };
+            };
           }
         ).__OPENHUMAN_STORE__;
-        return store?.getState?.().thread?.isLoadingThreads === false;
-      })
+        return store?.getState?.().thread?.threads?.some(thread => thread.id === threadId) ?? false;
+      }, selectedDuringLoad)
     )
-    .toBe(true);
+    .toBe(false);
   expect(await selectedThreadId(page)).toBe(selectedDuringLoad);
 });

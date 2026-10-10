@@ -168,6 +168,7 @@ describe('threadSlice synchronous reducers', () => {
     store.dispatch(setSelectedThread('t-1'));
     store.dispatch(setActiveThread('t-1'));
 
+    const selectionVersion = store.getState().thread.selectionIntentVersion;
     store.dispatch(clearAllThreads());
     const state = store.getState().thread;
     expect(state.threads).toEqual([]);
@@ -175,6 +176,7 @@ describe('threadSlice synchronous reducers', () => {
     expect(state.selectedThreadId).toBeNull();
     expect(state.activeThreadIds).toEqual({});
     expect(state.messages).toEqual([]);
+    expect(state.selectionIntentVersion).toBeGreaterThan(selectionVersion);
   });
 
   it('clearStaleThread removes stale selection, cache, and active id', async () => {
@@ -192,12 +194,14 @@ describe('threadSlice synchronous reducers', () => {
     store.dispatch(setSelectedThread('t-1'));
     store.dispatch(setActiveThread('t-1'));
 
+    const selectionVersion = store.getState().thread.selectionIntentVersion;
     store.dispatch(clearStaleThread('t-1'));
 
     const state = store.getState().thread;
     expect(state.threads.map(thread => thread.id)).toEqual(['t-2']);
     expect(state.messagesByThreadId['t-1']).toBeUndefined();
     expect(state.selectedThreadId).toBeNull();
+    expect(state.selectionIntentVersion).toBeGreaterThan(selectionVersion);
     expect(state.activeThreadIds).toEqual({});
     expect(state.messages).toEqual([]);
   });

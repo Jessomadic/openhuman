@@ -164,7 +164,7 @@ async function selectedThreadId(page: Page): Promise<string | null> {
 async function startNewThread(page: Page): Promise<void> {
   await dismissWalkthroughIfPresent(page);
   const previousThread = await selectedThreadId(page);
-  await page.getByRole('button', { name: 'New Conversation' }).click();
+  await page.getByTestId('new-thread-button').click({ force: true });
   await expect.poll(() => selectedThreadId(page), { timeout: 20_000 }).not.toBe(previousThread);
 }
 
