@@ -214,7 +214,7 @@ async fn x402_guard_rejects_readonly_and_private_destinations() {
     };
     assert!(matches!(
         guard
-            .authorize(&proposed_request("http://127.0.0.1/"))
+            .authorize(&proposed_request("https://127.0.0.1/"))
             .await,
         Err(RequestAuthorizationError::InvalidDestination(_))
     ));
@@ -245,7 +245,7 @@ async fn x402_rejected_destinations_do_not_exhaust_the_action_budget() {
     };
     assert!(matches!(
         guard
-            .authorize(&proposed_request("http://127.0.0.1/"))
+            .authorize(&proposed_request("https://127.0.0.1/"))
             .await,
         Err(RequestAuthorizationError::InvalidDestination(_))
     ));
@@ -273,7 +273,7 @@ async fn x402_tool_runs_the_host_guard_before_network_or_payment() {
 
     let security = Arc::new(SecurityPolicy::default());
     let blocked_private = request_tool(security.clone(), vec![])
-        .execute(serde_json::json!({"url": "http://127.0.0.1:1/"}))
+        .execute(serde_json::json!({"url": "https://127.0.0.1:1/"}))
         .await
         .unwrap();
     assert!(blocked_private.is_error);
