@@ -75,3 +75,13 @@ fn an_incomplete_reason_maps_to_cap_or_breaker() {
         "stopped: iteration_cap"
     );
 }
+
+#[test]
+fn zz_size_probe() {
+    eprintln!(
+        "SIZES agent_progress={} turn_stop={} opt_turn_stop={}",
+        std::mem::size_of::<crate::agent::progress::AgentProgress>(),
+        std::mem::size_of::<TurnStop>(),
+        std::mem::size_of::<Option<TurnStop>>()
+    );
+}
