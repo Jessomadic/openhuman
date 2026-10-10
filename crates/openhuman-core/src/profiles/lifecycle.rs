@@ -222,7 +222,7 @@ impl ProfileHost {
                     record.owner
                 );
                 Err(format!(
-                    "profile {id} is hosted by node {}; release it there first",
+                    "profile {id} is held by node {}; release it there or try again shortly",
                     record.owner
                 ))
             }

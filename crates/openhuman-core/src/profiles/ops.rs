@@ -132,12 +132,12 @@ pub(crate) async fn set_credential_on(
 ) -> Result<Outcome<CredentialResult>, String> {
     let profile_id = ProfileId::parse(profile_id)?;
     // From the layout, not `open`: installing or revoking a credential must
-    // work even when every profile slot is busy.
-    let config = host.provisioned_config(&profile_id).await?;
-    // Under the profile's own scope, so a storage-backed secret store files
-    // the credential under that profile.
-    crate::core::runtime::CoreContext::scope(host.records_context(&profile_id), async {
-        credentials::store(&config, kind, token, expires_at)
+    // work even when every profile slot is busy. Under the profile's
+    // lifecycle lock, so it cannot land in a profile being archived, and
+    // under its own scope, so a storage-backed secret store files the
+    // credential under that profile.
+    host.with_records(&profile_id, |config| {
+        credentials::store(config, kind, token, expires_at)
     })
     .await?;
     log::info!("[profiles] credential installed kind={kind:?}");
@@ -160,11 +160,8 @@ pub(crate) async fn clear_credential_on(
     profile_id: &str,
 ) -> Result<Outcome<CredentialResult>, String> {
     let profile_id = ProfileId::parse(profile_id)?;
-    let config = host.provisioned_config(&profile_id).await?;
-    let removed =
-        crate::core::runtime::CoreContext::scope(host.records_context(&profile_id), async {
-            credentials::clear(&config)
-        })
+    let removed = host
+        .with_records(&profile_id, credentials::clear)
         .await?;
     log::info!("[profiles] credential cleared removed={removed}");
     let log = if removed {
