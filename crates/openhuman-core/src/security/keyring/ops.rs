@@ -67,7 +67,16 @@ pub fn get(user_id: &str, key: &str) -> Result<Option<String>, KeyringError> {
     };
     log::debug!("[keyring] get (storage)");
     get_adopting(secrets, &namespaced_key(user_id, key), key, || {
-        process_get(user_id, key).ok().flatten()
+        // The storage backend is authoritative once configured, so a failing
+        // legacy backend must not fail the read; it is logged so a broken OS
+        // keychain does not look like "nothing stored".
+        match process_get(user_id, key) {
+            Ok(value) => value,
+            Err(error) => {
+                log::warn!("[keyring] legacy process-backend read failed during adoption: {error}");
+                None
+            }
+        }
     })
 }
 

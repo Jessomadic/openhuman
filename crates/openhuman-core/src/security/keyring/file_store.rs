@@ -201,32 +201,63 @@ fn temp_path_for(path: &Path) -> PathBuf {
 /// a recognisable extension.
 pub fn quarantine_corrupt(path: &Path, suffix: &str) -> Option<PathBuf> {
     let stamp = chrono::Utc::now().timestamp();
-    let mut target = path.with_extension(format!("{suffix}.corrupt.{stamp}"));
-    // Two recoveries within one second must not share a name: `rename`
-    // replaces an existing destination on every platform, which would destroy
-    // the earlier preserved bytes.
-    let mut attempt = 1u32;
-    while target.exists() {
-        target = path.with_extension(format!("{suffix}.corrupt.{stamp}.{attempt}"));
+    let mut attempt = 0u32;
+    loop {
+        let target = if attempt == 0 {
+            path.with_extension(format!("{suffix}.corrupt.{stamp}"))
+        } else {
+            path.with_extension(format!("{suffix}.corrupt.{stamp}.{attempt}"))
+        };
         attempt += 1;
-    }
-    match std::fs::rename(path, &target) {
-        Ok(()) => {
-            log::error!(
-                "[keyring] {} could not be parsed; moved to {} and treated as empty",
-                path.display(),
-                target.display()
-            );
-            Some(target)
+        // `hard_link` refuses an existing destination, so the name is
+        // reserved atomically: two processes quarantining in the same second
+        // can never overwrite each other's preserved bytes (a `rename` would
+        // replace the destination on every platform).
+        match std::fs::hard_link(path, &target) {
+            Ok(()) => {
+                if let Err(e) = std::fs::remove_file(path) {
+                    log::warn!(
+                        "[keyring] quarantined {} but could not remove the original: {e}",
+                        path.display()
+                    );
+                }
+                return Some(log_quarantined(path, target));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(link_error) => {
+                if !path.exists() {
+                    log::error!(
+                        "[keyring] {} could not be parsed and could not be moved aside: {link_error}",
+                        path.display()
+                    );
+                    return None;
+                }
+                // Filesystems without hard links: fall back to a checked rename.
+                if target.exists() {
+                    continue;
+                }
+                return match std::fs::rename(path, &target) {
+                    Ok(()) => Some(log_quarantined(path, target)),
+                    Err(e) => {
+                        log::error!(
+                            "[keyring] {} could not be parsed and could not be moved aside: {e}",
+                            path.display()
+                        );
+                        None
+                    }
+                };
+            }
         }
-        Err(e) => {
-            log::error!(
-                "[keyring] {} could not be parsed and could not be moved aside: {e}",
-                path.display()
-            );
-            None
-        }
     }
+}
+
+fn log_quarantined(path: &Path, target: PathBuf) -> PathBuf {
+    log::error!(
+        "[keyring] {} could not be parsed; moved to {} and treated as empty",
+        path.display(),
+        target.display()
+    );
+    target
 }
 
 #[cfg(test)]
