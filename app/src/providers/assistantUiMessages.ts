@@ -1114,13 +1114,18 @@ export function buildRuntimeMessages(
   const lastVisibleAgentId = [...coalescedMessages]
     .reverse()
     .find(message => message.sender === 'agent' && !message.extraMetadata?.hidden)?.id;
+  // A detached approval (an async sub-agent's) can still be parked after the
+  // turn that surfaced it settled. That turn's retained trail is already shown
+  // by its settled message, so the tail then carries only the approval —
+  // re-rendering the trail beside it would duplicate every tool card.
+  const detachedAfterTurn = projection.isRunning === false && pendingApproval?.detached === true;
   const tail =
     projection.isRunning === false && !pendingApproval
       ? null
       : streamingTailMessage(
-          streaming,
-          projection.liveTimeline ?? EMPTY_TIMELINE,
-          projection.liveTranscript ?? EMPTY_TRANSCRIPT,
+          detachedAfterTurn ? null : streaming,
+          detachedAfterTurn ? EMPTY_TIMELINE : (projection.liveTimeline ?? EMPTY_TIMELINE),
+          detachedAfterTurn ? EMPTY_TRANSCRIPT : (projection.liveTranscript ?? EMPTY_TRANSCRIPT),
           pendingApproval
         );
   // While the tail stands for the live turn, that turn's own persisted rows
