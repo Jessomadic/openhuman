@@ -251,13 +251,15 @@ impl openhuman_embed::BackendTransport for PointedTransport {
             self.base_url,
             req.path.trim_start_matches('/')
         );
-        self.client
+        let resp = self.client
             .post(&url)
             .json(&req.body)
             .send()
             .await
-            .and_then(|resp| resp.json())
-            .map_err(|e| openhuman_embed::BackendTransportError::Unavailable)
+            .map_err(|_| openhuman_embed::BackendTransportError::Unavailable)?;
+        resp.json()
+            .await
+            .map_err(|_| openhuman_embed::BackendTransportError::Unavailable)
     }
 
     async fn send_multipart(
