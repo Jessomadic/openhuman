@@ -58,6 +58,9 @@ impl SpanCollector {
                 attrs.insert("tool.name".to_string(), json_str(tool_name));
                 attrs.insert("tool.call_id".to_string(), json_str(call_id));
                 attrs.insert("agent.iteration".to_string(), json_u32(*iteration));
+                if let Some(model) = &self.last_model {
+                    attrs.insert("tool.model".to_string(), json_str(model));
+                }
                 let (_, index) = self.open_span(
                     SpanKind::Tool,
                     format!("tool.{tool_name}"),
@@ -97,20 +100,7 @@ impl SpanCollector {
                     );
                     extra.insert("tool.output_chars".to_string(), json_usize(*output_chars));
                     extra.insert("tool.elapsed_ms".to_string(), json_u64(*elapsed_ms));
-                    // Failed tool calls surface a Langfuse statusMessage: the
-                    // classified plain-language cause, truncated, gated on
-                    // content capture (it can quote user data / paths).
-                    if let Some(failure) = failure {
-                        if self.ctx.capture_content {
-                            extra.insert(
-                                "error.message".to_string(),
-                                serde_json::Value::String(truncate_chars(
-                                    &failure.cause_plain,
-                                    MAX_ERROR_MESSAGE_CHARS,
-                                )),
-                            );
-                        }
-                    }
+                    self.insert_failure_attrs(failure.as_ref(), &mut extra);
                     self.close_span(index, start + elapsed_ms, status_of(*success), extra);
                 }
             }
@@ -197,6 +187,7 @@ impl SpanCollector {
                         current_iteration_span_id: None,
                         open_tools: BTreeMap::new(),
                         first_deltas: Default::default(),
+                        last_model: None,
                     },
                 );
             }
@@ -253,17 +244,23 @@ impl SpanCollector {
                 iteration,
                 ..
             } => {
-                let parent_id = match self.subagents.get(task_id) {
-                    Some(state) => match &state.current_iteration_span_id {
-                        Some(id) => id.clone(),
-                        None => self.spans[state.span_index].span_id.clone(),
-                    },
+                let (parent_id, model) = match self.subagents.get(task_id) {
+                    Some(state) => (
+                        match &state.current_iteration_span_id {
+                            Some(id) => id.clone(),
+                            None => self.spans[state.span_index].span_id.clone(),
+                        },
+                        state.last_model.clone(),
+                    ),
                     None => return,
                 };
                 let mut attrs = BTreeMap::new();
                 attrs.insert("tool.name".to_string(), json_str(tool_name));
                 attrs.insert("tool.call_id".to_string(), json_str(call_id));
                 attrs.insert("agent.iteration".to_string(), json_u32(*iteration));
+                if let Some(model) = model {
+                    attrs.insert("tool.model".to_string(), json_str(&model));
+                }
                 let (_, index) = self.open_span(
                     SpanKind::Tool,
                     format!("tool.{tool_name}"),
@@ -285,6 +282,7 @@ impl SpanCollector {
                 output,
                 arguments,
                 elapsed_ms,
+                failure,
                 ..
             } => {
                 let Some(index) = self
@@ -308,6 +306,7 @@ impl SpanCollector {
                 );
                 extra.insert("tool.output_chars".to_string(), json_usize(*output_chars));
                 extra.insert("tool.elapsed_ms".to_string(), json_u64(*elapsed_ms));
+                self.insert_failure_attrs(failure.as_ref(), &mut extra);
                 self.close_span(index, start + elapsed_ms, status_of(*success), extra);
             }
 
@@ -498,5 +497,38 @@ impl SpanCollector {
         self.current_iteration_index = None;
         self.open_tools.clear();
         self.subagents.clear();
+    }
+}
+
+impl SpanCollector {
+    /// Failure attributes for a closing tool span (parent or child).
+    ///
+    /// * `tool.failure_class` — the classified class (`CommandFailed`,
+    ///   `InvalidArguments`, `NotFound`, …). Content-free, so not gated: it is
+    ///   what separates a program that exited non-zero from a harness failure
+    ///   on an error-level observation.
+    /// * `error.message` — the classified plain-language cause, truncated,
+    ///   which Langfuse renders as the statusMessage. Gated on content capture
+    ///   (it can quote user data / paths).
+    fn insert_failure_attrs(
+        &self,
+        failure: Option<&crate::tools::status::ClassifiedFailure>,
+        extra: &mut BTreeMap<String, serde_json::Value>,
+    ) {
+        let Some(failure) = failure else {
+            return;
+        };
+        if let Ok(serde_json::Value::String(class)) = serde_json::to_value(failure.class) {
+            extra.insert("tool.failure_class".to_string(), serde_json::Value::String(class));
+        }
+        if self.ctx.capture_content {
+            extra.insert(
+                "error.message".to_string(),
+                serde_json::Value::String(truncate_chars(
+                    &failure.cause_plain,
+                    MAX_ERROR_MESSAGE_CHARS,
+                )),
+            );
+        }
     }
 }

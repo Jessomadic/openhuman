@@ -37,6 +37,9 @@ pub(super) struct SubagentState {
     pub(super) open_tools: BTreeMap<String, usize>,
     /// First streamed delta of the child's in-flight model call.
     pub(super) first_deltas: FirstDeltas,
+    /// Langfuse-facing label (`{provider}.{model}`) of the child's latest
+    /// model call, stamped on the child tool spans it requests.
+    pub(super) last_model: Option<String>,
 }
 
 /// Pure state machine that folds an [`crate::agent::progress::AgentProgress`]
@@ -68,6 +71,10 @@ pub struct SpanCollector {
     pub(super) subagents: BTreeMap<String, SubagentState>,
     /// First streamed delta of the parent turn's in-flight model call.
     pub(super) first_deltas: FirstDeltas,
+    /// Langfuse-facing label (`{provider}.{model}`) of the parent turn's latest
+    /// model call. Tool calls run after the model call that requested them
+    /// completes, so this names the model behind every tool span opened next.
+    pub(super) last_model: Option<String>,
 }
 
 impl SpanCollector {
@@ -84,6 +91,7 @@ impl SpanCollector {
             open_tools: BTreeMap::new(),
             subagents: BTreeMap::new(),
             first_deltas: FirstDeltas::default(),
+            last_model: None,
         }
     }
 

@@ -82,6 +82,22 @@ impl SpanCollector {
         };
 
         let labeled_model = format!("{provider_id}.{model}");
+        // Remember which model this scope is on so the tool spans it requests
+        // name it (correlating tool errors to models without a join). The
+        // journal replay has no provider id; name the bare model there.
+        let tool_model = if provider_id.is_empty() {
+            model.to_string()
+        } else {
+            labeled_model.clone()
+        };
+        match subagent_task_id {
+            Some(id) => {
+                if let Some(state) = self.subagents.get_mut(id) {
+                    state.last_model = Some(tool_model);
+                }
+            }
+            None => self.last_model = Some(tool_model),
+        }
         let pricing = crate::agent::cost::lookup_pricing(model);
 
         let mut attrs = BTreeMap::new();
