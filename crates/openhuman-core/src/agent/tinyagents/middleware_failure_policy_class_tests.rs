@@ -67,7 +67,11 @@ fn a_policy_block_allows_one_alternative_but_a_user_denial_does_not() {
     }
     // The user said no, or never answered: asking again only re-prompts them.
     assert_eq!(
-        recovery_policy("shell", "[policy-denied] The user declined this command", false),
+        recovery_policy(
+            "shell",
+            "[policy-denied] The user declined this command",
+            false
+        ),
         Some(("policy", 0))
     );
     assert_eq!(
@@ -199,7 +203,9 @@ fn production_read_tools() -> Vec<Box<dyn tinytools::Tool>> {
             None,
             None,
         )),
-        Box::new(tinytools_std::filesystem::FileReadTool::new(security.clone())),
+        Box::new(tinytools_std::filesystem::FileReadTool::new(
+            security.clone(),
+        )),
         Box::new(tinytools_std::filesystem::ListFilesTool::new(security)),
         Box::new(crate::desktop::control::tools::DesktopTool::new(
             std::sync::Arc::new(crate::config::Config::default()),
@@ -285,7 +291,8 @@ async fn a_failed_browser_task_nudges_toward_its_hint_then_stops_on_a_repeat() {
         "{} Browser task failed at step 1: Planning failed Hint: name the exact button",
         crate::tools::status::TASK_FAILED_MARKER
     );
-    let args = serde_json::json!({"action": "task", "goal": "book it", "url": "https://shop.test/"});
+    let args =
+        serde_json::json!({"action": "task", "goal": "book it", "url": "https://shop.test/"});
     run_call(&mw, "task-1", "browser", args.clone(), Err(&error)).await;
     assert_eq!(drain_pause_count(&handle), 0);
     let nudges = drain_nudge_messages(&mw);

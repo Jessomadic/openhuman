@@ -66,19 +66,21 @@ async fn spawn_subagent_reports_a_stopped_child_as_a_failed_tool_result() {
         let live = super::ambient_parent_run_context("stopped-child-test").expect("parent");
         let mut run_context = live.data.child();
         run_context.progress = Some(progress_tx);
-        SpawnSubagentTool::new()
-            .execute_with_live_parent_context(
-                json!({
-                    "agent_id": "task_manager_agent",
-                    "prompt": "List the task sources",
-                    "model": "test-model",
-                    "blocking": true
-                }),
-                None,
-                run_context,
-                Some(&live),
-            )
-            .await
+        // Boxed: the inline spawn future is too large for a test thread's
+        // stack (the trait `execute` path boxes it the same way).
+        let tool = SpawnSubagentTool::new();
+        Box::pin(tool.execute_with_live_parent_context(
+            json!({
+                "agent_id": "task_manager_agent",
+                "prompt": "List the task sources",
+                "model": "test-model",
+                "blocking": true
+            }),
+            None,
+            run_context,
+            Some(&live),
+        ))
+        .await
     })
     .await
     .expect("tool execution");
