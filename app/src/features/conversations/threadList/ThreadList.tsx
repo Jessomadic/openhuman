@@ -50,7 +50,8 @@ function ThreadRow() {
   const host = useContext(ThreadListHostContext)!;
   const { t } = useT();
   const id = useAuiState(s => s.threadListItem.id);
-  const thread = host.threads.find(item => item.id === id)!;
+  const thread = host.threads.find(item => item.id === id);
+  if (!thread) return null;
   const running = Boolean(host.isThreadRunning?.(id));
   const pinned = (host.isPinned ?? isThreadPinned)(thread);
   return (
@@ -94,8 +95,6 @@ function ThreadRow() {
 
 /** The core owns threads; assistant-ui owns selection, search controls and row actions. */
 export function ThreadList(props: ThreadListProps) {
-  const { t } = useT();
-  const [search, setSearch] = useState('');
   const { threads, resolveTitle } = props;
   const adapterThreads = useMemo(
     () =>
@@ -126,13 +125,27 @@ export function ThreadList(props: ThreadListProps) {
       },
     },
   });
-  const filtered = props.threads.filter(thread =>
-    props.resolveTitle(thread.id).toLowerCase().includes(search.trim().toLowerCase())
-  );
-  const groups = groupThreads(filtered, new Date(), props.isPinned ?? isThreadPinned);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ThreadListHostContext.Provider value={props}>
+        <ThreadListView />
+      </ThreadListHostContext.Provider>
+    </AssistantRuntimeProvider>
+  );
+}
+
+/** Render only ids already admitted by the runtime, including during async list updates. */
+function ThreadListView() {
+  const props = useContext(ThreadListHostContext)!;
+  const { t } = useT();
+  const [search, setSearch] = useState('');
+  const threadIds = useAuiState(s => s.threads.threadIds);
+  const filtered = threadIds.flatMap(id => {
+    const thread = props.threads.find(item => item.id === id);
+    return thread && props.resolveTitle(id).toLowerCase().includes(search.trim().toLowerCase()) ? [thread] : [];
+  });
+  const groups = groupThreads(filtered, new Date(), props.isPinned ?? isThreadPinned);
+  return (
         <ThreadListRoot className="h-full min-h-0">
           <div className="flex-none px-2 pb-2">
             <ThreadListNew
@@ -163,7 +176,7 @@ export function ThreadList(props: ThreadListProps) {
                 {group.threads.map(thread => (
                   <ThreadListPrimitive.ItemByIndex
                     key={thread.id}
-                    index={props.threads.indexOf(thread)}
+                    index={threadIds.indexOf(thread.id)}
                     components={{ ThreadListItem: ThreadRow }}
                   />
                 ))}
@@ -176,7 +189,5 @@ export function ThreadList(props: ThreadListProps) {
             )}
           </div>
         </ThreadListRoot>
-      </ThreadListHostContext.Provider>
-    </AssistantRuntimeProvider>
   );
 }
