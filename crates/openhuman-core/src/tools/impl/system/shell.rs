@@ -169,7 +169,7 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        shell_description(ShellFlavor::current())
+        shell_description(self.runtime.shell_flavor())
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -178,7 +178,7 @@ impl Tool for ShellTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": command_param_description(ShellFlavor::current())
+                    "description": command_param_description(self.runtime.shell_flavor())
                 },
                 "category": {
                     "type": "string",
