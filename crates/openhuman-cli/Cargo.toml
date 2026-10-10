@@ -117,6 +117,16 @@ name = "storage_scope_e2e"
 path = "../../tests/storage_scope_e2e.rs"
 
 [[test]]
+# Its own binary: two agents on one backend keep cron jobs and flows apart.
+name = "storage_agent_scopes_e2e"
+path = "../../tests/storage_agent_scopes_e2e.rs"
+
+[[test]]
+# Its own binary: the delegation graph's checkpointer on every driver.
+name = "storage_delegation_e2e"
+path = "../../tests/storage_delegation_e2e.rs"
+
+[[test]]
 name = "embedded_server_shutdown_e2e"
 path = "../../tests/embedded_server_shutdown_e2e.rs"
 
@@ -308,6 +318,7 @@ parking_lot = "0.12"
 rusqlite = { version = "=0.40.2", features = ["bundled"] }
 sha2 = "0.10"
 tar = "0.4"
+tinyagents-graph = { path = "../../vendor/tinyagents/crates/tinyagents-graph", features = ["sqlite", "storage-drivers"] }
 tinyagents-harness = { path = "../../vendor/tinyagents/crates/tinyagents-harness", features = ["sqlite", "multimodal"] }
 tinyagents-session = { path = "../../vendor/tinyagents/crates/tinyagents-session" }
 tinybus = { path = "../../vendor/tinybus/crates/tinybus", default-features = false, features = ["macros", "uds"] }
