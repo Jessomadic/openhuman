@@ -20,10 +20,20 @@ pub enum LeafCall {
         /// The route and completion options.
         completer: Completer,
         /// The model request.
-        request: CompletionRequest,
+        request: Box<CompletionRequest>,
     },
     /// Independent agent turn. An unset session gets a fresh identity.
-    Turn(Turn),
+    Turn(Box<Turn>),
+}
+impl LeafCall {
+    /// A stateless request with owned, boxed options.
+    pub fn completion(completer: Completer, request: CompletionRequest) -> Self {
+        Self::Completion { completer, request: Box::new(request) }
+    }
+    /// An independent agent turn with owned, boxed state.
+    pub fn turn(turn: Turn) -> Self {
+        Self::Turn(Box::new(turn))
+    }
 }
 /// Either model-call result, retaining usage and answering-model metadata.
 #[derive(Debug)]
@@ -72,14 +82,14 @@ type CallFuture =
 fn call(call: LeafCall, budget: ModelBudget, leaf: bool) -> CallFuture {
     match call {
         LeafCall::Completion { completer, request } => Box::pin(async move {
-            Box::pin(completer.budget(budget).complete(request))
+            Box::pin(completer.budget(budget).complete(*request))
                 .await
                 .map(CallOutcome::Completion)
         }),
         LeafCall::Turn(turn) => Box::pin(async move {
             openhuman_core::agent::tinyagents::budget::with_spawn_depth_limit(
                 if leaf { 0 } else { 1 },
-                Box::pin(turn.budget(budget).send()),
+                Box::pin((*turn).budget(budget).send()),
             )
             .await
             .map(CallOutcome::Turn)

@@ -31,10 +31,7 @@ fn request(model: &str) -> CompletionRequest {
     CompletionRequest::new(model, vec![ChatMessage::user("review")]).max_tokens(30)
 }
 fn leaf(server: &MockServer, model: &str) -> LeafCall {
-    LeafCall::Completion {
-        completer: completer(server),
-        request: request(model),
-    }
+    LeafCall::completion(completer(server), request(model))
 }
 async fn provider() -> MockServer {
     let server = MockServer::start().await;
