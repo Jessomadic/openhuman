@@ -260,7 +260,7 @@ export function ReasoningPanel({
       data-testid={testId}
       open={isOpen}
       onOpenChange={handleOpenChange}
-      className={cn("w-full max-w-sm", className)}>
+      className={cn('w-full max-w-sm', className)}>
       <CollapsibleTrigger
         disabled={shown.length === 0}
         className="group/trigger text-muted-foreground hover:text-foreground/90 flex items-center gap-1.5 py-1 text-[13.5px] transition-[color,scale] outline-none active:scale-[0.98]">

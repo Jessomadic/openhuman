@@ -260,7 +260,7 @@ function ContextDisplayContent({
         <div className="bg-muted inset-ring-border mt-2.5 h-1 overflow-hidden rounded-full inset-ring forced-colors:border">
           <div
             className={cn(
-              "h-full w-(--usage-width) rounded-full transition-[width] duration-300 forced-color-adjust-none",
+              'h-full w-(--usage-width) rounded-full transition-[width] duration-300 forced-color-adjust-none',
               totalTokens > 0 && 'min-w-1',
               getBarColor(percent)
             )}

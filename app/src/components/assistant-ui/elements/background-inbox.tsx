@@ -63,7 +63,7 @@ export function BackgroundInbox({
           className={cn(
             mono,
             'tabular-nums',
-            ready > 0 ? 'text-blue-600 dark:text-blue-400' : "text-muted-foreground"
+            ready > 0 ? 'text-blue-600 dark:text-blue-400' : 'text-muted-foreground'
           )}>
           {ready > 0 ? strings.ready(ready) : strings.inFlight(running)}
         </span>
@@ -94,7 +94,7 @@ export function BackgroundInbox({
               <span
                 className={cn(
                   'truncate text-[13px]',
-                  run.state === 'running' ? "text-muted-foreground" : 'text-foreground/90'
+                  run.state === 'running' ? 'text-muted-foreground' : 'text-foreground/90'
                 )}>
                 {run.title}
               </span>
@@ -103,7 +103,7 @@ export function BackgroundInbox({
               )}
             </span>
 
-            <span className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}>
+            <span className={cn(mono, 'text-muted-foreground shrink-0 tabular-nums')}>
               {run.elapsed}
             </span>
           </>

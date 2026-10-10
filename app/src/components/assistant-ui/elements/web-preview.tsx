@@ -67,7 +67,7 @@ export function WebPreview({
             field,
             'flex min-w-0 flex-1 items-center gap-1.5 rounded-full px-2.5 py-1'
           )}>
-          <span className={cn(mono, "text-muted-foreground min-w-0 truncate")}>{origin}</span>
+          <span className={cn(mono, 'text-muted-foreground min-w-0 truncate')}>{origin}</span>
         </span>
 
         <button

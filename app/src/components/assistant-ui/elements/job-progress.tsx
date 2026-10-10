@@ -65,7 +65,7 @@ export function JobProgress({
           <Loader2Icon className="text-muted-foreground size-3.5 shrink-0 animate-spin motion-reduce:animate-none" />
         )}
         <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{title}</span>
-        <span className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}>
+        <span className={cn(mono, 'text-muted-foreground shrink-0 tabular-nums')}>
           {finished ? 'done' : eta}
         </span>
         {!finished && (
@@ -88,7 +88,7 @@ export function JobProgress({
         className="bg-foreground/[0.06] inset-ring-border h-1 w-full overflow-hidden rounded-full inset-ring forced-colors:border">
         <span
           className={cn(
-            "block h-full rounded-full transition-[width] duration-500 ease-out forced-color-adjust-none motion-reduce:transition-none",
+            'block h-full rounded-full transition-[width] duration-500 ease-out forced-color-adjust-none motion-reduce:transition-none',
             finished ? 'bg-emerald-500' : 'bg-blue-500 dark:bg-blue-400'
           )}
           style={{ width: `${overall}%` }}

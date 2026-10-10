@@ -49,7 +49,7 @@ export function StoppedRun({
           className={cn(
             field,
             mono,
-            "text-muted-foreground inline-flex items-center gap-1.5 rounded-full px-2.5 py-1"
+            'text-muted-foreground inline-flex items-center gap-1.5 rounded-full px-2.5 py-1'
           )}>
           <SquareIcon className="size-2.5 fill-current" />
           {reason}

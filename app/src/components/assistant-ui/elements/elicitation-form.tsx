@@ -113,7 +113,7 @@ export function ElicitationForm({
                       'rounded-full px-2.5 py-1 text-xs transition-colors',
                       option === item.value
                         ? 'bg-foreground text-background'
-                        : cn(field, "text-muted-foreground")
+                        : cn(field, 'text-muted-foreground')
                     )}>
                     {option}
                   </span>
@@ -147,7 +147,7 @@ export function ElicitationForm({
                 }
                 className={cn(
                   field,
-                  "text-foreground/80 focus-visible:ring-foreground/20 rounded-lg px-2.5 py-1.5 text-xs outline-none focus-visible:ring-1"
+                  'text-foreground/80 focus-visible:ring-foreground/20 rounded-lg px-2.5 py-1.5 text-xs outline-none focus-visible:ring-1'
                 )}
               />
             ) : (
@@ -167,7 +167,7 @@ export function ElicitationForm({
               onClick={onDecline}
               {...declineProps}
               className={cn(
-                "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3.5 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]",
+                'text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3.5 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]',
                 declineProps?.className
               )}>
               {declineLabel}
@@ -178,7 +178,7 @@ export function ElicitationForm({
               {...acceptProps}
               className={cn(
                 inkButton,
-                "flex h-8 items-center rounded-full px-3.5 text-xs font-medium disabled:pointer-events-none disabled:opacity-40",
+                'flex h-8 items-center rounded-full px-3.5 text-xs font-medium disabled:pointer-events-none disabled:opacity-40',
                 acceptProps?.className
               )}>
               {sendLabel}

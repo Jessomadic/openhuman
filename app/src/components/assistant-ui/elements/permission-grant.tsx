@@ -116,7 +116,7 @@ export function PermissionGrant({
                 onClick={() => onGrant('denied')}
                 {...denyProps}
                 className={cn(
-                  "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]",
+                  'text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]',
                   denyProps?.className
                 )}>
                 {denyLabel}
@@ -126,7 +126,7 @@ export function PermissionGrant({
                 onClick={() => onGrant('session')}
                 {...sessionProps}
                 className={cn(
-                  "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]",
+                  'text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground/90 h-8 rounded-full px-3 text-xs font-medium transition-[background-color,color,scale] duration-150 active:scale-[0.96]',
                   sessionProps?.className
                 )}>
                 {sessionLabel}
@@ -149,7 +149,7 @@ export function PermissionGrant({
               className={cn(
                 field,
                 mono,
-                "fade-in animate-in text-muted-foreground rounded-full px-2.5 py-1.5 duration-300"
+                'fade-in animate-in text-muted-foreground rounded-full px-2.5 py-1.5 duration-300'
               )}>
               {pendingLabel}
             </span>
@@ -160,7 +160,7 @@ export function PermissionGrant({
             className={cn(
               field,
               mono,
-              "fade-in animate-in text-muted-foreground rounded-full px-2.5 py-1.5 duration-300"
+              'fade-in animate-in text-muted-foreground rounded-full px-2.5 py-1.5 duration-300'
             )}>
             {scope === 'denied' ? deniedLabel : grantedLabel(scope)}
           </span>

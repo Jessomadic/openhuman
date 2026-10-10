@@ -477,7 +477,7 @@ const ThreadRoot: FC<{
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
-              "aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6",
+              'aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6',
               !isEmpty && 'sticky bottom-0 mt-auto rounded-t-(--composer-radius)'
             )}>
             <ThreadScrollToBottom />
@@ -1505,7 +1505,9 @@ const EditComposer: FC = () => {
   const { t } = useT();
   const discardedReplies = useAuiState(selectDiscardedReplies);
   return (
-    <MessagePrimitive.Root data-slot="aui_edit-composer-wrapper" className="flex flex-col px-2 [contain-intrinsic-size:auto_200px] [content-visibility:auto]">
+    <MessagePrimitive.Root
+      data-slot="aui_edit-composer-wrapper"
+      className="flex flex-col px-2 [contain-intrinsic-size:auto_200px] [content-visibility:auto]">
       <ComposerPrimitive.Root
         data-slot="edit-message"
         className="bg-background border-border/60 ms-auto flex w-full flex-col gap-3 rounded-2xl border p-3.5">

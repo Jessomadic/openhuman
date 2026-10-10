@@ -60,9 +60,10 @@ export function Timeline({
             <span
               className={cn(
                 'mt-1 size-2 shrink-0 rounded-full',
-                event.when === 'now' && "bg-blue-500 ring-4 ring-blue-500/15 dark:bg-blue-400 forced-colors:bg-[Highlight]",
-                event.when === 'past' && "bg-muted-foreground forced-colors:bg-[CanvasText]",
-                event.when === 'future' && "border-muted-foreground border bg-transparent"
+                event.when === 'now' &&
+                  'bg-blue-500 ring-4 ring-blue-500/15 dark:bg-blue-400 forced-colors:bg-[Highlight]',
+                event.when === 'past' && 'bg-muted-foreground forced-colors:bg-[CanvasText]',
+                event.when === 'future' && 'border-muted-foreground border bg-transparent'
               )}
             />
             {i < shown.length - 1 && (
@@ -79,7 +80,7 @@ export function Timeline({
             <span
               className={cn(
                 'text-[13px] break-words',
-                event.when === 'future' ? "text-muted-foreground" : 'text-foreground/90',
+                event.when === 'future' ? 'text-muted-foreground' : 'text-foreground/90',
                 event.when === 'now' && 'font-medium'
               )}>
               {event.title}

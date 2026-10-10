@@ -57,7 +57,7 @@ export function DataTable<TRow>({
   return (
     <div
       data-slot="data-table"
-      className={cn(paper, "@container w-full overflow-hidden rounded-2xl", className)}
+      className={cn(paper, '@container w-full overflow-hidden rounded-2xl', className)}
       {...props}>
       <div className="flex items-center px-4 pt-3 pb-2">
         {columns.map(column => (

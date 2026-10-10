@@ -47,7 +47,7 @@ export function SubagentList({
   return (
     <div
       data-slot="subagent-list"
-      className={cn("flex w-full max-w-xs flex-col gap-2", className)}
+      className={cn('flex w-full max-w-xs flex-col gap-2', className)}
       {...props}>
       {agents.map((agent, index) => {
         const done = agent.done ?? index < completedCount;
@@ -76,7 +76,7 @@ export function SubagentList({
               className="bg-foreground/[0.06] inset-ring-border h-[3px] w-full overflow-hidden rounded-full inset-ring forced-colors:outline">
               <span
                 className={cn(
-                  "block h-full rounded-full transition-[width] duration-700 forced-color-adjust-none",
+                  'block h-full rounded-full transition-[width] duration-700 forced-color-adjust-none',
                   done ? 'bg-emerald-500/70' : 'bg-foreground/60'
                 )}
                 style={{ width: `${percentage}%` }}

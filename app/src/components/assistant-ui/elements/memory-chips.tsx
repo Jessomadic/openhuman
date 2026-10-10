@@ -60,7 +60,7 @@ export function MemoryChips({
             className={cn(
               'fade-in zoom-in-95 animate-in fill-mode-both group flex items-center gap-1 rounded-full py-1 pr-1 pl-2.5 text-xs duration-300',
               chip.change === 'existing'
-                ? cn(field, "text-muted-foreground")
+                ? cn(field, 'text-muted-foreground')
                 : 'bg-blue-500/12 text-blue-700 dark:bg-blue-400/15 dark:text-blue-300'
             )}>
             {chip.text}

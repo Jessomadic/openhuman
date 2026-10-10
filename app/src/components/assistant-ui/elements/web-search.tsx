@@ -71,7 +71,7 @@ export function WebSearch({
           data-slot="web-search-query"
           className={cn(
             field,
-            "text-muted-foreground inline-flex w-fit items-center gap-1.5 rounded-full px-3.5 py-2 text-xs"
+            'text-muted-foreground inline-flex w-fit items-center gap-1.5 rounded-full px-3.5 py-2 text-xs'
           )}>
           <SearchIcon className="text-muted-foreground size-3 shrink-0" />
           <span className="truncate">{query}</span>

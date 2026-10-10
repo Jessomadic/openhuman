@@ -106,7 +106,8 @@ export function ApprovalCard({
         </div>
       </div>
 
-      <div className={cn(field, 'text-muted-foreground rounded-xl px-3.5 py-2.5 font-mono text-xs')}>
+      <div
+        className={cn(field, 'text-muted-foreground rounded-xl px-3.5 py-2.5 font-mono text-xs')}>
         {command}
       </div>
 
@@ -144,7 +145,7 @@ export function ApprovalCard({
                 {...allowOnceProps}
                 className={cn(
                   inkButton,
-                  "h-8 px-3.5 text-xs font-medium whitespace-nowrap",
+                  'h-8 px-3.5 text-xs font-medium whitespace-nowrap',
                   allowOnceProps?.className
                 )}>
                 {allowOnceLabel}

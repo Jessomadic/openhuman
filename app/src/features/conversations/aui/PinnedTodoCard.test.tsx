@@ -11,7 +11,6 @@ const active: TodoItem[] = [
   { id: '2', text: 'Step two', status: 'active' },
 ];
 describe('PinnedTodoCard', () => {
-
   it('renders the live progress using the assistant-ui agent plan', () => {
     const { container } = render(<PinnedTodoCard threadId="t1" items={active} />);
     expect(container.querySelector('[data-slot="agent-plan"]')).toBeInTheDocument();

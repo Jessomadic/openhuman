@@ -88,7 +88,7 @@ export function ImageGeneration({
           className={cn(
             mono,
             'absolute end-2.5 top-2.5 tabular-nums',
-            generating ? "text-muted-foreground" : 'text-white/70'
+            generating ? 'text-muted-foreground' : 'text-white/70'
           )}>
           {dimensions}
         </span>

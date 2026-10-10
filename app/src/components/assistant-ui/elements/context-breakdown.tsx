@@ -68,7 +68,7 @@ export function ContextBreakdown({
           className={cn(
             mono,
             'tabular-nums',
-            pressure > 0.85 ? 'text-amber-600 dark:text-amber-400' : "text-muted-foreground"
+            pressure > 0.85 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'
           )}>
           {formatTokenCount(used)} / {formatTokenCount(limit)}
         </span>
@@ -88,7 +88,7 @@ export function ContextBreakdown({
               aria-valuenow={announced(width)}
               aria-valuetext={meterValueText(fmt(segment.tokens), fmt(limit))}
               className={cn(
-                "h-full transition-[width] duration-500 ease-out forced-color-adjust-none motion-reduce:transition-none",
+                'h-full transition-[width] duration-500 ease-out forced-color-adjust-none motion-reduce:transition-none',
                 segment.tint
               )}
               style={{ width: `${width}%` }}
@@ -100,21 +100,27 @@ export function ContextBreakdown({
       <div className="flex flex-col gap-1.5">
         {segments.map(segment => (
           <div key={segment.label} className="flex items-center gap-2">
-            <span aria-hidden className={cn("size-2 shrink-0 rounded-full forced-color-adjust-none", segment.tint)} />
+            <span
+              aria-hidden
+              className={cn('size-2 shrink-0 rounded-full forced-color-adjust-none', segment.tint)}
+            />
             <span className="text-muted-foreground min-w-0 flex-1 truncate text-[13px]">
               {segment.label}
             </span>
-            <span className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}>
+            <span className={cn(mono, 'text-muted-foreground shrink-0 tabular-nums')}>
               {fmt(segment.tokens)}
             </span>
           </div>
         ))}
         <div className="flex items-center gap-2">
-          <span aria-hidden className="bg-foreground/[0.08] inset-ring-border size-2 shrink-0 rounded-full inset-ring forced-colors:border" />
+          <span
+            aria-hidden
+            className="bg-foreground/[0.08] inset-ring-border size-2 shrink-0 rounded-full inset-ring forced-colors:border"
+          />
           <span className="text-muted-foreground min-w-0 flex-1 truncate text-[13px]">
             {headroomLabel}
           </span>
-          <span className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}>
+          <span className={cn(mono, 'text-muted-foreground shrink-0 tabular-nums')}>
             {fmt(Math.max(0, limit - used))}
           </span>
         </div>

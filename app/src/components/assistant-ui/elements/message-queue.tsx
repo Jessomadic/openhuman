@@ -109,7 +109,9 @@ export function MessageQueueItem({
         field,
         'fade-in slide-in-from-bottom-1 animate-in fill-mode-both flex items-center gap-2.5 rounded-2xl py-2 pr-2 pl-3 duration-300'
       )}>
-      <span className={cn(mono, 'text-muted-foreground w-3 shrink-0 tabular-nums')}>{position}</span>
+      <span className={cn(mono, 'text-muted-foreground w-3 shrink-0 tabular-nums')}>
+        {position}
+      </span>
       <span className="text-muted-foreground min-w-0 flex-1 truncate text-[13.5px]">{text}</span>
       <ArrowUpIcon aria-hidden className="text-muted-foreground size-3 shrink-0" />
       {action}

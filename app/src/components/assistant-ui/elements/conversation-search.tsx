@@ -65,7 +65,7 @@ export function ConversationSearch({
             aria-label={placeholder}
             className="text-foreground/85 placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-[13px] outline-none"
           />
-          <span className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}>
+          <span className={cn(mono, 'text-muted-foreground shrink-0 tabular-nums')}>
             {hits.length === 0 ? '0' : `${index + 1}/${hits.length}`}
           </span>
           {onStep && (
@@ -109,8 +109,10 @@ export function ConversationSearch({
             key={hit.id}
             aria-hidden
             className={cn(
-              "absolute inset-x-0 h-1 rounded-full transition-colors duration-200 forced-color-adjust-none",
-              i === index ? "bg-amber-500 forced-colors:bg-[Highlight]" : "bg-amber-500/35 forced-colors:bg-[CanvasText]"
+              'absolute inset-x-0 h-1 rounded-full transition-colors duration-200 forced-color-adjust-none',
+              i === index
+                ? 'bg-amber-500 forced-colors:bg-[Highlight]'
+                : 'bg-amber-500/35 forced-colors:bg-[CanvasText]'
             )}
             style={{ top: `${hit.position}%` }}
           />
