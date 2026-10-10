@@ -216,10 +216,14 @@ pub fn quarantine_corrupt(path: &Path, suffix: &str) -> Option<PathBuf> {
         match std::fs::hard_link(path, &target) {
             Ok(()) => {
                 if let Err(e) = std::fs::remove_file(path) {
-                    log::warn!(
-                        "[keyring] quarantined {} but could not remove the original: {e}",
+                    // Not moved aside after all: drop the extra link so the
+                    // caller does not treat the original as gone.
+                    let _ = std::fs::remove_file(&target);
+                    log::error!(
+                        "[keyring] {} could not be parsed and could not be moved aside: {e}",
                         path.display()
                     );
+                    return None;
                 }
                 return Some(log_quarantined(path, target));
             }

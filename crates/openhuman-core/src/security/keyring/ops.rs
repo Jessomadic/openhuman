@@ -67,17 +67,22 @@ pub fn get(user_id: &str, key: &str) -> Result<Option<String>, KeyringError> {
     };
     log::debug!("[keyring] get (storage)");
     get_adopting(secrets, &namespaced_key(user_id, key), key, || {
-        // The storage backend is authoritative once configured, so a failing
-        // legacy backend must not fail the read; it is logged so a broken OS
-        // keychain does not look like "nothing stored".
-        match process_get(user_id, key) {
-            Ok(value) => value,
-            Err(error) => {
-                log::warn!("[keyring] legacy process-backend read failed during adoption: {error}");
-                None
-            }
-        }
+        legacy_or_warn(process_get(user_id, key))
     })
+}
+
+/// The legacy process-backend value to adopt. The storage backend is
+/// authoritative once configured, so a failing legacy backend must not fail
+/// the read; it is logged so a broken OS keychain does not look like
+/// "nothing stored".
+fn legacy_or_warn(result: Result<Option<String>, KeyringError>) -> Option<String> {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            log::warn!("[keyring] legacy process-backend read failed during adoption: {error}");
+            None
+        }
+    }
 }
 
 /// Read `name` from the storage-backed `secrets`. On a miss, ask `legacy` for
