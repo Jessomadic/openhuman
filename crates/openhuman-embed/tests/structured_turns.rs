@@ -349,3 +349,32 @@ fn a_complete_json_value_with_a_length_finish_is_not_a_valid_review() {
         .unwrap();
     });
 }
+
+#[test]
+fn shared_budget_stops_the_tool_loop_before_its_next_provider_call() {
+    let _guard = RUNTIME_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    runtime().block_on(async {
+        tokio::spawn(async {
+            use openhuman_embed::budget::{Budget, CallBudget, ModelBudget, SpendLimits};
+            let backend = stub_backend().await;
+            let provider = provider(vec![completion(json!({
+                "role":"assistant", "content":null,
+                "tool_calls":[{"id":"read-budget","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]
+            }),"tool_calls","fixture",0)]).await;
+            let runtime = build_runtime(&backend).await;
+            let reads = Arc::new(AtomicUsize::new(0));
+            let agent = runtime.agent(reviewer("budgeted",&provider,reads.clone())).unwrap();
+            let ledger = Budget::new(SpendLimits { tokens:None,cost_micros:Some(100) });
+            let outcome = agent.turn("Review this diff.").budget(ModelBudget {
+                ledger:ledger.clone(),
+                call:CallBudget {input_tokens:200_000,output_tokens:512,cost_micros:100},
+            }).send().await;
+            assert!(matches!(outcome,Err(CoreError::BudgetExceeded { .. })),"{outcome:?}");
+            assert_eq!(reads.load(Ordering::SeqCst),1);
+            assert_eq!(chat_requests(&provider).await.len(),1);
+            assert_eq!(ledger.snapshot().spent.cost_micros,100);
+        }).await.unwrap();
+    });
+}

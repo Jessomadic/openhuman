@@ -407,6 +407,7 @@ pub struct Completer {
     timeout: Option<Duration>,
     observer: Option<Arc<dyn CompletionObserver>>,
     cancellation: crate::cancellation::Cancellation,
+    budget: Option<crate::budget::ModelBudget>,
 }
 
 impl std::fmt::Debug for Completer {
@@ -429,6 +430,7 @@ impl Completer {
             timeout: None,
             observer: None,
             cancellation: Default::default(),
+            budget: None,
         }
     }
 
@@ -448,6 +450,12 @@ impl Completer {
     /// Attach an acknowledged cancellation scope shared with other calls.
     pub fn cancellation(mut self, cancellation: crate::cancellation::Cancellation) -> Self {
         self.cancellation = cancellation;
+        self
+    }
+
+    /// Enforce a shared run or per-turn budget before every provider call.
+    pub fn budget(mut self, budget: crate::budget::ModelBudget) -> Self {
+        self.budget = Some(budget);
         self
     }
 
@@ -559,8 +567,30 @@ impl Completer {
             &endpoint,
             request.into_wire(),
         );
+        let budget = self
+            .budget
+            .as_ref()
+            .map(|budget| crate::budget::ModelBudget {
+                ledger: budget.ledger.child(crate::budget::SpendLimits::default()),
+                call: budget.call,
+            });
+        let call = async {
+            match &budget {
+                Some(budget) => {
+                    openhuman_core::agent::tinyagents::budget::with_budget(budget.clone(), call)
+                        .await
+                }
+                None => call.await,
+            }
+        };
         let started = std::time::Instant::now();
         let response = call.await.map_err(|message| {
+            if let Some(source) = budget.as_ref().and_then(|budget| budget.ledger.refusal()) {
+                return CoreError::BudgetExceeded {
+                    method: COMPLETE,
+                    source,
+                };
+            }
             log::warn!(
                 "[embed] complete failed method={COMPLETE} model={model} elapsed_ms={}",
                 started.elapsed().as_millis()

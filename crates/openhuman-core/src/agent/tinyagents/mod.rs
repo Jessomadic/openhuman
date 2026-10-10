@@ -49,6 +49,7 @@ pub mod run_mode;
 // embedder may be unable to do (OpenCompany withholds spawn tools under
 // multi-tenancy), so "bring your own summarizer" is the case this seam exists
 // for rather than an exotic one.
+pub mod budget;
 pub mod payload_summarizer;
 mod policy_denial;
 pub(crate) mod reaper;

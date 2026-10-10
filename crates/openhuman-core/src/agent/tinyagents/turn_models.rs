@@ -67,6 +67,19 @@ pub(crate) struct TurnModels {
 }
 
 impl TurnModels {
+    /// Wrap every concrete route and summarizer below harness retries/fallback.
+    pub(crate) fn with_budget(mut self, budget: Option<&super::budget::ModelBudget>) -> Self {
+        let Some(budget) = budget else {
+            return self;
+        };
+        self.primary = budget.wrap(self.primary);
+        self.summarizer = budget.wrap(self.summarizer);
+        for (_, route) in &mut self.routes {
+            *route = budget.wrap(route.clone());
+        }
+        self
+    }
+
     /// Whether the primary provider is local / self-hosted.
     pub(crate) fn is_local(&self) -> bool {
         self.is_local

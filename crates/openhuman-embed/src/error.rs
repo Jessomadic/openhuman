@@ -47,6 +47,14 @@ pub enum CoreError {
         failure: crate::structured::StructuredOutputFailure,
     },
 
+    /// Model call refused before dispatch by a shared run or turn budget.
+    #[error("{method}: {source}")]
+    BudgetExceeded {
+        /// Method that attempted the call.
+        method: &'static str,
+        /// Refusal including spend so far and outstanding reservations.
+        source: crate::budget::BudgetExceeded,
+    },
     /// The domain returned a structured error envelope.
     #[error("{method}: {message}")]
     Domain {
@@ -184,6 +192,7 @@ impl CoreError {
             CoreError::Cancelled { method }
             | CoreError::DeadlineExceeded { method }
             | CoreError::StructuredOutput { method, .. }
+            | CoreError::BudgetExceeded { method, .. }
             | CoreError::Domain { method, .. }
             | CoreError::Unavailable { method }
             | CoreError::Rpc { method, .. }
@@ -206,10 +215,11 @@ impl CoreError {
     pub fn is_expected_user_state(&self) -> bool {
         matches!(
             self,
-            CoreError::Domain {
-                expected_user_state: true,
-                ..
-            }
+            CoreError::BudgetExceeded { .. }
+                | CoreError::Domain {
+                    expected_user_state: true,
+                    ..
+                }
         )
     }
 

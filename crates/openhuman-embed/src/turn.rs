@@ -248,6 +248,7 @@ pub(crate) enum TurnTarget {
 /// Owned rather than borrowed: it holds an `Arc` to whatever it dispatches
 /// on, so a host can build it in one place and send it from another.
 pub struct Turn {
+    budget: Option<crate::budget::ModelBudget>,
     target: TurnTarget,
     request: TurnRequest,
     session_id: Option<String>,
@@ -267,6 +268,7 @@ impl Turn {
     pub(crate) fn new(target: TurnTarget, message: impl Into<String>) -> Self {
         Self {
             target,
+            budget: None,
             request: TurnRequest::new(message),
             session_id: None,
             origin: None,
@@ -441,6 +443,12 @@ impl Turn {
         self
     }
 
+    /// Enforce the ledger across this tool loop, retries and synchronous children.
+    pub fn budget(mut self, budget: crate::budget::ModelBudget) -> Self {
+        self.budget = Some(budget);
+        self
+    }
+
     /// Set the sampling temperature for this turn.
     pub fn temperature(mut self, temperature: f64) -> Self {
         self.request.temperature = Some(temperature);
@@ -581,7 +589,20 @@ impl Turn {
             ),
             untrusted_input: self.untrusted_input,
         };
+        let budget = self.budget.take().map(|budget| crate::budget::ModelBudget {
+            ledger: budget.ledger.child(crate::budget::SpendLimits::default()),
+            call: budget.call,
+        });
         let dispatch = dispatch(self.target, self.request, self.seed.take(), &usage, options);
+        let dispatch = async {
+            match &budget {
+                Some(budget) => {
+                    openhuman_core::agent::tinyagents::budget::with_budget(budget.clone(), dispatch)
+                        .await
+                }
+                None => dispatch.await,
+            }
+        };
 
         let reply = match (self.origin, self.progress) {
             (Some(origin), Some(sink)) => {
@@ -610,6 +631,7 @@ impl Turn {
                 crate::error::CoreError::Cancelled { .. } => "cancelled",
                 crate::error::CoreError::DeadlineExceeded { .. } => "deadline",
                 crate::error::CoreError::StructuredOutput { .. } => "structured_output",
+                crate::error::CoreError::BudgetExceeded { .. } => "budget_exceeded",
                 crate::error::CoreError::Domain { .. } => "domain",
                 crate::error::CoreError::Unavailable { .. } => "unavailable",
                 crate::error::CoreError::Rpc { .. } => "rpc",
@@ -633,6 +655,15 @@ impl Turn {
                     .clone(),
             );
         }
+        let reply = reply.map_err(|error| {
+            match budget.as_ref().and_then(|budget| budget.ledger.refusal()) {
+                Some(source) => CoreError::BudgetExceeded {
+                    method: AGENT_CHAT,
+                    source,
+                },
+                None => error,
+            }
+        });
         let (reply, report) = reply?;
         let structured = if wants_json {
             serde_json::from_str(reply.trim()).ok()
