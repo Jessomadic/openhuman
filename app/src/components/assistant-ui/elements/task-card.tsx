@@ -109,7 +109,12 @@ export function TaskCard({
     <div
       data-slot="task-card"
       data-state={state}
-      className={cn(paper, 'flex w-full max-w-sm flex-col overflow-hidden rounded-2xl', (state === 'working' || state === 'waiting') && 'sticky bottom-0 z-10 bg-background', className)}
+      className={cn(
+        paper,
+        'flex w-full max-w-sm flex-col overflow-hidden rounded-2xl',
+        (state === 'working' || state === 'waiting') && 'sticky bottom-0 z-10 bg-background',
+        className
+      )}
       {...props}>
       <button
         type="button"
