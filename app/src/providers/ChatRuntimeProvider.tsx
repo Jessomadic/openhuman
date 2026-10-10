@@ -1044,8 +1044,7 @@ const ChatRuntimeProvider = ({ children }: { children: React.ReactNode }) => {
                     agentId: event.tool_name ?? 'subagent',
                     inputTokens: childInput ?? 0,
                     outputTokens: childOutput ?? 0,
-                    costUsd:
-                      event.subagent?.cost_usd === undefined ? 0 : event.subagent.cost_usd,
+                    costUsd: event.subagent?.cost_usd === undefined ? 0 : event.subagent.cost_usd,
                   },
                 ],
               })

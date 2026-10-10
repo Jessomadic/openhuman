@@ -36,11 +36,11 @@ import debug from 'debug';
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
-import type { CostSource } from '../../../services/chatService';
 import {
   type ContextBreakdown as ContextBreakdownData,
   getContextBreakdown,
 } from '../../../services/api/agentContextApi';
+import type { CostSource } from '../../../services/chatService';
 import { emptySessionTokenUsage, type SessionTokenUsage } from '../../../store/chatRuntimeSlice';
 import { useAppSelector } from '../../../store/hooks';
 
