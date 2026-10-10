@@ -64,7 +64,9 @@ impl Lifecycle {
             agent_id: agent_id.to_string(),
         };
         let mut watcher = self.removed.subscribe();
-        if *watcher.borrow_and_update() {
+        // Claiming removal closes admission immediately; waking existing turns
+        // waits until their approvals have been settled with the removal reason.
+        if self.removal_claimed.load(Ordering::SeqCst) || *watcher.borrow_and_update() {
             log::debug!("[embed][agent] turn refused: agent removed id={agent_id}");
             return Err(removed());
         }

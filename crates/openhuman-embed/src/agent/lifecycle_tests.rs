@@ -55,3 +55,32 @@ fn teardown_is_claimed_once() {
     assert!(lifecycle.begin_teardown());
     assert!(!lifecycle.begin_teardown());
 }
+
+#[tokio::test]
+async fn a_claimed_removal_refuses_turns_before_approvals_are_settled() {
+    let lifecycle = Arc::new(Lifecycle::new());
+    let removing = lifecycle.clone();
+    let (entered, callback_entered) = std::sync::mpsc::channel();
+    let (release, callback_release) = std::sync::mpsc::channel();
+    let removal = std::thread::spawn(move || {
+        removing.mark_removed_with(|| {
+            entered.send(()).unwrap();
+            callback_release.recv().unwrap();
+        })
+    });
+    callback_entered.recv().unwrap();
+    let ran = AtomicBool::new(false);
+    let outcome = lifecycle
+        .admit("a", "test", async {
+            ran.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+    release.send(()).unwrap();
+    assert!(removal.join().unwrap());
+    assert!(removed(outcome));
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "removal admitted a new turn while settling approvals"
+    );
+}
