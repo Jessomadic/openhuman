@@ -1,11 +1,10 @@
-//! OS-keychain backed secret storage with a test/debug file backend override.
+//! Encrypted secret storage with explicit OS-keychain and debug overrides.
 //!
 //! Wraps the [`keyring`] crate (or an explicit file backend override) to provide a
 //! namespaced, user-scoped interface to secret storage:
-//! - **macOS**: Keychain (prod)
-//! - **Windows**: Credential Manager (prod)
-//! - **Linux**: Secret Service / libsecret (prod)
-//! - **Tests / explicit override**: JSON file at `{workspace}/dev-keychain.json`
+//! - **Default**: encrypted file with a master key from the environment or OS keychain
+//! - **Explicit `os` override**: native OS credential store
+//! - **Tests / explicit `file` override**: JSON file at `{workspace}/dev-keychain.json`
 //!
 //! All keys are scoped under a `user_id` parameter so multiple users can
 //! coexist without collision.  The backend entry key format is:
@@ -15,9 +14,10 @@
 //!
 //! The backend is chosen **once** at first use, in this priority order:
 //!
-//! 1. `OPENHUMAN_KEYRING_BACKEND` env var: `"os"` | `"file"` | `"mock"`.
+//! 1. `OPENHUMAN_KEYRING_BACKEND` env var: `"os"` | `"file"` | `"encrypted_file"`.
 //! 2. `cfg!(test)` → `file`.
-//! 3. Otherwise → `os`.
+//! 3. Explicit `OPENHUMAN_APP_ENV=dev` or `development` → `file`.
+//! 4. Otherwise → `encrypted_file`.
 //!
 //! The selected backend is logged once with `[keyring] backend=<name> ...`.
 //!
