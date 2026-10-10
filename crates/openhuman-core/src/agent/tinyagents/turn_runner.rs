@@ -299,14 +299,8 @@ pub(super) async fn run_turn_via_tinyagents_body(
         run_context.tool_rules.clone(),
     );
     super::response_shape::install(&mut harness, hosted_root.is_some());
-    // Wind down before the outer web backstop and clamp the harness wall clock
-    // below it (`agent::turn_deadline`); a no-op for turns without a deadline.
-    let _deadline_wind_down = super::deadline_wind_down::install(
-        &mut harness,
-        handle.as_ref(),
-        run_context.turn_deadline,
-        subagent_scope.is_some(),
-    );
+    let is_child = subagent_scope.is_some(); // wind down before the web backstop:
+    super::deadline_wind_down::install(&mut harness, handle.as_ref(), run_context.turn_deadline, is_child);
 
     // Fail-closed registry validation gate (issue #4249, Workstream 10 — registry).
     // The projected `CapabilityRegistry` produced these diagnostics during
