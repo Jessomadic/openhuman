@@ -345,6 +345,10 @@ impl LeaseStore for DocumentLeases {
         self.declare().await?;
         Ok(self.read(key).await?.map(|(_, record)| record))
     }
+
+    fn record_scope(&self) -> Option<Scope> {
+        self.scope.clone()
+    }
 }
 
 #[cfg(test)]
