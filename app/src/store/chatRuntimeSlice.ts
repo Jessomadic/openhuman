@@ -628,7 +628,9 @@ function applyTurnUsage(usage: SessionTokenUsage, payload: ChatTurnUsagePayload)
   // correctly. The parent's value already excludes children by design (#4271),
   // which is exactly what this delta must not disturb.
   if (!payload.subAgentSpendOnly) {
-    usage.lastTurnContextUsed = Math.max(0, inTok + outTok - subTurnTokens);
+    const contextTokens = nonNeg(payload.contextTokens);
+    usage.lastTurnContextUsed =
+      contextTokens > 0 ? contextTokens : Math.max(0, inTok + outTok - subTurnTokens);
   }
 }
 
