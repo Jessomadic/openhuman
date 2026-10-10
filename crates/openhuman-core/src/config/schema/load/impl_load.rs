@@ -482,87 +482,11 @@ impl Config {
         let toml_str =
             toml::to_string_pretty(&config_to_save).context("Failed to serialize config")?;
 
-        let parent_dir = self
-            .config_path
-            .parent()
-            .context("Config path must have a parent directory")?;
-
-        fs::create_dir_all(parent_dir).await.with_context(|| {
-            format!(
-                "Failed to create config directory: {}",
-                parent_dir.display()
-            )
-        })?;
-
-        let file_name = self
-            .config_path
-            .file_name()
-            .and_then(|v| v.to_str())
-            .unwrap_or("config.toml");
-        let temp_path = parent_dir.join(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()));
-        let backup_path = parent_dir.join(format!("{file_name}.bak"));
-
-        let mut temp_file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp_path)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to create temporary config file: {}",
-                    temp_path.display()
-                )
-            })?;
-
-        // Harden BEFORE any secret bytes are written. `create_new` opens at
-        // `0o666 & ~umask` (0644 under the usual 022), and the atomic rename
-        // below carries the *temp file's* mode onto the live config — so
-        // without this every save silently re-widened a config that holds
-        // `enc2:` provider keys and channel tokens back to world-readable, and
-        // `fs::copy` propagated the same mode onto `config.toml.bak`. The
-        // load-time auto-fix only ever repaired it on the next startup.
-        // Same pattern as `keyring::backend`.
-        //
-        // Non-fatal by design: filesystems that do not implement chmod
-        // (CIFS/SMB, exFAT, some FUSE mounts) would otherwise turn a save that
-        // has always worked into a hard failure. A failed hardening leaves the
-        // file exactly as permissive as it was before this call existed, so
-        // warn and continue rather than regress writability — matching the
-        // best-effort `let _ = set_permissions(..)` on the first-init path.
-        #[cfg(unix)]
-        {
-            use std::{fs::Permissions, os::unix::fs::PermissionsExt};
-            if let Err(e) = fs::set_permissions(&temp_path, Permissions::from_mode(0o600)).await {
-                tracing::warn!(
-                    path = %temp_path.display(),
-                    error = %e,
-                    "[security][config] could not restrict config file to 0600; \
-                     it may be readable by other local users"
-                );
-            }
-        }
-
-        temp_file
-            .write_all(toml_str.as_bytes())
-            .await
-            .context("Failed to write temporary config contents")?;
-        temp_file
-            .sync_all()
-            .await
-            .context("Failed to fsync temporary config file")?;
-        drop(temp_file);
-
-        // Everything above can still fail with the live config untouched.
-        // `commit_replacement` owns the swap, and returns `Err` only while the
-        // old config is still in place — see its docs for why callers that roll
-        // back on `Err` depend on that.
-        super::atomic_commit::commit_replacement(
-            &temp_path,
-            &self.config_path,
-            parent_dir,
-            &backup_path,
-        )
-        .await?;
+        // Where the text lives is the source's business: the file (atomic
+        // replace with a `.bak`) or, on a shared backend, the config document.
+        let source = super::source::for_config(&self.config_path);
+        tracing::debug!(source = source.label(), "[config] saving config");
+        source.write(&toml_str).await?;
 
         Ok(())
     }
