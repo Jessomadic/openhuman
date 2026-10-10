@@ -97,6 +97,7 @@ export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
  */
 export type ThreadComponents = {
   MessageTasks?: ComponentType | undefined;
+  ActiveTasks?: ComponentType | undefined;
   AssistantMessage?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
@@ -427,6 +428,7 @@ const ThreadRoot: FC<{
     Welcome = ThreadWelcome,
     Composer: HostComposer,
     ConversationMap,
+    ActiveTasks,
   } = useContext(ThreadComponentsContext);
   const { isDraggingFiles, dropHandlers } = useThreadFileDrop();
   const footerRef = useRef<HTMLDivElement>(null);
@@ -434,14 +436,17 @@ const ThreadRoot: FC<{
     const footer = footerRef.current;
     const viewport = footer?.closest<HTMLElement>('[data-slot="aui_thread-viewport"]');
     if (!footer || !viewport) return;
-    const measure = () => viewport.style.setProperty('--task-card-bottom', `${footer.getBoundingClientRect().height + 8}px`);
+    const measure = () =>
+      viewport.style.setProperty(
+        '--task-card-bottom',
+        `${footer.getBoundingClientRect().height + 8}px`
+      );
     measure();
     if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(measure);
     observer.observe(footer);
     return () => observer.disconnect();
   }, []);
-
 
   return (
     <ThreadPrimitive.Root
@@ -487,6 +492,7 @@ const ThreadRoot: FC<{
             <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
             <RunningStatusSlot />
             <TranscriptFooterSlot />
+            {ActiveTasks && <ActiveTasks />}
           </div>
 
           <ThreadPrimitive.ViewportFooter
@@ -1242,7 +1248,11 @@ const AssistantMessage: FC = () => {
         {stopped && <StoppedRunSlot />}
         <MessageError />
         <ChatErrorNotice />
-        {MessageTasks && <MessageTasks />}
+        {MessageTasks && (
+          <div className="mt-3">
+            <MessageTasks />
+          </div>
+        )}
       </div>
 
       <div

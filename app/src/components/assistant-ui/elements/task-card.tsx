@@ -20,8 +20,10 @@ import {
   Loader2Icon,
   XIcon,
 } from 'lucide-react';
-import { Children, type ComponentProps, type ReactNode, useState } from 'react';
+import { Children, type ComponentProps, type ReactNode, useContext, useState } from 'react';
+import { createPortal } from 'react-dom';
 
+import { TaskCardDockTarget } from '../lib/task-card-dock';
 import { mono, paper } from './surfaces';
 
 export type TaskCardState = 'working' | 'waiting' | 'done' | 'failed' | 'cancelled' | 'incomplete';
@@ -95,6 +97,7 @@ export function TaskCard({
   children?: ReactNode | undefined;
 }) {
   const { t } = useT();
+  const dock = useContext(TaskCardDockTarget);
   const hasTranscript = Children.toArray(children).length > 0;
   const inert = open !== undefined && onOpenChange === undefined;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
@@ -105,16 +108,11 @@ export function TaskCard({
     onOpenChange?.(next);
   };
 
-  return (
+  const card = (
     <div
       data-slot="task-card"
       data-state={state}
-      className={cn(
-        paper,
-        'flex w-full max-w-sm flex-col overflow-hidden rounded-2xl',
-        (state === 'working' || state === 'waiting') && 'sticky bottom-(--task-card-bottom,0px) z-10 bg-background',
-        className
-      )}
+      className={cn(paper, 'flex w-full max-w-sm flex-col overflow-hidden rounded-2xl', className)}
       {...props}>
       <button
         type="button"
@@ -164,4 +162,5 @@ export function TaskCard({
       )}
     </div>
   );
+  return dock && (state === 'working' || state === 'waiting') ? createPortal(card, dock) : card;
 }

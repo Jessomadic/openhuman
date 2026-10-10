@@ -339,7 +339,7 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     const plan = await screen.findByTestId('todo-checklist');
     const overlay = plan.closest('[data-slot="composer-overlays"]');
     expect(overlay).toBeNull();
-    expect(plan.closest('[data-slot="aui_assistant-message-root"]')).not.toBeNull();
+    expect(plan.closest('[data-slot="task-card-dock"]')).not.toBeNull();
     expect(plan).toHaveAttribute('data-slot', 'task-card');
   });
 

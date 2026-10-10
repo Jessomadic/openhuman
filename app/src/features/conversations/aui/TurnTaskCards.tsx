@@ -3,6 +3,10 @@ import { createContext, type PropsWithChildren, useContext, useEffect, useState 
 
 import { TaskCard } from '../../../components/assistant-ui/elements/task-card';
 import { TodoItems } from '../../../components/assistant-ui/elements/todo-list';
+import {
+  TaskCardDock,
+  TaskCardDockProvider,
+} from '../../../components/assistant-ui/lib/task-card-dock';
 import { useDisclosure } from '../../../components/assistant-ui/lib/useDisclosure';
 import { useT } from '../../../lib/i18n/I18nContext';
 import { useAuiThreadId } from '../../../providers/AssistantUiRuntimeProvider';
@@ -60,9 +64,11 @@ export function TurnTaskProvider({ children }: PropsWithChildren) {
     void userScopedStorage.setItem(`chat-task-cards:${threadId}`, JSON.stringify(cards));
   }, [anchor, todos, goal, saved, threadId]);
   return (
-    <Tasks.Provider value={saved.threadId === threadId ? saved.cards : []}>
-      {children}
-    </Tasks.Provider>
+    <TaskCardDockProvider>
+      <Tasks.Provider value={saved.threadId === threadId ? saved.cards : []}>
+        {children}
+      </Tasks.Provider>
+    </TaskCardDockProvider>
   );
 }
 
@@ -76,6 +82,7 @@ function TurnTaskCard({ task }: { task: TurnTask }) {
     <TaskCard
       data-testid="todo-checklist"
       label={task.goal?.objective ?? t('conversations.runMode.plan')}
+      meta={t(`conversations.taskCard.state.${state}`)}
       state={state}
       open={open}
       onOpenChange={setOpen}
@@ -101,10 +108,23 @@ export function TurnTaskCards() {
   return (
     <>
       {cards
-        .filter(task => task.anchor === anchor)
+        .filter(task => task.anchor === anchor && taskFinished(task))
         .map(task => (
           <TurnTaskCard key={task.anchor} task={task} />
         ))}
     </>
+  );
+}
+
+export function ActiveTurnTaskCards() {
+  const cards = useContext(Tasks);
+  return (
+    <TaskCardDock>
+      {cards
+        .filter(task => !taskFinished(task))
+        .map(task => (
+          <TurnTaskCard key={task.anchor} task={task} />
+        ))}
+    </TaskCardDock>
   );
 }

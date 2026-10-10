@@ -1,14 +1,40 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { TaskCardDock, TaskCardDockProvider } from '../lib/task-card-dock';
 import { TaskCard } from './task-card';
 
 vi.mock('@/lib/i18n/I18nContext', () => ({ useT: () => ({ t: (key: string) => key }) }));
 describe('task card conversation placement', () => {
   it('sticks active work to the bottom and releases completed work', () => {
-    const { container, rerender } = render(<TaskCard label="Inspect UI" state="working" />);
-    expect(container.firstChild).toHaveClass('sticky', 'bottom-(--task-card-bottom,0px)');
-    rerender(<TaskCard label="Inspect UI" state="done" />);
-    expect(container.firstChild).not.toHaveClass('sticky');
+    const { container, rerender } = render(
+      <TaskCardDockProvider>
+        <div data-testid="original">
+          <TaskCard label="Inspect UI" state="working" />
+        </div>
+        <TaskCardDock />
+      </TaskCardDockProvider>
+    );
+    expect(container.querySelector('[data-slot=task-card-dock]')).toHaveClass(
+      'sticky',
+      'bottom-(--task-card-bottom,0px)'
+    );
+    expect(container.querySelector('[data-slot=task-card]')?.parentElement).toHaveAttribute(
+      'data-slot',
+      'task-card-dock'
+    );
+    rerender(
+      <TaskCardDockProvider>
+        <div data-testid="original">
+          <TaskCard label="Inspect UI" state="done" />
+        </div>
+        <TaskCardDock />
+      </TaskCardDockProvider>
+    );
+    expect(container.querySelector('[data-slot=task-card]')?.parentElement).toHaveAttribute(
+      'data-testid',
+      'original'
+    );
+    expect(container.querySelector('[data-slot=task-card-dock]')).toBeEmptyDOMElement();
   });
 });

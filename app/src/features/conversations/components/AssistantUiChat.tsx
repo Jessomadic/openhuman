@@ -313,6 +313,7 @@ export function AssistantUiChat({
     () => ({
       ToolFallback: ChatToolFallback,
       MessageTasks: TurnTaskCards,
+      ActiveTasks: ActiveTurnTaskCards,
       // `/` commands (builtins + core `commands_list` + registry actions) and
       // `@` mentions (memory recall, thread files); see `aui/ComposerTriggers`.
       ComposerTriggers,
