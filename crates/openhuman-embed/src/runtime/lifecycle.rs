@@ -115,7 +115,7 @@ impl Runtime {
         };
         if !inner
             .lifecycle
-            .mark_removed_with(|| inner.deny_approvals("agent_removed"))
+            .mark_removed_with("agent_removed", || inner.deny_approvals("agent_removed"))
         {
             return Err(AgentError::UnknownId(id.to_string()));
         }

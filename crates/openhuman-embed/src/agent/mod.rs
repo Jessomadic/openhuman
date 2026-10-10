@@ -145,7 +145,7 @@ impl AgentInner {
         if !self.lifecycle.begin_teardown() {
             return;
         }
-        self.lifecycle.mark_removed();
+        self.lifecycle.mark_removed(resolution);
         self._runtime_guard.events.emit(
             Some(self.id.clone()),
             None,

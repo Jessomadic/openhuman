@@ -501,6 +501,8 @@ impl ApprovalGate {
         // to time out and return `Deny` incorrectly. (CodeRabbit
         // review on PR #2149.)
         let (tx, rx) = oneshot::channel::<ApprovalDecision>();
+        let scope = crate::core::runtime::CoreContext::current_host_overrides()
+            .and_then(|overrides| overrides.approval_scope());
         let register = || -> anyhow::Result<()> {
             {
                 let mut waiters = self.waiters.lock();
@@ -526,6 +528,7 @@ impl ApprovalGate {
                     tool_call_id: tool_call_id.map(str::to_string),
                     forced,
                     agent_id: agent_id.clone(),
+                    approval_scope: scope.clone(),
                     thread_key: thread_key.clone(),
                     detached,
                 },
@@ -553,10 +556,8 @@ impl ApprovalGate {
             });
             Ok(())
         };
-        let scope = crate::core::runtime::CoreContext::current_host_overrides()
-            .and_then(|overrides| overrides.approval_scope());
-        let registered = match scope {
-            Some(scope) => scope.register(register),
+        let registered = match scope.as_ref() {
+            Some(scope) => scope.with_open(register),
             None => Ok(register()),
         };
         match registered {

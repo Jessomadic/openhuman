@@ -23,6 +23,7 @@ pub(crate) struct Lifecycle {
 pub(crate) struct ApprovalState {
     claimed: AtomicBool,
     decisions: Mutex<()>,
+    scope: Arc<openhuman_core::security::approval::ApprovalScope>,
 }
 
 impl ApprovalState {
@@ -38,11 +39,14 @@ impl ApprovalState {
         }
     }
 
-    fn claim_removal(&self) -> bool {
+    fn claim_removal(&self, reason: &str) -> bool {
         let _decision = self
             .decisions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The shared gate closes before this claim becomes observable, so
+        // RPC/chat decisions cannot approve during the later denial snapshot.
+        self.scope.close(reason);
         !self.claimed.swap(true, Ordering::SeqCst)
     }
 }
@@ -60,13 +64,13 @@ impl Lifecycle {
 
     /// Stops admitting turns and ends the ones in flight; returns whether this
     /// caller claimed removal before another caller.
-    pub(crate) fn mark_removed(&self) -> bool {
-        self.mark_removed_with(|| {})
+    pub(crate) fn mark_removed(&self, reason: &str) -> bool {
+        self.mark_removed_with(reason, || {})
     }
 
     /// Claim removal and settle owned approvals before waking in-flight turns.
-    pub(crate) fn mark_removed_with(&self, before_notify: impl FnOnce()) -> bool {
-        if !self.approvals.claim_removal() {
+    pub(crate) fn mark_removed_with(&self, reason: &str, before_notify: impl FnOnce()) -> bool {
+        if !self.approvals.claim_removal(reason) {
             return false;
         }
         before_notify();
@@ -78,6 +82,11 @@ impl Lifecycle {
 
     pub(crate) fn approval_state(&self) -> Arc<ApprovalState> {
         self.approvals.clone()
+    }
+
+    /// The same instance barrier captured by every request at the shared gate.
+    pub(crate) fn approval_scope(&self) -> Arc<openhuman_core::security::approval::ApprovalScope> {
+        self.approvals.scope.clone()
     }
 
     /// Bind handles to this agent instance, even after its public id is reused.

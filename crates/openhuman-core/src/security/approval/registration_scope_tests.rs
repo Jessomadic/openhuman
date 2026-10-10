@@ -4,9 +4,11 @@ use std::sync::{mpsc, Arc};
 #[test]
 fn removal_refuses_late_registration_without_creating_a_pending_row() {
     let scope = ApprovalScope::default();
+    assert!(!scope.is_closed());
     scope.close("agent_removed");
+    assert!(scope.is_closed());
     let mut created = false;
-    let result = scope.register(|| created = true);
+    let result = scope.with_open(|| created = true);
     assert_eq!(result, Err("agent_removed".to_owned()));
     assert!(!created);
 }
@@ -18,7 +20,7 @@ fn accepted_registration_holds_the_removal_barrier_until_it_finishes() {
     let (release_tx, release_rx) = mpsc::channel();
     let registering = scope.clone();
     let registration = std::thread::spawn(move || {
-        registering.register(|| {
+        registering.with_open(|| {
             entered_tx.send(()).unwrap();
             release_rx.recv().unwrap();
         })
@@ -37,7 +39,7 @@ fn accepted_registration_holds_the_removal_barrier_until_it_finishes() {
         "registration released the removal barrier before finishing"
     );
     scope.close("agent_removed");
-    assert_eq!(scope.register(|| ()), Err("agent_removed".to_owned()));
+    assert_eq!(scope.with_open(|| ()), Err("agent_removed".to_owned()));
 }
 
 #[test]
@@ -45,6 +47,6 @@ fn a_reused_agent_id_has_a_fresh_scope_and_preserves_the_old_removal_reason() {
     let old = ApprovalScope::default();
     old.close("agent_removed");
     old.close("agent_dropped");
-    assert_eq!(old.register(|| ()), Err("agent_removed".to_owned()));
-    assert_eq!(ApprovalScope::default().register(|| 42), Ok(42));
+    assert_eq!(old.with_open(|| ()), Err("agent_removed".to_owned()));
+    assert_eq!(ApprovalScope::default().with_open(|| 42), Ok(42));
 }

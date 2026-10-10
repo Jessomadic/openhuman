@@ -16,7 +16,7 @@ async fn a_live_agent_runs_its_turns() {
 #[tokio::test]
 async fn a_removed_agent_refuses_new_turns() {
     let lifecycle = Lifecycle::new();
-    lifecycle.mark_removed();
+    lifecycle.mark_removed("agent_removed");
     let ran = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&ran);
     let outcome = lifecycle
@@ -43,7 +43,7 @@ async fn removal_ends_a_turn_in_flight_and_the_agent_goes_idle() {
     }
     assert!(!lifecycle.wait_idle(Duration::from_millis(10)).await);
 
-    lifecycle.mark_removed();
+    lifecycle.mark_removed("agent_removed");
 
     assert!(removed(turn.await.expect("turn task")));
     assert!(lifecycle.wait_idle(Duration::from_secs(1)).await);
@@ -63,7 +63,7 @@ async fn a_claimed_removal_refuses_turns_before_approvals_are_settled() {
     let (entered, callback_entered) = std::sync::mpsc::channel();
     let (release, callback_release) = std::sync::mpsc::channel();
     let removal = std::thread::spawn(move || {
-        removing.mark_removed_with(|| {
+        removing.mark_removed_with("agent_removed", || {
             entered.send(()).unwrap();
             callback_release.recv().unwrap();
         })
@@ -88,20 +88,26 @@ async fn a_claimed_removal_refuses_turns_before_approvals_are_settled() {
 #[test]
 fn a_claimed_removal_refuses_approval_decisions_before_denial_finishes() {
     let lifecycle = Arc::new(Lifecycle::new());
+    let shared_scope = lifecycle.approval_scope();
     let approvals = crate::Approvals::new("a", lifecycle.removed(), lifecycle.approval_state());
     let removing = lifecycle.clone();
     let (entered, callback_entered) = std::sync::mpsc::channel();
     let (release, callback_release) = std::sync::mpsc::channel();
     let removal = std::thread::spawn(move || {
-        removing.mark_removed_with(|| {
+        removing.mark_removed_with("agent_removed", || {
             entered.send(()).unwrap();
             callback_release.recv().unwrap();
         })
     });
     callback_entered.recv().unwrap();
+    let core_closed = shared_scope.is_closed();
     let outcome = approvals.decide("pending-request", crate::ApprovalDecision::ApproveOnce);
     release.send(()).unwrap();
     assert!(removal.join().unwrap());
+    assert!(
+        core_closed,
+        "the shared gate remained open after removal was claimed"
+    );
     assert!(
         matches!(outcome, Err(crate::ApprovalsError::NotFound(_))),
         "{outcome:?}"
@@ -132,7 +138,7 @@ fn accepted_approval_decisions_hold_the_removal_claim_barrier() {
         held,
         "removal could claim while a decision was still being applied"
     );
-    assert!(state.claim_removal());
+    assert!(state.claim_removal("agent_removed"));
     let mut ran = false;
     assert_eq!(state.with_live(|| ran = true), None);
     assert!(!ran);
