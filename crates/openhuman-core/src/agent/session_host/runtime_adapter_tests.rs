@@ -166,6 +166,12 @@ fn codec_attaches_only_this_agents_own_sidecar_usage_to_atomic_append() {
         "the parent's own cache reads, NOT 4"
     );
     assert_eq!(usage.usage.context_window, 128_000);
+    // The final call's size is persisted beside the summed spend, so a thread
+    // reopened later can still fill the context gauge correctly.
+    assert_eq!(
+        (usage.usage.last_call_input, usage.usage.last_call_output),
+        (9, 2)
+    );
     assert!(
         (usage.usage.cost_usd - 0.004).abs() < f64::EPSILON,
         "the parent's own cost, NOT 0.005"
