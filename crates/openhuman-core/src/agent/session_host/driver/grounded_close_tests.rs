@@ -72,10 +72,11 @@ async fn run(candidates: Vec<String>, verdicts: Vec<Option<CloseViolation>>) -> 
         async move { (violation, None) }
     };
 
-    let (output, usage) = close_with_one_repair("test-model", instruction.clone(), None, ask, verify, || {
-        FALLBACK.to_string()
-    })
-    .await;
+    let (output, usage) =
+        close_with_one_repair("test-model", instruction.clone(), None, ask, verify, || {
+            FALLBACK.to_string()
+        })
+        .await;
 
     Shipped {
         output,

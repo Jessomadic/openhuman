@@ -12463,7 +12463,10 @@ async fn json_rpc_threads_token_usage_reads_persisted_thread_totals() {
     assert_eq!(subs[0]["input_tokens"], 1000);
     assert_eq!(subs[0]["output_tokens"], 200);
     assert_eq!(subs[0]["runs"], 1);
-    assert!(subs[0]["cost_usd"].is_null(), "an unpriced sub-agent reports no cost");
+    assert!(
+        subs[0]["cost_usd"].is_null(),
+        "an unpriced sub-agent reports no cost"
+    );
 
     // Unknown thread → all-zero totals with has_usage=false (brand-new thread).
     let resp_unknown = post_json_rpc(

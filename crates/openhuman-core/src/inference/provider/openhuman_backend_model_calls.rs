@@ -85,9 +85,9 @@ impl ChatModel<()> for OpenHumanBackendModel {
                 observe_in_band_failure(&item);
                 match item {
                     tinyinference_llm::model::ModelStreamItem::Completed(response) => {
-                        tinyinference_llm::model::ModelStreamItem::Completed(
-                            project_managed_usage(response),
-                        )
+                        tinyinference_llm::model::ModelStreamItem::Completed(project_managed_usage(
+                            response,
+                        ))
                     }
                     other => other,
                 }

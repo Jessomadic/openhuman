@@ -166,8 +166,8 @@ pub(super) async fn finalize_turn_outcome(
     // cached tokens and the estimated charged USD) when the observed path ran;
     // otherwise fall back to the run's aggregate totals and estimate the cost from
     // them so a fire-and-forget turn still reports a real (non-$0) cost.
-    let (input_tokens, output_tokens, cached_input_tokens, cost) = bridge_totals
-        .unwrap_or_else(|| {
+    let (input_tokens, output_tokens, cached_input_tokens, cost) =
+        bridge_totals.unwrap_or_else(|| {
             let input = run.usage.usage.input_tokens;
             let output = run.usage.usage.output_tokens;
             let cached = run.usage.usage.cache_read_tokens;

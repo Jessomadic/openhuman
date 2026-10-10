@@ -880,9 +880,11 @@ impl OpenHumanPersistence {
                         .saturating_add(checkpoint.usage.output_tokens),
                     cache_read_tokens: checkpoint.usage.cached_input_tokens,
                     // An unknown cost crosses as no charge at all, never as $0.
-                    charged_amount: checkpoint.usage.cost().usd().map(|usd| {
-                        ChargedAmount::usd_micros((usd * 1_000_000.0).round() as i64)
-                    }),
+                    charged_amount: checkpoint
+                        .usage
+                        .cost()
+                        .usd()
+                        .map(|usd| ChargedAmount::usd_micros((usd * 1_000_000.0).round() as i64)),
                     ..Usage::default()
                 },
             },
@@ -1197,9 +1199,11 @@ fn host_outcome_to_neutral(
                     .saturating_add(outcome.usage.output_tokens),
                 cache_read_tokens: outcome.usage.cached_input_tokens,
                 // An unknown cost crosses as no charge at all, never as $0.
-                charged_amount: outcome.usage.cost().usd().map(|usd| {
-                    ChargedAmount::usd_micros((usd * 1_000_000.0).round() as i64)
-                }),
+                charged_amount: outcome
+                    .usage
+                    .cost()
+                    .usd()
+                    .map(|usd| ChargedAmount::usd_micros((usd * 1_000_000.0).round() as i64)),
                 ..Usage::default()
             },
         },
@@ -1307,16 +1311,13 @@ fn outcome_to_host(
 
 fn map_lifecycle_error(error: SubagentError) -> SubagentRunError {
     SubagentRunError::Provider(anyhow::anyhow!(error.to_string()))
-}/// A child run's cost as it comes back across the orchestration boundary.
+}
+/// A child run's cost as it comes back across the orchestration boundary.
 /// That `Usage` can only say whether a charge is present, so a present one is
 /// read as charged and an absent one as unknown (it was sent as absent).
-fn cost_source_of(
-    charged: Option<&ChargedAmount>,
-) -> crate::agent::cost::CostSource {
+fn cost_source_of(charged: Option<&ChargedAmount>) -> crate::agent::cost::CostSource {
     match charged {
         Some(_) => crate::agent::cost::CostSource::Charged,
         None => crate::agent::cost::CostSource::Unknown,
     }
 }
-
-

@@ -80,9 +80,7 @@ pub(super) fn persist_subagent_transcript(
             cost_usd: usage.cost.known_usd,
             cost_source: Some(match usage.cost.source {
                 crate::agent::cost::CostSource::Charged => transcript::UsageCostSource::Charged,
-                crate::agent::cost::CostSource::Estimated => {
-                    transcript::UsageCostSource::Estimated
-                }
+                crate::agent::cost::CostSource::Estimated => transcript::UsageCostSource::Estimated,
                 crate::agent::cost::CostSource::Unknown => transcript::UsageCostSource::Unknown,
             }),
             // No per-call figure reaches here; readers fall back to the mean

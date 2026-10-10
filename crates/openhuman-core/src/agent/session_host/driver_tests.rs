@@ -140,7 +140,10 @@ fn graph_failure_copies_snapshot_usage_and_failed_tool_outcome_to_sidecar() {
         (13, 5)
     );
     assert!((observed.cost.known_usd - 0.004).abs() < f64::EPSILON);
-    assert_eq!(observed.cost.source, crate::agent::cost::CostSource::Charged);
+    assert_eq!(
+        observed.cost.source,
+        crate::agent::cost::CostSource::Charged
+    );
     let route = observed
         .resolved_route
         .as_ref()

@@ -261,7 +261,10 @@ async fn managed_stream_carries_the_backend_charge_to_the_cost_accounting() {
 
     let billed = crate::agent::tinyagents::model::usage_info_from_response(&response)
         .expect("usage reported");
-    assert!(billed.charge_reported, "the backend's charge reached the core");
+    assert!(
+        billed.charge_reported,
+        "the backend's charge reached the core"
+    );
     assert!((billed.charged_amount_usd - 0.0000634).abs() < 1e-12);
     assert_eq!(billed.cached_input_tokens(), 800);
     assert_eq!(
