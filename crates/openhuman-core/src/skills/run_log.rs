@@ -221,6 +221,13 @@ pub fn format_event(ev: &AgentProgress) -> Option<String> {
             "  ⮑ subagent {agent_id} awaiting user: {}",
             truncate(question, 200)
         ),
+        AgentProgress::TurnCompleted {
+            iterations,
+            stop: Some(stop),
+        } => format!(
+            "turn {} ({iterations} iterations)",
+            stop.status_message()
+        ),
         AgentProgress::TurnCompleted { iterations, .. } => {
             format!("turn completed ({iterations} iterations)")
         }
@@ -249,12 +256,16 @@ pub async fn drain_to_log(
     mut rx: Receiver<AgentProgress>,
     path: PathBuf,
 ) -> Option<crate::agent::turn_stop::TurnStop> {
+    let mut stop = None;
     while let Some(ev) = rx.recv().await {
         if let Some(line) = format_event(&ev) {
             let _ = append(&path, &line).await;
         }
+        if let AgentProgress::TurnCompleted { stop: Some(s), .. } = &ev {
+            stop = Some(s.clone());
+        }
     }
-    None
+    stop
 }
 
 /// Detect the degenerate "model emitted the same paragraph many times in one
@@ -298,7 +309,7 @@ pub struct ScannedRun {
     pub workflow_id: String,
     /// Header `started:` timestamp (RFC3339); empty if header was malformed.
     pub started: String,
-    /// `"DONE"` / `"DEGENERATE"` / `"FAILED"` / `"RUNNING"` (running ⇔ no footer yet).
+    /// `"DONE"` / `"STOPPED"` / `"DEGENERATE"` / `"FAILED"` / `"RUNNING"` (running ⇔ no footer yet).
     pub status: String,
     /// Footer `duration: <ms> ms`, parsed; `None` while running.
     pub duration_ms: Option<u64>,

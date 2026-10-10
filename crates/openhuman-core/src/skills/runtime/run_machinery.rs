@@ -246,7 +246,7 @@ pub async fn spawn_workflow_run_background(
             };
             agent.set_on_progress(None);
             drop(agent);
-            let _ = bridge.await;
+            let stop = bridge.await.ok().flatten();
 
             let ms = started.elapsed().as_millis() as u64;
             run_log::unregister_run_cancel(&run_id);
@@ -256,6 +256,17 @@ pub async fn spawn_workflow_run_background(
                         run_log::write_footer(&log_path, "CANCELLED", ms, "Run stopped by user.")
                             .await;
                     tracing::info!(run_id = %run_id, "[workflows] workflow_run: cancelled");
+                }
+                Some(Ok(out)) if stop.is_some() => {
+                    // The harness stopped the run's turn early (breaker,
+                    // wind-down, iteration cap): it did not finish, so it is
+                    // not `DONE`. `run_workflow` reports `STOPPED` as a failure.
+                    let summary = stop.as_ref().map(|s| s.status_message()).unwrap_or_default();
+                    let _ = run_log::write_footer(&log_path, "STOPPED", ms, &out).await;
+                    tracing::warn!(
+                        run_id = %run_id,
+                        "[skills] workflow_run: turn stopped early, not marking DONE {summary}"
+                    );
                 }
                 Some(Ok(out)) => {
                     if let Some((line, count)) = run_log::detect_repeated_line(&out, 30, 4) {
