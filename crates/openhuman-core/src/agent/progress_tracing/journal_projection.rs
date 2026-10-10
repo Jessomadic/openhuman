@@ -448,7 +448,7 @@ fn observation_to_progress(obs: &AgentObservation, state: &mut ReplayState) -> V
                 // reported a cache write.
                 cache_creation_tokens: usage.cache_creation_tokens,
                 reasoning_tokens: usage.reasoning_tokens,
-                cost_usd: 0.0,
+                cost_usd: None,
             }];
             if scope.is_none() {
                 let turn_input = input.as_ref().map(json_content_text);

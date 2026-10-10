@@ -1212,7 +1212,7 @@ pub(crate) fn spawn_progress_bridge(
                     // stay on the cumulative TurnCostUpdated rollup.
                     log::debug!(
                         "[web_channel][bridge] model_call_completed model={model} iter={iteration} \
-                         in={input_tokens} out={output_tokens} cost_usd={cost_usd:.6} request_id={request_id}"
+                         in={input_tokens} out={output_tokens} cost_usd={cost_usd:?} request_id={request_id}"
                     );
                 }
             }
