@@ -15,7 +15,10 @@
 //!
 //! Each open profile carries its own [`CoreContext`], derived from the operator
 //! context with the profile's forced config, its own security policy, and
-//! `profile` and `session_agent` set to its id. Running work under that
+//! `profile` set to its id. It names no `session_agent`: the profile's
+//! default agent runs as the desktop's default orchestrator does, at its
+//! workspace root, and every per-tenant table keys on the profile
+//! (`core::runtime::current_tenant`). Running work under that
 //! context is what makes the session store, the config loader and the
 //! per-thread tables resolve that user's state.
 
@@ -201,7 +204,6 @@ impl ProfileHost {
         self.operator.derive_with(
             ContextOverlay::new(config, user_domains(), ToolGroups::none())
                 .without_user_skill_roots()
-                .session_agent(id.as_str())
                 .profile(id.as_str()),
         )
     }
@@ -290,7 +292,6 @@ impl ProfileHost {
         let context = self.operator.derive_with(
             ContextOverlay::new(config.clone(), user_domains(), ToolGroups::none())
                 .without_user_skill_roots()
-                .session_agent(id.as_str())
                 .profile(id.as_str())
                 .agent_policy(profile_policy(&config)),
         );

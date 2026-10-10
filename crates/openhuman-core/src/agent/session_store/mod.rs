@@ -138,29 +138,37 @@ pub fn transcripts_or_files(
     agent_id: &str,
     workspace_dir: &std::path::Path,
 ) -> Arc<dyn tinyagents_session::transcript::TranscriptLocator> {
-    transcripts_for(agent_id).unwrap_or_else(|| {
-        match crate::core::runtime::agent_scope::current_agent_id() {
-            Some(embedded) => {
-                log::debug!(
-                    "[session_store] transcripts under the agent's directory agent={embedded}"
-                );
-                Arc::new(AgentTranscriptFiles::new(workspace_dir, &embedded))
-            }
-            None => Arc::new(tinyagents_session::transcript::FileTranscriptLocator::new(
-                workspace_dir,
-            )),
+    transcripts_for(agent_id).unwrap_or_else(|| match current_embedded_agent() {
+        Some(embedded) => {
+            log::debug!("[session_store] transcripts under the agent's directory agent={embedded}");
+            Arc::new(AgentTranscriptFiles::new(workspace_dir, &embedded))
         }
+        None => Arc::new(tinyagents_session::transcript::FileTranscriptLocator::new(
+            workspace_dir,
+        )),
     })
 }
 
 /// The workspace root transcripts are written under: the agent's own
-/// directory under an embedded agent's context, else `workspace_dir`.
+/// directory under an embedded agent's context, else `workspace_dir` — which
+/// for a SaaS profile's default agent is that profile's own workspace.
 #[must_use]
 pub fn transcript_root(workspace_dir: &std::path::Path) -> std::path::PathBuf {
-    match crate::core::runtime::agent_scope::current_agent_id() {
+    match current_embedded_agent() {
         Some(agent) => agent_transcript_root(workspace_dir, &agent),
         None => workspace_dir.to_path_buf(),
     }
+}
+
+/// The embedded agent the calling tenant runs as, if any. A SaaS profile's
+/// default agent has none: its transcripts live at its workspace root, which
+/// no other profile shares. A SaaS task with no scope has none either; the
+/// workspace it was handed is the only one it touches.
+#[must_use]
+pub fn current_embedded_agent() -> Option<String> {
+    crate::core::runtime::current_tenant()
+        .ok()
+        .and_then(|tenant| tenant.agent)
 }
 
 /// The stores of the tenant the current [`CoreContext`] works for, keyed by
