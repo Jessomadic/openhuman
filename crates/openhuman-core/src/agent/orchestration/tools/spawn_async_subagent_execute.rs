@@ -522,6 +522,7 @@ impl SpawnAsyncSubagentTool {
                                             worktree_path: None,
                                             changed_files: Vec::new(),
                                             dirty_status: None,
+                                            stop: None,
                                         })
                                         .await;
                                 }
@@ -597,6 +598,7 @@ impl SpawnAsyncSubagentTool {
                                             worktree_path: None,
                                             changed_files: Vec::new(),
                                             dirty_status: None,
+                                            stop: None,
                                         })
                                         .await;
                                 }

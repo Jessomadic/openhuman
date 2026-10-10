@@ -115,6 +115,7 @@ pub(crate) async fn project_spawn_parallel_result(
                         worktree_path: worktree_path.clone(),
                         changed_files: changed_files.clone(),
                         dirty_status: *dirty_status,
+                        stop: None,
                     })
                     .await
                 {

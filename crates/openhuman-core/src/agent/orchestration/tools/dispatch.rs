@@ -503,6 +503,7 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
                                     worktree_path: None,
                                     changed_files: Vec::new(),
                                     dirty_status: None,
+                                    stop: None,
                                 })
                                 .await;
                         }
@@ -571,6 +572,7 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
                                     worktree_path: None,
                                     changed_files: Vec::new(),
                                     dirty_status: None,
+                                    stop: None,
                                 })
                                 .await;
                         }
