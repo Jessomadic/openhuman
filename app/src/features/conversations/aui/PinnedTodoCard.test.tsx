@@ -1,32 +1,16 @@
 import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { TodoItem } from '../../../components/assistant-ui/elements/todo-list';
 import { PinnedTodoCard } from './PinnedTodoCard';
 
 vi.mock('../../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (key: string) => key }) }));
 
-const store = vi.hoisted(() => new Map<string, string>());
-vi.mock('../../../store/userScopedStorage', () => ({
-  userScopedStorage: {
-    getItem: async (key: string) => store.get(key) ?? null,
-    setItem: async (key: string, value: string) => {
-      store.set(key, value);
-    },
-  },
-}));
-
 const active: TodoItem[] = [
   { id: '1', text: 'Step one', status: 'done' },
   { id: '2', text: 'Step two', status: 'active' },
 ];
-const idle: TodoItem[] = [
-  { id: '1', text: 'Step one', status: 'done' },
-  { id: '2', text: 'Step two', status: 'pending' },
-];
-
 describe('PinnedTodoCard', () => {
-  beforeEach(() => store.clear());
 
   it('renders the live progress using the assistant-ui agent plan', () => {
     const { container } = render(<PinnedTodoCard threadId="t1" items={active} />);

@@ -12,7 +12,7 @@ import {
   useExternalStoreRuntime,
 } from '@assistant-ui/react';
 import { PinIcon } from 'lucide-react';
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useContext, useMemo } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
 import type { Thread } from '../../../types/thread';
@@ -96,7 +96,7 @@ function ThreadRow() {
   );
 }
 
-/** The core owns threads; assistant-ui owns selection, search controls and row actions. */
+/** The core owns threads; assistant-ui owns selection and row actions. */
 export function ThreadList(props: ThreadListProps) {
   const { threads, resolveTitle } = props;
   const adapterThreads = useMemo(
@@ -157,7 +157,6 @@ function ThreadListView() {
           title={t('chat.newThreadShortcut')}
           label={t('chat.newConversation')}
         />
-        {props.threads.length > 0 && <ThreadListSearch value={search} onValueChange={setSearch} />}
       </div>
       <div
         data-slot="aui_thread-list-items"
