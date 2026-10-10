@@ -69,9 +69,16 @@ impl RequestGuard for HostRequestGuard {
                 "Action blocked: autonomy is read-only".into(),
             ));
         }
-        let host = reqwest::Url::parse(&request.url)
-            .ok()
-            .and_then(|parsed| parsed.host_str().map(str::to_string))
+        let parsed = reqwest::Url::parse(&request.url)
+            .map_err(|error| RequestAuthorizationError::InvalidDestination(error.to_string()))?;
+        if parsed.scheme() != "https" {
+            return Err(RequestAuthorizationError::InvalidDestination(
+                "x402 payment requests require HTTPS".into(),
+            ));
+        }
+        let host = parsed
+            .host_str()
+            .map(str::to_string)
             .unwrap_or_else(|| "unknown".to_string());
         if let Some(reason) = self.security.local_only_block(&host) {
             return Err(RequestAuthorizationError::Denied(

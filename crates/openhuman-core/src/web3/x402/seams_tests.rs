@@ -221,6 +221,19 @@ async fn x402_guard_rejects_readonly_and_private_destinations() {
 }
 
 #[tokio::test]
+async fn x402_guard_rejects_cleartext_payment_destinations() {
+    let _env_lock = crate::config::TEST_ENV_LOCK.lock().await;
+    let guard = HostRequestGuard {
+        security: Arc::new(SecurityPolicy::default()),
+        allowed_domains: vec![],
+    };
+    assert!(matches!(
+        guard.authorize(&proposed_request("http://8.8.8.8/")).await,
+        Err(RequestAuthorizationError::InvalidDestination(reason)) if reason.contains("HTTPS")
+    ));
+}
+
+#[tokio::test]
 async fn x402_rejected_destinations_do_not_exhaust_the_action_budget() {
     let _env_lock = crate::config::TEST_ENV_LOCK.lock().await;
     let guard = HostRequestGuard {
@@ -272,6 +285,13 @@ async fn x402_tool_runs_the_host_guard_before_network_or_payment() {
         .unwrap();
     assert!(blocked_domain.is_error);
     assert!(blocked_domain.text().contains("[policy-blocked]"));
+
+    let blocked_cleartext = request_tool(Arc::new(SecurityPolicy::default()), vec![])
+        .execute(serde_json::json!({"url": "http://8.8.8.8:1/"}))
+        .await
+        .unwrap();
+    assert!(blocked_cleartext.is_error);
+    assert!(blocked_cleartext.text().contains("require HTTPS"));
 }
 
 #[tokio::test]
