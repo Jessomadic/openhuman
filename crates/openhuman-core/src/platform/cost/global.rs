@@ -255,11 +255,7 @@ pub(super) fn build_token_usage(model: &str, usage: &BilledUsage) -> Option<Toke
         } else {
             0.0
         },
-        cost_source: if provider_charged {
-            CostSource::ProviderCharged
-        } else {
-            CostSource::Estimated
-        },
+        cost_source,
         // Lineage groundwork (06-cost step 3): the provider-usage build site
         // does not yet carry a run_id/root_run_id from the observation stream.
         // Leave `None` until the run-tree rollup (06.3, gated) threads run
