@@ -81,6 +81,11 @@ impl RequestGuard for HostRequestGuard {
                     .to_string(),
             ));
         }
+        if self.security.is_rate_limited() {
+            return Err(RequestAuthorizationError::Denied(
+                "Action blocked: rate limit exceeded".into(),
+            ));
+        }
         let target = validate_url_with_dns_check(&request.url, &self.allowed_domains)
             .await
             .map_err(|error| RequestAuthorizationError::InvalidDestination(error.to_string()))?;
@@ -272,9 +277,6 @@ fn direct_connection_allowed(
         "http_proxy",
         "https_proxy",
         "all_proxy",
-        "OPENHUMAN_HTTP_PROXY",
-        "OPENHUMAN_HTTPS_PROXY",
-        "OPENHUMAN_ALL_PROXY",
     ];
     !(config.enabled && config.scope == crate::config::ProxyScope::Environment)
         && !config.should_apply_to_service(service)

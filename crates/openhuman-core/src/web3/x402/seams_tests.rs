@@ -97,6 +97,9 @@ fn x402_direct_egress_requires_absent_runtime_and_environment_proxies() {
     config.scope = crate::config::ProxyScope::Services;
     config.services = vec!["tool.http_request".into()];
     assert!(direct_connection_allowed(&config, service, clear));
+    assert!(direct_connection_allowed(&config, service, |candidate| {
+        candidate == "OPENHUMAN_HTTP_PROXY"
+    }));
     config.services = vec!["tool.*".into()];
     assert!(!direct_connection_allowed(&config, service, clear));
 
@@ -111,13 +114,20 @@ fn x402_direct_egress_requires_absent_runtime_and_environment_proxies() {
         "http_proxy",
         "https_proxy",
         "all_proxy",
+    ] {
+        assert!(
+            !direct_connection_allowed(&config, service, |candidate| candidate == key),
+            "{key} must refuse direct egress"
+        );
+    }
+    for key in [
         "OPENHUMAN_HTTP_PROXY",
         "OPENHUMAN_HTTPS_PROXY",
         "OPENHUMAN_ALL_PROXY",
     ] {
         assert!(
-            !direct_connection_allowed(&config, service, |candidate| candidate == key),
-            "{key} must refuse direct egress"
+            direct_connection_allowed(&config, service, |candidate| candidate == key),
+            "{key} follows the disabled runtime proxy config"
         );
     }
 }
@@ -201,6 +211,11 @@ async fn x402_rejected_destinations_do_not_exhaust_the_action_budget() {
         .is_ok());
     assert!(matches!(
         guard.authorize(&proposed_request("https://8.8.8.8/"))
+            .await,
+        Err(RequestAuthorizationError::Denied(reason)) if reason.contains("rate limit")
+    ));
+    assert!(matches!(
+        guard.authorize(&proposed_request("http://127.0.0.1/"))
             .await,
         Err(RequestAuthorizationError::Denied(reason)) if reason.contains("rate limit")
     ));
