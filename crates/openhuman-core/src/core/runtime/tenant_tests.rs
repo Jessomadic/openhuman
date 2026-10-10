@@ -208,3 +208,11 @@ async fn profile_keys_drop_the_agent() {
         "no profile: the bare id, embedded agents included"
     );
 }
+
+#[test]
+fn only_the_unprofiled_default_orchestrator_is_unscoped() {
+    assert!(!tenant(None, None).is_scoped());
+    assert!(tenant(Some("alice"), None).is_scoped());
+    assert!(tenant(None, Some("alpha")).is_scoped());
+    assert!(tenant(Some("alice"), Some("alpha")).is_scoped());
+}

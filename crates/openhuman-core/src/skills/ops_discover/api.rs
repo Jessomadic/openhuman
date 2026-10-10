@@ -11,7 +11,14 @@ use crate::skills::ops_types::{Workflow, TRUST_MARKER};
 
 use super::scan::{discover_filtered, ALL_ROOT_KINDS, WORKFLOW_ROOT_KINDS};
 
-type MetadataCacheKey = (PathBuf, Option<PathBuf>, bool, Option<String>);
+/// Workspace, home, trust, and the tenant whose agent roots were scanned
+/// (`None`: a SaaS task with no scope, which scans none).
+type MetadataCacheKey = (
+    PathBuf,
+    Option<PathBuf>,
+    bool,
+    Option<crate::core::runtime::Tenant>,
+);
 static METADATA_CACHE: LazyLock<RwLock<HashMap<MetadataCacheKey, Vec<Workflow>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 static METADATA_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -87,7 +94,7 @@ pub fn load_workflow_metadata(workspace_dir: &Path) -> Vec<Workflow> {
         workspace_dir.to_path_buf(),
         home.clone(),
         trusted,
-        crate::core::runtime::agent_scope::current_agent_id(),
+        crate::core::runtime::current_tenant().ok(),
     );
     if let Ok(cache) = METADATA_CACHE.read() {
         if let Some(workflows) = cache.get(&key) {

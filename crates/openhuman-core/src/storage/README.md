@@ -187,7 +187,8 @@ without fencing).
 ## Background work and agent scopes
 
 Work done inside an agent's turn runs under that agent's `CoreContext`
-(`session_agent`, set for embed agents and SaaS profiles), so with a
+(`session_agent`, set for embed agents; a SaaS profile's context carries
+`profile` instead, and its records land in the profile's scope), so with a
 backend installed its records land in that agent's scope. Background work
 runs under the process default context and on its own would only see
 `local`. `storage::agents` closes the gap:
