@@ -278,7 +278,10 @@ test("the storage area arms only the storage-drivers lane, with the sqlite and f
   }
   // Without the area the lane stays off.
   const off = buildPlan({ profile: "hosted", areas: NONE });
-  assert.equal(off.lanes.find((l) => l.name === "storage-drivers").active, false);
+  assert.equal(
+    off.lanes.find((l) => l.name === "storage-drivers").active,
+    false,
+  );
 });
 
 test("hosted matrix only spins up groups with active lanes", () => {
