@@ -470,14 +470,11 @@ const ThreadRoot: FC<{
             </>
           )}
 
-          <div
-            data-slot="aui_message-group"
-            className="mb-14 flex flex-col gap-y-6 empty:hidden">
+          <div data-slot="aui_message-group" className="mb-14 flex flex-col gap-y-6 empty:hidden">
             <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
             <RunningStatusSlot />
             <TranscriptFooterSlot />
           </div>
-
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
@@ -1592,9 +1589,10 @@ const EditComposer: FC = () => {
           <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
             <AlertTriangleIcon aria-hidden className="size-3.5 shrink-0" />
             <span className="font-mono text-[11px] tabular-nums">
-              {t(discardedReplies === 1
-                ? 'conversations.assistantUi.edit.discardedRepliesOne'
-                : 'conversations.assistantUi.edit.discardedRepliesOther'
+              {t(
+                discardedReplies === 1
+                  ? 'conversations.assistantUi.edit.discardedRepliesOne'
+                  : 'conversations.assistantUi.edit.discardedRepliesOther'
               ).replace('{count}', String(discardedReplies))}
             </span>
           </div>

@@ -14,8 +14,12 @@ vi.mock('../../services/api/threadApi', () => ({
 
 describe('assistant-ui thread identity', () => {
   it('projects the real thread id so native thread switching can reset the viewport', () => {
-    const store = configureStore({ reducer: { thread: threadReducer, chatRuntime: chatRuntimeReducer } });
-    const wrapper = ({ children }: { children: ReactNode }) => <Provider store={store}>{children}</Provider>;
+    const store = configureStore({
+      reducer: { thread: threadReducer, chatRuntime: chatRuntimeReducer },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <Provider store={store}>{children}</Provider>
+    );
     const { result, rerender } = renderHook(
       ({ threadId }: { threadId: string | null }) => useOpenHumanExternalStore(threadId),
       { wrapper, initialProps: { threadId: 'first' as string | null } }

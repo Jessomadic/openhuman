@@ -210,10 +210,19 @@ describe('assistant-ui native scroll anchoring', () => {
     scrollToSpy.mockClear();
     const alignment = vi.spyOn(Element.prototype, 'scrollIntoView');
     setGeometry(viewport, 500, 1400);
-    act(() => store.dispatch({
-      type: loadThreadMessages.fulfilled.type,
-      payload: { threadId: 't1', messages: [msg('1', 'user', 'hi'), msg('2', 'agent', 'hello'), msg('3', 'user', 'follow-up')] },
-    }));
+    act(() =>
+      store.dispatch({
+        type: loadThreadMessages.fulfilled.type,
+        payload: {
+          threadId: 't1',
+          messages: [
+            msg('1', 'user', 'hi'),
+            msg('2', 'agent', 'hello'),
+            msg('3', 'user', 'follow-up'),
+          ],
+        },
+      })
+    );
     growContent();
     expect(followedBottom(viewport)).toBe(true);
     expect(alignment).not.toHaveBeenCalled();

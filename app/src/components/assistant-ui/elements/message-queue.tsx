@@ -69,27 +69,46 @@ export function MessageQueue({
       )}
 
       <ul className="flex flex-col gap-1.5">
-        {children ?? queued.map((message, index) => (
-          <MessageQueueItem
-            key={message.id}
-            position={index + 1}
-            text={message.text}
-            action={onCancel ? (
-              <button type="button" aria-label={removeLabel(message.text)} onClick={() => onCancel(message.id)} className={cn(ghostButton, 'size-6 shrink-0')}>
-                <XIcon className="size-3.5" />
-              </button>
-            ) : null}
-          />
-        ))}
+        {children ??
+          queued.map((message, index) => (
+            <MessageQueueItem
+              key={message.id}
+              position={index + 1}
+              text={message.text}
+              action={
+                onCancel ? (
+                  <button
+                    type="button"
+                    aria-label={removeLabel(message.text)}
+                    onClick={() => onCancel(message.id)}
+                    className={cn(ghostButton, 'size-6 shrink-0')}>
+                    <XIcon className="size-3.5" />
+                  </button>
+                ) : null
+              }
+            />
+          ))}
       </ul>
     </div>
   );
 }
 
 /** Shared registry row; runtime text and actions are supplied by queue primitives. */
-export function MessageQueueItem({ position, text, action }: { position: number; text: ReactNode; action?: ReactNode }) {
+export function MessageQueueItem({
+  position,
+  text,
+  action,
+}: {
+  position: number;
+  text: ReactNode;
+  action?: ReactNode;
+}) {
   return (
-    <li className={cn(field, 'fade-in slide-in-from-bottom-1 animate-in fill-mode-both flex items-center gap-2.5 rounded-2xl py-2 pr-2 pl-3 duration-300')}>
+    <li
+      className={cn(
+        field,
+        'fade-in slide-in-from-bottom-1 animate-in fill-mode-both flex items-center gap-2.5 rounded-2xl py-2 pr-2 pl-3 duration-300'
+      )}>
       <span className={cn(mono, 'text-foreground/30 w-3 shrink-0 tabular-nums')}>{position}</span>
       <span className="text-foreground/60 min-w-0 flex-1 truncate text-[13.5px]">{text}</span>
       <ArrowUpIcon aria-hidden className="text-foreground/25 size-3 shrink-0" />

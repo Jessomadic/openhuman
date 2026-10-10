@@ -10,13 +10,7 @@ import { ArrowDownIcon } from 'lucide-react';
  * library resumes following when the reader returns to the end.
  * Positioned above the composer so expanding its cards moves the pill with it.
  */
-export function ScrollAnchor({
-  label,
-  className,
-}: {
-  label: string;
-  className?: string;
-}) {
+export function ScrollAnchor({ label, className }: { label: string; className?: string }) {
   return (
     <ThreadPrimitive.ScrollToBottom asChild behavior="instant">
       <Button
