@@ -196,8 +196,11 @@ impl Docs {
             }
             imported += 1;
         }
-        std::fs::write(&marker, b"legacy artifact records were imported into the storage backend\n")
-            .with_context(|| format!("write {}", marker.display()))?;
+        std::fs::write(
+            &marker,
+            b"legacy artifact records were imported into the storage backend\n",
+        )
+        .with_context(|| format!("write {}", marker.display()))?;
         log::debug!("[artifacts] legacy import: imported={imported}");
         Ok(imported)
     }
@@ -231,7 +234,9 @@ pub(super) async fn documents(workspace_dir: &Path) -> Result<Option<Docs>, Stri
     let key = workspace_dir.display().to_string();
     let legacy = workspace_dir.join("artifacts");
     on_docs(docs.clone(), move |docs| {
-        let mut seen = IMPORTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut seen = IMPORTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !seen.contains(&key) {
             docs.import_legacy(&legacy)?;
             seen.push(key);

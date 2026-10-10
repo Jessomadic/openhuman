@@ -546,14 +546,13 @@ impl CostStorage {
         if crate::storage::current_scope().ok() != Some(crate::storage::Scope::local()) {
             return Ok(());
         }
-        {
-            let mut done = DONE.lock();
-            if done.contains(&self.path) {
-                return Ok(());
-            }
-            done.push(self.path.clone());
+        let mut done = DONE.lock();
+        if done.contains(&self.path) {
+            return Ok(());
         }
-        docs.import_legacy(&self.path).map(|_| ())
+        docs.import_legacy(&self.path)?;
+        done.push(self.path.clone());
+        Ok(())
     }
 
     fn rebuild_aggregates(&mut self, day: NaiveDate, year: i32, month: u32) -> Result<()> {

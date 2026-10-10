@@ -69,6 +69,6 @@ fn a_legacy_jsonl_ledger_is_imported_once_and_set_aside() {
     assert_eq!(docs.all().unwrap().len(), 2);
     assert!(!path.exists());
     assert!(dir.path().join("costs.jsonl.migrated").exists());
-    // Nothing left to import, and a ledger that already has records is not imported over.
+    // Nothing left to import.
     assert_eq!(docs.import_legacy(&path).unwrap(), 0);
 }

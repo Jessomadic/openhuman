@@ -73,8 +73,11 @@ fn the_legacy_files_are_imported_once_and_a_delete_sticks() {
     let dir = tempfile::tempdir().unwrap();
     let a = dir.path().join("a");
     std::fs::create_dir_all(&a).unwrap();
-    std::fs::write(a.join("meta.json"), serde_json::to_string(&meta("a", 1, Some("t"))).unwrap())
-        .unwrap();
+    std::fs::write(
+        a.join("meta.json"),
+        serde_json::to_string(&meta("a", 1, Some("t"))).unwrap(),
+    )
+    .unwrap();
     std::fs::write(a.join("args.json"), r#"{"x":2}"#).unwrap();
     let bad = dir.path().join("bad");
     std::fs::create_dir_all(&bad).unwrap();

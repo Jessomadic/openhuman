@@ -82,14 +82,19 @@ impl CostDocs {
     /// it to `costs.jsonl.migrated` so it is not read twice. Returns how many
     /// records were imported. Malformed lines are skipped, as readers skip them.
     pub(super) fn import_legacy(&self, path: &std::path::Path) -> Result<usize> {
-        if !path.exists() || !self.all()?.is_empty() {
+        if !path.exists() {
             return Ok(0);
         }
+        let existing: std::collections::HashSet<String> =
+            self.all()?.into_iter().map(|record| record.id).collect();
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("read legacy cost ledger {}", path.display()))?;
         let mut imported = 0;
         for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
             match serde_json::from_str::<CostRecord>(line) {
+                Ok(record) if existing.contains(&record.id) => {
+                    let _ = record;
+                }
                 Ok(record) => {
                     self.add(&record)?;
                     imported += 1;
