@@ -114,6 +114,7 @@ describe('chatRuntimeSlice recordChatTurnUsage', () => {
       outputTokens: 15,
       costUsd: 0.003,
       runs: 2,
+      costSource: 'charged',
     });
     expect(subs.coder.runs).toBe(1);
     expect(subs.coder.inputTokens).toBe(80);
@@ -265,6 +266,7 @@ describe('chatRuntimeSlice recordChatTurnUsage', () => {
       outputTokens: 80,
       costUsd: 0.006,
       runs: 2,
+      costSource: 'charged',
     });
 
     // A live turn for the same thread adds on top of the seeded base.
