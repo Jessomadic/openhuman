@@ -223,6 +223,24 @@ async fn x402_tool_runs_the_host_guard_before_network_or_payment() {
     assert!(blocked_domain.text().contains("[policy-blocked]"));
 }
 
+#[tokio::test]
+async fn x402_host_guard_normalizes_the_network_allowlist() {
+    let security = Arc::new(SecurityPolicy::default());
+    let allowed = host_request_guard(security.clone(), vec!["HTTPS://8.8.8.8/path".into()]);
+    assert!(allowed
+        .authorize(&proposed_request("https://8.8.8.8/"))
+        .await
+        .is_ok());
+
+    let malformed = host_request_guard(security, vec!["   ".into()]);
+    assert!(matches!(
+        malformed
+            .authorize(&proposed_request("https://8.8.8.8/"))
+            .await,
+        Err(RequestAuthorizationError::InvalidDestination(_))
+    ));
+}
+
 #[test]
 fn the_tool_is_built_from_the_host_seams() {
     use tinytools::Tool;

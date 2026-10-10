@@ -24,7 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use log::debug;
 use tinytools_std::network::NetGate;
-use tinytools_std::url_guard::validate_url_with_dns_check;
+use tinytools_std::url_guard::{normalize_allowed_domains, validate_url_with_dns_check};
 use tinywallet_x402::crypto::{CryptoPayments, PaymentAccount, PaymentSigner, SignScheme};
 use tinywallet_x402::protocol::ProxyPolicy;
 use tinywallet_x402::thread::ThreadScope;
@@ -300,10 +300,17 @@ pub(crate) fn request_tool(
         Arc::new(RuntimeProxyPolicy),
     )
     .with_thread_scope(Arc::new(TaskLocalThread))
-    .with_request_guard(Arc::new(HostRequestGuard {
+    .with_request_guard(Arc::new(host_request_guard(security, allowed_domains)))
+}
+
+fn host_request_guard(
+    security: Arc<SecurityPolicy>,
+    allowed_domains: Vec<String>,
+) -> HostRequestGuard {
+    HostRequestGuard {
         security,
-        allowed_domains,
-    }))
+        allowed_domains: normalize_allowed_domains(allowed_domains),
+    }
 }
 
 #[cfg(test)]
