@@ -49,6 +49,7 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
       document
         .querySelector('[data-slot="aui_assistant-message-content"]')
         ?.textContent?.includes('FIRST_CANARY'),
+    undefined,
     { timeout: 60000 }
   );
   await ui.testId('stop-generation-button').waitFor({ state: 'hidden', timeout: 60000 });
@@ -60,7 +61,7 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
     const content = card.closest('[data-slot="aui_assistant-message-content"]');
     return {
       cardWidth: card.getBoundingClientRect().width,
-      contentWidth: content.getBoundingClientRect().width,
+      contentWidth: content.getBoundingClientRect().width - parseFloat(getComputedStyle(content).paddingLeft) - parseFloat(getComputedStyle(content).paddingRight),
       maxWidth: getComputedStyle(card).maxWidth,
       inComposer: !!card.closest('form'),
       state: card.dataset.state,
