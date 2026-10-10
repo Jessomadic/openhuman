@@ -284,9 +284,9 @@ fn direct_connection_allowed(
         "https_proxy",
         "all_proxy",
     ];
-    !(config.enabled && config.scope == crate::config::ProxyScope::Environment)
-        && !config.should_apply_to_service(service)
-        && !PROXY_ENV_KEYS.iter().any(|key| env_has_value(key))
+    !((config.enabled && config.scope == crate::config::ProxyScope::Environment)
+        || config.should_apply_to_service(service)
+        || PROXY_ENV_KEYS.iter().any(|key| env_has_value(key)))
 }
 
 /// The crypto rail's payment builder, over OpenHuman's wallet and transport.
