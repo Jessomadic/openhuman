@@ -271,8 +271,9 @@ pub struct CompletionUsage {
     pub cached_tokens: u64,
     /// Reasoning tokens, when the provider reports them.
     pub reasoning_tokens: u64,
-    /// What the provider says it charged, in USD, when it says. Never a local
-    /// price estimate: a host that wants one owns that table.
+    /// Selected provider charge in USD: buyer microcharge, raw gateway cost,
+    /// then normalized charge. Missing or invalid selected amounts stay unknown.
+    /// Never a local price estimate: a host that wants one owns that table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
 }
@@ -321,25 +322,39 @@ impl CompletionResponse {
             .and_then(|raw| raw.get("model"))
             .and_then(Value::as_str)
             .map(str::to_string);
-        let raw_cost = raw
+        // A relay may report its own upstream `cost: 0` while the buyer pays
+        // `buyer_cost_micro`. That actual bill precedes normalized estimates.
+        let cost_usd = raw
             .as_ref()
-            .and_then(|raw| raw.pointer("/usage/cost"))
-            .and_then(Value::as_f64);
+            .and_then(|raw| raw.pointer("/usage/buyer_cost_micro"))
+            .and_then(Value::as_f64)
+            .map(|micro| micro / 1_000_000.0)
+            .or_else(|| {
+                raw.as_ref()
+                    .and_then(|raw| raw.pointer("/usage/cost"))
+                    .and_then(Value::as_f64)
+            })
+            .or_else(|| {
+                response
+                    .usage
+                    .as_ref()
+                    .and_then(|usage| usage.charged_amount)
+                    .map(|amount| amount.micros as f64 / 1_000_000.0)
+            })
+            // Invalid authoritative charges stay unknown, rather than being
+            // replaced by a lower-priority estimate or crediting the budget.
+            .filter(|cost| cost.is_finite() && *cost >= 0.0);
         let usage = match response.usage {
             Some(usage) => Some(CompletionUsage {
                 input_tokens: usage.input_tokens,
                 output_tokens: usage.output_tokens,
                 cached_tokens: usage.cache_read_tokens,
                 reasoning_tokens: usage.reasoning_tokens,
-                cost_usd: usage
-                    .charged_amount
-                    .map(|amount| amount.micros as f64 / 1_000_000.0)
-                    .or(raw_cost),
+                cost_usd,
             }),
-            // Some gateways report `usage.cost` in the raw body without the
-            // typed usage block. Keep the provider's cost rather than dropping
-            // it; the token counts are unknown and stay zero.
-            None => raw_cost.map(|cost| CompletionUsage {
+            // Raw gateway charges can survive without a typed usage block;
+            // retain them while unknown token counts stay zero.
+            None => cost_usd.map(|cost| CompletionUsage {
                 cost_usd: Some(cost),
                 ..CompletionUsage::default()
             }),
@@ -634,3 +649,7 @@ impl Completer {
 #[cfg(test)]
 #[path = "complete_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/completion_cost.rs"]
+mod cost_tests;

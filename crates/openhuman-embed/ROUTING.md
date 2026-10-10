@@ -32,7 +32,7 @@ truncation growth; omitting the builder inherits the request cap. Options are
 replaced before `unpinned()` removes the provider routing object. Rung debug
 output omits option values. Each fallback retries from its own initial cap.
 
-A `length` finish
+A case-insensitive `length` or `max_tokens` finish
 reason retries the same rung at doubled caps, bounded by both the retry count
 and absolute ceiling; 1024 tokens with the example policy tries 1024, 2048,
 4096. A missing cap never creates an implicit token budget. At the ceiling,
@@ -47,8 +47,11 @@ gateway route choose its serving provider without changing the requested
 model. Adding a rung after an unpinned rung fails before any dispatch.
 
 `response.usage` describes the winning call. `attempts` records every call,
-including truncated responses. `total_usage` sums reported tokens and costs;
-its cost is unknown (`None`) when any attempt's cost was not reported. The
+including truncated responses. Buyer `usage.buyer_cost_micro` charges take
+precedence over relayed `usage.cost`, then normalized `charged_amount`. The
+selected amount must be finite and nonnegative; invalid selected charges stay
+unknown. `total_usage` sums reported tokens and costs;
+its cost is unknown (`None`) when any attempt's cost was missing or invalid. The
 ladder error retains this accounting and the last typed error. Completer
 observers run for each call, so hosts can meter failures independently.
 

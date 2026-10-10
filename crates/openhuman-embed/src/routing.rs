@@ -252,7 +252,10 @@ impl CompletionLadder {
                         failed: true,
                     },
                 };
-                let truncated = attempt.finish_reason.as_deref() == Some("length");
+                let truncated = attempt.finish_reason.as_deref().is_some_and(|reason| {
+                    reason.eq_ignore_ascii_case("length")
+                        || reason.eq_ignore_ascii_case("max_tokens")
+                });
                 attempts.push(attempt);
                 match response {
                     Ok(response) if !truncated => {

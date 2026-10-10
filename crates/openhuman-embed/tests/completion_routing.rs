@@ -36,7 +36,7 @@ fn rung(server: &MockServer, model: &str) -> CompletionRung {
 }
 #[tokio::test]
 async fn truncation_doubles_the_cap_before_ordered_unpinned_fallback() {
-    let first = scripted(vec![answer("first-actual", "length", 0.01)]).await;
+    let first = scripted(vec![answer("first-actual", "LeNgTh", 0.01)]).await;
     let last = scripted(vec![answer("last-actual", "stop", 0.02)]).await;
     let outcome = CompletionLadder::new(rung(&first,"first"))
         .fallback(rung(&last,"last").unpinned())
@@ -248,4 +248,37 @@ async fn unpinned_rung_removes_its_own_pin_and_can_explicitly_clear_the_cap() {
     assert!(body.get("provider").is_none());
     assert!(body.get("max_tokens").is_none());
     assert_eq!(body["reasoning"]["effort"], "high");
+}
+
+#[tokio::test]
+async fn uppercase_max_tokens_retries_the_same_rung_and_counts_buyer_charges() {
+    let mut truncated = answer("actual", "MAX_TOKENS", 0.0);
+    truncated["usage"]["buyer_cost_micro"] = json!(3);
+    let mut complete = answer("actual", "stop", 0.0);
+    complete["usage"]["buyer_cost_micro"] = json!(4);
+    let provider = scripted(vec![truncated, complete]).await;
+    let fallback = scripted(vec![answer("unused", "stop", 0.5)]).await;
+    let outcome = CompletionLadder::new(rung(&provider, "primary"))
+        .fallback(rung(&fallback, "fallback"))
+        .truncation_retry(TruncationRetry::new(1, 64))
+        .complete(
+            CompletionRequest::new("ignored", vec![ChatMessage::user("review")]).max_tokens(16),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome.attempts.len(), 2);
+    assert_eq!(
+        outcome.attempts[0].finish_reason.as_deref(),
+        Some("MAX_TOKENS")
+    );
+    assert_eq!(outcome.attempts[1].max_tokens, Some(32));
+    assert_eq!(outcome.response.usage.unwrap().cost_usd, Some(0.000004));
+    assert!((outcome.total_usage.unwrap().cost_usd.unwrap() - 0.000007).abs() < 1e-12);
+    assert!(fallback.received_requests().await.unwrap().is_empty());
+    let requests = provider.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for (request, cap) in requests.iter().zip([16, 32]) {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["max_tokens"], cap);
+    }
 }
