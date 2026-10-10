@@ -170,7 +170,7 @@ describe('assistant-ui native scroll anchoring', () => {
     setGeometry(viewport, 500, 1000);
     act(() => viewport.dispatchEvent(new Event('scroll')));
 
-    // Up, and past the 80px threshold — a deliberate move into history.
+    // A deliberate move into history.
     setGeometry(viewport, 100, 1000);
     readerScrolls(viewport);
     scrollToSpy.mockClear();

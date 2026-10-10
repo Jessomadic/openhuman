@@ -142,8 +142,7 @@ describe('opening a thread scrolls to the newest message', () => {
     );
 
     // Put the reader far up the transcript: 1000px of content, 200px tall
-    // viewport, parked at the top — 800px from the bottom, well past the 80px
-    // follow threshold.
+    // viewport, parked at the top — 800px from the bottom.
     const viewport = viewportOf(container);
     await waitFor(() => expect(scrolledToBottom(viewport)).toBe(true));
     Object.defineProperty(viewport, 'scrollHeight', { value: 1000, configurable: true });
