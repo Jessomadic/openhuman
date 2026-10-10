@@ -625,3 +625,26 @@ async fn published_events_carry_the_publishing_agent() {
         "the stamp is not serialized"
     );
 }
+
+/// An async sub-agent's card is marked `detached` on the wire so the client
+/// keeps it across the parent turn's `chat_done`; an in-turn card carries no
+/// flag at all.
+#[test]
+fn approval_request_event_marks_only_detached_parks() {
+    let build = |detached| {
+        serde_json::to_value(approval_request_event(
+            "req-1",
+            "media_generate_image",
+            "a red fox",
+            &serde_json::json!({}),
+            "thread-1",
+            "client-1",
+            None,
+            None,
+            detached,
+        ))
+        .unwrap()
+    };
+    assert_eq!(build(true)["detached"], serde_json::json!(true));
+    assert!(build(false).get("detached").is_none());
+}
