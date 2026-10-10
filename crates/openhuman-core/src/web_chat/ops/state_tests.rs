@@ -74,7 +74,7 @@ async fn a_user_cancel_under_the_fence_placeholder_id_keeps_the_callers_client()
     track_parallel_turn_for_test("fence-thread", "fence-req", token.clone()).await;
     let mut events = crate::web_chat::subscribe_web_channel_events();
 
-    super::channel_ops::cancel_chat_scoped("profile-fence", "fence-thread", None)
+    crate::web_chat::ops::channel_ops::cancel_chat_scoped("profile-fence", "fence-thread", None)
         .await
         .unwrap();
 
