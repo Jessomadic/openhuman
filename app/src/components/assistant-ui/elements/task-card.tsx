@@ -58,7 +58,7 @@ export function TaskStateIcon({ state, className }: { state: TaskCardState; clas
         className={cn(
           'text-muted-foreground size-3.5 shrink-0 animate-spin motion-reduce:animate-none',
           (!dock || (state !== 'working' && state !== 'waiting')) && 'my-3',
-        className
+          className
         )}
       />
     );
@@ -130,7 +130,9 @@ export function TaskCard({
           </span>
         )}
         {elapsed !== undefined && (
-          <span className={cn(mono, 'text-muted-foreground text-xs shrink-0 tabular-nums')}>{elapsed}</span>
+          <span className={cn(mono, 'text-muted-foreground text-xs shrink-0 tabular-nums')}>
+            {elapsed}
+          </span>
         )}
         {hasTranscript && (
           <ChevronRightIcon
