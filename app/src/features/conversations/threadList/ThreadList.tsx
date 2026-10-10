@@ -108,6 +108,7 @@ export function ThreadList(props: ThreadListProps) {
   );
   const runtime = useExternalStoreRuntime({
     messages: EMPTY_MESSAGES,
+    convertMessage: message => message,
     isRunning: false,
     onNew: async () => {},
     adapters: {
