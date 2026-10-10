@@ -1,13 +1,13 @@
 //! Migration from the process/OS keyring into storage-backed secrets, with a
 //! fake keychain standing in for the OS.
 
+use super::*;
 use std::sync::Arc;
 
 use tinystoragedrivers::secrets::{DerivedKeys, SecretStore as _};
 use zeroize::Zeroizing;
 
-use super::*;
-use crate::security::keyring::adapter_tests::fake_os_backend;
+use crate::security::keyring::adapter::tests::fake_os_backend;
 use crate::security::keyring::KeyringBackend;
 use crate::storage::{MemoryStorage, Scope, StorageBackend};
 

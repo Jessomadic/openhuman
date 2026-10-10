@@ -2,6 +2,7 @@
 //! persistent fake credential store (never the real keychain), the encrypted
 //! file backend's desktop corruption policy, and the legacy-file import.
 
+use super::*;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -9,9 +10,9 @@ use std::sync::{Arc, Mutex};
 use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi};
 use tinystoragedrivers::secrets::{crypto, KeyringSecrets};
 
-use super::backend::OsBackend;
-use super::encrypted_file_backend::EncryptedFileBackend;
-use super::{KeyringBackend, KeyringError};
+use crate::security::keyring::backend::OsBackend;
+use crate::security::keyring::encrypted_file_backend::EncryptedFileBackend;
+use crate::security::keyring::KeyringBackend;
 
 type Shared = Arc<Mutex<HashMap<(String, String), Vec<u8>>>>;
 

@@ -65,13 +65,5 @@ pub use store::init_workspace;
 pub(crate) use ops::force_backend_for_test;
 
 #[cfg(test)]
-#[path = "adapter_tests.rs"]
-pub(crate) mod adapter_tests;
-
-#[cfg(test)]
-#[path = "fixture_compat_tests.rs"]
-mod fixture_compat_tests;
-
-#[cfg(test)]
 #[path = "keyring_tests.rs"]
 mod tests;

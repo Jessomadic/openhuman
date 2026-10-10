@@ -98,3 +98,7 @@ pub(super) fn recover_corrupt_file(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "adapter_tests.rs"]
+pub(crate) mod tests;

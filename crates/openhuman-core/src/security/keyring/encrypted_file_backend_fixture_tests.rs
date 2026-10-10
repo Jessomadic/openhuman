@@ -7,7 +7,7 @@
 //! still read every secret, and a downgrade must still read what the new code
 //! writes. Never regenerate them to make a test pass.
 
-use super::encrypted_file_backend::EncryptedFileBackend;
+use super::*;
 use tinystoragedrivers::secrets::crypto;
 
 const FIXTURE_KEY: [u8; 32] = [0x42; 32];

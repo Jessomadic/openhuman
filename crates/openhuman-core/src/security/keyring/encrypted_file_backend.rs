@@ -476,7 +476,9 @@ impl EncryptedFileBackend {
         // The driver's own writes take this same lock, so it is released
         // before they run: this import stages the file itself.
         let _guard = file_store::lock_for_write(&self.path)?;
-        if self.path.exists() {
+        // Rechecked under the lock: another process may have imported (and
+        // renamed) the legacy file between the unlocked check and here.
+        if self.path.exists() || !legacy_path.exists() {
             return Ok(());
         }
 
@@ -597,3 +599,7 @@ impl KeyringBackend for EncryptedFileBackend {
 #[cfg(test)]
 #[path = "encrypted_file_backend_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "encrypted_file_backend_fixture_tests.rs"]
+mod fixture_tests;
