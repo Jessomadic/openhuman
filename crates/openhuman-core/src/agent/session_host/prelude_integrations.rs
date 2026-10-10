@@ -380,7 +380,7 @@ pub(super) fn apply_cold_hydration(
     // the live lookup rather than pinning this session to the snapshot.
     state.connected_integrations_initialized = authoritative;
     state.connected_integrations_authoritative = authoritative;
-    if false && state.integration_announcements_seeded {
+    if state.integration_announcements_seeded {
         log::debug!(
             "[session] re-hydrating integrations after a stale snapshot; diffing announcements"
         );
