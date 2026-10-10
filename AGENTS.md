@@ -405,6 +405,12 @@ Additional rules:
 
 ## Tool, harness, and runtime boundaries
 
+Embed public API documentation: [Embedding](gitbooks/developing/embed/README.md),
+[concepts](gitbooks/developing/embed/concepts/README.md), and the source-generated
+[builder setters](gitbooks/developing/embed/builder-setters.md). Snippets come from
+compiled examples; run `pnpm docs:generate` and `pnpm docs:check` after changing them.
+
+
 `tinyagents` owns tool-call dialects, parsing, catalog rendering, transcript
 replay, session identity, and the agent loop. `tinytools` owns the shared
 `Tool` trait and tool types. OpenHuman owns execution policy, approvals,

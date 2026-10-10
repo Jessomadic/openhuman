@@ -11,6 +11,36 @@ const tinyagentsRoot = resolve(repoRoot, "vendor/tinyagents/crates");
 const writeBaseline = process.argv.includes("--write-baseline");
 const noBaseline = process.argv.includes("--no-baseline");
 
+// Embed's injection API exposes the original provider/policy contracts (#7306)
+// so callers need only the facade dependency. These are exact declarations,
+// not alternative implementations or compatibility layers. Keep the allowance
+// bounded by both file and the complete statement, including grouped members.
+const embedContractExports = new Map([
+  ["crates/openhuman-core/src/agent/host_overrides.rs", [
+    "pub use tinyagents_harness::cancel::CancellationToken;",
+  ]],
+  ["crates/openhuman-embed/src/config.rs", [
+    "pub use tinytools::{DefaultEffect, Patterns, RuleEffect, Surface, ToolMatcher, ToolRule, ToolRules};",
+  ]],
+  ["crates/openhuman-embed/src/lib.rs", [
+    "pub use tinyinference_llm::message::MessageDelta;",
+    "pub use tinyinference_llm::model::{ChatModel, DeferredHandle, DeferredStatus, ModelProfile, ModelRequest, ModelResponse, ModelStream, ModelStreamItem, ModelStreamMetadata};",
+    "pub use tinyinference_llm::{Error, Result};",
+  ]],
+].map(([path, statements]) => [path, new Set(statements.map(normalizeExport))]));
+
+function normalizeExport(statement) {
+  return statement.replace(/\s+/g, "").replace(/,}/g, "}");
+}
+
+function isEmbedContractExport(path, lines, index) {
+  const allowed = embedContractExports.get(path);
+  if (!allowed) return false;
+  const remaining = lines.slice(index).map(({ text }) => text).join("\n");
+  const end = remaining.indexOf(";");
+  return end >= 0 && allowed.has(normalizeExport(remaining.slice(0, end + 1)));
+}
+
 // Product types need not start with `OpenHuman`, so this is an explicit,
 // reviewed inventory rather than a naming convention.
 const openhumanDomainTypes = new Set([
@@ -280,7 +310,8 @@ function add(rule, path, line, text) {
 // Scan every OpenHuman crate: facades are not restricted to agent/.
 for (const path of await filesUnder(openhumanCratesRoot, (path) => path.endsWith(".rs") && /\/src\//.test(path))) {
   const rel = relative(repoRoot, path);
-  for (const { line, text, raw } of codeLines(await readFile(path, "utf8"))) {
+  const lines = codeLines(await readFile(path, "utf8"));
+  for (const [index, { line, text, raw }] of lines.entries()) {
     if (!text.trim()) continue;
     const compact = compactRustPath(text);
     if (/\btinyagents_harness::tool_calling\b/.test(compact)) add("openhuman-tool-calling-facade", path, line, raw);
@@ -294,7 +325,8 @@ for (const path of await filesUnder(openhumanCratesRoot, (path) => path.endsWith
       const declaresDeletedModule = deletedTaskLocalModules.some((name) => new RegExp(`\\bmod\\s+${escapeRegex(name)}\\s*;`).test(text));
       if ((isListedTaskLocalFile && /\btokio\s*::\s*task_local!/.test(text)) || namesTaskLocalAccessor || namesTaskLocalStatic || usesGenericAccessor || declaresDeletedModule) add("openhuman-task-local", path, line, raw);
     }
-    if (/\bpub(?:\s*\([^)]*\))?\s+use\s+(?:tinyagents(?:_[a-z_]+)?|tinytools(?:_[a-z_]+)?|tinyinference(?:_[a-z_]+)?)\s*::/i.test(text)) add("openhuman-upstream-reexport", path, line, raw);
+    if (/\bpub(?:\s*\([^)]*\))?\s+use\s+(?:tinyagents(?:_[a-z_]+)?|tinytools(?:_[a-z_]+)?|tinyinference(?:_[a-z_]+)?)\s*::/i.test(text)
+        && !isEmbedContractExport(rel, lines, index)) add("openhuman-upstream-reexport", path, line, raw);
   }
 }
 

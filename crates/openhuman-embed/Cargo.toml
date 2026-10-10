@@ -41,6 +41,8 @@ scheduler-gate = ["openhuman-core/scheduler-gate"]
 e2e-test-support = ["openhuman-core/e2e-test-support"]
 
 [dependencies]
+futures-core = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }
 async-trait = "0.1"
 openhuman-core = { path = "../openhuman-core", package = "openhuman", default-features = false }
 anyhow = "1"
@@ -96,3 +98,23 @@ wiremock = "0.6"
 sentry = { version = "0.47.0", default-features = false, features = ["test"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "mcp"
+required-features = ["mcp"]
+
+[[example]]
+name = "skills"
+required-features = ["skills"]
+
+[[example]]
+name = "telegram"
+required-features = ["channels"]
+
+[[example]]
+name = "storage"
+required-features = ["storage-sqlite"]

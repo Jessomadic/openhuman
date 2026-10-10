@@ -266,13 +266,7 @@ path = "../../tests/observability_wallet_expected_e2e.rs"
 name = "skills_mcp_registry_live"
 path = "../../tests/skills_mcp_registry_live.rs"
 
-[[example]]
-name = "embed_headless"
-path = "../../examples/embed_headless.rs"
 
-[[example]]
-name = "embed_kernel"
-path = "../../examples/embed_kernel.rs"
 
 [dependencies]
 # The only openhuman crate the binary depends on. Every gate below forwards to
