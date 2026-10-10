@@ -36,7 +36,7 @@ async fn streaming_gateway_charge_settles_and_releases_the_reservation() {
         Arc::new(GatewayChargeModel::new(Arc::new(StreamingFixture))),
         budget.clone(),
         CallBudget {
-            input_tokens: 10,
+            input_tokens: 1_000,
             output_tokens: 5,
             cost_micros: 100,
         },
@@ -111,4 +111,47 @@ fn invalid_gateway_amount_discards_a_typed_charge_but_absent_metadata_preserves_
     response.raw = Some(serde_json::json!({"usage": {"buyer_cost_micro": -0.5, "cost": 0}}));
     normalize_charge(&mut response);
     assert!(response.usage.unwrap().charged_amount.is_none());
+}
+
+#[test]
+fn authoritative_billing_source_presence_prevents_unknown_charge_refunds() {
+    for raw in [
+        serde_json::json!({"usage": {"buyer_cost_micro": null, "cost": 0}}),
+        serde_json::json!({"usage": {"buyer_cost_micro": "invalid", "cost": 0}}),
+        serde_json::json!({"usage": {"cost": "invalid"}}),
+    ] {
+        let mut response = ModelResponse {
+            usage: Some(Usage {
+                charged_amount: Some(ChargedAmount::usd_micros(12)),
+                ..Usage::new(10, 5)
+            }),
+            raw: Some(raw.clone()),
+            ..ModelResponse::assistant("done")
+        };
+        normalize_charge(&mut response);
+        assert!(response.usage.unwrap().charged_amount.is_none(), "{raw}");
+    }
+}
+
+#[test]
+fn managed_backend_charge_precedes_generic_provider_billing() {
+    for (reported, expected) in [(0.0000064, Some(7)), (0.0, Some(0)), (-1.0, None)] {
+        let mut response = ModelResponse {
+            usage: Some(Usage::new(10, 5)),
+            raw: Some(serde_json::json!({
+                "openhuman_usage_meta": {"charged_amount_usd": reported},
+                "usage": {"buyer_cost_micro": 42, "cost": 1}
+            })),
+            ..ModelResponse::assistant("done")
+        };
+        normalize_charge(&mut response);
+        assert_eq!(
+            response
+                .usage
+                .unwrap()
+                .charged_amount
+                .map(|charge| charge.micros),
+            expected
+        );
+    }
 }

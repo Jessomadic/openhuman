@@ -19,37 +19,70 @@ impl GatewayChargeModel {
     }
 }
 
+fn rounded_micros(micros: Option<f64>) -> Option<ChargedAmount> {
+    micros
+        .filter(|amount| amount.is_finite() && *amount >= 0.0 && *amount < i64::MAX as f64)
+        .map(|amount| ChargedAmount::usd_micros(amount.ceil() as i64))
+}
+
 fn normalize_charge(response: &mut ModelResponse) {
     let Some(usage) = response.usage.as_mut() else {
         // Missing usage must retain conservative token and charge reservations.
+        tracing::trace!(
+            source = "missing_usage",
+            charge_known = false,
+            "budget_charge_normalized"
+        );
         return;
     };
     let Some(raw) = response.raw.as_ref() else {
+        tracing::trace!(
+            source = "typed_usage",
+            charge_known = usage
+                .charged_amount
+                .is_some_and(|charge| charge.micros >= 0),
+            "budget_charge_normalized"
+        );
         return;
     };
-    if let Some(micros) = raw
-        .pointer("/usage/buyer_cost_micro")
-        .and_then(serde_json::Value::as_i64)
-    {
-        usage.charged_amount = (micros >= 0).then(|| ChargedAmount::usd_micros(micros));
-        return;
-    }
-    let micros = raw
-        .pointer("/usage/buyer_cost_micro")
-        .and_then(serde_json::Value::as_f64)
-        .or_else(|| {
-            raw.pointer("/usage/cost")
-                .and_then(serde_json::Value::as_f64)
-                .map(|cost| cost * 1_000_000.0)
-        });
-    let Some(micros) = micros else {
-        return;
-    };
-    // Buyer charge is authoritative, including zero. Invalid reported amounts
-    // remain unknown, and fractional micro-units round up rather than refunding
-    // money the gateway billed. No local price estimate enters the ledger.
-    usage.charged_amount = (micros.is_finite() && micros >= 0.0 && micros < i64::MAX as f64)
-        .then(|| ChargedAmount::usd_micros(micros.ceil() as i64));
+    let (source, charge) =
+        if let Some(managed) = raw.pointer("/openhuman_usage_meta/charged_amount_usd") {
+            (
+                "managed_backend",
+                rounded_micros(managed.as_f64().map(|amount| amount * 1_000_000.0)),
+            )
+        } else if let Some(buyer) = raw.pointer("/usage/buyer_cost_micro") {
+            let charge = if let Some(micros) = buyer.as_i64() {
+                (micros >= 0).then_some(ChargedAmount::usd_micros(micros))
+            } else {
+                rounded_micros(buyer.as_f64())
+            };
+            ("gateway_buyer", charge)
+        } else if let Some(cost) = raw.pointer("/usage/cost") {
+            (
+                "provider_cost",
+                rounded_micros(cost.as_f64().map(|amount| amount * 1_000_000.0)),
+            )
+        } else {
+            tracing::trace!(
+                source = "typed_usage",
+                charge_known = usage
+                    .charged_amount
+                    .is_some_and(|charge| charge.micros >= 0),
+                "budget_charge_normalized"
+            );
+            return;
+        };
+    // Presence selects the authoritative billing source, including known zero
+    // and malformed values. Invalid billing remains unknown; fractional units
+    // round up. The ledger never substitutes a provider estimate for host or
+    // buyer billing, and no locally calculated price enters settlement.
+    usage.charged_amount = charge;
+    tracing::trace!(
+        source,
+        charge_known = charge.is_some(),
+        "budget_charge_normalized"
+    );
 }
 
 #[async_trait]

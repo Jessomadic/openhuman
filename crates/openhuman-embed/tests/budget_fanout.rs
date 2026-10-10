@@ -253,6 +253,8 @@ async fn gateway_charge_precedence_and_unknown_cost_keep_budget_conservative() {
         (json!({"buyer_cost_micro": 0, "cost": 1}), 0),
         (json!({"cost": 0.0000064}), 7),
         (json!({"buyer_cost_micro": -1, "cost": 0}), 100),
+        (json!({"buyer_cost_micro": null, "cost": 0}), 100),
+        (json!({"buyer_cost_micro": "invalid", "cost": 0}), 100),
         (json!({"cost": -1}), 100),
         (json!({"cost": 1e20}), 100),
         (json!({}), 100),
