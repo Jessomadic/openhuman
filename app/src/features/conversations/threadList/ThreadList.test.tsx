@@ -70,12 +70,9 @@ describe('ThreadList', () => {
     expect(within(sections[0]).getByTestId('thread-row-t3')).toBeInTheDocument();
   });
 
-  it('uses the assistant-ui thread-list search to filter rows', () => {
+  it('has no search box in the conversation sidebar', () => {
     renderList();
-    const search = screen.getByRole('searchbox');
-    fireEvent.change(search, { target: { value: 'gmail' } });
-    expect(screen.getByTestId('thread-row-t1')).toBeInTheDocument();
-    expect(screen.queryByTestId('thread-row-t2')).not.toBeInTheDocument();
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument();
   });
 
   it('toggles a pin through the registry menu without selecting the row', async () => {
