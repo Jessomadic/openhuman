@@ -398,3 +398,49 @@ async fn an_artifact_path_without_a_configured_dir_points_at_file_read() {
     assert!(res.is_error);
     assert!(result_text(&res).contains("file_read"));
 }
+
+/// Every `juice_*` / `*_retrieve` identifier a footer mentions.
+fn tool_names_in(text: &str) -> Vec<String> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| w.starts_with("juice_") || w.ends_with("_retrieve") || w.contains("juice_"))
+        .map(str::to_string)
+        .collect()
+}
+
+#[tokio::test]
+async fn compressed_output_footers_only_name_tools_that_exist() {
+    // Regression for the "unknown tool juice_*" cluster: a footer naming a tool
+    // the model is not offered (or a pre-rename alias like `tinyjuice_retrieve`)
+    // burns the model's failure budget on a call that cannot dispatch.
+    use crate::inference::tokenjuice::RETRIEVE_TOOL_NAME;
+    let offered: Vec<&str> = REPL_TOOL_NAMES
+        .iter()
+        .copied()
+        .chain([RETRIEVE_TOOL_NAME])
+        .collect();
+
+    let store = MemoryCcrStore::default();
+    let (handle_footer, _) = store_behind_handle(&store, &log_body()).await;
+
+    let ccr = tinyjuice::compress_content_with_store(
+        &log_body(),
+        None,
+        &CompressOptions::default(),
+        &MemoryCcrStore::default(),
+    )
+    .await;
+
+    let mut seen = 0;
+    for footer in [handle_footer, ccr.text] {
+        assert!(!footer.contains("tinyjuice_retrieve"), "{footer}");
+        assert!(!footer.contains("tokenjuice_retrieve"), "{footer}");
+        for name in tool_names_in(&footer) {
+            seen += 1;
+            assert!(
+                offered.contains(&name.as_str()),
+                "footer names `{name}`, which is not an offered tool: {footer}"
+            );
+        }
+    }
+    assert!(seen > 0, "the footers must name at least one tool");
+}

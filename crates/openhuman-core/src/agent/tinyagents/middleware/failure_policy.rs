@@ -1,5 +1,5 @@
 //! Which recovery class and budget a failed tool call gets
-//! ([`recovery_policy`]), split out of `repeated_failure.rs` so the breaker
+//! ([`recovery_policy_with_effect`]), split out of `repeated_failure.rs` so the breaker
 //! stays readable: the ladder driver lives there, the classification here.
 
 use super::call_effect::{call_effect, CallEffect};
@@ -11,7 +11,9 @@ use tinyinference_llm::failure::is_recoverable_failure_text as is_recoverable_to
 ///
 /// Judges the call's side effect from `tool`'s name alone; the breaker, which
 /// sees the call's arguments and the registered tools, uses
-/// [`recovery_policy_with_effect`].
+/// [`recovery_policy_with_effect`]. Test-only: every production caller knows
+/// the call's arguments.
+#[cfg(test)]
 pub(super) fn recovery_policy(
     tool: &str,
     error: &str,

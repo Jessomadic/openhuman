@@ -297,8 +297,10 @@ pub(super) fn failure_scope(tool: &str, arguments: &serde_json::Value) -> String
     scope
 }
 
+#[cfg(test)]
+pub(super) use super::failure_policy::recovery_policy;
 pub(super) use super::failure_policy::{
-    is_command_exit_report, missing_program_nudge, recovery_policy, recovery_policy_with_effect,
+    is_command_exit_report, missing_program_nudge, recovery_policy_with_effect,
 };
 
 /// Detect a **body-level** failure from `validate_workflow` / `dry_run_workflow`
