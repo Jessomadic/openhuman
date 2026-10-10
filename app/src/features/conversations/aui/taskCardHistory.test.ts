@@ -8,6 +8,13 @@ const task = (anchor: string, completed = false): TurnTask => ({
   todos: [{ content: 'Inspect UI', status: completed ? 'completed' : 'in_progress' }],
 });
 describe('turn task attachment', () => {
+  it('derives the visible status from pending, running and completed steps', () => {
+    expect(
+      taskState({ ...task('turn'), todos: [{ content: 'Inspect UI', status: 'pending' }] })
+    ).toBe('waiting');
+    expect(taskState(task('turn'))).toBe('working');
+    expect(taskState(task('turn', true))).toBe('done');
+  });
   it('keeps completion attached to its original turn as new messages arrive', () => {
     const running = updateTaskHistory([], task('first'));
     const finished = updateTaskHistory(running, task('second', true));

@@ -11,7 +11,7 @@ import { useDisclosure } from '../../../components/assistant-ui/lib/useDisclosur
 import { useT } from '../../../lib/i18n/I18nContext';
 import { useAuiThreadId } from '../../../providers/AssistantUiRuntimeProvider';
 import { userScopedStorage } from '../../../store/userScopedStorage';
-import { taskFinished, type TurnTask, updateTaskHistory } from './taskCardHistory';
+import { taskFinished, taskState, type TurnTask, updateTaskHistory } from './taskCardHistory';
 import { toAuiTodoItems } from './TodoListPart';
 import { useThreadGoal } from './useThreadGoal';
 import { useThreadTodos } from './useThreadTodos';
@@ -81,7 +81,7 @@ function TurnTaskCard({ task }: { task: TurnTask }) {
   const threadId = useAuiThreadId();
   const done = taskFinished(task);
   const [open, setOpen] = useDisclosure(`task:${threadId}:${task.anchor}`, !done);
-  const state = done ? 'done' : task.goal && task.goal.status !== 'active' ? 'waiting' : 'working';
+  const state = taskState(task);
   return (
     <TaskCard
       data-testid="todo-checklist"

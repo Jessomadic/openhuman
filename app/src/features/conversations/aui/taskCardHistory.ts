@@ -7,9 +7,16 @@ export interface TurnTask {
   goal: ThreadGoalView | null;
 }
 export const taskFinished = (task: TurnTask) =>
-  task.goal
-    ? task.goal.status === 'complete'
-    : task.todos.length > 0 && task.todos.every(item => item.status === 'completed');
+  Boolean(task.goal || task.todos.length) &&
+  (!task.goal || task.goal.status === 'complete') &&
+  task.todos.every(item => item.status === 'completed');
+
+export const taskState = (task: TurnTask): 'done' | 'working' | 'waiting' =>
+  taskFinished(task)
+    ? 'done'
+    : task.goal?.status === 'active' || task.todos.some(item => item.status === 'in_progress')
+      ? 'working'
+      : 'waiting';
 
 /** Preserve a completed turn's presentation when later turns begin. */
 export function updateTaskHistory(history: TurnTask[], next: TurnTask): TurnTask[] {
