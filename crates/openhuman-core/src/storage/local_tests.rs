@@ -124,3 +124,21 @@ fn an_import_that_cannot_read_is_an_error_and_is_retried() {
     assert!(open_things(&config(None), &path).is_some());
     assert!(table_names(&path).contains(&"_legacy_old_things".to_string()));
 }
+
+#[test]
+fn retiring_a_table_releases_its_index_names() {
+    let dir = TempDir::new().unwrap();
+    let path = legacy_file(&dir);
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE INDEX idx_old_things_n ON old_things(n)")
+        .unwrap();
+    open_things(&config(None), &path).unwrap();
+    let conn = Connection::open(&path).unwrap();
+    // A recreated legacy table can index itself under the same name again.
+    conn.execute_batch(
+        "CREATE TABLE old_things (id TEXT PRIMARY KEY, n INTEGER);
+         CREATE INDEX idx_old_things_n ON old_things(n)",
+    )
+    .unwrap();
+}

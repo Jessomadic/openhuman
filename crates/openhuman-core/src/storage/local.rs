@@ -314,6 +314,17 @@ fn import(
     Ok(written)
 }
 
+/// Drops every cached default-store handle, so a data reset can delete the
+/// files (Windows refuses while a handle is open) and the next call opens
+/// and imports afresh.
+#[cfg(feature = "storage-sqlite")]
+pub fn release_all() {
+    OPENED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clear();
+}
+
 /// Forgets that `db_path` was opened, so the next call opens (and imports)
 /// it afresh; also how a test models a restart.
 #[cfg(feature = "storage-sqlite")]
@@ -379,6 +390,16 @@ fn retire_tables(db_path: &Path, tables: &[&str]) -> Result<()> {
         while table_exists(&tx, &target)? {
             n += 1;
             target = format!("_legacy_{table}_{n}");
+        }
+        // Index names are database-global and survive a rename, which would
+        // make a later `CREATE INDEX IF NOT EXISTS` on the recreated legacy
+        // table a silent no-op; the archive does not need them.
+        let indexes: Vec<String> = tx
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1 AND sql IS NOT NULL")?
+            .query_map([table], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for index in indexes {
+            tx.execute_batch(&format!("DROP INDEX \"{index}\""))?;
         }
         tx.execute_batch(&format!("ALTER TABLE \"{table}\" RENAME TO \"{target}\""))
             .with_context(|| format!("rename {table} to {target}"))?;
