@@ -43,6 +43,7 @@ pub mod sources;
 pub mod status;
 mod tool_budget;
 pub mod tools;
+pub(crate) mod tool_writes;
 pub mod types;
 pub mod user_scope;
 

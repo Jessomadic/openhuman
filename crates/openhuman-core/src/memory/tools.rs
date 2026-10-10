@@ -362,7 +362,32 @@ impl Tool for MemoryTool {
             .or_else(crate::agent::turn_origin::current_request_id);
         Ok(self
             .budget
-            .run(run_id, run_action(&self.config, &args, &facts))
+            .run(run_id, async {
+                if matches!(
+                    args.get("action").and_then(Value::as_str),
+                    Some("learn" | "forget")
+                ) {
+                    let config = self.config.clone();
+                    let write_args = args.clone();
+                    let queued = crate::core::runtime::spawn_blocking_scoped(move || {
+                        super::tool_writes::enqueue(&config, &write_args, &facts)
+                    })
+                    .await;
+                    match queued.unwrap_or_else(|_| {
+                        Err(MemoryError::Unavailable(
+                            "memory write queue unavailable".into(),
+                        ))
+                    }) {
+                        Ok(value) => {
+                            super::tool_writes::schedule(self.config.clone());
+                            ToolResult::success(value.to_string())
+                        }
+                        Err(error) => ToolResult::error(render_error(error)),
+                    }
+                } else {
+                    run_action(&self.config, &args, &facts).await
+                }
+            })
             .await)
     }
 }

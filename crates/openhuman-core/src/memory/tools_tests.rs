@@ -47,7 +47,7 @@ async fn the_memory_tool_stops_write_churn_and_recovers_on_the_next_chat_turn() 
     let tmp = tempfile::tempdir().unwrap();
     let config = config_in(&tmp);
     let engine = bind_reference(&config);
-    let tool = MemoryTool::new(Arc::new(config));
+    let tool = MemoryTool::new(Arc::new(config.clone()));
     let origin = |request: &str| AgentTurnOrigin::WebChat {
         thread_id: "thread-budget".into(),
         client_id: "client-budget".into(),
@@ -63,6 +63,7 @@ async fn the_memory_tool_stops_write_churn_and_recovers_on_the_next_chat_turn() 
         }
     })
     .await;
+    super::super::tool_writes::drain(&config).await;
     assert_eq!(stored(&engine, MetaFilter::default()).await.len(), 8);
     let result = with_origin(
         origin("next"),
@@ -71,18 +72,19 @@ async fn the_memory_tool_stops_write_churn_and_recovers_on_the_next_chat_turn() 
     .await
     .unwrap();
     assert!(!result.is_error);
+    super::super::tool_writes::drain(&config).await;
     assert_eq!(stored(&engine, MetaFilter::default()).await.len(), 9);
 }
 
 #[tokio::test]
-async fn harness_runs_have_independent_budgets_and_learning_retries_replay() {
+async fn harness_runs_have_independent_budgets_and_identical_learnings_deduplicate() {
     use tinyagents_harness::context::{RunConfig, RunContext};
     use tinyagents_harness::ids::CallId;
     use tinyagents_harness::tool::ToolExecutionContext;
     let tmp = tempfile::tempdir().unwrap();
     let config = config_in(&tmp);
     let engine = bind_reference(&config);
-    let tool = MemoryTool::new(Arc::new(config));
+    let tool = MemoryTool::new(Arc::new(config.clone()));
     let first: RunContext = RunContext::new(RunConfig::new("first-harness-run"), ());
     let next: RunContext = RunContext::new(RunConfig::new("next-harness-run"), ());
     let args = json!({"action":"learn","text":"Prefers tea"});
@@ -111,6 +113,7 @@ async fn harness_runs_have_independent_budgets_and_learning_retries_replay() {
         .await
         .unwrap();
     assert!(!result.is_error, "a new harness run gets a fresh budget");
+    super::super::tool_writes::drain(&config).await;
     assert_eq!(stored(&engine, MetaFilter::default()).await.len(), 1);
 }
 
@@ -365,7 +368,7 @@ async fn execute_gathers_facts_from_the_run_context() {
     let tmp = tempfile::tempdir().unwrap();
     let config = config_in(&tmp);
     let engine = bind_reference(&config);
-    let tool = MemoryTool::new(Arc::new(config));
+    let tool = MemoryTool::new(Arc::new(config.clone()));
     let ctx = Ctx {
         root: tmp.path().join("isolated"),
         thread: "thread-ctx",
@@ -379,6 +382,7 @@ async fn execute_gathers_facts_from_the_run_context() {
         .await
         .unwrap();
     assert!(!result.is_error, "{}", text(&result));
+    super::super::tool_writes::drain(&config).await;
     let items = stored(&engine, MetaFilter::default()).await;
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].meta.thread_id.as_deref(), Some("thread-ctx"));
@@ -393,6 +397,7 @@ async fn execute_gathers_facts_from_the_run_context() {
         .await
         .unwrap();
     assert!(!plain.is_error);
+    super::super::tool_writes::drain(&config).await;
 }
 
 #[test]
@@ -722,4 +727,20 @@ async fn refers_to_reaches_the_engine_in_the_users_time_zone() {
             ),
         ]
     );
+}
+
+#[tokio::test]
+async fn learning_is_durably_queued_even_when_the_backend_refuses_writes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = config_in(&tmp);
+    crate::memory::test_fixtures::RefusingEngine::out_of_credits().bind(&config);
+    let tool = MemoryTool::new(Arc::new(config.clone()));
+    let result = tool
+        .execute(json!({"action":"learn","text":"Prefers tea"}))
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", result.text());
+    let value: Value = serde_json::from_str(&result.text()).unwrap();
+    assert_eq!(value["status"], "queued; not yet saved to memory");
+    assert_eq!(super::super::tool_writes::drain(&config).await, 0);
 }
