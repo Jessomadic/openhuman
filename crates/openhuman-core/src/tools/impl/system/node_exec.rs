@@ -195,6 +195,15 @@ impl NodeExecTool {
             ));
         }
         let path_policy = super::security_for_tool_context(&self.security, context, "node_exec");
+        for input in inline_code
+            .iter()
+            .chain(script_path.iter())
+            .chain(extra_args.iter())
+        {
+            if let Err(reason) = path_policy.check_protected_path_literals(input) {
+                return Ok(ToolResult::error(reason));
+            }
+        }
         if self.security.is_rate_limited() {
             return Ok(ToolResult::error(
                 "Rate limit exceeded: too many actions in the last hour",

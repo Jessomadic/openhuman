@@ -211,6 +211,11 @@ impl NpmExecTool {
             ));
         }
         let path_policy = super::security_for_tool_context(&self.security, context, "npm_exec");
+        for input in extra_args.iter().chain(cwd_override.iter()) {
+            if let Err(reason) = path_policy.check_protected_path_literals(input) {
+                return Ok(ToolResult::error(reason));
+            }
+        }
         let cwd = match resolve_cwd(&path_policy.action_dir, cwd_override.as_deref()) {
             Ok(p) => p,
             Err(msg) => return Ok(ToolResult::error(msg)),
