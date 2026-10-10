@@ -22,7 +22,7 @@ fn call(
     output: u64,
     cache_read: u64,
     cache_write: u64,
-    cost: f64,
+    cost: impl Into<Option<f64>>,
 ) -> AgentProgress {
     AgentProgress::ModelCallCompleted {
         model: model.to_string(),
@@ -36,7 +36,7 @@ fn call(
         cached_input_tokens: cache_read,
         cache_creation_tokens: cache_write,
         reasoning_tokens: 0,
-        cost_usd: cost,
+        cost_usd: cost.into(),
     }
 }
 
@@ -98,6 +98,7 @@ fn child_completed(task: &str, elapsed: u64) -> AgentProgress {
         worktree_path: None,
         changed_files: Vec::new(),
         dirty_status: None,
+        stop: None,
     }
 }
 
@@ -223,7 +224,13 @@ fn late_child_tool_completion_after_subagent_completed_closes_the_span() {
             child_tool_completed("t1", "c1", "get_node_kind_contract", 4),
             2_050,
         ),
-        (AgentProgress::TurnCompleted { iterations: 1 }, 400_000),
+        (
+            AgentProgress::TurnCompleted {
+                iterations: 1,
+                stop: None,
+            },
+            400_000,
+        ),
     ]);
     c.finish(400_000);
     let tool = find(c.spans(), "tool.get_node_kind_contract");
@@ -261,7 +268,13 @@ fn tool_without_completion_is_force_closed_at_its_parent_end() {
         (tool_started("c1", "composio_list_toolkits", 1), 1_500),
         (iteration(2), 2_000),
         (simple_call("chat-v1"), 3_000),
-        (AgentProgress::TurnCompleted { iterations: 2 }, 440_000),
+        (
+            AgentProgress::TurnCompleted {
+                iterations: 2,
+                stop: None,
+            },
+            440_000,
+        ),
     ]);
     c.finish(440_000);
     let tool = find(c.spans(), "tool.composio_list_toolkits");
@@ -345,7 +358,13 @@ fn cancelled_turn_is_a_warning_not_an_error() {
 fn completed_turn_is_not_reclassified_by_finish() {
     let mut c = collect(&[
         (AgentProgress::TurnStarted, 1_000),
-        (AgentProgress::TurnCompleted { iterations: 1 }, 2_000),
+        (
+            AgentProgress::TurnCompleted {
+                iterations: 1,
+                stop: None,
+            },
+            2_000,
+        ),
     ]);
     c.finish_with_outcome(
         3_000,
@@ -426,7 +445,7 @@ fn empty_provider_and_model_do_not_produce_dot_labels() {
 // ── 7. unpriced / free models ───────────────────────────────────────────────
 
 #[test]
-fn unpriced_model_placeholder_cost_is_not_recorded() {
+fn unpriced_model_unknown_cost_is_not_recorded() {
     let model = "acme/never-heard-of-it";
     let placeholder = crate::agent::cost::estimate_call_cost_usd(
         model,
@@ -441,10 +460,7 @@ fn unpriced_model_placeholder_cost_is_not_recorded() {
         ),
     ]);
     let g = generations(c.spans())[0];
-    assert_eq!(
-        g.attributes["gen_ai.usage.cost_usd"],
-        serde_json::json!(0.0)
-    );
+    assert!(!g.attributes.contains_key("gen_ai.usage.cost_usd"));
     assert_eq!(
         g.attributes["gen_ai.cost.source"],
         serde_json::json!("unpriced")

@@ -401,3 +401,148 @@ async fn a_document_that_does_not_parse_is_an_error_and_leaves_the_bootstrap_fil
     );
     assert!(!tmp.path().join("config.toml.bak").exists());
 }
+
+#[tokio::test]
+async fn a_read_reports_whether_its_text_is_a_document_body() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("config.toml");
+    std::fs::write(&file, "default_model = \"from-file\"\n").unwrap();
+    let storage = MemoryStorage::new();
+    let source = document_source(&storage, "alice", &file);
+    assert!(!source.read().await.unwrap().from_document, "file fallback");
+    source.write("default_model = \"doc\"\n").await.unwrap();
+    assert!(source.read().await.unwrap().from_document);
+    assert!(
+        !FileConfigSource::new(&file)
+            .read()
+            .await
+            .unwrap()
+            .from_document
+    );
+}
+
+#[tokio::test]
+async fn a_recovered_bootstrap_file_is_restored_beside_the_document() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("config.toml");
+    let storage = MemoryStorage::new();
+    let source = document_source(&storage, "alice", &file);
+    source.write("default_model = \"m\"\n").await.unwrap();
+    let bootstrap = "[storage]\nurl = \"sqlite:/b\"\n";
+    std::fs::write(tmp.path().join("config.toml.bak"), bootstrap).unwrap();
+    std::fs::write(&file, [0xff, 0xfe, 0x00, 0x80]).unwrap();
+
+    let read = source.read().await.unwrap();
+    assert!(read.contents.contains("sqlite:/b"), "{}", read.contents);
+    assert!(!read.recovered, "the document body itself was intact");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), bootstrap);
+}
+
+#[tokio::test]
+async fn a_file_fallback_keeps_the_file_backup_recovery() {
+    let tmp = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let _forced = ForcedDocumentSource::new(
+        scoped(&storage, "tenant-a"),
+        Scope::new("tenant-a").unwrap(),
+        keys(3),
+    );
+    let config = config_at(tmp.path(), "unused");
+    std::fs::write(&config.config_path, "default_model = 5\n").unwrap();
+    std::fs::write(
+        tmp.path().join("config.toml.bak"),
+        "default_model = \"from-bak\"\n",
+    )
+    .unwrap();
+
+    let reloaded = Config::load_from_config_path(&config.config_path, &config.workspace_dir)
+        .await
+        .unwrap();
+    assert_eq!(reloaded.default_model.as_deref(), Some("from-bak"));
+}
+
+#[tokio::test]
+async fn a_document_save_never_nests_process_key_ciphertext() {
+    let tmp = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let _forced = ForcedDocumentSource::new(
+        scoped(&storage, "tenant-a"),
+        Scope::new("tenant-a").unwrap(),
+        keys(3),
+    );
+    let mut config = config_at(tmp.path(), "m");
+    assert!(config.secrets.encrypt);
+    // A field still sealed under this node's key, as a file-seeded config
+    // holds it before the load decrypts.
+    let sealed = crate::security::keyring::SecretStore::new(tmp.path(), true)
+        .encrypt("sk-node-local")
+        .unwrap();
+    assert!(sealed.starts_with("enc2:"));
+    config.api_key = Some(sealed);
+    config.save().await.unwrap();
+
+    let body = document_source_keyed(&storage, "tenant-a", &config.config_path, keys(3))
+        .read()
+        .await
+        .unwrap()
+        .contents;
+    assert!(body.contains("sk-node-local"), "{body}");
+    assert!(!body.contains("enc2:"), "{body}");
+}
+
+#[tokio::test]
+async fn a_document_save_refuses_process_key_secrets_it_cannot_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let other_node = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let _forced = ForcedDocumentSource::new(
+        scoped(&storage, "tenant-a"),
+        Scope::new("tenant-a").unwrap(),
+        keys(3),
+    );
+    let mut config = config_at(tmp.path(), "m");
+    // Sealed under another node's key: this node cannot open it.
+    config.api_key = Some(
+        crate::security::keyring::SecretStore::new(other_node.path(), true)
+            .encrypt("sk-elsewhere")
+            .unwrap(),
+    );
+    let error = config.save().await.unwrap_err();
+    assert!(
+        format!("{error:#}").contains("could not be opened"),
+        "{error:#}"
+    );
+    let docs = Arc::clone(scoped(&storage, "tenant-a").documents());
+    docs.ensure_collection(&tinystoragedrivers::CollectionSpec::new("config"))
+        .await
+        .unwrap();
+    assert!(
+        docs.get("config", "tenant-a").await.unwrap().is_none(),
+        "nothing was written over the shared document"
+    );
+}
+
+#[tokio::test]
+async fn a_recovered_file_fallback_rewrites_the_bootstrap_file_too() {
+    let tmp = tempfile::tempdir().unwrap();
+    let storage = MemoryStorage::new();
+    let _forced = ForcedDocumentSource::new(
+        scoped(&storage, "tenant-a"),
+        Scope::new("tenant-a").unwrap(),
+        keys(3),
+    );
+    let mut config = config_at(tmp.path(), "recovered");
+    config.storage.url = Some("sqlite:/boot".to_string());
+    let source = for_config(&config.config_path).unwrap();
+    assert_eq!(source.label(), "document");
+
+    super::super::branches::save_recovered(&config, source.as_ref())
+        .await
+        .unwrap();
+
+    let file = std::fs::read_to_string(&config.config_path).unwrap();
+    assert!(file.contains("[storage]"), "{file}");
+    let body = source.read().await.unwrap();
+    assert!(body.from_document);
+    assert!(body.contents.contains("recovered"));
+}

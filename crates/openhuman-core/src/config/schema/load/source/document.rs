@@ -59,6 +59,40 @@ impl DocumentConfigSource {
             .map_err(|error| anyhow!("no data key for the config document: {error}"))
     }
 
+    /// The local file's text for its bootstrap tables.
+    ///
+    /// When the file read had to recover (non-UTF-8 content renamed aside, the
+    /// `.bak` used), the recovered text is written back to the file: saves go
+    /// to the document, so nothing else would ever recreate it, and a restart
+    /// whose storage URL lives only in the file's `[storage]` table would boot
+    /// without its shared backend. Nothing recoverable means no bootstrap
+    /// tables, the same as an absent file (the corrupt bytes stay preserved
+    /// beside it).
+    async fn read_bootstrap_file(&self) -> Result<String> {
+        let read = self.file.read().await?;
+        if read.recovered {
+            if read.contents.is_empty() {
+                tracing::error!(
+                    path = %self.file.path().display(),
+                    "[config] bootstrap config file unreadable and no backup; \
+                     reading the config document without bootstrap tables"
+                );
+            } else if let Err(error) = self.file.write(&read.contents).await {
+                tracing::warn!(
+                    path = %self.file.path().display(),
+                    error = %error,
+                    "[config] could not restore the recovered bootstrap config file"
+                );
+            } else {
+                tracing::warn!(
+                    path = %self.file.path().display(),
+                    "[config] bootstrap config file was corrupt; restored it from its backup"
+                );
+            }
+        }
+        Ok(read.contents)
+    }
+
     /// The decrypted stored body, or `None` when the scope has no document.
     async fn stored_body(&self) -> Result<Option<zeroize::Zeroizing<String>>> {
         self.docs
@@ -128,15 +162,21 @@ impl ConfigSource for DocumentConfigSource {
         // Through the file source, so its corruption recovery (a `.bak`, a
         // non-UTF-8 file renamed aside) applies to the bootstrap read too.
         let file_text = if self.file.exists().await? {
-            Some(self.file.read().await?.contents)
+            Some(self.read_bootstrap_file().await?)
         } else {
             None
         };
         let contents = apply_bootstrap(&body, file_text.as_deref())
             .context("apply the bootstrap tables to the config document")?;
+        // The document body itself was read intact. A recovered bootstrap file
+        // is handled (and restored) by `read_bootstrap_file`, not reported
+        // here: the loader's file-corruption branch would rename the local
+        // `config.toml` aside and save only to the document, losing the
+        // bootstrap tables on the next boot.
         Ok(ConfigRead {
             contents,
             recovered: false,
+            from_document: true,
         })
     }
 

@@ -20,6 +20,8 @@
 
 pub mod agents;
 pub mod documents;
+pub mod fence;
+pub mod fenced_backend;
 pub mod lease;
 mod lease_documents;
 mod lease_local;
@@ -87,7 +89,8 @@ pub fn url_from(env: Option<String>, config: &Config) -> Option<String> {
         .find(|url| !url.is_empty())
 }
 
-/// Parses and opens the backend `url` names.
+/// Parses and opens the backend `url` names, its writes fenced by the
+/// process's lease fences ([`fence`]).
 ///
 /// # Errors
 ///
@@ -101,7 +104,11 @@ pub async fn open(url: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
         url = %redact_url(url),
         "[storage] opening the configured backend"
     );
-    tinystoragedrivers::open(&parsed).await
+    // Every opened backend checks the process's lease fences on write; with
+    // no fence registered (every single-user host) that is a pass-through.
+    Ok(fenced_backend::wrap(
+        tinystoragedrivers::open(&parsed).await?,
+    ))
 }
 
 /// Makes `backend` the process's storage backend; returns the previous one.

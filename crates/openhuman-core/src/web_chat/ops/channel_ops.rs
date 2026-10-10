@@ -155,7 +155,7 @@ async fn cancel_chat_inner(
     // Only once nothing is left running on the thread: a scoped cancel can leave
     // the primary or a parallel turn alive, and those still owe a terminal event.
     if cancelled_any.is_some() && !thread_has_live_turn(thread_id, &map_key).await {
-        crate::agent::orchestration::background_delivery::clear_busy_for_thread(thread_id);
+        crate::agent::orchestration::busy_guard::clear_busy_for_thread(thread_id);
         // A drain that fired while the cancelled turn counted as busy returned
         // without claiming anything; ask for another.
         crate::agent::orchestration::background_delivery::kick_delivery(thread_id);

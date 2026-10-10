@@ -155,3 +155,62 @@ async fn a_spawned_shell_sees_the_python_utf8_defaults() {
     assert!(!result.is_error, "{}", result.output());
     assert_eq!(result.output().trim(), expected);
 }
+
+/// A runtime that spawns cmd.exe regardless of the host, so the description
+/// is provably taken from the runtime rather than from `cfg!(windows)`.
+struct CmdRuntime;
+
+impl RuntimeAdapter for CmdRuntime {
+    fn name(&self) -> &str {
+        "cmd-test"
+    }
+    fn has_shell_access(&self) -> bool {
+        true
+    }
+    fn has_filesystem_access(&self) -> bool {
+        true
+    }
+    fn storage_path(&self) -> std::path::PathBuf {
+        std::env::temp_dir()
+    }
+    fn supports_long_running(&self) -> bool {
+        true
+    }
+    fn shell_flavor(&self) -> ShellFlavor {
+        ShellFlavor::Cmd
+    }
+    fn build_shell_command(
+        &self,
+        _command: &str,
+        _workspace_dir: &std::path::Path,
+    ) -> anyhow::Result<tokio::process::Command> {
+        anyhow::bail!("not spawned in this test")
+    }
+}
+
+#[test]
+fn the_tool_describes_the_shell_its_runtime_spawns() {
+    let cmd_tool = ShellTool::new(
+        test_security(AutonomyLevel::Supervised),
+        Arc::new(CmdRuntime),
+        test_audit(),
+    );
+    assert_eq!(cmd_tool.description(), shell_description(ShellFlavor::Cmd));
+    assert_eq!(
+        cmd_tool.parameters_schema()["properties"]["command"]["description"],
+        command_param_description(ShellFlavor::Cmd)
+    );
+}
+
+#[test]
+fn the_docker_runtime_always_runs_posix_sh() {
+    let docker = crate::agent::host_runtime::create_runtime(
+        &crate::config::RuntimeConfig {
+            kind: "docker".into(),
+            ..crate::config::RuntimeConfig::default()
+        },
+        false,
+    )
+    .expect("docker runtime");
+    assert_eq!(docker.shell_flavor(), ShellFlavor::Posix);
+}

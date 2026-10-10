@@ -12,7 +12,9 @@
 //! took the profile over, or an operator released it — fences the profile:
 //! it is marked fenced, its in-flight turns are cancelled, and it is closed,
 //! so this node stops writing its state. The same happens when renewals keep
-//! failing until the grant would have expired.
+//! failing until the grant would have expired. Between heartbeats, each
+//! storage write to the profile's scopes is checked against the grant
+//! itself ([`super::fence`]).
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -112,11 +114,14 @@ pub(crate) fn renew_interval(ttl: Duration) -> Duration {
     (ttl / 3).max(Duration::from_millis(100))
 }
 
-/// Releases `grants` (closed profiles), logging failures: a release that
-/// fails leaves a record that expires on its own.
-pub(crate) async fn release_all(leases: &dyn LeaseStore, grants: Vec<(ProfileId, LeaseGrant)>) {
+/// Releases `grants` (closed profiles) and retires their fences, logging
+/// failures: a release that fails leaves a record that expires on its own.
+pub(crate) async fn release_all(host: &ProfileHost, grants: Vec<(ProfileId, LeaseGrant)>) {
     for (id, grant) in grants {
-        match leases.release(grant).await {
+        // Retire first: once released, another node may take the profile, and
+        // nothing of this node's may pass the fence as if it still held it.
+        host.fences().retire(id.as_str(), grant.epoch);
+        match host.leases().release(grant).await {
             Ok(()) => log::debug!("[profiles][lease] released profile={id}"),
             Err(error) => log::debug!("[profiles][lease] release of profile={id}: {error}"),
         }

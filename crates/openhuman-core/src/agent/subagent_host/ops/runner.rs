@@ -1044,7 +1044,12 @@ async fn run_typed_mode(
                         input_tokens,
                         output_tokens,
                         cached_input_tokens,
-                        charged_amount_usd,
+                        // A custom turn graph reports its own spend; it is
+                        // taken as that graph's charge, never re-estimated.
+                        cost: crate::agent::cost::CostTally {
+                            known_usd: charged_amount_usd,
+                            source: crate::agent::cost::CostSource::Charged,
+                        },
                     },
                     res.early_exit_tool,
                     res.hit_cap,
@@ -1090,7 +1095,7 @@ async fn run_typed_mode(
         // result + blocker instead of treating the summary as a finished answer
         // or re-spinning the identical delegation (#4096).
         crate::agent::subagent_host::types::SubagentRunStatus::Incomplete {
-            reason: "reached its tool-call limit before finishing".into(),
+            reason: crate::agent::turn_stop::SUBAGENT_ITERATION_CAP_REASON.into(),
         }
     } else {
         // A clean final response. (An `ask_user_clarification` early-exit is
@@ -1106,7 +1111,8 @@ async fn run_typed_mode(
         input_tokens: agg_usage.input_tokens,
         output_tokens: agg_usage.output_tokens,
         cached_input_tokens: agg_usage.cached_input_tokens,
-        charged_amount_usd: agg_usage.charged_amount_usd,
+        charged_amount_usd: agg_usage.cost.known_usd,
+        cost_source: agg_usage.cost.source,
     };
     // A nested child records on this run's isolated ledger. Fold those totals
     // into the completed child before writing the immediate parent's ledger so
@@ -1121,6 +1127,7 @@ async fn run_typed_mode(
             .cached_input_tokens
             .saturating_add(entry.usage.cached_input_tokens);
         usage.charged_amount_usd += entry.usage.charged_amount_usd;
+        usage.cost_source = usage.cost_source.max(entry.usage.cost_source);
     }
     Ok(SubagentRunOutcome {
         task_id: task_id.to_string(),

@@ -71,6 +71,8 @@ fn is_external_inference_path_matches_only_v1_routes() {
 
 #[test]
 fn verify_external_inference_bearer_for_config_accepts_stored_key() {
+    // Keep a session_store test from installing a storage backend mid-test.
+    let _slot = crate::STORAGE_SLOT_TEST_LOCK.blocking_lock();
     let tmp = tempfile::tempdir().unwrap();
     let config = Config {
         config_path: tmp.path().join("config.toml"),

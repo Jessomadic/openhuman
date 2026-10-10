@@ -144,6 +144,18 @@ What the lease drives:
   in-flight turns are stopped (`web_chat::cancel_all_turns` under its
   context) and it is closed. `ensure_hosted` refuses new turns for a profile
   this node no longer hosts.
+- **Write fencing.** Opening a profile registers a lease fence
+  (`storage::fence`, built by `profiles::fence`) for its grant. Every write
+  through the storage ports to the profile's scope or one of its session
+  scopes is refused with a typed `FenceError` when the fence is latched, when
+  the grant has run out by this node's clock less a skew margin (a sixth of
+  the TTL), or when the stored lease record no longer names this node at this
+  epoch (which latches it). A takeover therefore stops the old holder's next
+  write, before its heartbeat notices. `ensure_hosted` refuses new turns on
+  the latch or a locally expired grant, and the background loop checks the
+  fence against the record before a profile's jobs and drops them if it
+  latches mid-run. A latched fence keeps refusing for as long as the fenced
+  profile's context is alive; a clean release retires it.
 - **In use.** A profile is in use while anyone holds its `Profile` (a gateway
   request, a `ProfileHandle`) or a turn still runs on its context
   (`CoreContext::tenant_in_use`). A profile in use is never evicted, released
@@ -340,6 +352,8 @@ set.
 | `layout.rs` | The SaaS side of the shared `ProfileLayout`, archived profiles, and `profile_config`: the forced paths, memory binding (pinned to the legacy layout) and autonomy policy |
 | `host.rs` | `ProfileHost`: provisioning, lazy open behind the lease, LRU and idle eviction (never of a profile in use), release, fencing, each profile's derived `CoreContext` and policy, `current()`, `ensure_hosted()` |
 | `lifecycle.rs` | Provisioning, deprovisioning and credential changes, and `ProfileLocks`: the per-profile lock that keeps one profile's lifecycle operations from interleaving (see [Lifecycle](#lifecycle)) |
+| `fence.rs` | The profile's lease fence: the scopes its grant guards (its own scope and every `<profile>~<agent>` session scope), the skew margin, and how the host registers, renews, latches and retires it |
+| `recovery.rs` | Workspace and session-store recovery after an unclean takeover |
 | `lease.rs` | The profile lease as the host uses it: `OpenError`, the lease store choice (`DocumentLeases` over a backend, else `LocalLeases`), and the heartbeat that renews every open profile's lease and fences the ones lost |
 | `registry.rs` | `ProfileRegistry`: which profiles are provisioned, in the backend's `cluster` scope or as `profile.toml` files |
 | `gateway.rs` | Which context a gateway request runs under: the operator plane, or the profile of the user named in `X-OpenHuman-User`, after the signature check; the typed refusal (`409` holder) |
@@ -363,10 +377,23 @@ channel threads, `409`) and `crates/openhuman-embed/tests/saas_profiles.rs`
   completions and the sandbox stay as files under `users/<id>/workspace`, so a
   multi-node deployment needs `<root>` on a shared read-write-many volume and
   a remote memory engine. Moving those onto the storage ports is a follow-up.
-- Storage writes carry no epoch fence, so a node that is partitioned but still
-  running could write after its lease expired. The mitigations are a TTL much
-  longer than the renew interval, the fence check before each turn, and
-  stopping turns when the lease is lost.
+- On drivers with `Capability::Fencing` (memory, SQLite, file, MongoDB
+  replica sets) the driver re-checks the lease record atomically with each
+  write, so a takeover cuts off a paused holder's writes at storage. Where it
+  cannot (MongoDB without transactions, MongoDB blobs, named databases) the
+  host check and the write are two operations: a holder paused for longer
+  than the skew margin right after a passing check can still land one write
+  after a takeover (see `storage/README.md`).
+- Only writes through the storage ports are fenced. Files a profile writes
+  directly under `<root>/users/<id>/` (the memory job queue, the classic
+  on-disk stores) are not; on a shared volume, stopping turns and jobs on
+  fence is the mitigation.
+- A node that re-opens a profile after being fenced registers a new fence;
+  work left over from its older grant is stopped by turn cancellation, not by
+  the fence.
+- With file leases (no backend) nothing goes through the ports, and the
+  `flock` cannot be lost while the process lives, so the fence only backs the
+  latch checks.
 - Each node keeps its own operator keyring (`operator_dir`), so a credential
   installed through one node is only readable there unless secrets live in
   the storage backend.

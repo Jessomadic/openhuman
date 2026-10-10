@@ -49,6 +49,10 @@ pub(crate) struct ConfigRead {
     pub contents: String,
     /// The source recovered from corruption (a `.bak`, or defaults).
     pub recovered: bool,
+    /// The text is a stored config document's body. `false` for a file,
+    /// including the file a document source falls back to when the scope has
+    /// no document yet: that text keeps the file's corruption recovery.
+    pub from_document: bool,
 }
 
 /// A place a config's TOML text is read from and written to.
