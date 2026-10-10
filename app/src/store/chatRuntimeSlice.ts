@@ -2443,15 +2443,16 @@ const chatRuntimeSlice = createSlice({
         queue[queuedAt] = approval;
         return;
       }
-      // A different, still-waiting detached card must not be replaced: its
-      // gate stays parked until answered or expired.
-      if (current && current.requestId !== approval.requestId && current.detached) {
-        if (!current.resolution) {
-          if (approval.detached) {
-            state.queuedApprovalsByThread[threadId] = [...(queue ?? []), approval];
-            return;
-          }
-          // The parent turn's own approval goes first; it blocks that turn.
+      if (current && current.requestId !== approval.requestId && !current.resolution) {
+        // A detached request never displaces a card that is still waiting:
+        // both gates stay parked until answered or expired, so it queues.
+        if (approval.detached) {
+          state.queuedApprovalsByThread[threadId] = [...(queue ?? []), approval];
+          return;
+        }
+        // The parent turn's own approval goes first (it blocks that turn); a
+        // detached card it covers waits at the head of the queue.
+        if (current.detached) {
           state.queuedApprovalsByThread[threadId] = [current, ...(queue ?? [])];
         }
       }
