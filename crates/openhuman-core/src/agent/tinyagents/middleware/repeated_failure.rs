@@ -435,6 +435,7 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
                 "site_refused",
                 "policy",
                 "blocked_by_policy",
+                "task_failed",
                 "unsupported",
                 "missing_window",
                 "missing_app",
@@ -481,6 +482,7 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
                         | "unavailable"
                         | "service_refused"
                         | "blocked_by_policy"
+                        | "task_failed"
                 ) {
                     let instruction = match class {
                         "service_refused" => format!(
@@ -489,6 +491,10 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
                         ),
                         "blocked_by_policy" => format!(
                             "The `{tool_name}` call was blocked by policy and did not run ({}). Try one narrower, permitted alternative (a scoped path, a bounded command, a read instead of a write) or continue with other tools; do not resend it unchanged. Another refusal of this operation ends the turn.",
+                            first_error_line(&failure_text)
+                        ),
+                        "task_failed" => format!(
+                            "The `{tool_name}` task ended without finishing ({}). Follow its hint once: change the goal, inputs or starting point it names, or continue with other tools. Do not rerun it unchanged.",
                             first_error_line(&failure_text)
                         ),
                         "validation" => "The last call failed validation. Correct its schema or arguments once before trying again.".to_owned(),

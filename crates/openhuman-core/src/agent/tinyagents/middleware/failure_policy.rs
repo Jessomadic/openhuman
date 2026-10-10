@@ -197,6 +197,23 @@ pub(super) fn classified_recovery_policy(
     if is_command_exit_report(error) {
         return None;
     }
+    // A delegated task (a TinyComputer browser task) that ended without
+    // finishing. The call itself is not uncertain: the task reports what it
+    // did and what to change, and its prose (a page's `403`, a planner's
+    // `timed out`) is that report, not the call's verdict, so keyword
+    // sniffing must not turn it into a zero-retry credential or uncertain
+    // class. One changed attempt; a model gateway failing under the task
+    // (5xx, connection) is transient like any other.
+    if error
+        .trim_start()
+        .starts_with(crate::tools::status::TASK_FAILED_MARKER)
+    {
+        let class = crate::tools::status::classify(error, false).class;
+        return Some(match class {
+            Class::ServiceUnavailable | Class::ModelConnection => ("transient", 2),
+            _ => ("task_failed", 1),
+        });
+    }
     // A module the host could not load stays unloaded until the app restarts,
     // so retrying the same tool cannot help. Steer the model off it once
     // rather than halting the run on the first call or spending a transient
