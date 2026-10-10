@@ -166,7 +166,7 @@ impl ProfileRuntimeBuilder {
         // the core builds. Save the previous provider so we can restore it on failure.
         let previous_session_store = if let Some(provider) = session_store {
             log::debug!("[embed][profiles] installing the host's session store");
-            Some(openhuman_core::agent::session_store::install(provider))
+            openhuman_core::agent::session_store::install(provider)
         } else {
             None
         };
