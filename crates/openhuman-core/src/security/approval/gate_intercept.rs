@@ -501,73 +501,87 @@ impl ApprovalGate {
         // to time out and return `Deny` incorrectly. (CodeRabbit
         // review on PR #2149.)
         let (tx, rx) = oneshot::channel::<ApprovalDecision>();
-        {
-            let mut waiters = self.waiters.lock();
-            waiters.insert(request_id.clone(), tx);
-        }
-        // Record the thread → request mapping so an inbound chat reply on this
-        // thread can be routed to `approval_decide` (see web channel ingress).
-        if let Some(thread_key) = thread_key.as_ref() {
-            self.thread_to_request
-                .lock()
-                .insert(thread_key.clone(), request_id.clone());
-        }
-        // Record the full routing correlation (thread/client/tool_call_id) so
-        // whichever path resolves this request's decision — `decide()`, the
-        // TTL timeout, or a dropped decision channel, all below — can mirror
-        // it onto `ApprovalDecided` without re-deriving it from ambient
-        // task-locals that may no longer be in scope by then.
-        self.insert_request_route(
-            &request_id,
-            RequestRoute {
+        let register = || -> anyhow::Result<()> {
+            {
+                let mut waiters = self.waiters.lock();
+                waiters.insert(request_id.clone(), tx);
+            }
+            // Record the thread → request mapping so an inbound chat reply on this
+            // thread can be routed to `approval_decide` (see web channel ingress).
+            if let Some(thread_key) = thread_key.as_ref() {
+                self.thread_to_request
+                    .lock()
+                    .insert(thread_key.clone(), request_id.clone());
+            }
+            // Record the full routing correlation (thread/client/tool_call_id) so
+            // whichever path resolves this request's decision — `decide()`, the
+            // TTL timeout, or a dropped decision channel, all below — can mirror
+            // it onto `ApprovalDecided` without re-deriving it from ambient
+            // task-locals that may no longer be in scope by then.
+            self.insert_request_route(
+                &request_id,
+                RequestRoute {
+                    thread_id: chat_thread_id.clone(),
+                    client_id: chat_client_id.clone(),
+                    tool_call_id: tool_call_id.map(str::to_string),
+                    forced,
+                    agent_id: agent_id.clone(),
+                    thread_key: thread_key.clone(),
+                    detached,
+                },
+            );
+            store::insert_pending(&self.config, &pending, &self.session_id)?;
+
+            tracing::info!(
+                request_id = %request_id,
+                tool = tool_name,
+                thread_id = chat_thread_id.as_deref().unwrap_or("<none>"),
+                client_id = chat_client_id.as_deref().unwrap_or("<none>"),
+                agent_id = agent_id.as_deref().unwrap_or("<none>"),
+                "[approval::gate] publishing ApprovalRequested (surface fires only if thread_id+client_id are both set)"
+            );
+            BUS.publish(DomainEvent::ApprovalRequested {
+                request_id: request_id.clone(),
+                tool_name: tool_name.to_string(),
+                action_summary: action_summary.to_string(),
+                args_redacted,
                 thread_id: chat_thread_id.clone(),
                 client_id: chat_client_id.clone(),
                 tool_call_id: tool_call_id.map(str::to_string),
-                forced,
+                expires_at: expires_at.map(|t| t.to_rfc3339()),
                 agent_id: agent_id.clone(),
-                thread_key: thread_key.clone(),
-                detached,
-            },
-        );
-        if let Err(err) = store::insert_pending(&self.config, &pending, &self.session_id) {
-            self.evict_waiter(&request_id);
-            self.clear_thread(&thread_key, &request_id);
-            self.take_request_route(&request_id);
-            tracing::error!(
-                error = %err,
-                tool = tool_name,
-                "[approval::gate] failed to persist pending row — failing closed"
-            );
-            return (
-                GateOutcome::Deny {
-                    reason: format!(
-                        "{POLICY_DENIED_MARKER} Approval gate could not persist the request — \
-                         denying for safety: {err}"
-                    ),
-                },
-                None,
-            );
+            });
+            Ok(())
+        };
+        let scope = crate::core::runtime::CoreContext::current_host_overrides()
+            .and_then(|overrides| overrides.approval_scope());
+        let registered = match scope {
+            Some(scope) => scope.register(register),
+            None => Ok(register()),
+        };
+        match registered {
+            Err(resolution) => {
+                return (
+                    GateOutcome::Deny {
+                        reason: format!("{POLICY_DENIED_MARKER} Agent approval registration closed: {resolution}"),
+                    },
+                    None,
+                );
+            }
+            Ok(Err(err)) => {
+                self.evict_waiter(&request_id);
+                self.clear_thread(&thread_key, &request_id);
+                self.take_request_route(&request_id);
+                tracing::error!(error = %err, tool = tool_name, "[approval::gate] failed to persist pending row — failing closed");
+                return (
+                    GateOutcome::Deny {
+                        reason: format!("{POLICY_DENIED_MARKER} Approval gate could not persist the request — denying for safety: {err}"),
+                    },
+                    None,
+                );
+            }
+            Ok(Ok(())) => {}
         }
-
-        tracing::info!(
-            request_id = %request_id,
-            tool = tool_name,
-            thread_id = chat_thread_id.as_deref().unwrap_or("<none>"),
-            client_id = chat_client_id.as_deref().unwrap_or("<none>"),
-            agent_id = agent_id.as_deref().unwrap_or("<none>"),
-            "[approval::gate] publishing ApprovalRequested (surface fires only if thread_id+client_id are both set)"
-        );
-        BUS.publish(DomainEvent::ApprovalRequested {
-            request_id: request_id.clone(),
-            tool_name: tool_name.to_string(),
-            action_summary: action_summary.to_string(),
-            args_redacted,
-            thread_id: chat_thread_id.clone(),
-            client_id: chat_client_id.clone(),
-            tool_call_id: tool_call_id.map(str::to_string),
-            expires_at: expires_at.map(|t| t.to_rfc3339()),
-            agent_id: agent_id.clone(),
-        });
 
         // Flow-origin surface bridge (flow-approval-surface, PR3): a flow run
         // has no chat thread/client to route the generic `ApprovalRequested`

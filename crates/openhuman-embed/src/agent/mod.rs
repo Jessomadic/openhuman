@@ -167,6 +167,9 @@ impl AgentInner {
 
     /// Denies every approval this agent has parked, with `resolution`.
     pub(crate) fn deny_approvals(&self, resolution: &str) {
+        if let Some(scope) = self.ctx.host_overrides().and_then(|o| o.approval_scope()) {
+            scope.close(resolution);
+        }
         let Some(gate) = openhuman_core::security::approval::ApprovalGate::try_global() else {
             return;
         };

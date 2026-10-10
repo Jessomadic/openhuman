@@ -127,13 +127,43 @@ fn removing_an_agent_releases_everything_it_held() {
                     .and_then(|rows| rows.into_iter().next())
             })
             .await;
-            assert!(AgentContextRegistry::get("parker").is_some());
+            let old_context =
+                AgentContextRegistry::get("parker").expect("agent context registered");
 
             runtime
                 .remove_agent("parker")
                 .await
                 .expect("parker is removed");
             removed(turn.await.expect("turn task"), "parker");
+            assert!(parker.approvals().pending().unwrap().is_empty());
+            // A turn admitted before removal may reach the gate after the denial
+            // snapshot. Its retained context must refuse registration entirely.
+            let gate = openhuman_core::security::approval::ApprovalGate::try_global().unwrap();
+            let late = tokio::time::timeout(
+                Duration::from_millis(500),
+                openhuman_core::core::runtime::CoreContext::scope(
+                    old_context,
+                    openhuman_core::agent::turn_origin::with_origin(
+                        AgentTurnOrigin::WebChat {
+                            thread_id: "late-lifecycle-thread".into(),
+                            client_id: "late-lifecycle-client".into(),
+                            request_id: None,
+                        },
+                        gate.intercept_forced(
+                            "shell",
+                            "late removal registration",
+                            serde_json::json!({}),
+                        ),
+                    ),
+                ),
+            )
+            .await
+            .expect("a removed instance cannot park a late approval");
+            assert!(matches!(
+                late,
+                openhuman_core::security::approval::GateOutcome::Deny { reason }
+                    if reason.contains("agent_removed")
+            ));
             assert!(parker.approvals().pending().unwrap().is_empty());
             let decided = loop {
                 match tokio::time::timeout(Duration::from_secs(10), events.recv())

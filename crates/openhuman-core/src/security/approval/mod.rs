@@ -15,6 +15,8 @@
 
 pub mod gate;
 pub mod redact;
+mod registration_scope;
+pub use registration_scope::ApprovalScope;
 pub mod rpc;
 pub mod schemas;
 pub mod store;
