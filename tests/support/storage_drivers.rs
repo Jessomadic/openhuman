@@ -241,59 +241,68 @@ where
     }
 }
 
-/// Declares one test case per driver for `body`, each in a module named after
-/// its driver. Drivers the build lacks are not declared at all; MongoDB is
-/// declared when compiled in and skips itself without `TSD_MONGO_URL`.
+/// Declares one test case per driver for each `body`, in a module named after
+/// the driver (`memory::body`, `sqlite::body`, ...). Drivers the build lacks
+/// are not declared at all; MongoDB is declared when compiled in and skips
+/// itself without `TSD_MONGO_URL`.
 #[allow(unused_macros)]
 macro_rules! driver_cases {
-    (sync $body:ident) => {
-        driver_cases!(@each run_sync $body);
+    (sync $($body:ident),+ $(,)?) => {
+        driver_cases!(@each run_sync $($body),+);
     };
-    (async $body:ident) => {
-        driver_cases!(@each run_async $body);
+    (async $($body:ident),+ $(,)?) => {
+        driver_cases!(@each run_async $($body),+);
     };
-    (url $body:ident) => {
-        driver_cases!(@each run_url $body);
+    (url $($body:ident),+ $(,)?) => {
+        driver_cases!(@each run_url $($body),+);
     };
-    (@each $runner:ident $body:ident) => {
+    (@each $runner:ident $($body:ident),+) => {
         mod memory {
-            #[test]
-            fn $body() {
-                $crate::storage_drivers::$runner(
-                    $crate::storage_drivers::Driver::Memory,
-                    super::$body,
-                );
-            }
+            $(
+                #[test]
+                fn $body() {
+                    $crate::storage_drivers::$runner(
+                        $crate::storage_drivers::Driver::Memory,
+                        super::$body,
+                    );
+                }
+            )+
         }
         #[cfg(feature = "storage-sqlite")]
         mod sqlite {
-            #[test]
-            fn $body() {
-                $crate::storage_drivers::$runner(
-                    $crate::storage_drivers::Driver::Sqlite,
-                    super::$body,
-                );
-            }
+            $(
+                #[test]
+                fn $body() {
+                    $crate::storage_drivers::$runner(
+                        $crate::storage_drivers::Driver::Sqlite,
+                        super::$body,
+                    );
+                }
+            )+
         }
         #[cfg(feature = "storage-file")]
         mod file {
-            #[test]
-            fn $body() {
-                $crate::storage_drivers::$runner(
-                    $crate::storage_drivers::Driver::File,
-                    super::$body,
-                );
-            }
+            $(
+                #[test]
+                fn $body() {
+                    $crate::storage_drivers::$runner(
+                        $crate::storage_drivers::Driver::File,
+                        super::$body,
+                    );
+                }
+            )+
         }
         #[cfg(feature = "storage-mongodb")]
         mod mongodb {
-            #[test]
-            fn $body() {
-                $crate::storage_drivers::$runner(
-                    $crate::storage_drivers::Driver::Mongo,
-                    super::$body,
-                );
-            }
+            $(
+                #[test]
+                fn $body() {
+                    $crate::storage_drivers::$runner(
+                        $crate::storage_drivers::Driver::Mongo,
+                        super::$body,
+                    );
+                }
+            )+
         }
     };
 }

@@ -234,4 +234,7 @@ async fn no_acting_agent_falls_back_to_the_local_scope(case: Case) {
     assert!(AgentContextRegistry::deregister("agent-gamma", &agent));
 }
 
-driver_cases!(async two_agents_keep_cron_and_flows_apart);
+driver_cases!(
+    async two_agents_keep_cron_and_flows_apart,
+    no_acting_agent_falls_back_to_the_local_scope
+);
