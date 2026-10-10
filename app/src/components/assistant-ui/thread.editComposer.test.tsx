@@ -1,15 +1,15 @@
-import { AssistantRuntimeProvider, useExternalStoreRuntime } from '@assistant-ui/react';
+import { type AppendMessage, AssistantRuntimeProvider, useExternalStoreRuntime } from '@assistant-ui/react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Thread } from './thread';
 
-function Harness({ onEdit = vi.fn() }: { onEdit?: ReturnType<typeof vi.fn> }) {
+function Harness({ onEdit = vi.fn(async () => {}) }: { onEdit?: (message: AppendMessage) => Promise<void> }) {
   const runtime = useExternalStoreRuntime({
     messages: [{ id: 'user-1', role: 'user' as const, content: 'Original question' }],
     convertMessage: message => message,
     isRunning: false,
-    onNew: vi.fn(),
+    onNew: vi.fn(async () => {}),
     onEdit,
   });
   return (
@@ -21,7 +21,7 @@ function Harness({ onEdit = vi.fn() }: { onEdit?: ReturnType<typeof vi.fn> }) {
 
 describe('native message edit composer', () => {
   it('disables sending an empty edit and cancels without changing the transcript', async () => {
-    const onEdit = vi.fn();
+    const onEdit = vi.fn(async () => {});
     render(<Harness onEdit={onEdit} />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     const input = screen.getByRole('textbox', { name: 'Edit your message' });
@@ -37,7 +37,7 @@ describe('native message edit composer', () => {
   });
 
   it('sends the edit through the message composer rather than the thread composer', async () => {
-    const onEdit = vi.fn();
+    const onEdit = vi.fn(async () => {});
     render(<Harness onEdit={onEdit} />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Edit your message' }), {
