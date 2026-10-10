@@ -162,14 +162,31 @@ impl ProfileRuntimeBuilder {
                 openhuman_core::storage::install(backend);
             }
         }
-        if let Some(provider) = session_store {
+        // Install the session store only after other validations pass, but before
+        // the core builds. Save the previous provider so we can restore it on failure.
+        let previous_session_store = if let Some(provider) = session_store {
             log::debug!("[embed][profiles] installing the host's session store");
-            let _previous = openhuman_core::agent::session_store::install(provider);
-        }
-        let core = openhuman_core::core::runtime::saas::build(config, None, None)
-            .await
-            .map_err(|e| ProfileError::Boot(format!("{e:#}")))?;
+            Some(openhuman_core::agent::session_store::install(provider))
+        } else {
+            None
+        };
+
+        let core = match openhuman_core::core::runtime::saas::build(config, None, None).await {
+            Ok(core) => core,
+            Err(e) => {
+                // Boot failed; restore the previous session store if we installed one.
+                if let Some(previous) = previous_session_store {
+                    let _restored = openhuman_core::agent::session_store::install(previous);
+                }
+                return Err(ProfileError::Boot(format!("{e:#}")));
+            }
+        };
+
         let host = openhuman_core::profiles::host::host().ok_or_else(|| {
+            // Boot guard check failed; restore the previous session store if we installed one.
+            if let Some(previous) = previous_session_store {
+                let _restored = openhuman_core::agent::session_store::install(previous);
+            }
             ProfileError::Boot("the SaaS core installed no profile host".to_string())
         })?;
         log::info!(
