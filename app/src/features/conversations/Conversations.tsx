@@ -2206,7 +2206,9 @@ const Conversations = ({
     ) : null;
 
   const assistantComposerHeader = (
-    <div className="chat-composer-surfaces flex w-full min-w-0 flex-col empty:hidden">
+    <div
+      data-slot="composer-overlays"
+      className="chat-composer-surfaces pointer-events-none absolute inset-x-0 bottom-full z-20 flex max-h-[60dvh] min-w-0 flex-col items-start gap-2 overflow-y-auto pb-2 empty:hidden [&>*]:pointer-events-auto [&>*]:bg-background">
       {/* Turn gates first: a parked plan review and a drafted workflow both
           block progress until the user decides, so they sit above the transient
           attach error and the queued-followup strip. `ComposerHeader` is the
@@ -2264,7 +2266,7 @@ const Conversations = ({
   // the host's voice-chat control and the push-to-talk mic.
   const voiceComposer =
     composer === 'mic-cloud' ? (
-      <div className="flex flex-col gap-2" data-testid="voice-composer">
+      <div className="relative flex flex-col gap-2" data-testid="voice-composer">
         {assistantComposerHeader}
         {isSending && rustChat && (
           <div className="flex justify-start px-1">
