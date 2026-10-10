@@ -88,12 +88,23 @@ async fn scenario() {
     ));
     assert_eq!(agent.run("still usable").await.unwrap().reply, "finished");
 
+    // A whole-turn deadline drops inference and leaves the same agent reusable.
+    assert!(matches!(
+        blocked
+            .turn("deadline")
+            .timeout(Duration::from_millis(100))
+            .send()
+            .await,
+        Err(CoreError::DeadlineExceeded { .. })
+    ));
+    assert_eq!(agent.run("after deadline").await.unwrap().reply, "finished");
+
     // An externally dropped send future also acknowledges cancellation.
     let mut turn = blocked.turn("drop this inference request");
     let cancel = turn.cancellation_handle();
     let sent = tokio::spawn(turn.send());
     tokio::time::timeout(Duration::from_secs(5), async {
-        while common::chat_requests(&slow).await.len() < 2 {
+        while common::chat_requests(&slow).await.len() < 3 {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })

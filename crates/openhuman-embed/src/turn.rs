@@ -263,6 +263,7 @@ pub struct Turn {
     require_tool_call: bool,
     untrusted_input: bool,
     cancellation: Option<crate::TurnCancellation>,
+    timeout: Option<std::time::Duration>,
 }
 
 impl Turn {
@@ -283,6 +284,7 @@ impl Turn {
             require_tool_call: false,
             untrusted_input: false,
             cancellation: None,
+            timeout: None,
         }
     }
 
@@ -509,8 +511,11 @@ impl Turn {
     /// that is a build/composition fact, not a failure, and a host should hide
     /// the surface rather than report an error.
     pub async fn send(mut self) -> Result<TurnOutcome, CoreError> {
-        let Some(cancellation) = self.cancellation.take() else {
-            return self.send_inner().await;
+        let timeout = self.timeout.take();
+        let cancellation = match self.cancellation.take() {
+            Some(cancellation) => cancellation,
+            None if timeout.is_some() => crate::TurnCancellation::default(),
+            None => return self.send_inner().await,
         };
         let _guard = cancellation.enter();
         let outcome = cancellation
@@ -522,6 +527,12 @@ impl Turn {
                         log::debug!("[embed][agent] turn cancelled");
                         Err(CoreError::TurnCancelled { method: AGENT_CHAT })
                     }
+                    _ = async {
+                        match timeout {
+                            Some(duration) => tokio::time::sleep(duration).await,
+                            None => std::future::pending().await,
+                        }
+                    } => Err(CoreError::DeadlineExceeded { method: AGENT_CHAT }),
                     outcome = Box::pin(self.send_inner()) => outcome,
                 }
             })
@@ -530,6 +541,13 @@ impl Turn {
         // waiters. No new command can register after this point.
         cancellation.cleanup().wait().await;
         outcome
+    }
+
+    /// Bound the entire turn, including tool calls and answer repair.
+    /// Deadline errors are returned only after registered subprocess cleanup.
+    pub fn timeout(mut self, duration: std::time::Duration) -> Self {
+        self.timeout = Some(duration);
+        self
     }
 
     /// Obtain a cloneable handle that cancels only this turn and awaits its
@@ -675,7 +693,6 @@ impl Turn {
                 crate::error::CoreError::InsecureRoute { .. } => "insecure_route",
                 crate::error::CoreError::InvalidRoute { .. } => "invalid_route",
                 crate::error::CoreError::AgentRemoved { .. } => "agent_removed",
-                crate::error::CoreError::TurnCancelled { .. } => "turn_cancelled",
             };
             log::debug!("[embed][agent] turn_failed session={session_id} kind={tag}");
         });

@@ -282,11 +282,10 @@ pub struct CompletionUsage {
 pub struct CompletionResponse {
     /// The visible reply text (reasoning content excluded).
     pub text: String,
-    /// `text` parsed as JSON, when a JSON [`ResponseFormat`] was requested and
-    /// the reply parses. A [`ResponseFormat::JsonObject`] reply must parse to
-    /// an object, otherwise this is `None`. `None` with a JSON format means the
-    /// model returned something that is not the requested JSON — check
-    /// [`finish_reason`](Self::finish_reason) for `"length"` first.
+    /// Locally validated JSON when a JSON [`ResponseFormat`] was requested.
+    /// JSON objects and complete schemas are enforced before success; invalid
+    /// or truncated replies return [`CoreError::StructuredOutput`]. Text-mode
+    /// completions leave this field unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured: Option<Value>,
     /// Provider finish reason (`stop`, `length`, …).
