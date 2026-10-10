@@ -1,7 +1,7 @@
 /* global window, document, getComputedStyle */
 import assert from 'node:assert/strict';
-import { URL } from 'node:url';
 import { createRequire } from 'node:module';
+import { URL } from 'node:url';
 
 // Use the repository's shared browser element adapter, including in this CLI scenario.
 createRequire(new URL('../../../../package.json', import.meta.url))('tsx/cjs');
@@ -63,7 +63,10 @@ export default async function uiPolish({ page, mock, screenshot, log }) {
     const content = card.closest('[data-slot="aui_assistant-message-content"]');
     return {
       cardWidth: card.getBoundingClientRect().width,
-      contentWidth: content.getBoundingClientRect().width - parseFloat(getComputedStyle(content).paddingLeft) - parseFloat(getComputedStyle(content).paddingRight),
+      contentWidth:
+        content.getBoundingClientRect().width -
+        parseFloat(getComputedStyle(content).paddingLeft) -
+        parseFloat(getComputedStyle(content).paddingRight),
       maxWidth: getComputedStyle(card).maxWidth,
       inComposer: !!card.closest('form'),
       state: card.dataset.state,
