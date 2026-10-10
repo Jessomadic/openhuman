@@ -102,15 +102,9 @@ async fn a_takeover_fences_the_old_holders_writes_before_its_heartbeat_runs() {
         Some(FenceError::Superseded { .. })
     ));
     assert!(state.is_fenced());
-    // ... so new work is refused under its context, even before the
-    // heartbeat closes it.
-    let refused_turn = CoreContext::scope(Arc::clone(state.context()), async {
-        crate::profiles::host::ensure_hosted()
-    })
-    .await;
-    // `ensure_hosted` reads the process host, which tests do not install;
-    // the latch it consults is the one asserted above.
-    let _ = refused_turn;
+    // ... so new work is refused for it (`ensure_hosted` reads this latch)
+    // even before the heartbeat closes it.
+    assert!(state.lease_fence().check_local(now_ms()).is_err());
 
     // The heartbeat closes it; the latched fence stays registered (refusing
     // writes) while the profile's state is still held.
