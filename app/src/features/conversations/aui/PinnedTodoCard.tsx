@@ -1,6 +1,6 @@
 /**
- * The thread's live todo list pinned above the composer, as OpenClaw's
- * collapsible session progress card (`TodoProgressCard`).
+ * The thread's live steps pinned above the composer using assistant-ui's
+ * AgentPlan, in a disclosure that remembers the user's choice.
  *
  * Open by default while a step is in progress and collapsed otherwise, until
  * the user opens or closes it by hand: that choice is remembered per thread in
@@ -12,8 +12,12 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   type TodoItem,
   todoProgress,
-  TodoProgressCard,
 } from '../../../components/assistant-ui/elements/todo-list';
+import { AgentPlan } from '../../../components/assistant-ui/elements/agent-plan';
+import { Button } from '../../../components/assistant-ui/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../../../components/assistant-ui/ui/collapsible';
+import { ChevronRightIcon, ListChecksIcon } from 'lucide-react';
+import { cn } from '../../../components/assistant-ui/lib/utils';
 import { useT } from '../../../lib/i18n/I18nContext';
 import { userScopedStorage } from '../../../store/userScopedStorage';
 
@@ -91,19 +95,33 @@ export function PinnedTodoCard({
   const { t } = useT();
   const progress = todoProgress(items);
   const [open, setOpen] = useTodoCardOpen(threadId, progress.anyActive);
+  const countLabel = t('chat.todos.ofTotal').replace('{done}', String(progress.done)).replace('{total}', String(progress.total));
   return (
-    <TodoProgressCard
-      data-testid="todo-checklist"
-      items={items}
-      open={open}
-      onOpenChange={setOpen}
-      title={t('conversations.todos.title')}
-      completedLabel={t('chat.todos.completed')}
-      countLabel={t('chat.todos.ofTotal')
-        .replace('{done}', String(progress.done))
-        .replace('{total}', String(progress.total))}
-      className={className}
-    />
+    <Collapsible open={open} onOpenChange={setOpen} asChild>
+      <div data-testid="todo-checklist" data-open={open ? 'true' : 'false'} data-todo-completed={progress.done} data-todo-total={progress.total} className={cn('bg-background flex w-full flex-col gap-1 rounded-lg px-2 py-1', className)}>
+        <CollapsibleTrigger asChild>
+          <Button variant="ghost" size="sm" aria-label={t('conversations.runMode.plan')} className="h-auto w-full justify-start gap-2 px-0 py-1 text-xs">
+            <ListChecksIcon aria-hidden className="text-muted-foreground size-3.5" />
+            <span className="flex-1 text-start">{t('conversations.runMode.plan')}</span>
+            <span className="text-muted-foreground font-mono text-[11px]">{progress.allDone ? t('chat.todos.completed') : countLabel}</span>
+            <ChevronRightIcon aria-hidden className={cn('size-3 transition-transform', open && 'rotate-90')} />
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent forceMount asChild>
+          <div hidden={!open} className="max-h-[min(160px,24dvh)] overflow-y-auto pb-1">
+            <AgentPlan
+              steps={items.map(item => item.reason && item.status === 'failed' ? `${item.text} — ${item.reason}` : item.text)}
+              statuses={items.map(item => item.status)}
+              activeIndex={progress.done}
+              compact
+              showHeader={false}
+              stepTestId="todo-item"
+              className="max-w-none"
+            />
+          </div>
+        </CollapsibleContent>
+      </div>
+    </Collapsible>
   );
 }
 

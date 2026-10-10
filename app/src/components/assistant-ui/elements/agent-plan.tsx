@@ -14,7 +14,7 @@
  *   string via `useT()`.
  */
 import { cn } from '@/components/assistant-ui/lib/utils';
-import { CheckIcon, Loader2Icon } from 'lucide-react';
+import { CheckIcon, Loader2Icon, XIcon } from 'lucide-react';
 import type { ComponentProps } from 'react';
 
 import { pct, progressOf } from '../utils/range';
@@ -25,43 +25,58 @@ export function AgentPlan({
   activeIndex,
   title = 'Plan',
   className,
+  statuses,
+  compact = false,
+  showHeader = true,
+  countLabel,
+  stepTestId,
   ...props
 }: Omit<ComponentProps<'div'>, 'children' | 'steps' | 'activeIndex' | 'title'> & {
   steps: readonly string[];
   activeIndex: number;
   title?: string;
+  /** Exact harness states when progress is not strictly sequential. */
+  statuses?: readonly ('pending' | 'active' | 'done' | 'failed')[];
+  compact?: boolean;
+  showHeader?: boolean;
+  countLabel?: string;
+  stepTestId?: string;
 }) {
   const total = steps.length;
-  const completed = progressOf(activeIndex, total);
+  const completed = statuses ? statuses.filter(status => status === 'done').length : progressOf(activeIndex, total);
   const allDone = completed >= total;
   const progress = pct(completed, total);
 
   return (
     <div
       data-slot="agent-plan"
-      className={cn('flex w-full max-w-sm flex-col gap-3', className)}
+      className={cn('flex w-full max-w-sm flex-col', compact ? 'gap-1.5' : 'gap-3', className)}
       {...props}>
-      <div className="flex items-center justify-between">
+      {showHeader && <div className="flex items-center justify-between">
         <span className="text-[13.5px] font-medium">{title}</span>
         <span className={cn(mono, 'text-foreground/35 tabular-nums')}>
-          {completed} of {total}
+          {countLabel ?? `${completed} of ${total}`}
         </span>
-      </div>
+      </div>}
       <div className="bg-foreground/[0.06] h-[3px] w-full overflow-hidden rounded-full">
         <span
           className="bg-foreground/80 block h-full rounded-full transition-[width] duration-500"
           style={{ width: `${progress}%` }}
         />
       </div>
-      <ul className="flex flex-col gap-2.5">
+      <ul className={cn('flex flex-col', compact ? 'gap-1' : 'gap-2.5')}>
         {steps.map((step, i) => {
-          const done = allDone || i < completed;
-          const active = !allDone && i === completed;
+          const status = statuses?.[i] ?? (allDone || i < completed ? 'done' : i === completed ? 'active' : 'pending');
+          const done = status === 'done';
+          const active = status === 'active';
+          const failed = status === 'failed';
           return (
-            <li key={step} className="flex items-center gap-2.5 text-[13.5px]">
+            <li key={`${i}:${step}`} data-testid={stepTestId} data-status={status} className={cn('flex items-start gap-2.5', compact ? 'text-xs leading-4' : 'text-[13.5px]')}>
               <span className="flex size-4 shrink-0 items-center justify-center">
                 {done ? (
                   <CheckIcon className="text-foreground/35 size-3.5" />
+                ) : failed ? (
+                  <XIcon aria-hidden className="text-destructive size-3.5" />
                 ) : active ? (
                   <Loader2Icon className="text-foreground/90 size-3.5 animate-spin motion-reduce:animate-none" />
                 ) : (
@@ -72,7 +87,8 @@ export function AgentPlan({
                 className={cn(
                   done && 'text-foreground/40',
                   active && 'text-foreground/90',
-                  !done && !active && 'text-foreground/35'
+                  failed && 'text-destructive',
+                  !done && !active && !failed && 'text-foreground/35'
                 )}>
                 {step}
               </span>
