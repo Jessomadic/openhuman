@@ -81,6 +81,7 @@ const STORAGE_E2E_TARGETS = [
   "storage_scope_e2e",
   "storage_agent_scopes_e2e",
   "storage_delegation_e2e",
+  "storage_default_import_e2e",
   "cli_storage_url_e2e",
 ];
 const STORAGE_LIB_FILTERS = [
