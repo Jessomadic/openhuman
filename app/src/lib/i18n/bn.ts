@@ -1374,7 +1374,7 @@ const messages: TranslationMap = {
   'mic.startRecording': 'রেকর্ডিং শুরু করুন',
   'mic.deviceSelector': 'মাইক্রোফোন ডিভাইস',
   'mic.tapToSendCountdown': 'পাঠাতে ট্যাপ করুন ({seconds}স)',
-  'token.costTitle': 'এই সেশনের আনুমানিক খরচ (USD)',
+  'token.costTitle': 'খরচ',
   'token.popCacheHit': 'ক্যাশ হিট',
   'modal.dontShowAgain': 'একই ধরনের পরামর্শ আর দেখাবেন না',
   'bootCheck.invalidUrl': 'অনুগ্রহ করে একটি ঠিকানা লিখুন।',

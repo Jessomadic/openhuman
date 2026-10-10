@@ -5,26 +5,16 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { type ChatSendError, chatSendError } from '../../chat/chatSendError';
 import { checkPromptInjection, promptGuardMessage } from '../../chat/promptInjectionGuard';
 import { trackAnalyticsEvent } from '../../components/analytics';
-import { AgentStatus } from '../../components/assistant-ui/elements/agent-status';
 import ChatFilesChip from '../../components/chat/ChatFilesChip';
 import WorkflowProposalCard from '../../components/chat/WorkflowProposalCard';
 import { ConfirmationModal } from '../../components/intelligence/ConfirmationModal';
 import { SidebarContent } from '../../components/layout/shell/SidebarSlot';
 import { ArtifactCardAdapter } from '../../features/conversations/aui/ArtifactCardAdapter';
 import { ContextUsage } from '../../features/conversations/aui/ContextUsage';
-import { PinnedTodoCard } from '../../features/conversations/aui/PinnedTodoCard';
 import { PlanReviewCardCore } from '../../features/conversations/aui/PlanReviewPart';
-import { toAuiTodoItems } from '../../features/conversations/aui/TodoListPart';
 import { useRunMode } from '../../features/conversations/aui/useRunMode';
-import {
-  formatTokens,
-  useLoadThreadGoal,
-  useThreadGoal,
-} from '../../features/conversations/aui/useThreadGoal';
-import {
-  useLoadThreadTodos,
-  useThreadTodos,
-} from '../../features/conversations/aui/useThreadTodos';
+import { useLoadThreadGoal } from '../../features/conversations/aui/useThreadGoal';
+import { useLoadThreadTodos } from '../../features/conversations/aui/useThreadTodos';
 import { AssistantUiChat } from '../../features/conversations/components/AssistantUiChat';
 import { TranscriptOverlays } from '../../features/conversations/components/aui/TranscriptOverlays';
 import {
@@ -458,10 +448,6 @@ const Conversations = ({
   const rustChat = useRustChat();
   // Inline thread-title rename in the sidebar thread list — keyed by the
   // thread id being edited (null = none) so any row can rename in place.
-  const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
-  const [editTitleValue, setEditTitleValue] = useState('');
-  const editTitleInputRef = useRef<HTMLInputElement>(null);
-  const ignoreNextTitleBlurRef = useRef(false);
 
   const {
     isAtLimit,
@@ -757,45 +743,6 @@ const Conversations = ({
       debug('[chat] create thread failed: %O', error);
       setSendError(chatSendError('create_thread_failed', t('chat.createThreadFailed')));
     }
-  };
-
-  const handleStartEditTitle = (threadId: string) => {
-    const thr = threads.find(t => t.id === threadId);
-    debug('[chat] thread rename: start thread=%s', threadId);
-    setEditTitleValue(thr?.title ?? '');
-    ignoreNextTitleBlurRef.current = true;
-    setEditingThreadId(threadId);
-    const scheduleSelect = window.requestAnimationFrame ?? window.setTimeout;
-    scheduleSelect(() => {
-      editTitleInputRef.current?.select();
-      ignoreNextTitleBlurRef.current = false;
-    });
-  };
-
-  const handleCommitTitle = (threadId: string) => {
-    const trimmed = editTitleValue.trim();
-    setEditingThreadId(null);
-    // Title length only — never log the title text itself (may carry PII).
-    if (!threadId || !trimmed) {
-      debug('[chat] thread rename: commit skipped thread=%s empty=%s', threadId, !trimmed);
-      return;
-    }
-    const currentTitle = threads.find(t => t.id === threadId)?.title?.trim();
-    if (trimmed === currentTitle) {
-      debug('[chat] thread rename: commit skipped thread=%s (unchanged)', threadId);
-      return;
-    }
-    debug('[chat] thread rename: commit thread=%s len=%d', threadId, trimmed.length);
-    void dispatch(updateThreadTitle({ threadId, title: trimmed }))
-      .unwrap()
-      .then(() => debug('[chat] thread rename: committed thread=%s', threadId))
-      .catch(err =>
-        debug(
-          '[chat] thread rename: failed thread=%s err=%s',
-          threadId,
-          err instanceof Error ? err.message : String(err)
-        )
-      );
   };
 
   // Seed the composer footer with the selected thread's persisted token/cost
@@ -1821,12 +1768,12 @@ const Conversations = ({
   // and its goal — driven by the dedicated `thread_todos_changed` /
   // `thread_goal_updated` core events (`aui/useThreadTodos.ts` /
   // `aui/useThreadGoal.ts`), primed on thread open by the RPC pair below.
-  // Rendered above the composer next to the gate cards so a five-step task
-  // shows as a checklist ticking off while the agent works through it.
-  useLoadThreadTodos(selectedThreadId ?? null);
-  useLoadThreadGoal(selectedThreadId ?? null);
-  const liveTodos = useThreadTodos(selectedThreadId ?? null);
-  const threadGoal = useThreadGoal(selectedThreadId ?? null);
+  // Progress cards are presented in the transcript by TurnTaskProvider.
+  const harnessStateRevision = selectedThreadId
+    ? (inferenceTurnLifecycleByThread[selectedThreadId] ?? 'idle')
+    : '';
+  useLoadThreadTodos(selectedThreadId ?? null, harnessStateRevision);
+  useLoadThreadGoal(selectedThreadId ?? null, harnessStateRevision);
   // A plan the orchestrator parked for interactive review (request_plan_review
   // gate). When present, the PlanReviewCard renders above the composer and
   // resolves the parked turn.
@@ -1940,7 +1887,7 @@ const Conversations = ({
     <ThreadList
       threads={sortedThreads}
       selectedThreadId={selectedThreadId ?? null}
-      onCreateThread={() => void handleCreateNewThread()}
+      onCreateThread={() => handleCreateNewThread()}
       onSelectThread={id => {
         threadSelectionIntentRef.current += 1;
         dispatch(setSelectedThread(id));
@@ -1974,22 +1921,8 @@ const Conversations = ({
           onCancel: () => {},
         })
       }
-      editingThreadId={editingThreadId}
-      editTitleValue={editTitleValue}
-      editTitleInputRef={editTitleInputRef}
-      onEditTitleValueChange={setEditTitleValue}
-      onStartEditTitle={handleStartEditTitle}
-      onCommitTitle={handleCommitTitle}
-      onCancelEditTitle={() => {
-        ignoreNextTitleBlurRef.current = true;
-        setEditingThreadId(null);
-      }}
-      onBlurTitle={id => {
-        if (ignoreNextTitleBlurRef.current) {
-          ignoreNextTitleBlurRef.current = false;
-          return;
-        }
-        handleCommitTitle(id);
+      onRenameThread={async (threadId, title) => {
+        await dispatch(updateThreadTitle({ threadId, title })).unwrap();
       }}
     />
   );
@@ -2000,40 +1933,6 @@ const Conversations = ({
   // doubles up.
   const agentGateCards = (
     <>
-      {/* Harness work state: the thread goal (as a compact `AgentStatus`
-          pill) and the agent's live todo list. Both are read-only progress
-          the agent wrote via its tools; they sit above the gate cards so a
-          parked decision is always the closest thing to the composer. */}
-      {selectedThreadId && threadGoal && (
-        <AgentStatus
-          data-testid="goal-banner"
-          data-goal-status={threadGoal.status}
-          state={
-            threadGoal.status === 'complete'
-              ? 'done'
-              : threadGoal.status === 'active'
-                ? 'working'
-                : 'waiting'
-          }
-          label={threadGoal.objective}
-          trailing={
-            <span data-testid="goal-objective" className="text-[10px] tabular-nums">
-              {threadGoal.token_budget !== undefined
-                ? `${formatTokens(threadGoal.tokens_used)} / ${formatTokens(threadGoal.token_budget)}`
-                : formatTokens(threadGoal.tokens_used)}
-            </span>
-          }
-          className="mb-2 self-start"
-        />
-      )}
-      {selectedThreadId && liveTodos && liveTodos.length > 0 && (
-        <PinnedTodoCard
-          threadId={selectedThreadId}
-          items={toAuiTodoItems(liveTodos)}
-          className="mb-2"
-        />
-      )}
-
       {/* Plan-mode review: the orchestrator parked the live turn on a
           thread-scoped plan (request_plan_review gate). Surface it for the
           user to Approve / Reject / send feedback on before anything
@@ -2263,7 +2162,9 @@ const Conversations = ({
     ) : null;
 
   const assistantComposerHeader = (
-    <>
+    <div
+      data-slot="composer-overlays"
+      className="chat-composer-surfaces pointer-events-none absolute inset-x-0 bottom-full z-20 flex max-h-[60dvh] min-w-0 flex-col items-start gap-2 overflow-y-auto pb-2 empty:hidden [&>*]:pointer-events-auto [&>*]:bg-background">
       {/* Turn gates first: a parked plan review and a drafted workflow both
           block progress until the user decides, so they sit above the transient
           attach error and the queued-followup strip. `ComposerHeader` is the
@@ -2298,7 +2199,7 @@ const Conversations = ({
           input; renders only while the thread has no messages, since the
           core fixes the folder at the first send. */}
       <ThreadWorkspaceChip threadId={selectedThreadId ?? null} />
-    </>
+    </div>
   );
 
   // Left-hand controls in the assistant-ui composer toolbar.
@@ -2321,7 +2222,7 @@ const Conversations = ({
   // the host's voice-chat control and the push-to-talk mic.
   const voiceComposer =
     composer === 'mic-cloud' ? (
-      <div className="flex flex-col gap-2" data-testid="voice-composer">
+      <div className="relative flex flex-col gap-2" data-testid="voice-composer">
         {assistantComposerHeader}
         {isSending && rustChat && (
           <div className="flex justify-start px-1">

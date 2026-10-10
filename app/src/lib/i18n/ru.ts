@@ -1389,7 +1389,7 @@ const messages: TranslationMap = {
   'mic.startRecording': 'Начать запись',
   'mic.deviceSelector': 'Микрофонное устройство',
   'mic.tapToSendCountdown': 'Нажми для отправки ({seconds}с)',
-  'token.costTitle': 'Оценочная стоимость этой сессии (USD)',
+  'token.costTitle': 'Стоимость',
   'token.popCacheHit': 'Попадание в кэш',
   'modal.dontShowAgain': 'Не показывать похожие предложения',
   'bootCheck.invalidUrl': 'Введите адрес.',

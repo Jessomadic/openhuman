@@ -1380,7 +1380,7 @@ const messages: TranslationMap = {
   'mic.startRecording': 'रिकॉर्डिंग शुरू करें',
   'mic.deviceSelector': 'माइक्रोफोन डिवाइस',
   'mic.tapToSendCountdown': 'भेजने के लिए टैप करें ({seconds}स)',
-  'token.costTitle': 'इस सत्र की अनुमानित लागत (USD)',
+  'token.costTitle': 'लागत',
   'token.popCacheHit': 'कैश हिट',
   'modal.dontShowAgain': 'ऐसे सुझाव फिर न दिखाएं',
   'bootCheck.invalidUrl': 'कृपया एक पता दर्ज करें।',

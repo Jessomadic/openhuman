@@ -1405,7 +1405,7 @@ const messages: TranslationMap = {
   'mic.startRecording': 'Kaydı başlat',
   'mic.deviceSelector': 'Mikrofon cihazı',
   'mic.tapToSendCountdown': 'Göndermek için dokunun ({seconds} sn)',
-  'token.costTitle': 'Bu oturumun tahmini maliyeti (USD)',
+  'token.costTitle': 'Maliyet',
   'token.popCacheHit': 'Önbellek isabeti',
   'modal.dontShowAgain': 'Benzer önerileri gösterme',
   'bootCheck.invalidUrl': 'Lütfen bir adres girin.',

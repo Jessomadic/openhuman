@@ -1389,7 +1389,7 @@ const messages: TranslationMap = {
   'mic.startRecording': 'Mulai merekam',
   'mic.deviceSelector': 'Perangkat mikrofon',
   'mic.tapToSendCountdown': 'Ketuk untuk mengirim ({seconds}d)',
-  'token.costTitle': 'Perkiraan biaya sesi ini (USD)',
+  'token.costTitle': 'Biaya',
   'token.popCacheHit': 'Cache terkena',
   'modal.dontShowAgain': 'Jangan tampilkan saran serupa',
   'bootCheck.invalidUrl': 'Masukkan alamat.',

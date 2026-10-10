@@ -1352,7 +1352,7 @@ const messages: TranslationMap = {
   'mic.startRecording': 'بدء التسجيل',
   'mic.deviceSelector': 'جهاز الميكروفون',
   'mic.tapToSendCountdown': 'انقر للإرسال ({seconds} ث)',
-  'token.costTitle': 'التكلفة التقديرية لهذه الجلسة (دولار أمريكي)',
+  'token.costTitle': 'التكلفة',
   'token.popCacheHit': 'إصابة ذاكرة التخزين المؤقت',
   'modal.dontShowAgain': 'لا تظهر اقتراحات مماثلة',
   'bootCheck.invalidUrl': 'يرجى إدخال عنوان.',

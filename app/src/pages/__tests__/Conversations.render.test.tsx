@@ -9,6 +9,7 @@
  */
 import { combineReducers, configureStore } from '@reduxjs/toolkit';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -482,9 +483,8 @@ describe('Conversations — smoke render (#1123 welcome-lock removal)', () => {
     });
 
     const betaRow = await screen.findByRole('button', { name: /Thread Beta/ });
-    await act(async () => {
-      fireEvent.keyDown(betaRow, { key: 'Enter' });
-    });
+    betaRow.focus();
+    await userEvent.keyboard('{Enter}');
     await waitFor(() => {
       expect(screen.getByTestId('route-path')).toHaveTextContent('/chat/t-2');
     });
@@ -777,11 +777,8 @@ describe('Conversations — smoke render (#1123 welcome-lock removal)', () => {
       expect(screen.getAllByText('Deletable Thread').length).toBeGreaterThan(0);
     });
 
-    // The delete button has title="Delete thread"
-    const deleteBtn = screen.getByTitle('Delete thread');
-    await act(async () => {
-      fireEvent.click(deleteBtn);
-    });
+    await userEvent.click(screen.getByRole('button', { name: 'More options' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
 
     // The modal should now be open — "Are you sure you want to delete" text
     // This verifies lines 981, 982, 985 inside the delete onClick callback executed
@@ -797,10 +794,8 @@ describe('Conversations — smoke render (#1123 welcome-lock removal)', () => {
     });
     await openSidebar();
 
-    const deleteBtn = await screen.findByTitle('Delete thread');
-    await act(async () => {
-      fireEvent.click(deleteBtn);
-    });
+    await userEvent.click(await screen.findByRole('button', { name: 'More options' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     });

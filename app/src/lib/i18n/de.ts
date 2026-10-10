@@ -1417,7 +1417,7 @@ const messages: TranslationMap = {
   'mic.startRecording': 'Starte die Aufnahme',
   'mic.deviceSelector': 'Mikrofongerät',
   'mic.tapToSendCountdown': 'Zum Senden tippen ({seconds}s)',
-  'token.costTitle': 'Geschätzte Kosten dieser Sitzung (USD)',
+  'token.costTitle': 'Kosten',
   'token.popCacheHit': 'Cache-Treffer',
   'modal.dontShowAgain': 'Ähnliche Vorschläge nicht anzeigen',
   'bootCheck.invalidUrl': 'Bitte gib eine Adresse ein.',

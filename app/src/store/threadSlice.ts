@@ -5,6 +5,7 @@ import { threadApi } from '../services/api/threadApi';
 import { isThreadNotFoundCoreRpcError } from '../services/coreRpcClient';
 import type { Thread, ThreadMessage } from '../types/thread';
 import { IS_DEV } from '../utils/config';
+import { jsonValuesEqual } from '../utils/jsonValuesEqual';
 import { setWorkflowProposalForThread } from './chatRuntimeSlice';
 import { resetUserScopedState } from './resetActions';
 
@@ -92,6 +93,7 @@ function appendMessageToCache(
 ) {
   const upsert = (list: ThreadMessage[]) => {
     const present = list.some(e => e.id === message.id);
+    if (present && list.some(e => e.id === message.id && jsonValuesEqual(e, message))) return list;
     if (replaceExisting || present) {
       return list.map(e => (e.id === message.id ? message : e));
     }
@@ -642,6 +644,11 @@ const threadSlice = createSlice({
         state.isLoadingMessages = false;
         const { threadId, messages: fetched } = action.payload;
         const existing = state.messagesByThreadId[threadId] ?? [];
+        const existingById = new Map(existing.map(message => [message.id, message]));
+        const stableFetched = fetched.map(message => {
+          const before = existingById.get(message.id);
+          return before && jsonValuesEqual(before, message) ? before : message;
+        });
         const fetchedIds = new Set(fetched.map(m => m.id));
         // A message present locally but missing from this fetch already
         // persisted server-side (cache entries only ever land via a
@@ -655,11 +662,18 @@ const threadSlice = createSlice({
         const localOnly = existing.filter(m => !fetchedIds.has(m.id));
         const messages =
           localOnly.length > 0
-            ? [...fetched, ...localOnly].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-            : fetched;
-        state.messagesByThreadId[threadId] = messages;
+            ? [...stableFetched, ...localOnly].sort(
+                (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)
+              )
+            : stableFetched;
+        const stableMessages =
+          messages.length === existing.length &&
+          messages.every((message, index) => message === existing[index])
+            ? existing
+            : messages;
+        state.messagesByThreadId[threadId] = stableMessages;
         if (threadId === state.selectedThreadId) {
-          state.messages = messages;
+          state.messages = stableMessages;
         }
       })
       .addCase(loadThreadMessages.rejected, (state, action) => {

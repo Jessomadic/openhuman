@@ -1403,7 +1403,7 @@ const messages: TranslationMap = {
   'mic.startRecording': 'Avvia registrazione',
   'mic.deviceSelector': 'Dispositivo microfono',
   'mic.tapToSendCountdown': 'Tocca per inviare ({seconds}s)',
-  'token.costTitle': 'Costo stimato di questa sessione (USD)',
+  'token.costTitle': 'Costo',
   'token.popCacheHit': 'Hit della cache',
   'modal.dontShowAgain': 'Non mostrare suggerimenti simili',
   'bootCheck.invalidUrl': 'Inserisci un indirizzo.',
