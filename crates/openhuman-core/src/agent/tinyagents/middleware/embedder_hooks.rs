@@ -41,7 +41,7 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
 
     async fn before_tool(
         &self,
-        _ctx: &mut RunContext<crate::agent::tinyagents::host::OpenHumanRunContext>,
+        ctx: &mut RunContext<crate::agent::tinyagents::host::OpenHumanRunContext>,
         _state: &(),
         call: &mut TaToolCall,
     ) -> TaResult<()> {
@@ -54,8 +54,32 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
             duration_ms: None,
             output: None,
             error: None,
-            session_id: None,
-            agent_id: None,
+            session_id: ctx
+                .data
+                .thread_id
+                .clone()
+                .or_else(|| ctx.data.parent.as_ref().map(|p| p.session_id.clone())),
+            agent_id: ctx
+                .data
+                .parent
+                .as_ref()
+                .map(|p| p.agent_definition_id.clone()),
+            cwd: ctx
+                .data
+                .workspace
+                .as_ref()
+                .map(|w| w.root.clone())
+                .or_else(|| {
+                    ctx.data
+                        .parent
+                        .as_ref()
+                        .and_then(|p| p.workspace_descriptor.as_ref().map(|w| w.root.clone()))
+                })
+                .or_else(|| {
+                    crate::core::runtime::CoreContext::with_current_embedder_config(|config| {
+                        config.action_dir.clone()
+                    })
+                }),
         };
         for hook in &self.hooks {
             match hook.before_tool_decision(&context).await {
@@ -120,7 +144,7 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
     /// arguments through.
     async fn check_nested_tool(
         &self,
-        _ctx: &RunContext<crate::agent::tinyagents::host::OpenHumanRunContext>,
+        ctx: &RunContext<crate::agent::tinyagents::host::OpenHumanRunContext>,
         _state: &(),
         call: &TaToolCall,
     ) -> TaResult<()> {
@@ -133,8 +157,32 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
             duration_ms: None,
             output: None,
             error: None,
-            session_id: None,
-            agent_id: None,
+            session_id: ctx
+                .data
+                .thread_id
+                .clone()
+                .or_else(|| ctx.data.parent.as_ref().map(|p| p.session_id.clone())),
+            agent_id: ctx
+                .data
+                .parent
+                .as_ref()
+                .map(|p| p.agent_definition_id.clone()),
+            cwd: ctx
+                .data
+                .workspace
+                .as_ref()
+                .map(|w| w.root.clone())
+                .or_else(|| {
+                    ctx.data
+                        .parent
+                        .as_ref()
+                        .and_then(|p| p.workspace_descriptor.as_ref().map(|w| w.root.clone()))
+                })
+                .or_else(|| {
+                    crate::core::runtime::CoreContext::with_current_embedder_config(|config| {
+                        config.action_dir.clone()
+                    })
+                }),
         };
         for hook in &self.hooks {
             let refusal = match hook.before_tool_decision(&context).await {
@@ -165,7 +213,7 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
 
     async fn after_tool(
         &self,
-        _ctx: &mut RunContext<crate::agent::tinyagents::host::OpenHumanRunContext>,
+        ctx: &mut RunContext<crate::agent::tinyagents::host::OpenHumanRunContext>,
         _state: &(),
         invocation: &ToolInvocationIdentity,
         result: &mut TaToolResult,
@@ -191,8 +239,32 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
             error: result
                 .is_error
                 .then(|| crate::agent::tinyagents::middleware::tool_result_text(result)),
-            session_id: None,
-            agent_id: None,
+            session_id: ctx
+                .data
+                .thread_id
+                .clone()
+                .or_else(|| ctx.data.parent.as_ref().map(|p| p.session_id.clone())),
+            agent_id: ctx
+                .data
+                .parent
+                .as_ref()
+                .map(|p| p.agent_definition_id.clone()),
+            cwd: ctx
+                .data
+                .workspace
+                .as_ref()
+                .map(|w| w.root.clone())
+                .or_else(|| {
+                    ctx.data
+                        .parent
+                        .as_ref()
+                        .and_then(|p| p.workspace_descriptor.as_ref().map(|w| w.root.clone()))
+                })
+                .or_else(|| {
+                    crate::core::runtime::CoreContext::with_current_embedder_config(|config| {
+                        config.action_dir.clone()
+                    })
+                }),
         };
         for hook in &self.hooks {
             // Text a hook returns is appended to the result the model reads —

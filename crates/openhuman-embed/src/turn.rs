@@ -71,6 +71,8 @@ pub struct Route {
     pub base_url: String,
     /// The bearer presented to `base_url`.
     pub api_key: String,
+    /// Headers sent only to this route, never persisted or copied to other providers.
+    pub headers: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for Route {
@@ -82,6 +84,7 @@ impl std::fmt::Debug for Route {
         f.debug_struct("Route")
             .field("base_url", &sanitize_url_for_display(&self.base_url))
             .field("api_key", &"<redacted>")
+            .field("headers", &self.headers.len())
             .finish()
     }
 }
@@ -139,7 +142,14 @@ impl Route {
         Self {
             base_url: base_url.into(),
             api_key: api_key.into(),
+            headers: Vec::new(),
         }
+    }
+
+    /// Add a gateway attribution header to this endpoint's requests only.
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
     }
 }
 
@@ -173,6 +183,9 @@ pub struct TurnRequest {
     /// Bearer half of the per-call route. Paired with `inference_url`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Custom headers for the per-call route. Ignored when no route is supplied.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inference_headers: Vec<(String, String)>,
     /// The agent definition the turn runs as. Set by
     /// [`Agent::turn`](crate::Agent::turn); absent runs the orchestrator.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -190,6 +203,7 @@ impl TurnRequest {
             cwd: None,
             inference_url: None,
             api_key: None,
+            inference_headers: Vec::new(),
             agent_id: None,
         }
     }
@@ -259,6 +273,9 @@ pub struct Turn {
     max_tokens: Option<u32>,
     untrusted_input: bool,
     cancellation: Option<crate::TurnCancellation>,
+    hooks: openhuman_core::agent::hooks::HookScope,
+    tools: Option<openhuman_core::agent::HostTools>,
+    tool_env: Option<openhuman_core::tools::timeout::CommandEnvironment>,
 }
 
 impl Turn {
@@ -275,11 +292,83 @@ impl Turn {
             max_tokens: None,
             untrusted_input: false,
             cancellation: None,
+            hooks: Default::default(),
+            tools: None,
+            tool_env: None,
         }
     }
 
     pub(crate) fn with_agent_id(mut self, id: &str) -> Self {
         self.request.agent_id = Some(id.to_string());
+        self
+    }
+
+    pub(crate) fn with_hooks(mut self, hooks: openhuman_core::agent::hooks::HookScope) -> Self {
+        self.hooks = hooks;
+        self
+    }
+
+    /// Add a tool callback for this turn only, after runtime and agent hooks.
+    /// Does not change the agent or any other concurrent turn.
+    pub fn tool_hook(mut self, hook: Arc<dyn crate::seams::ToolHook>) -> Self {
+        self.hooks.push_tool(hook);
+        self
+    }
+
+    /// Replace this turn's host tools, including attached sources. An empty
+    /// belt revokes them. Builtin tools remain governed by the agent definition;
+    /// the agent's original host tools return on its next turn.
+    pub fn tools(
+        mut self,
+        factory: impl for<'a> Fn(
+                openhuman_core::agent::TurnContext<'a>,
+            ) -> openhuman_core::agent::HostTurnTools
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        self.tools = Some(Arc::new(factory));
+        self
+    }
+
+    /// Replace the environment of owned builtin tool subprocesses for this
+    /// turn. Variables absent from this map are not inherited from the daemon.
+    /// Interpreter pools are bypassed so a pooled process cannot carry another
+    /// turn's environment. Independently spawned host tasks must carry the scope.
+    pub fn tool_env(mut self, env: impl IntoIterator<Item = (String, String)>) -> Self {
+        self.tool_env = Some(openhuman_core::tools::timeout::CommandEnvironment::new(env));
+        self
+    }
+
+    /// Await the host's permission decision before each tool executes.
+    /// The callback may wait for UI approval, then return `Proceed`, `Deny`,
+    /// or `ProceedWith`. Returning `Ask` denies the call; this callback itself
+    /// owns the approval wait. Static tool/security restrictions still apply.
+    /// Agent and turn callbacks are additive: a denial cannot be overridden.
+    pub fn can_use_tool<F>(self, callback: F) -> Self
+    where
+        F: for<'a> Fn(&'a crate::seams::ToolHookContext) -> crate::PermissionFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.tool_hook(std::sync::Arc::new(crate::permission::PermissionHook(
+            callback,
+        )))
+    }
+
+    /// Observe cumulative usage after each model call or vote to stop before
+    /// the next call. Return `StopDecision::Continue` for observation alone;
+    /// a budget policy can return `StopDecision::Stop`. Scoped to this turn; no runtime-global policy is replaced.
+    pub fn stop_hook(mut self, hook: std::sync::Arc<dyn crate::seams::StopHook>) -> Self {
+        self.hooks.push_stop(hook);
+        self
+    }
+
+    /// Add a completed-turn callback for this turn only. The callback runs
+    /// asynchronously with an owned snapshot after the turn completes.
+    pub fn post_turn_hook(mut self, hook: Arc<dyn crate::seams::PostTurnHook>) -> Self {
+        self.hooks.push_post_turn(hook);
         self
     }
 
@@ -434,6 +523,7 @@ impl Turn {
     pub fn route(mut self, route: Route) -> Self {
         self.request.inference_url = Some(route.base_url);
         self.request.api_key = Some(route.api_key);
+        self.request.inference_headers = route.headers;
         self
     }
 
@@ -476,20 +566,47 @@ impl Turn {
     /// that is a build/composition fact, not a failure, and a host should hide
     /// the surface rather than report an error.
     pub async fn send(mut self) -> Result<TurnOutcome, CoreError> {
-        let Some(cancellation) = self.cancellation.take() else {
-            return self.send_inner().await;
+        let hooks = std::mem::take(&mut self.hooks);
+        let environment = self.tool_env.take();
+        let fresh_tools = self.tools.is_some();
+        let dispatch = hooks.scope(Box::pin(self.send_with_cancellation()));
+        let dispatch = async move {
+            if fresh_tools {
+                openhuman_core::agent::tool_snapshot_scope::with_fresh_snapshot(dispatch).await
+            } else {
+                dispatch.await
+            }
         };
-        let _guard = cancellation.enter();
+        match environment {
+            Some(environment) => environment.scope(dispatch).await,
+            None => dispatch.await,
+        }
+    }
+
+    async fn send_with_cancellation(mut self) -> Result<TurnOutcome, CoreError> {
+        let session_id = self
+            .session_id
+            .take()
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or_else(|| format!("embed-{}", uuid::Uuid::new_v4()));
+        self.request.thread_id = Some(session_id.clone());
+        // Drop the meter before publishing cancellation's finished phase.
+        let cancellation = self.cancellation.take();
+        let _guard = cancellation.as_ref().map(crate::TurnCancellation::enter);
+        let meter = crate::turn_meter::TurnMeter::new(self.meter.take());
+        let Some(cancellation) = cancellation else {
+            return self.send_inner(&meter.usage).await;
+        };
         let outcome = cancellation
             .cleanup()
             .scope(async {
                 tokio::select! {
                     biased;
                     _ = cancellation.cancelled() => {
-                        log::debug!("[embed][agent] turn cancelled");
+                        log::debug!("[embed][agent] turn_cancelled session={session_id} method={AGENT_CHAT}");
                         Err(CoreError::TurnCancelled { method: AGENT_CHAT })
                     }
-                    outcome = Box::pin(self.send_inner()) => outcome,
+                    outcome = Box::pin(self.send_inner(&meter.usage)) => outcome,
                 }
             })
             .await;
@@ -507,17 +624,12 @@ impl Turn {
             .clone()
     }
 
-    async fn send_inner(mut self) -> Result<TurnOutcome, CoreError> {
-        // The core neither mints nor returns a session id, so continuing a
-        // conversation would otherwise be impossible without the caller
-        // inventing an id scheme — which every embedder has then done
-        // differently. Mint one here and hand it back.
+    async fn send_inner(mut self, usage: &UsageSink) -> Result<TurnOutcome, CoreError> {
         let session_id = self
-            .session_id
-            .take()
-            .filter(|id| !id.trim().is_empty())
-            .unwrap_or_else(|| format!("embed-{}", uuid::Uuid::new_v4()));
-        self.request.thread_id = Some(session_id.clone());
+            .request
+            .thread_id
+            .clone()
+            .expect("send assigned a session id");
 
         log::debug!(
             "[embed][agent] turn session={session_id} model={:?} routed={} cwd_set={}",
@@ -552,11 +664,6 @@ impl Turn {
             }
         }
 
-        // Filled by the turn itself, before any error is raised, so a failed
-        // turn is still metered. Read back below whether the dispatch returned
-        // a reply or an error.
-        let usage: UsageSink = std::sync::Mutex::new(None);
-        let meter = self.meter.take();
         let wants_json = self
             .response_format
             .as_ref()
@@ -572,8 +679,9 @@ impl Turn {
                 },
             ),
             untrusted_input: self.untrusted_input,
+            tools: self.tools.take(),
         };
-        let dispatch = dispatch(self.target, self.request, self.seed.take(), &usage, options);
+        let dispatch = dispatch(self.target, self.request, self.seed.take(), usage, options);
 
         let reply = match (self.origin, self.progress) {
             (Some(origin), Some(sink)) => {
@@ -612,17 +720,6 @@ impl Turn {
             log::debug!("[embed][agent] turn_failed session={session_id} kind={tag}");
         });
 
-        // Before the `?`. A turn that errored still spent what it spent, and
-        // this is the only place both the sink and a failing result are in
-        // hand -- `TurnOutcome` below is never built on that path.
-        if let Some(meter) = meter {
-            meter(
-                usage
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone(),
-            );
-        }
         let (reply, report) = reply?;
         let structured = if wants_json {
             serde_json::from_str(reply.trim()).ok()
@@ -643,8 +740,9 @@ impl Turn {
             reply,
             session_id,
             usage: usage
-                .into_inner()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
             structured,
             finish_reason: report.finish_reason,
             answered_model: report.answered_model,
@@ -666,6 +764,12 @@ impl Turn {
         let host_only = match &self.target {
             TurnTarget::Agent(agent) => agent.host_only,
             TurnTarget::Runtime(_) => {
+                if self.tools.is_some() {
+                    return refuse(
+                        "per-turn host tools need a runtime-owned Agent",
+                        "turn_tools_unsupported",
+                    );
+                }
                 if self.response_format.is_some() || self.max_tokens.is_some() {
                     return refuse(
                         "response_format and max_tokens need a runtime-owned Agent",
@@ -695,7 +799,7 @@ impl Turn {
 /// DomainSet gate itself before touching the core.
 use openhuman_core::agent::tinyagents::host::LastTurnUsage;
 
-type UsageSink = std::sync::Mutex<Option<LastTurnUsage>>;
+use crate::turn_meter::UsageSink;
 
 use openhuman_core::agent::tinyagents::response_shape::{FinalResponse, ResponseShapeScope};
 
@@ -711,6 +815,7 @@ mod futures_box {
 /// What only an agent target can honour, already validated by
 /// [`Turn::validate_turn_options`].
 struct AgentTurnOptions {
+    tools: Option<openhuman_core::agent::HostTools>,
     shape: std::sync::Arc<ResponseShapeScope>,
     untrusted_input: bool,
 }
@@ -769,8 +874,9 @@ async fn dispatch(
                     let route = openhuman_core::config::schema::EphemeralRoute::from_params(
                         request.inference_url,
                         request.api_key,
-                    );
-                    let host = inner.composed_host_tools();
+                    )
+                    .map(|route| route.with_headers(request.inference_headers));
+                    let host = options.tools.or_else(|| inner.composed_host_tools());
                     let target = AgentChatTarget::Definition {
                         definition: &inner.definition,
                         host: host.as_ref(),

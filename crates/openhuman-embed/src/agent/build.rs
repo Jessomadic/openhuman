@@ -202,6 +202,7 @@ pub(crate) fn instantiate(runtime: &Runtime, spec: AgentSpec) -> Result<AgentInn
             Some(route.base_url.clone()),
             Some(route.api_key.clone()),
         )
+        .map(|scoped| scoped.with_headers(route.headers.clone()))
     });
     let overlay = ContextOverlay {
         config: context_config,
@@ -249,6 +250,7 @@ pub(crate) fn instantiate(runtime: &Runtime, spec: AgentSpec) -> Result<AgentInn
         access,
         layout,
         host_tools: parts.host_tools,
+        hooks: parts.hooks,
         lifecycle: super::lifecycle::Lifecycle::new(),
         host_only,
     })

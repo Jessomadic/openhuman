@@ -40,6 +40,14 @@ recorded on the wrong server.
 | [`turn_cancellation.rs`](turn_cancellation.rs) | Cancellation before send, during inference and during a builtin shell command; repeated requests and agent reuse. |
 | [`process_cancellation.rs`](process_cancellation.rs) | On Linux, dropping a command future kills its shell descendants. |
 
+| `inline_permissions.rs` | An inline UI decision precedes execution; concurrent agents and one-turn denials stay isolated. |
+| `usage_hooks.rs` | Per-agent stop policy and per-turn cumulative usage observation, with provider charges and no extra calls after a stop. |
+| [`turn_tools.rs`](turn_tools.rs) | One-turn belt replacement/revocation, resumed-session schemas and independent concurrent workers. |
+| [`tool_environment.rs`](tool_environment.rs) | Overlapping child environments exclude inherited variables and stay within their own scopes. |
+| [`scoped_hooks.rs`](scoped_hooks.rs) | Same-named runtime, agent and turn callbacks remain additive and isolated during concurrent turns, resumed sessions and reuse of a removed agent id. |
+| [`route_headers.rs`](route_headers.rs) | Attribution headers and bearer follow only the per-turn route, without reaching other agents, later turns or backend calls. |
+| [`tool_hook_context.rs`](tool_hook_context.rs) | Hook agent/session identities and cwd agree with builtin shell execution on an overridden and a default working root. |
+
 ## Running
 
 [`runtime_agents.rs`](runtime_agents.rs) gates its skills and MCP assertions on the `skills` and

@@ -18,6 +18,8 @@ use std::time::Duration;
 use tinyagents_harness::tool::ToolTimeoutSettings;
 use tinytools::ToolTimeout;
 
+mod command_environment;
+pub use command_environment::CommandEnvironment;
 mod process_cleanup;
 pub use process_cleanup::ProcessCleanup;
 
@@ -243,32 +245,42 @@ pub async fn output_unbounded(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    CommandEnvironment::apply(cmd);
     own_process_group(cmd.as_std_mut());
     let child = cmd.spawn()?;
-    let pid = child.id();
     let reaped = process_cleanup::Reaped::register();
     let (cancel, cancellation) = tokio::sync::watch::channel(false);
     let waiter = tokio::spawn(async move {
         let _reaped = reaped;
         collect_command_output(child, cancellation).await
     });
-    let mut group = CommandGroup { pid, cancel };
-    let result = waiter.await.map_err(std::io::Error::other)?;
-    group.pid = None;
-    result
+    let _cancel_on_drop = CancelOnDrop(cancel);
+    waiter.await.map_err(std::io::Error::other)?
 }
 
-struct CommandGroup {
-    pid: Option<u32>,
-    cancel: tokio::sync::watch::Sender<bool>,
+// The caller signals only the owned waiter. It never retains a PID after
+// that waiter reaps the child, so late future drops cannot kill a reused PID.
+struct CancelOnDrop(tokio::sync::watch::Sender<bool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
+    }
+}
+
+struct CommandGroup(Option<u32>);
+
+impl CommandGroup {
+    fn kill(&self) {
+        if let Some(pid) = self.0 {
+            kill_process_group(pid);
+        }
+    }
 }
 
 impl Drop for CommandGroup {
     fn drop(&mut self) {
-        if let Some(pid) = self.pid {
-            kill_process_group(pid);
-            self.cancel.send_replace(true);
-        }
+        self.kill();
     }
 }
 
@@ -278,27 +290,42 @@ async fn collect_command_output(
 ) -> std::io::Result<std::process::Output> {
     use tokio::io::AsyncReadExt;
 
+    let mut group = CommandGroup(child.id());
     let mut stdout = child.stdout.take().expect("command stdout is piped");
     let mut stderr = child.stderr.take().expect("command stderr is piped");
     let mut stdout_bytes = Vec::new();
     let mut stderr_bytes = Vec::new();
-    let wait = async {
+    {
+        let drain = async {
+            tokio::try_join!(
+                stdout.read_to_end(&mut stdout_bytes),
+                stderr.read_to_end(&mut stderr_bytes),
+            )
+        };
+        tokio::pin!(drain);
         tokio::select! {
             biased;
             _ = async { let _ = cancellation.wait_for(|cancelled| *cancelled).await; } => {
-                // Reap the direct child on every platform. On Unix the
-                // caller has also signalled the process group.
-                child.kill().await?;
-                child.wait().await
+                // The leader has not been reaped, even if it already exited.
+                // Its PID cannot be reused while signalling this group.
+                group.kill();
+                child.start_kill()?;
+                drain.await?;
             }
-            result = child.wait() => result,
+            result = &mut drain => { result?; }
         }
+    }
+    let status = tokio::select! {
+        biased;
+        _ = async { let _ = cancellation.wait_for(|cancelled| *cancelled).await; } => {
+            group.kill();
+            child.start_kill()?;
+            child.wait().await?
+        }
+        result = child.wait() => result?,
     };
-    let (status, _, _) = tokio::try_join!(
-        wait,
-        stdout.read_to_end(&mut stdout_bytes),
-        stderr.read_to_end(&mut stderr_bytes),
-    )?;
+    // No await between reaping and disarming. Only this waiter owns the PID.
+    group.0 = None;
     Ok(std::process::Output {
         status,
         stdout: stdout_bytes,

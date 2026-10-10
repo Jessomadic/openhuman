@@ -96,6 +96,12 @@ assert!(matches!(running.await?, Err(openhuman_embed::CoreError::TurnCancelled {
 ```
 
 Cancellation is scoped to this turn, including while waiting for inference.
+Turns with a cancellation handle use owned interpreter subprocesses rather
+than the Node/Python pool, which has no acknowledged per-job abort API. This
+trades warm-worker reuse for awaited cleanup; ordinary turns retain pooling.
+The `meter` callback fires once on cancellation or a dropped send future,
+with `None` when dispatch has not supplied usage yet.
+
 Before send, cancellation prevents dispatch; after completion it is a no-op.
 On Unix, the built-in shell, Node, Python and npm commands kill their process
 group, including descendants. Other platforms stop the direct command. Host
@@ -166,9 +172,27 @@ println!("{}", again.reply);
 # }
 ```
 
+Hooks can be supplied at three levels: `RuntimeBuilder::tool_hook` /
+`post_turn_hook` for all agents, `AgentSpec::tool_hook` / `post_turn_hook`
+for one agent, and `Turn::tool_hook` / `post_turn_hook` for one dispatch.
+Tool callbacks run in that order; same-named scoped callbacks are additive.
+`ToolHookContext` carries the agent/session identity when known, and `cwd`
+follows the execution workspace descriptor (including `Turn::cwd`), falling
+back to the embedding context's configured action root.
+The agent and turn hooks are never installed in the global registry, so
+concurrent workers and later turns do not pick up one another's callbacks.
+Post-turn callbacks run asynchronously with an owned session snapshot.
+Independently spawned tasks that build sessions must explicitly inherit
+`openhuman_core::agent::hooks::HookScope` to carry scoped hooks.
+
 `McpServer` and `AgentSpec::mcp` need the `mcp` feature; `skills_dir` needs
 `skills`. `Agent::run` always starts a new conversation. To continue one, pass
 the returned `session_id` to `Turn::session`.
+
+Gateway attribution headers can be attached to `Route::header(name, value)`
+and used with `Turn::route`, or with `Provider::routed(route)` on an agent.
+They follow only that route's endpoint and are never saved to configuration,
+sent to background providers, or included as values in `Route`'s `Debug`.
 
 A `Turn` has more knobs than the example shows: `model` and `temperature`
 for one turn, `cwd` to root the file and shell tools somewhere else (use
@@ -773,3 +797,36 @@ Attachments are shared by clones, always directly advertised, and update only
 their managed system catalogue when a continuing conversation gains tools.
 See [agent attachment semantics and example](src/agent/README.md#attach-tools-to-an-existing-agent)
 for source identity, collision errors, policy composition, and runtime identity.
+
+### Inline permission and usage policy
+
+`AgentSpec::can_use_tool` and `Turn::can_use_tool` await a host callback before
+executing each tool. The callback can wait for an approval UI and return
+`ToolHookDecision::Proceed`, `Deny`, or `ProceedWith`. It owns that wait;
+returning `Ask` denies execution. These callbacks add to existing tool policies,
+and a turn callback cannot override an agent denial.
+
+`AgentSpec::stop_hook` and `Turn::stop_hook` receive cumulative usage after each
+completed model call. Return `StopDecision::Continue` to observe usage, or
+`Stop` to prevent subsequent calls. Completed tool rounds may still execute;
+this is an after-call budget boundary, so hosts must refuse an already exhausted
+budget before sending a turn. Provider-reported charges remain authoritative,
+including known zero; missing charges remain unknown unless pricing is known.
+A policy stop uses a deterministic partial summary rather than spending on
+final-answer repair calls.
+
+### Per-turn tools and subprocess environment
+
+`Turn::tools` replaces this turn's host tool belt, including attached sources.
+An empty belt revokes host tools; the next turn returns to the agent's belt.
+Builtin tools still follow the agent definition. This supplies dynamic tools for
+in-process hosts; statically declared MCP servers retain their creation-time
+configuration.
+
+`Turn::tool_env` supplies the base environment of owned builtin subprocesses.
+Variables absent from it are not inherited from the daemon. The builtin command
+builders retain their own security/runtime additions, including Git restrictions,
+managed interpreter paths and scratch directories. Scoped turns bypass Node and
+Python pools, which cannot acknowledge per-job cancellation or swap a job's
+process environment. A host tool that spawns a separate Tokio task must explicitly
+carry the command environment and cleanup scopes into that task.

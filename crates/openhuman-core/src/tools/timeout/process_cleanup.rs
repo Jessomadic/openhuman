@@ -16,6 +16,13 @@ tokio::task_local! {
 pub struct ProcessCleanup(Arc<Mutex<Vec<watch::Receiver<bool>>>>);
 
 impl ProcessCleanup {
+    /// Whether the current task must acknowledge owned subprocess cleanup.
+    /// Interpreter pools have no per-job cancellation acknowledgement and
+    /// therefore cannot accept work from this scope.
+    pub fn is_active() -> bool {
+        ACTIVE.try_with(|_| ()).is_ok()
+    }
+
     /// Run a future with command waiters registered to this turn.
     pub async fn scope<T>(&self, future: impl Future<Output = T>) -> T {
         ACTIVE.scope(self.clone(), future).await

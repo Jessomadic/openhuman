@@ -413,8 +413,8 @@ impl Completer {
     /// A completer for `route`, with no timeout and no observer.
     pub fn new(route: Route) -> Self {
         Self {
+            headers: route.headers.clone(),
             route,
-            headers: Vec::new(),
             timeout: None,
             observer: None,
         }
