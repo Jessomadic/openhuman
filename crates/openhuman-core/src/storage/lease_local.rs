@@ -270,25 +270,9 @@ impl LeaseStore for LocalLeases {
                 released: true,
                 ..holding.record.clone()
             };
-            // The key's directory was moved away while held (a deprovisioned
-            // profile is archived with its lease inside): the lock file went
-            // with it, so there is no record left to persist. Writing one
-            // would fail forever and keep a holding on a file nobody else
-            // can see, so a later acquire here would skip the real lock.
-            let dir = local_dir(&self.root, &grant.key);
-            if !dir.is_dir() {
-                tracing::debug!(
-                    target: "openhuman::storage::lease",
-                    key = %grant.key,
-                    node = %self.node,
-                    "[lease] local release: key directory moved away; dropping the holding"
-                );
-            } else {
-                // Persist first: on failure the lock and holding stay, so no
-                // one can take the key over a record still saying "not
-                // released".
-                self.write_record(&grant.key, &record)?;
-            }
+            // Persist first: on failure the lock and holding stay, so no one
+            // can take the key over a record still saying "not released".
+            self.write_record(&grant.key, &record)?;
             if let Some(holding) = held.remove(&grant.key) {
                 let _ = FileExt::unlock(&holding.file);
             }

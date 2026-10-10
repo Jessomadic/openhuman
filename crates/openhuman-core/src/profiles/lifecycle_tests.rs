@@ -192,23 +192,6 @@ async fn an_open_racing_an_archive_on_another_node_does_not_resurrect_the_profil
 }
 
 #[tokio::test]
-async fn a_deprovisioned_file_lease_does_not_linger_on_its_node() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (a, b) = (node(tmp.path(), "node-a"), node(tmp.path(), "node-b"));
-    let id = profile("returning");
-    a.provision(&id).await.unwrap();
-    assert!(a.deprovision(&id).await.unwrap());
-
-    // The same user returns through node b, which hosts the new profile.
-    b.provision(&id).await.unwrap();
-    let _hosted = b.open(&id).await.unwrap();
-    match a.open(&id).await {
-        Err(OpenError::HeldElsewhere(record)) => assert_eq!(record.owner, "node-b"),
-        other => panic!("node a must not host it as well: {other:?}"),
-    }
-}
-
-#[tokio::test]
 async fn a_failed_archive_gives_the_lease_back() {
     let tmp = tempfile::tempdir().unwrap();
     let (a, b) = (node(tmp.path(), "node-a"), node(tmp.path(), "node-b"));
