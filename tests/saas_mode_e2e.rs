@@ -15,6 +15,10 @@ use support::*;
 
 #[path = "saas_mode/cluster.rs"]
 mod cluster;
+#[path = "saas_mode/memory.rs"]
+mod memory;
+#[path = "saas_mode/mock_memory.rs"]
+mod mock_memory;
 
 #[test]
 fn an_unsafe_deployment_is_refused_before_it_binds() {
