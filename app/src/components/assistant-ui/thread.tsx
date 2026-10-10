@@ -436,6 +436,7 @@ const ThreadRoot: FC<{
       className="aui-root aui-thread-root bg-background @container flex h-full flex-col"
       {...dropHandlers}
       style={{
+        ['--thread-max-width' as string]: '44rem',
         ['--composer-bg' as string]: 'color-mix(in oklab, var(--color-muted) 30%, transparent)',
         ['--composer-radius' as string]: '1rem',
         ['--composer-padding' as string]: '8px',
@@ -449,7 +450,7 @@ const ThreadRoot: FC<{
         {ConversationMap ? <ConversationMap /> : null}
         <div
           className={cn(
-            'mx-auto flex w-full flex-1 flex-col px-4 pt-4',
+            'mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col px-4 pt-4',
             isEmpty && 'justify-center'
           )}>
           {loadError ? (
