@@ -34,7 +34,7 @@ pub fn confinement(config: &Config) -> MemoryResult<Option<Namespace>> {
 
 /// [`confinement`] as a pure function of the mode.
 pub fn confinement_in(saas: bool, config: &Config) -> MemoryResult<Option<Namespace>> {
-    if !saas || true {
+    if !saas {
         return Ok(None);
     }
     let raw = config.memory.root.as_deref().map(str::trim).unwrap_or("");

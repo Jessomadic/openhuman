@@ -33,8 +33,7 @@ use super::types::{
 /// identity in scope's layout root.
 #[must_use]
 pub fn allowed_reach(config: &Config) -> Reach {
-    let _ = scope::resolve_current(config);
-    Reach::subtree(Namespace::ROOT)
+    Reach::subtree(scope::resolve_current(config).root().clone())
 }
 
 /// `reach` confined to `allowed`: unset becomes `allowed`, a reach within it
