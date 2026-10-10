@@ -121,6 +121,10 @@ pub(crate) struct SessionTurnSidecar {
     pub hit_cap: bool,
     pub wrap_up_injected: bool,
     pub resolved_route: Option<ResolvedModelRoute>,
+    /// When the driver handed its candidate to the runtime. `after_commit`
+    /// subtracts it from its own start to log how long the durable commit
+    /// took (`[session-runtime] post-commit`).
+    pub driver_finished_at: Option<std::time::Instant>,
 }
 
 /// Immutable inputs to the host's pre-dispatch policy.
