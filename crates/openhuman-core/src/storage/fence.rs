@@ -314,9 +314,22 @@ impl FenceRegistry {
         self.fences.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Registers `fence`, replacing any fence on the same key.
+    /// Registers `fence`, replacing any fence on the same key unless that
+    /// one is from a newer epoch.
     pub fn register(&self, fence: Arc<LeaseFence>) {
         let mut fences = self.lock();
+        // A fence from a newer epoch is never displaced by an older grant's.
+        if fences
+            .iter()
+            .any(|held| held.key == fence.key && held.epoch > fence.epoch)
+        {
+            tracing::debug!(
+                target: "openhuman::storage::fence",
+                epoch = fence.epoch,
+                "[storage][fence] stale registration ignored"
+            );
+            return;
+        }
         fences.retain(|held| held.key != fence.key);
         tracing::debug!(
             target: "openhuman::storage::fence",

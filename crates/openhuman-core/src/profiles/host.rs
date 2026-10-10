@@ -362,6 +362,19 @@ impl ProfileHost {
                 .profile(id.as_str())
                 .agent_policy(profile_policy(&config)),
         );
+        let fence = super::fence::for_grant(
+            Arc::clone(&self.leases),
+            &self.node,
+            id,
+            &grant,
+            self.saas.lease_ttl(),
+        );
+        // Registered before recovery so its writes are already guarded.
+        // Once fenced, it refuses writes for as long as work on this context
+        // could still issue them.
+        let anchor: Arc<dyn std::any::Any + Send + Sync> = context.clone();
+        fence.anchor_to(Arc::downgrade(&anchor));
+        self.fences.register(Arc::clone(&fence));
         if grant.previous_unclean {
             log::info!(
                 "[profiles] profile={id} taken over from a holder that never released it (epoch {}); recovering",
@@ -371,18 +384,6 @@ impl ProfileHost {
             recover_session_store(id, &context);
         }
         crate::platform::cost::seed_tenant_tracker(&context, &config);
-        let fence = super::fence::for_grant(
-            Arc::clone(&self.leases),
-            &self.node,
-            id,
-            &grant,
-            self.saas.lease_ttl(),
-        );
-        // Once fenced, it refuses writes for as long as work on this context
-        // could still issue them.
-        let anchor: Arc<dyn std::any::Any + Send + Sync> = context.clone();
-        fence.anchor_to(Arc::downgrade(&anchor));
-        self.fences.register(Arc::clone(&fence));
         let state = Arc::new(Profile {
             id: id.clone(),
             layout,
