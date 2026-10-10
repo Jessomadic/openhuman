@@ -8,7 +8,7 @@ struct State {
 }
 
 /// Cancellation shared by attached completers. Cancellation is permanent;
-/// create a fresh handle for a new operation or review.
+/// create a fresh handle for a new operation or request.
 #[derive(Clone)]
 pub struct Cancellation(Arc<State>);
 impl Default for Cancellation {

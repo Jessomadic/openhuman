@@ -120,3 +120,12 @@ required-features = ["channels"]
 [[example]]
 name = "storage"
 required-features = ["storage-sqlite"]
+
+# SaaS profiles are exposed only when the channel facade is compiled.
+[[test]]
+name = "saas_profiles"
+required-features = ["channels"]
+
+[[example]]
+name = "profiles"
+required-features = ["channels"]

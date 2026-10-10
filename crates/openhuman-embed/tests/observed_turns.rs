@@ -25,17 +25,19 @@ impl Tool for ReadFile {
         "read_file"
     }
     fn description(&self) -> &str {
-        "Read a file from the pull request's checkout"
+        "Read a document supplied by the host"
     }
     fn parameters_schema(&self) -> Value {
         json!({"type": "object", "properties": {"path": {"type": "string"}}})
     }
-    async fn execute(&self, args: Value) -> anyhow::Result<openhuman_core::tools::ToolResult> {
+    async fn execute(&self, args: Value) -> anyhow::Result<openhuman_embed::ToolResult> {
         self.0.fetch_add(1, Ordering::SeqCst);
         if args["path"] == "blocked" {
-            return Ok(openhuman_core::tools::ToolResult::error("read denied"));
+            return Ok(openhuman_embed::ToolResult::error("read denied"));
         }
-        Ok(openhuman_core::tools::ToolResult::success("fn main() {}"))
+        Ok(openhuman_embed::ToolResult::success(
+            "Sample document content.",
+        ))
     }
 }
 
@@ -97,12 +99,12 @@ fn routed(spec: AgentSpec, provider: &MockServer) -> AgentSpec {
     )
 }
 
-fn reviewer(id: &str, provider: &MockServer, reads: Arc<AtomicUsize>) -> AgentSpec {
+fn analyst(id: &str, provider: &MockServer, reads: Arc<AtomicUsize>) -> AgentSpec {
     routed(AgentSpec::new(id), provider)
         .access(Access::readonly())
         .definition(
             AgentDefinitionSpec::new()
-                .bare_prompt("You must call read_file on src/main.rs before reviewing the diff. Answer with the review JSON.")
+                .bare_prompt("You must call read_file on documents/sample.txt before analyzing the document. Answer with the analysis JSON.")
                 .tools(ToolScopeSpec::HostOnly),
         )
         .tools(move |_| HostTurnTools::advertised(vec![Box::new(ReadFile(reads.clone()))]))
@@ -154,7 +156,7 @@ fn model_and_tool_observations_capture_payloads_only_with_consent() {
                 completion(json!({"role":"assistant","content":"SECRET-REPLY"}),"stop","actual-model",3),
             ]).await;
             let reads = Arc::new(AtomicUsize::new(0));
-            let agent = runtime.agent(reviewer(&format!("observed-{index}"),&provider,reads.clone())).unwrap();
+            let agent = runtime.agent(analyst(&format!("observed-{index}"),&provider,reads.clone())).unwrap();
             let records = Arc::new(Records::default());
             let result = observe_turn(records.clone(),capture,"session","SECRET-PROMPT",dispatch_on_worker(agent.turn("Read the file. SECRET-PROMPT"))).await.unwrap();
             assert_eq!(result.reply,"SECRET-REPLY");
@@ -184,7 +186,7 @@ fn model_and_tool_observations_capture_payloads_only_with_consent() {
             assert_eq!(debug.contains("SECRET-REPLY"),capture==TraceContent::Include);
         }
         let provider = provider(vec![completion(json!({"role":"assistant","content":"SECRET-PREMATURE"}),"stop","refused-model",7)]).await;
-        let agent = runtime.agent(reviewer("refused-observed", &provider, Arc::new(AtomicUsize::new(0)))).unwrap();
+        let agent = runtime.agent(analyst("refused-observed", &provider, Arc::new(AtomicUsize::new(0)))).unwrap();
         let records = Arc::new(Records::default());
         observe_turn(records.clone(), TraceContent::default(), "session", "prompt", dispatch_on_worker(agent.turn("Read before replying").require_tool_call(true))).await.unwrap_err();
         let terminal = records.terminal.lock().unwrap();

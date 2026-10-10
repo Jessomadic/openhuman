@@ -64,7 +64,7 @@ fn terminal_errors_and_inputs_are_private_unless_content_is_requested() {
 fn existing_langfuse_exporter_builds_a_host_owned_batch_without_network() {
     use openhuman_embed::observe::langfuse::{LangfuseClient, LangfuseScore};
     let client = LangfuseClient::proxy("http://127.0.0.1:1", "fixture-token").unwrap();
-    let batch = client.build_score_batch(LangfuseScore::numeric("run", "review", 1.0));
+    let batch = client.build_score_batch(LangfuseScore::numeric("run", "analysis", 1.0));
     assert_eq!(batch["batch"][0]["type"], "score-create");
     assert_eq!(batch["batch"][0]["body"]["traceId"], "run");
     assert!(!batch.to_string().contains("fixture-token"));

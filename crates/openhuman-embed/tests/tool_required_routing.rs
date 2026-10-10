@@ -1,10 +1,10 @@
 //! Structured agent turns on a `HostOnly` agent.
 //!
-//! A reviewer reads a diff with host tools and answers in a schema the host
+//! An analyst reads a document with host tools and answers in a schema the host
 //! parses. These read the requests the provider received (the response format
 //! and output cap must reach every call of the tool loop) and the outcome the
 //! host gets back (the parsed answer, why the model stopped, which model
-//! answered, and the reasoning it spent). The diff is untrusted data, so a
+//! answered, and the reasoning it spent). The document is untrusted data, so a
 //! host-only agent may take it past the prompt guard; no other agent may.
 
 mod common;
@@ -32,17 +32,19 @@ impl Tool for ReadFile {
         "read_file"
     }
     fn description(&self) -> &str {
-        "Read a file from the pull request's checkout"
+        "Read a document supplied by the host"
     }
     fn parameters_schema(&self) -> Value {
         json!({"type": "object", "properties": {"path": {"type": "string"}}})
     }
-    async fn execute(&self, args: Value) -> anyhow::Result<openhuman_core::tools::ToolResult> {
+    async fn execute(&self, args: Value) -> anyhow::Result<openhuman_embed::ToolResult> {
         self.0.fetch_add(1, Ordering::SeqCst);
         if args["path"] == "blocked" {
-            return Ok(openhuman_core::tools::ToolResult::error("read denied"));
+            return Ok(openhuman_embed::ToolResult::error("read denied"));
         }
-        Ok(openhuman_core::tools::ToolResult::success("fn main() {}"))
+        Ok(openhuman_embed::ToolResult::success(
+            "Sample document content.",
+        ))
     }
 }
 
@@ -104,24 +106,24 @@ fn routed(spec: AgentSpec, provider: &MockServer) -> AgentSpec {
     )
 }
 
-fn reviewer(id: &str, provider: &MockServer, reads: Arc<AtomicUsize>) -> AgentSpec {
+fn analyst(id: &str, provider: &MockServer, reads: Arc<AtomicUsize>) -> AgentSpec {
     routed(AgentSpec::new(id), provider)
         .access(Access::readonly())
         .definition(
             AgentDefinitionSpec::new()
-                .bare_prompt("You must call read_file on src/main.rs before reviewing the diff. Answer with the review JSON.")
+                .bare_prompt("You must call read_file on documents/sample.txt before analyzing the document. Answer with the analysis JSON.")
                 .tools(ToolScopeSpec::HostOnly),
         )
         .tools(move |_| HostTurnTools::advertised(vec![Box::new(ReadFile(reads.clone()))]))
 }
 
-fn review_schema() -> ResponseFormat {
+fn answer_schema() -> ResponseFormat {
     ResponseFormat::JsonSchema {
-        name: "review".to_string(),
+        name: "analysis".to_string(),
         schema: json!({
             "type": "object",
-            "properties": { "verdict": { "type": "string" } },
-            "required": ["verdict"]
+            "properties": { "summary": { "type": "string" } },
+            "required": ["summary"]
         }),
     }
 }
@@ -141,19 +143,19 @@ fn required_exploration_refuses_premature_answers_and_preserves_gateway_options(
             let runtime = build_runtime(&backend).await;
             for (index, model) in ["openai/gpt-4.1-mini", "moonshotai/kimi-k2.5", "minimax/minimax-m3"].iter().enumerate() {
                 let premature = provider(vec![completion(
-                    json!({"role":"assistant","content":"{\"verdict\":\"approve\"}"}),"stop",model,0,
+                    json!({"role":"assistant","content":"{\"summary\":\"complete\"}"}),"stop",model,0,
                 )]).await;
                 let reads = Arc::new(AtomicUsize::new(0));
-                let spec = reviewer(&format!("premature-{index}"), &premature, reads.clone())
+                let spec = analyst(&format!("premature-{index}"), &premature, reads.clone())
                     .provider(Provider::openai_compatible(format!("{}/v1",premature.uri()),"fixture").model(*model));
                 let agent = runtime.agent(spec).expect("agent");
                 // Prompt-only exploration accepts premature schema-valid JSON.
-                let advisory = agent.turn("Read src/main.rs before answering.")
-                    .response_format(review_schema()).max_tokens(1024).untrusted_input(true)
+                let advisory = agent.turn("Read documents/sample.txt before answering.")
+                    .response_format(answer_schema()).max_tokens(1024).untrusted_input(true)
                     .send().await.expect("advisory prompt accepts provider reply");
                 assert!(advisory.structured.is_some());
                 assert_eq!(reads.load(Ordering::SeqCst),0);
-                let outcome = agent.turn("Read src/main.rs before answering.").response_format(review_schema())
+                let outcome = agent.turn("Read documents/sample.txt before answering.").response_format(answer_schema())
                     .max_tokens(1024).require_tool_call(true).untrusted_input(true)
                     .provider_options(json!({"provider":{"only":["fixture"]},"reasoning":{"effort":"low"}}))
                     .send().await;
@@ -170,23 +172,23 @@ fn required_exploration_refuses_premature_answers_and_preserves_gateway_options(
             }
             let rejected = provider(vec![
                 completion(json!({"role":"assistant","content":null,"tool_calls":[{"id":"call-blocked","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"blocked\"}"}}]}),"tool_calls","fixture",0),
-                completion(json!({"role":"assistant","content":"{\"verdict\":\"approve\"}"}),"stop","fixture",0),
+                completion(json!({"role":"assistant","content":"{\"summary\":\"complete\"}"}),"stop","fixture",0),
             ]).await;
             let rejected_reads = Arc::new(AtomicUsize::new(0));
-            let rejected_agent = runtime.agent(reviewer("rejected-read",&rejected,rejected_reads.clone())).expect("agent");
-            assert!(rejected_agent.turn("Read before review.").response_format(review_schema()).require_tool_call(true).send().await.is_err());
+            let rejected_agent = runtime.agent(analyst("rejected-read",&rejected,rejected_reads.clone())).expect("agent");
+            assert!(rejected_agent.turn("Read before answering.").response_format(answer_schema()).require_tool_call(true).send().await.is_err());
             assert_eq!(rejected_reads.load(Ordering::SeqCst),1);
             let rejected_requests = chat_requests(&rejected).await;
             assert_eq!(rejected_requests.len(),2);
             assert_eq!(body(&rejected_requests[1])["tool_choice"],"required");
             assert!(body(&rejected_requests[1]).get("response_format").is_none());
             let served = provider(vec![
-                completion(json!({"role":"assistant","content":null,"tool_calls":[{"id":"call-read","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"src/main.rs\"}"}}]}),"tool_calls","fixture",0),
-                completion(json!({"role":"assistant","content":"{\"verdict\":\"approve\"}"}),"stop","actual-answered",0),
+                completion(json!({"role":"assistant","content":null,"tool_calls":[{"id":"call-read","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"documents/sample.txt\"}"}}]}),"tool_calls","fixture",0),
+                completion(json!({"role":"assistant","content":"{\"summary\":\"complete\"}"}),"stop","actual-answered",0),
             ]).await;
             let reads = Arc::new(AtomicUsize::new(0));
-            let agent = runtime.agent(reviewer("explored",&served,reads.clone())).expect("agent");
-            let outcome = agent.turn("Read before review.").response_format(review_schema())
+            let agent = runtime.agent(analyst("explored",&served,reads.clone())).expect("agent");
+            let outcome = agent.turn("Read before answering.").response_format(answer_schema())
                 .require_tool_call(true).max_tokens(1024).send().await.expect("explored answer");
             assert_eq!(reads.load(Ordering::SeqCst),1);
             assert_eq!(outcome.answered_model.as_deref(),Some("actual-answered"));
