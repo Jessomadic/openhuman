@@ -39,7 +39,7 @@ import socketReducer from '../../store/socketSlice';
 import themeReducer from '../../store/themeSlice';
 import threadGoalReducer from '../../store/threadGoalSlice';
 import threadReducer from '../../store/threadSlice';
-import threadTodosReducer from '../../store/threadTodosSlice';
+import threadTodosReducer, { setThreadTodos } from '../../store/threadTodosSlice';
 import type { Thread, ThreadMessage } from '../../types/thread';
 
 // ── Hoisted mock state ─────────────────────────────────────────────────────
@@ -291,6 +291,18 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     mockGetThreadMessages.mockResolvedValue({ messages: [], count: 0 });
     mockFlowApprovalRequests.mockReturnValue({ requests: [], dismiss: vi.fn() });
     vi.mocked(chatSend).mockResolvedValue(undefined);
+  });
+
+  it('places live plan cards in an overlay above the composer rather than normal chat flow', async () => {
+    const store = await renderChat();
+    await act(async () => store.dispatch(setThreadTodos({ threadId: THREAD_ID, todos: [
+      { content: 'Inspect the current UI', status: 'completed' },
+      { content: 'Verify overlay geometry', status: 'in_progress' },
+    ] })));
+    const plan = await screen.findByTestId('todo-checklist');
+    const overlay = plan.closest('[data-slot="composer-overlays"]');
+    expect(overlay).toHaveClass('absolute', 'bottom-full');
+    expect(overlay?.closest('form')).toHaveClass('relative');
   });
 
   it('shows the send error when a send is rejected', async () => {
