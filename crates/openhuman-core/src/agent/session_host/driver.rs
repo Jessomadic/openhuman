@@ -395,9 +395,10 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
                 + repair_usage
                     .map(|usage| usage.charged_amount_usd)
                     .unwrap_or_default();
-            let loop_last_call = snapshot.lock().ok().map(|guard| {
-                (guard.last_call_input_tokens, guard.last_call_output_tokens)
-            });
+            let loop_last_call = snapshot
+                .lock()
+                .ok()
+                .map(|guard| (guard.last_call_input_tokens, guard.last_call_output_tokens));
             (
                 observed.last_call_input_tokens,
                 observed.last_call_output_tokens,

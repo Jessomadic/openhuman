@@ -240,7 +240,11 @@ fn final_call_tokens_prefer_the_newest_call_that_reached_the_provider() {
     );
     // A close that recorded no provider usage did not make the final call.
     assert_eq!(
-        final_call_tokens(loop_last, Some(&grounded_close::RepairUsage::default()), None),
+        final_call_tokens(
+            loop_last,
+            Some(&grounded_close::RepairUsage::default()),
+            None
+        ),
         (90_000, 400)
     );
     assert_eq!(final_call_tokens(None, None, None), (0, 0));
