@@ -274,3 +274,8 @@ Provisioning, opening, credential changes (`profiles.set_credential` /
 - **Opening** reads the registry again once it holds the lease: an open that
   raced a deprovision on another node answers `NotProvisioned` instead of
   recreating the archived directory.
+
+Credential changes take no lease: the profile is normally hosted by some node
+while the gateway installs a credential, and must not be refused for it. So
+across nodes they are not ordered against a deprovision running elsewhere;
+with per-node keyrings (above) they do not share a slot with it either.
