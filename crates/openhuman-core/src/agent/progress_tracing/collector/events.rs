@@ -330,6 +330,7 @@ impl SpanCollector {
                 iterations,
                 output_chars,
                 output,
+                stop,
                 ..
             } => {
                 let Some(span_index) = self.retire_subagent(task_id, now_unix_ms, SpanStatus::Ok)
@@ -355,7 +356,20 @@ impl SpanCollector {
                     json_usize(*output_chars),
                 );
                 extra.insert("subagent.elapsed_ms".to_string(), json_u64(*elapsed_ms));
-                self.close_span(state.span_index, start + elapsed_ms, SpanStatus::Ok, extra);
+                // A child the harness stopped early (breaker / iteration cap)
+                // is handed back incomplete: WARNING, not a clean Ok.
+                let status = match stop {
+                    Some(stop) => {
+                        Self::insert_stop_attrs(stop, &mut extra);
+                        log::debug!(
+                            "[agent-tracing] subagent stopped early task_id={task_id} {}",
+                            stop.status_message()
+                        );
+                        SpanStatus::Unset
+                    }
+                    None => SpanStatus::Ok,
+                };
+                self.close_span(state.span_index, start + elapsed_ms, status, extra);
             }
 
             AgentProgress::SubagentFailed { task_id, error, .. } => {
@@ -468,13 +482,19 @@ impl SpanCollector {
                 }
             }
 
-            AgentProgress::TurnCompleted { iterations, .. } => {
+            AgentProgress::TurnCompleted { iterations, stop } => {
                 self.close_current_iteration(now_unix_ms);
                 if let Some(index) = self.turn_span_index {
-                    let mut extra = BTreeMap::new();
-                    extra.insert("agent.iterations".to_string(), json_u32(*iterations));
-                    extra.insert("turn.outcome".to_string(), json_str("completed"));
-                    self.close_span(index, now_unix_ms, SpanStatus::Ok, extra);
+                    self.spans[index]
+                        .attributes
+                        .insert("agent.iterations".to_string(), json_u32(*iterations));
+                    // A turn the harness stopped early still arrives here; it
+                    // closes at WARNING instead of as a clean completion.
+                    let outcome = match stop {
+                        Some(stop) => super::state::TurnOutcome::Stopped { stop: stop.clone() },
+                        None => super::state::TurnOutcome::Completed,
+                    };
+                    self.apply_turn_outcome(outcome, now_unix_ms);
                 }
             }
 
