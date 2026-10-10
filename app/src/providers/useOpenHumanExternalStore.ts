@@ -868,9 +868,15 @@ export function useOpenHumanExternalStore(
       // support speech." That is the #5897 defect shape, and Reload already
       // sits in the same trap today.
       // No `dictation` key here — see the Web Speech note above this object.
-      adapters: { feedback: feedbackAdapter, speech: openHumanSpeechAdapter },
+      adapters: {
+        feedback: feedbackAdapter,
+        speech: openHumanSpeechAdapter,
+        // Native viewport and composer resets need the real conversation identity.
+        threadList: { threadId: threadId ?? undefined },
+      },
     }),
     [
+      threadId,
       runtimeMessages,
       isRunning,
       isLoading,

@@ -7,20 +7,18 @@ import { ArrowDownIcon } from 'lucide-react';
 
 /**
  * Runtime scroll-anchor pill. The viewport owns visibility and the jump; the
- * host can reclaim its streaming follower when the reader returns to the end.
+ * library resumes following when the reader returns to the end.
  * Positioned above the composer so expanding its cards moves the pill with it.
  */
 export function ScrollAnchor({
   label,
-  onJump,
   className,
 }: {
   label: string;
-  onJump?: () => void;
   className?: string;
 }) {
   return (
-    <ThreadPrimitive.ScrollToBottom asChild behavior="instant" onClick={onJump}>
+    <ThreadPrimitive.ScrollToBottom asChild behavior="instant">
       <Button
         data-slot="scroll-anchor"
         data-analytics-id="chat-scroll-to-bottom"
