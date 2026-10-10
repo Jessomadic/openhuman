@@ -14,10 +14,12 @@ use super::state::{SpanCollector, TurnOutcome};
 /// Metadata key marking a span this collector closed without its completion
 /// event. Its latency is a bound, not a measurement.
 pub(crate) const FORCE_CLOSED_ATTR: &str = "force_closed";
-/// Intended Langfuse level for spans that are not errors but need attention
-/// (a force-closed tool, a cancelled turn). Exported as observation metadata
-/// today: the upstream OTLP converter maps only `SpanStatus::Error` to a level.
-pub(crate) const LEVEL_ATTR: &str = "observation.level";
+/// Span attribute carrying a Langfuse level override: `WARNING` for spans that
+/// need attention without being harness failures (a force-closed tool, a
+/// cancelled turn, a command that exited non-zero). The OTLP converter exports
+/// it as the observation level.
+pub(crate) const LEVEL_ATTR: &str =
+    tinyagents_harness::observability::trace_export::otlp::OBSERVATION_LEVEL_ATTR;
 
 impl SpanCollector {
     /// Seal every span still open after the stream closes. Idempotent.
