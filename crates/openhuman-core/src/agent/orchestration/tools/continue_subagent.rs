@@ -598,7 +598,7 @@ impl ContinueSubagentTool {
                                         worktree_path: None,
                                         changed_files: Vec::new(),
                                         dirty_status: None,
-                                        stop: super::incomplete_stop(&reason),
+                                        stop: crate::agent::orchestration::tools::dispatch::incomplete_stop(&reason),
                                     })
                                     .await;
                             }
@@ -615,7 +615,7 @@ impl ContinueSubagentTool {
                              user, or take a different approach.",
                             outcome.task_id, outcome.agent_id, outcome.output,
                         );
-                        Ok(super::stopped_subagent_result(
+                        Ok(crate::agent::orchestration::tools::dispatch::stopped_subagent_result(
                             "continue_subagent",
                             &outcome.agent_id,
                             &outcome.task_id,
