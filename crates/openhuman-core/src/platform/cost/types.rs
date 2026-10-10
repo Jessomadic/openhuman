@@ -199,6 +199,11 @@ pub struct ModelStats {
     pub total_tokens: u64,
     /// Number of requests for this model
     pub request_count: usize,
+    /// Requests whose cost is not known (no reported charge, no catalogued
+    /// price). They add nothing to `cost_usd`, so when this equals
+    /// `request_count` the model's cost is unknown, not zero.
+    #[serde(default)]
+    pub unpriced_request_count: usize,
 }
 
 impl Default for CostSummary {
