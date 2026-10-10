@@ -142,7 +142,7 @@ fn client() -> reqwest::blocking::Client {
 
 /// POST /rpc for `user` on `node`: status, `X-OpenHuman-Profile-Owner`, body.
 fn call(node: &Node, user: &str, method: &str, params: Value) -> (u16, Option<String>, Value) {
-    use openhuman_core::profiles::gateway::{sign, USER_HEADER, USER_SIG_HEADER};
+    use openhuman_core::profiles::gateway::{USER_HEADER, USER_SIG_HEADER, sign};
     let response = client()
         .post(format!("{}/rpc", node.base))
         .bearer_auth(BEARER)

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[path = "saas_mode/cluster.rs"]
 mod cluster;
@@ -269,6 +269,37 @@ fn start(d: &Deployment) -> (Server, String, reqwest::blocking::Client) {
     (server, base, client)
 }
 
+/// `--port` is a preference: a core that finds it taken listens elsewhere.
+/// The harness must notice that another core answers on the port, or the test
+/// drives that core's deployment and checks its own (an empty `users/`).
+#[test]
+fn a_core_on_a_taken_port_is_not_mistaken_for_ours() {
+    let first = deployment(true);
+    let (mut first_server, base, client) = start(&first);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    assert_eq!(
+        wait_until_serving(&client, &base, &mut first_server, deadline),
+        Ok(Serving::Ours)
+    );
+
+    let second = deployment(true);
+    let port = base.rsplit(':').next().unwrap().to_string();
+    let child = core_command(&second, &["--port", &port])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn openhuman-core");
+    let mut second_server = Server(child);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    assert_eq!(
+        wait_until_serving(&client, &base, &mut second_server, deadline),
+        Ok(Serving::Taken(Some(u64::from(first_server.0.id())))),
+        "the first core still answers on its port"
+    );
+    drop(second_server);
+    drop(first_server);
+}
+
 #[test]
 fn a_safe_deployment_serves_core_and_the_operator_plane_behind_the_gateway_bearer() {
     let d = deployment(true);
@@ -325,12 +356,13 @@ fn a_safe_deployment_serves_core_and_the_operator_plane_behind_the_gateway_beare
         "a user id outside the raw charset maps to its deterministic hash"
     );
     assert!(!body.to_string().contains("alice"), "{body}");
-    assert!(d
-        .root
-        .join("users")
-        .join(&profile_id)
-        .join("workspace")
-        .is_dir());
+    assert!(
+        d.root
+            .join("users")
+            .join(&profile_id)
+            .join("workspace")
+            .is_dir()
+    );
 
     let (_, body) = rpc(&client, &base, Some(BEARER), "openhuman.profiles_list");
     assert!(body.to_string().contains(&profile_id), "{body}");
@@ -407,7 +439,7 @@ fn user_rpc_with(
     method: &str,
     params: Value,
 ) -> (u16, Value) {
-    use openhuman_core::profiles::gateway::{sign, USER_HEADER, USER_SIG_HEADER};
+    use openhuman_core::profiles::gateway::{USER_HEADER, USER_SIG_HEADER, sign};
     let signature = sig
         .map(str::to_owned)
         .unwrap_or_else(|| sign(BEARER, user, now()));
@@ -506,7 +538,7 @@ fn gateway_requests_run_under_the_named_users_profile() {
     assert_eq!(status, 403, "bob is not provisioned: {body}");
     // A repeated signature header is refused, not resolved to the first value.
     {
-        use openhuman_core::profiles::gateway::{sign, USER_HEADER, USER_SIG_HEADER};
+        use openhuman_core::profiles::gateway::{USER_HEADER, USER_SIG_HEADER, sign};
         let response = client
             .post(format!("{base}/rpc"))
             .bearer_auth(BEARER)
@@ -664,7 +696,7 @@ fn each_user_sees_only_their_own_threads() {
 
 /// Open `/events?client_id=` for `user` and forward each SSE `data:` line.
 fn user_events(base: &str, user: &str, client_id: &str) -> std::sync::mpsc::Receiver<String> {
-    use openhuman_core::profiles::gateway::{sign, USER_HEADER, USER_SIG_HEADER};
+    use openhuman_core::profiles::gateway::{USER_HEADER, USER_SIG_HEADER, sign};
     use std::io::BufRead;
     let (tx, rx) = std::sync::mpsc::channel();
     let url = format!("{base}/events?client_id={client_id}");
