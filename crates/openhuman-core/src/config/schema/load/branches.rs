@@ -190,7 +190,7 @@ impl Config {
                     "[config] Config file already renamed by read recovery; \
                      persisting recovered config"
                 );
-                if let Err(e) = config.save().await {
+                if let Err(e) = Box::pin(save_recovered(&config, source.as_ref())).await {
                     tracing::warn!(
                         path = %config.config_path.display(),
                         error = %e,
@@ -206,7 +206,7 @@ impl Config {
                             dst = %corrupted_path.display(),
                             "[config] Renamed corrupted config; persisting recovered config"
                         );
-                        if let Err(e) = config.save().await {
+                        if let Err(e) = Box::pin(save_recovered(&config, source.as_ref())).await {
                             tracing::warn!(
                                 path = %config.config_path.display(),
                                 error = %e,
@@ -292,4 +292,21 @@ impl Config {
         Box::pin(crate::config::migrations::run_pending(&mut config)).await;
         Ok(*config)
     }
+}
+
+/// Persist a config the loader recovered from corruption.
+///
+/// On a document source this can only be the file fallback (a scope with no
+/// document yet: a document body is parsed strictly and never "recovered"),
+/// and the corrupt `config.toml` has been renamed aside. The document save
+/// strips the bootstrap tables and never writes the file, so the file is
+/// rewritten too: otherwise a storage URL that lived only in its `[storage]`
+/// table would be gone on the next boot.
+async fn save_recovered(config: &Config, source: &dyn super::source::ConfigSource) -> Result<()> {
+    config.save().await?;
+    if source.label() == "document" {
+        let file = super::source::FileConfigSource::new(&config.config_path);
+        Box::pin(config.save_to(&file)).await?;
+    }
+    Ok(())
 }
