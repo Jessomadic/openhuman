@@ -90,8 +90,10 @@ pub(super) fn current(config: &Config) -> Result<Option<Docs>> {
         read: &|| super::store::import::read(config),
     };
     let db_path = super::store::db_path(config);
-    Ok(local::repo(config, &db_path, DOMAIN, collections, &plan)?
-        .map(|repo| Docs(repo, workspace)))
+    Ok(
+        local::repo(config, &db_path, DOMAIN, collections, &plan)?
+            .map(|repo| Docs(repo, workspace)),
+    )
 }
 
 fn status_of(raw: Option<&str>) -> NotificationStatus {

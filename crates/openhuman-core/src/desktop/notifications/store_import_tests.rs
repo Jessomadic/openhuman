@@ -113,3 +113,31 @@ fn legacy_notifications_are_imported_once_through_the_public_api() {
     assert_eq!(old.status, NotificationStatus::Dismissed);
     assert_eq!(after.len(), 3);
 }
+
+#[test]
+fn core_notifications_survive_a_moved_workspace() {
+    let (dir, classic, default) = workspace();
+    live::insert_core_notification(&classic, &event("e1", 1_000)).unwrap();
+    // Imported, then one more written through the default store.
+    assert_eq!(live::unread_core_notification_count(&default).unwrap(), 1);
+    live::insert_core_notification(&default, &event("e2", 2_000)).unwrap();
+    let db = live::db_path(&default);
+    forget(&db);
+
+    // The workspace is moved; its database comes along.
+    let moved_root = TempDir::new().unwrap();
+    let moved_dir = moved_root.path().join("moved");
+    std::fs::rename(dir.path(), &moved_dir).unwrap();
+    let moved = Config {
+        workspace_dir: moved_dir.clone(),
+        ..Config::default()
+    };
+    let core = live::list_core_notifications(&moved, false, 10).unwrap();
+    let ids: Vec<_> = core.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, ["e2", "e1"]);
+    assert!(live::mark_core_notification_read(&moved, "e1").unwrap());
+    assert_eq!(live::unread_core_notification_count(&moved).unwrap(), 1);
+    forget(&live::db_path(&moved));
+    // Put it back so the TempDir cleans up.
+    std::fs::rename(&moved_dir, dir.path()).unwrap();
+}

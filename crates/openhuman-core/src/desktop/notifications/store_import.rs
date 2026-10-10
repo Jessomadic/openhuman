@@ -19,7 +19,9 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde_json::json;
 
-use super::super::store_documents::{core_id, to_doc, CORE, LOCAL_WORKSPACE, NOTIFICATIONS, SETTINGS};
+use super::super::store_documents::{
+    core_id, to_doc, CORE, LOCAL_WORKSPACE, NOTIFICATIONS, SETTINGS,
+};
 use crate::config::Config;
 use crate::storage::local::{table_exists, ImportDoc};
 
