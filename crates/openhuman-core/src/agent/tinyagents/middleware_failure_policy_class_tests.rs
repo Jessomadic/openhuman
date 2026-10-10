@@ -244,3 +244,55 @@ fn production_read_tools_time_out_as_transient() {
         );
     }
 }
+
+// ── a browser task that ended without finishing ─────────────────────────────
+
+#[test]
+fn a_failed_browser_task_gets_one_changed_attempt_not_a_credential_halt() {
+    // The task's own prose (a page's 403, a planner's timeout) is the task's
+    // report, not the tool call's verdict: nothing about the call is
+    // uncertain, the task says what it did and what to change.
+    for reason in [
+        "Planning failed: the planner returned no steps",
+        "the site answered 403 Forbidden on the login page",
+        "the planner timed out choosing the next step",
+    ] {
+        let error = format!(
+            "{} Browser task failed at step 1: {reason} Hint: narrow the goal",
+            crate::tools::status::TASK_FAILED_MARKER
+        );
+        assert_eq!(
+            recovery_policy("browser", &error, false),
+            Some(("task_failed", 1)),
+            "{reason}"
+        );
+    }
+    // A model gateway failing under the rescuer is transient.
+    let error = format!(
+        "{} Browser task failed at step 3: the rescuer gave up: rescue model returned HTTP 504",
+        crate::tools::status::TASK_FAILED_MARKER
+    );
+    assert_eq!(
+        recovery_policy("browser", &error, false),
+        Some(("transient", 2))
+    );
+}
+
+#[tokio::test]
+async fn a_failed_browser_task_nudges_toward_its_hint_then_stops_on_a_repeat() {
+    let (mw, handle, slot) = breaker();
+    let error = format!(
+        "{} Browser task failed at step 1: Planning failed Hint: name the exact button",
+        crate::tools::status::TASK_FAILED_MARKER
+    );
+    let args = serde_json::json!({"action": "task", "goal": "book it", "url": "https://shop.test/"});
+    run_call(&mw, "task-1", "browser", args.clone(), Err(&error)).await;
+    assert_eq!(drain_pause_count(&handle), 0);
+    let nudges = drain_nudge_messages(&mw);
+    assert_eq!(nudges.len(), 1, "{nudges:?}");
+    assert!(nudges[0].contains("hint"), "{nudges:?}");
+    run_call(&mw, "task-2", "browser", args, Err(&error)).await;
+    assert_eq!(drain_pause_count(&handle), 1);
+    let summary = slot.lock().unwrap().clone().unwrap();
+    assert!(summary.contains("task_failed"), "{summary}");
+}
