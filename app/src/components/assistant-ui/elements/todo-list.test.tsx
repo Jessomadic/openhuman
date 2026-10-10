@@ -43,7 +43,8 @@ describe('TodoProgressCard', () => {
       <TodoProgressCard items={items} open onOpenChange={vi.fn()} {...labels} />
     );
     const card = container.querySelector('[data-slot="todo-progress-card"]');
-    expect(card).toHaveClass('max-w-none', 'bg-transparent', 'backdrop-blur-md');
+    expect(card).toHaveClass('max-w-none', 'bg-background');
+    expect(card).not.toHaveClass('bg-transparent', 'backdrop-blur-md');
     expect(screen.getAllByTestId('todo-item')[0]).toHaveClass('text-xs', 'py-0');
   });
 

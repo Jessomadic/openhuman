@@ -209,7 +209,7 @@ export function TodoProgressCard({
       data-todo-completed={progress.done}
       data-todo-total={progress.total}
       className={cn(
-        'flex w-full max-w-none flex-col overflow-hidden rounded-lg bg-transparent backdrop-blur-md',
+        'bg-background flex w-full max-w-none flex-col overflow-hidden rounded-lg',
         className
       )}
       {...props}>
