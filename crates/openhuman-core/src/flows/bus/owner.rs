@@ -97,7 +97,7 @@ pub(super) async fn as_owner<F: std::future::Future<Output = ()>>(
     }
 }
 
-/// The configuration to handle a flow event under: the acting agent's own
+/// The configuration to handle a flow event under: the acting agent's (or SaaS profile's) own
 /// when the handler runs as one ([`as_owner`]) — its provider, access
 /// policy, memory and action directory — else `registered`, the one the
 /// subscriber was registered with.
