@@ -54,7 +54,8 @@ export function useProviderConnect({
   onConnected: () => void;
 }) {
   const latestSettings = useRef({ draft, saved });
-  const providerConnectQueues = useRef(new Map<string, Promise<void>>());
+  const providerConnectQueue = useRef(Promise.resolve());
+  const providerConnectRevisions = useRef(new Map<string, number>());
   useEffect(() => {
     latestSettings.current = { draft, saved };
   }, [draft, saved]);
@@ -99,13 +100,19 @@ export function useProviderConnect({
       endpoint?: string | null;
       credentialMode: ConnectCredentialMode;
     }) => {
-      const previousOperation = providerConnectQueues.current.get(slug);
+      const revision = (providerConnectRevisions.current.get(slug) ?? 0) + 1;
+      providerConnectRevisions.current.set(slug, revision);
+      const previousOperation = providerConnectQueue.current;
       let finishOperation!: () => void;
       const currentOperation = new Promise<void>(resolve => {
         finishOperation = resolve;
       });
-      providerConnectQueues.current.set(slug, currentOperation);
+      providerConnectQueue.current = previousOperation.then(() => currentOperation);
       if (previousOperation) await previousOperation;
+      if (revision !== providerConnectRevisions.current.get(slug)) {
+        finishOperation();
+        return;
+      }
 
       const isLocalRuntime = credentialMode === 'endpoint' || credentialMode === 'endpoint_key';
       const isEndpointKey = credentialMode === 'endpoint_key';
@@ -287,6 +294,7 @@ export function useProviderConnect({
           ...upserted,
           caCertPem: currentProvider?.caCertPem ?? currentSavedProvider?.caCertPem,
         };
+        if (revision !== providerConnectRevisions.current.get(slug)) return;
         const nextDraft = {
           ...currentSettings.draft,
           cloudProviders: [
@@ -295,6 +303,7 @@ export function useProviderConnect({
           ],
         };
         await persist(nextDraft);
+        if (revision !== providerConnectRevisions.current.get(slug)) return;
         if (isCodexOAuth && slug === 'openai') {
           await clearCloudProviderKey(slug);
         }
@@ -304,9 +313,6 @@ export function useProviderConnect({
         onConnected();
       } finally {
         setBusyAction(null);
-        if (providerConnectQueues.current.get(slug) === currentOperation) {
-          providerConnectQueues.current.delete(slug);
-        }
         finishOperation();
       }
     },

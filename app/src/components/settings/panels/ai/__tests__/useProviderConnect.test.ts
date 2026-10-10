@@ -161,7 +161,53 @@ describe('useProviderConnect', () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
-  it('serializes overlapping connection updates for the same provider', async () => {
+  it('restores the original provider list when storing the key fails', async () => {
+    const existing = {
+      id: 'provider-1',
+      slug: 'openai',
+      label: 'OpenAI',
+      endpoint: 'https://api.openai.com/v1',
+      authStyle: 'bearer' as const,
+      maskedKey: '••••old',
+      caCertPem: 'saved CA PEM',
+    };
+    const settings: AISettings = { ...EMPTY_SETTINGS, cloudProviders: [existing] };
+    api.setCloudProviderKey.mockRejectedValueOnce(new Error('key store failed'));
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useProviderConnect({
+        draft: settings,
+        saved: settings,
+        persist,
+        t: key => key,
+        onConnected: vi.fn(),
+      })
+    );
+
+    await act(async () => {
+      await expect(
+        result.current.connectProvider({
+          slug: 'openai',
+          value: 'replacement-key',
+          credentialMode: 'api_key',
+        })
+      ).rejects.toThrow('key store failed');
+    });
+
+    expect(api.flushCloudProviders).toHaveBeenNthCalledWith(2, [
+      {
+        id: 'provider-1',
+        slug: 'openai',
+        label: 'OpenAI',
+        endpoint: 'https://api.openai.com/v1',
+        ca_cert_pem: 'saved CA PEM',
+        auth_style: 'bearer',
+      },
+    ]);
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it('persists only the latest overlapping connection update', async () => {
     let finishFirst!: () => void;
     let finishSecond!: () => void;
     api.setCloudProviderKey
@@ -203,6 +249,56 @@ describe('useProviderConnect', () => {
       await first;
       await waitFor(() => expect(finishSecond).toBeTypeOf('function'));
       finishSecond();
+      await second;
+    });
+
+    expect(api.setCloudProviderKey.mock.calls.map(([, key]) => key)).toEqual([
+      'first-key',
+      'second-key',
+    ]);
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(persist.mock.calls[0][0].cloudProviders[0].slug).toBe('openai');
+  });
+
+  it('serializes provider-list updates across different providers', async () => {
+    let finishFirst!: () => void;
+    api.setCloudProviderKey.mockImplementationOnce(
+      () => new Promise<void>(resolve => (finishFirst = resolve))
+    );
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useProviderConnect({
+        draft: EMPTY_SETTINGS,
+        saved: EMPTY_SETTINGS,
+        persist,
+        t: key => key,
+        onConnected: vi.fn(),
+      })
+    );
+
+    let first!: Promise<void>;
+    act(() => {
+      first = result.current.connectProvider({
+        slug: 'openai',
+        value: 'first-key',
+        credentialMode: 'api_key',
+      });
+    });
+    await waitFor(() => expect(finishFirst).toBeTypeOf('function'));
+
+    let second!: Promise<void>;
+    act(() => {
+      second = result.current.connectProvider({
+        slug: 'anthropic',
+        value: 'second-key',
+        credentialMode: 'api_key',
+      });
+    });
+    expect(api.setCloudProviderKey).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      finishFirst();
+      await first;
       await second;
     });
 
