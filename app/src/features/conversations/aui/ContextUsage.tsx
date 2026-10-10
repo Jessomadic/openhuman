@@ -66,7 +66,7 @@ type BreakdownState =
 export function contextBreakdownSegments(
   data: ContextBreakdownData,
   t: (key: string) => string,
-  usage: Pick<SessionTokenUsage, 'lastTurnContextUsed' | 'lastTurnOutputTokens'> = EMPTY_USAGE
+  usage: Pick<SessionTokenUsage, 'lastTurnContextUsed'> = EMPTY_USAGE
 ): readonly ContextSegment[] {
   let systemPrompt = 0;
   let toolSchemas = 0;
@@ -85,13 +85,12 @@ export function contextBreakdownSegments(
       systemPrompt += section.est_tokens;
     }
   }
-  // Partition the context the last turn ended with. Every reply the turn
-  // produced is in that context (each one is input to the next call), so the
-  // turn's output is a share of it and the rest is the conversation.
-  const output = Math.min(usage.lastTurnOutputTokens, usage.lastTurnContextUsed);
+  // The turn-wide output total includes replies from earlier calls that may
+  // have been trimmed or compacted out of the final request. Keep the final
+  // context partition limited to its fixed prompt and remaining conversation.
   const yourInput = Math.max(
     0,
-    usage.lastTurnContextUsed - output - systemPrompt - toolSchemas - hiddenToolUsage
+    usage.lastTurnContextUsed - systemPrompt - toolSchemas - hiddenToolUsage
   );
   return [
     {
@@ -104,7 +103,6 @@ export function contextBreakdownSegments(
       tokens: toolSchemas,
       tint: 'bg-violet-500',
     },
-    { label: t('conversations.composer.context.output'), tokens: output, tint: 'bg-emerald-500' },
     {
       label: t('conversations.composer.context.section.yourInput'),
       tokens: yourInput,

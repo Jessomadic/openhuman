@@ -119,7 +119,7 @@ describe('ContextUsage', () => {
     await waitFor(() => expect(popover).toHaveTextContent('Tool schemas'));
     expect(popover).not.toHaveTextContent('Tool usage');
     expect(popover).not.toHaveTextContent('Thinking tokens');
-    expect(popover).toHaveTextContent('Output');
+    expect(popover).not.toHaveTextContent('Output');
     expect(popover).toHaveTextContent('Your input');
     expect(popover).toHaveTextContent('System prompt');
     // Individual system-prompt headings are folded into one stable bucket.
@@ -229,7 +229,6 @@ describe('contextBreakdownSegments', () => {
     expect(segments.map(s => [s.label, s.tokens])).toEqual([
       ['System prompt', 30],
       ['Tool schemas', 100],
-      ['Output', 0],
       ['Your input', 0],
     ]);
   });
@@ -245,16 +244,15 @@ describe('contextBreakdownSegments', () => {
         context_window: 1_000_000,
       },
       t,
-      { lastTurnContextUsed: 100_000, lastTurnOutputTokens: 30_000 }
+      { lastTurnContextUsed: 100_000 }
     );
 
-    // 100k context = 10k prompt + 20k schemas + 30k of this turn's replies +
-    // 40k of conversation. The summed 5.7M input never enters the partition.
+    // 100k context = 10k prompt + 20k schemas + 70k of conversation. The
+    // turn-wide output total is excluded because earlier replies may be gone.
     expect(segments.map(s => [s.label, s.tokens])).toEqual([
       ['System prompt', 10_000],
       ['Tool schemas', 20_000],
-      ['Output', 30_000],
-      ['Your input', 40_000],
+      ['Your input', 70_000],
     ]);
     expect(segments.reduce((sum, s) => sum + s.tokens, 0)).toBe(100_000);
   });

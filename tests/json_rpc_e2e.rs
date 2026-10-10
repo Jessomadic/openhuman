@@ -2452,6 +2452,7 @@ fn json_rpc_protocol_auth_and_agent_hello() {
 
 async fn json_rpc_protocol_auth_and_agent_hello_inner() {
     let _env_lock = json_rpc_e2e_env_lock_async().await;
+    let _scripted_fifo_guard = ScriptedFifoGuard;
     let tmp = tempdir().expect("tempdir");
     let home = tmp.path();
     let openhuman_home = home.join(".openhuman");
@@ -2536,6 +2537,10 @@ async fn json_rpc_protocol_auth_and_agent_hello_inner() {
     let thread_id = "thread-1";
     let events_url = format!("{}/events?client_id={}", rpc_base, client_id);
     let sse_task = tokio::spawn(async move { read_terminal_web_chat_event(&events_url).await });
+    push_forced_chat_completion_when(
+        "Hello from web channel",
+        forced_text_completion("Hello from e2e mock agent"),
+    );
 
     let web_chat = post_json_rpc(
         &rpc_base,
@@ -2565,6 +2570,13 @@ async fn json_rpc_protocol_auth_and_agent_hello_inner() {
     assert_eq!(
         sse_event.get("thread_id").and_then(Value::as_str),
         Some(thread_id)
+    );
+    assert_eq!(
+        sse_event
+            .pointer("/usage/context_tokens")
+            .and_then(Value::as_u64),
+        Some(20),
+        "chat_done carries the final call's input plus output token count: {sse_event}"
     );
     assert!(
         !sse_event

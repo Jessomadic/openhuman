@@ -38,11 +38,13 @@ pub(super) struct RepairUsage {
 }
 
 impl RepairUsage {
-    fn record(&mut self, usage: Option<BilledUsage>) {
+    fn record(&mut self, usage: Option<BilledUsage>, measures_context: bool) {
         self.model_calls += 1;
         if let Some(usage) = usage {
-            self.last_call_input_tokens = usage.input_tokens;
-            self.last_call_output_tokens = usage.output_tokens;
+            if measures_context {
+                self.last_call_input_tokens = usage.input_tokens;
+                self.last_call_output_tokens = usage.output_tokens;
+            }
             self.input_tokens += usage.input_tokens;
             self.output_tokens += usage.output_tokens;
             self.cached_input_tokens += usage.cached_input_tokens();
@@ -105,7 +107,7 @@ pub(super) async fn repair_required_output(
     let (candidate, candidate_usage) =
         completion(source, model, temperature, thread_id, prompt_history).await;
     let mut usage = RepairUsage::default();
-    usage.record(candidate_usage);
+    usage.record(candidate_usage, true);
     let candidate = candidate.trim().to_owned();
     let candidate_is_usable = !candidate.is_empty()
         && !contains_tool_call(dispatcher, &candidate)
@@ -281,7 +283,7 @@ where
     let mut prompt = instruction.clone();
     for attempt in 0..2 {
         let (candidate, candidate_usage) = ask(prompt).await;
-        usage.record(candidate_usage);
+        usage.record(candidate_usage, true);
         let candidate = candidate.trim().to_owned();
         let violation = if candidate.is_empty() {
             Some(CloseViolation::NoReply)
@@ -289,7 +291,9 @@ where
             Some(CloseViolation::QuotedHarnessText)
         } else {
             let (violation, verify_usage) = verify(candidate.clone()).await;
-            usage.record(verify_usage);
+            // The verifier sees one synthetic prompt, not the conversation
+            // context that will be resumed, so it must not replace the gauge.
+            usage.record(verify_usage, false);
             violation
         };
         let Some(violation) = violation else {
