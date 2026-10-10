@@ -40,8 +40,8 @@ impl ConfigSource for FileConfigSource {
         "file"
     }
 
-    async fn exists(&self) -> bool {
-        self.path.exists()
+    async fn exists(&self) -> Result<bool> {
+        Ok(self.path.exists())
     }
 
     async fn read(&self) -> Result<ConfigRead> {
@@ -65,12 +65,19 @@ impl ConfigSource for FileConfigSource {
             )
         })?;
 
+        // Built from the original `OsStr`, so a non-UTF-8 file name keeps its
+        // own temp and backup names instead of collapsing onto `config.toml`.
         let file_name = config_path
             .file_name()
-            .and_then(|v| v.to_str())
-            .unwrap_or("config.toml");
-        let temp_path = parent_dir.join(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()));
-        let backup_path = parent_dir.join(format!("{file_name}.bak"));
+            .unwrap_or_else(|| std::ffi::OsStr::new("config.toml"));
+        let with_name = |prefix: &str, suffix: String| {
+            let mut name = std::ffi::OsString::from(prefix);
+            name.push(file_name);
+            name.push(suffix);
+            parent_dir.join(name)
+        };
+        let temp_path = with_name(".", format!(".tmp-{}", uuid::Uuid::new_v4()));
+        let backup_path = with_name("", ".bak".to_string());
 
         let mut temp_file = OpenOptions::new()
             .create_new(true)
@@ -110,15 +117,24 @@ impl ConfigSource for FileConfigSource {
             }
         }
 
-        temp_file
-            .write_all(toml_str.as_bytes())
-            .await
-            .context("Failed to write temporary config contents")?;
-        temp_file
-            .sync_all()
-            .await
-            .context("Failed to fsync temporary config file")?;
+        // The staged file holds the whole config, secrets included: remove it
+        // on every failure before the commit instead of leaving it behind.
+        let staged = async {
+            temp_file
+                .write_all(toml_str.as_bytes())
+                .await
+                .context("Failed to write temporary config contents")?;
+            temp_file
+                .sync_all()
+                .await
+                .context("Failed to fsync temporary config file")
+        }
+        .await;
         drop(temp_file);
+        if let Err(error) = staged {
+            let _ = fs::remove_file(&temp_path).await;
+            return Err(error);
+        }
 
         // Everything above can still fail with the live config untouched.
         // `commit_replacement` owns the swap, and returns `Err` only while the

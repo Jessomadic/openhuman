@@ -29,7 +29,7 @@
 mod document;
 mod file;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::path::Path;
 
@@ -57,7 +57,19 @@ pub(crate) trait ConfigSource: Send + Sync {
     fn label(&self) -> &'static str;
 
     /// Whether the source holds a config at all.
-    async fn exists(&self) -> bool;
+    ///
+    /// # Errors
+    ///
+    /// A backend failure. It is never folded into "absent": a transient
+    /// outage must not make the loader fall back to defaults.
+    async fn exists(&self) -> Result<bool>;
+
+    /// Whether the source encrypts the whole body itself, so `Config::save`
+    /// must not also encrypt individual fields under the process-local key
+    /// (which another node could not decrypt).
+    fn encrypts_body(&self) -> bool {
+        false
+    }
 
     /// Read the config text, recovering from corruption where the source can.
     async fn read(&self) -> Result<ConfigRead>;
@@ -71,36 +83,50 @@ pub(crate) trait ConfigSource: Send + Sync {
 ///
 /// The document source when the host installed a shared (multi-tenant)
 /// backend and the current scope resolves; the file otherwise, which includes
-/// every desktop build and SaaS calls with no resolvable scope.
-pub(crate) fn for_config(config_path: &Path) -> Box<dyn ConfigSource> {
+/// every desktop build and SaaS calls with no resolvable scope. The scope is
+/// the ambient one, as for every other storage-backed domain.
+///
+/// # Errors
+///
+/// On a shared backend with a scope, when no master key can derive the
+/// scope's data key: the config then fails closed instead of falling back to
+/// a file that would hold the same settings unprotected.
+pub(crate) fn for_config(config_path: &Path) -> Result<Box<dyn ConfigSource>> {
     let file = FileConfigSource::new(config_path);
     #[cfg(test)]
-    if let Some((scoped, scope)) = tests_support::forced_document_scope() {
-        return Box::new(DocumentConfigSource::new(
-            std::sync::Arc::clone(scoped.documents()),
-            scope,
+    if let Some(forced) = tests_support::forced_document_scope() {
+        return Ok(Box::new(DocumentConfigSource::new(
+            std::sync::Arc::clone(forced.scoped.documents()),
+            forced.scope,
+            forced.keys,
             file,
-        ));
+        )));
     }
     if !crate::storage::installed_is_shared() {
-        return Box::new(file);
+        return Ok(Box::new(file));
     }
-    match crate::storage::current_scoped().and_then(|scoped| {
+    let resolved = crate::storage::current_scoped().and_then(|scoped| {
         let scope = crate::storage::current_scope()?;
         Ok(scoped.map(|scoped| (scoped, scope)))
-    }) {
-        Ok(Some((scoped, scope))) => Box::new(DocumentConfigSource::new(
-            std::sync::Arc::clone(scoped.documents()),
-            scope.as_str().to_string(),
-            file,
-        )),
-        Ok(None) => Box::new(file),
+    });
+    match resolved {
+        Ok(Some((scoped, scope))) => {
+            let keys = crate::storage::secrets::keys()
+                .map_err(|error| anyhow::anyhow!("config document key: {error}"))?;
+            Ok(Box::new(DocumentConfigSource::new(
+                std::sync::Arc::clone(scoped.documents()),
+                scope,
+                keys,
+                file,
+            )))
+        }
+        Ok(None) => Ok(Box::new(file)),
         Err(error) => {
             tracing::debug!(
                 error = %error,
                 "[config] no storage scope for the config document; using the file"
             );
-            Box::new(file)
+            Ok(Box::new(file))
         }
     }
 }
@@ -118,9 +144,12 @@ pub(crate) fn strip_bootstrap(toml_text: &str) -> Result<String> {
 /// (the file's), or removed when the file has none.
 pub(crate) fn apply_bootstrap(stored: &str, bootstrap_text: Option<&str>) -> Result<String> {
     let mut table: toml::Table = toml::from_str(stored)?;
-    let bootstrap: toml::Table = bootstrap_text
-        .and_then(|text| toml::from_str(text).ok())
-        .unwrap_or_default();
+    // A bootstrap file that does not parse is an error, not an empty file:
+    // treating it as empty would silently drop the storage table.
+    let bootstrap: toml::Table = match bootstrap_text {
+        Some(text) => toml::from_str(text).context("the bootstrap config file is not valid TOML")?,
+        None => toml::Table::default(),
+    };
     for name in BOOTSTRAP_TABLES {
         table.remove(*name);
         if let Some(value) = bootstrap.get(*name) {

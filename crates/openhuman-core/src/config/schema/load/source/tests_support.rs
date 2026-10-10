@@ -1,28 +1,50 @@
 //! Test seam: force the document source for the current thread without
 //! installing a process-wide backend that every other test would see.
-use crate::storage::ScopedStorage;
 use std::cell::RefCell;
+use std::sync::Arc;
 
-thread_local! {
-    static FORCED: RefCell<Option<(ScopedStorage, String)>> = const { RefCell::new(None) };
+use tinystoragedrivers::secrets::KeyProvider;
+
+use crate::storage::{Scope, ScopedStorage};
+
+/// What a forced document source is built from.
+#[derive(Clone)]
+pub(crate) struct Forced {
+    pub scoped: ScopedStorage,
+    pub scope: Scope,
+    pub keys: Arc<dyn KeyProvider>,
 }
 
-pub(crate) fn forced_document_scope() -> Option<(ScopedStorage, String)> {
+thread_local! {
+    static FORCED: RefCell<Option<Forced>> = const { RefCell::new(None) };
+}
+
+pub(crate) fn forced_document_scope() -> Option<Forced> {
     FORCED.with(|forced| forced.borrow().clone())
 }
 
-/// Forces the document source on this thread until the guard drops.
-pub(crate) struct ForcedDocumentSource;
+/// Forces the document source on this thread until the guard drops, then
+/// restores whatever was forced before (guards nest).
+pub(crate) struct ForcedDocumentSource {
+    previous: Option<Forced>,
+}
 
 impl ForcedDocumentSource {
-    pub(crate) fn new(scoped: ScopedStorage, scope: &str) -> Self {
-        FORCED.with(|forced| *forced.borrow_mut() = Some((scoped, scope.to_string())));
-        Self
+    pub(crate) fn new(scoped: ScopedStorage, scope: Scope, keys: Arc<dyn KeyProvider>) -> Self {
+        let previous = FORCED.with(|forced| {
+            forced.borrow_mut().replace(Forced {
+                scoped,
+                scope,
+                keys,
+            })
+        });
+        Self { previous }
     }
 }
 
 impl Drop for ForcedDocumentSource {
     fn drop(&mut self) {
-        FORCED.with(|forced| *forced.borrow_mut() = None);
+        let previous = self.previous.take();
+        FORCED.with(|forced| *forced.borrow_mut() = previous);
     }
 }
