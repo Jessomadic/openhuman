@@ -112,7 +112,10 @@ reference model.
   `LocalLeases` under `<root>/users`) and the profile registry, collection
   `profiles` in the same `cluster` scope. A lease taken over unclean runs
   the profile's workspace recovery; a lost one fences the profile. See
-  `profiles/README.md`.
+  `profiles/README.md`. The server opens the operator's storage URL before
+  boot (`openhuman-rpc`'s `session_store::install_for_saas`);
+  `openhuman_embed::ProfileRuntime` opens and installs it itself when no
+  backend is installed yet.
 - The session store: `openhuman_rpc::session_store::install_for_host` opens
   the configured backend before boot and installs `DriverSessionStores`
   over it. See that module's README.
