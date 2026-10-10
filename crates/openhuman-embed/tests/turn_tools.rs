@@ -1,4 +1,4 @@
-//! A host can await its own approval UI inline without polling the core.
+//! Per-turn host-tool belts replace agent tools without leaking into other turns.
 
 mod common;
 

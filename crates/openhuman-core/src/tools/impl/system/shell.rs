@@ -662,7 +662,7 @@ impl ShellTool {
         } else {
             Some(prepend_path_dirs(
                 prepend_dirs.iter().map(|p| p.as_path()),
-                &std::env::var("PATH").unwrap_or_default(),
+                &crate::tools::timeout::CommandEnvironment::var("PATH").unwrap_or_default(),
             ))
         }
     }
