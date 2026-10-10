@@ -175,7 +175,7 @@ macro_rules! fenced_write {
                 // `&str` and `Copy` arguments clone trivially; the owned ones
                 // must survive for the fallback.
                 #[allow(clippy::clone_on_copy)]
-                let outcome = scoped.$port().$method($($arg.clone()),*).await;
+                let outcome = scoped.$port().$method($(Clone::clone(&$arg)),*).await;
                 match outcome {
                     Err(error) if unfenceable(&error) => {
                         tracing::debug!(
