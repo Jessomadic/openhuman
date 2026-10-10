@@ -215,8 +215,5 @@ pub(crate) fn call_effect(lookup: Option<&ToolFactsLookup>, tool: &str, args: &V
     // A target the lookup does not know (a Composio slug, a packed tool) is
     // judged by its name alone: being reached through a read-only-declared
     // dispatcher says nothing about it.
-    match leaf_effect(inner_facts, target.tool) {
-        CallEffect::Unknown => CallEffect::Unknown,
-        known => known,
-    }
+    leaf_effect(inner_facts, target.tool)
 }
