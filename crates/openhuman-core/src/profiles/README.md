@@ -245,6 +245,13 @@ The lease drives the rest:
   must be unique among live nodes. A stable one lets a restarted node take
   its own profiles back at once instead of waiting out their leases.
 
+Known limits: storage writes carry no epoch fence, so a node that is
+partitioned but still running could write after its lease expired; the TTL
+being much longer than the renew interval, the fence check before each turn
+and stopping turns on loss are the mitigations. Each node keeps its own
+operator keyring (`operator_dir`), so a credential installed through one node
+is only readable there unless secrets live in the storage backend.
+
 ## Lifecycle
 
 Provisioning, opening, credential changes (`profiles.set_credential` /
@@ -267,10 +274,3 @@ Provisioning, opening, credential changes (`profiles.set_credential` /
 - **Opening** reads the registry again once it holds the lease: an open that
   raced a deprovision on another node answers `NotProvisioned` instead of
   recreating the archived directory.
-
-Known limits: storage writes carry no epoch fence, so a node that is
-partitioned but still running could write after its lease expired; the TTL
-being much longer than the renew interval, the fence check before each turn
-and stopping turns on loss are the mitigations. Each node keeps its own
-operator keyring (`operator_dir`), so a credential installed through one node
-is only readable there unless secrets live in the storage backend.
