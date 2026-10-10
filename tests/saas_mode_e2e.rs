@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 
 #[path = "saas_mode/cluster.rs"]
 mod cluster;
+#[path = "saas_mode/hashed_ids.rs"]
+mod hashed_ids;
 
 const BEARER: &str = "saas-e2e-gateway-bearer-0123456789abcdef";
 
