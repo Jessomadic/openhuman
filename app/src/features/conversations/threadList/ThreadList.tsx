@@ -96,15 +96,16 @@ function ThreadRow() {
 export function ThreadList(props: ThreadListProps) {
   const { t } = useT();
   const [search, setSearch] = useState('');
+  const { threads, resolveTitle } = props;
   const adapterThreads = useMemo(
     () =>
-      props.threads.map(thread => ({
+      threads.map(thread => ({
         id: thread.id,
         remoteId: thread.id,
         status: 'regular' as const,
-        title: props.resolveTitle(thread.id),
+        title: resolveTitle(thread.id),
       })),
-    [props.threads, props.resolveTitle]
+    [threads, resolveTitle]
   );
   const runtime = useExternalStoreRuntime({
     messages: EMPTY_MESSAGES,

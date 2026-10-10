@@ -38,6 +38,18 @@ describe('PinnedTodoCard', () => {
     expect(container.querySelector('[data-slot="todo-progress-card"]')).toBeNull();
   });
 
+  it('keeps pending and failed steps from appearing to run when progress is not sequential', () => {
+    const { container } = render(<PinnedTodoCard threadId="t1" items={[
+      { id: 'pending', text: 'Waiting step', status: 'pending' },
+      { id: 'done', text: 'Finished step', status: 'done' },
+      { id: 'failed', text: 'Failed step', status: 'failed', reason: 'Retry needed' },
+    ]} />);
+    fireEvent.click(toggle());
+    expect(screen.getByText('Failed step — Retry needed')).toBeVisible();
+    expect(container.querySelector('.animate-spin')).toBeNull();
+    expect(screen.getAllByTestId('todo-item').map(item => item.getAttribute('data-status'))).toEqual(['pending', 'done', 'failed']);
+  });
+
   it('opens while a step is active and stays collapsed otherwise', async () => {
     const { rerender } = render(<PinnedTodoCard threadId="t1" items={active} />);
     await waitFor(() => expect(toggle()).toHaveAttribute('aria-expanded', 'true'));

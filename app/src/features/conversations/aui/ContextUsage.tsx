@@ -202,7 +202,7 @@ export function ContextUsage({
         : 0;
     const stats = [
       { label: t('token.popCacheHit'), value: `${cacheHit}%` },
-      { label: t('token.costTitle'), value: formatCost(usage.costUsd, usage.costSource) },
+      { label: `${t('token.costTitle')}:`, value: formatCost(usage.costUsd, usage.costSource) },
       ...Object.values(usage.subAgents).map(sub => ({
         label: t('conversations.composer.context.subagentCost').replace('{agent}', sub.agentId),
         value: `${(sub.inputTokens + sub.outputTokens).toLocaleString('en-US')} · ${formatCost(
