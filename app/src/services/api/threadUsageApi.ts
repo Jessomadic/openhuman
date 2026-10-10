@@ -45,6 +45,8 @@ interface ThreadTokenUsageWire {
   turn_count: number;
   last_turn_input_tokens: number;
   last_turn_output_tokens: number;
+  /** Absent from a core that predates it. */
+  last_turn_context_tokens?: number;
   context_window: number;
   model: string | null;
   updated: string | null;
