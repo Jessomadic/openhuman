@@ -107,11 +107,17 @@ pub(super) fn is_optional_service(tool: &str) -> bool {
     )
 }
 
-/// Tools whose timeout has always been transient, kept as a floor under the
-/// side-effect reading: a `web_fetch` declaring network access must not become
-/// an uncertain action because its policy does not say `read_only`.
+/// Read tools whose timeout is always transient, kept as a floor under the
+/// side-effect reading for a call judged by name alone (no registered tool
+/// facts, e.g. a dispatcher's unregistered target): a `web_fetch` declaring
+/// network access must not become an uncertain action because its policy
+/// does not say `read_only`, and `web_answer_tool` carries no reading verb.
+/// Every entry is a production tool name; `web_search` was dropped when the
+/// search tools became TinySearch's `web_*_tool` set.
 const ALWAYS_RETRYABLE_ON_TIMEOUT: &[&str] = &[
-    "web_search",
+    "web_search_tool",
+    "web_answer_tool",
+    "web_contents_tool",
     "web_fetch",
     "file_read",
     "list_files",
@@ -238,7 +244,16 @@ pub(super) fn classified_recovery_policy(
     Some(match class {
         Class::MissingPermission => ("permission", 0),
         Class::BadCredentials => ("authentication", 0),
-        Class::BlockedByPolicy | Class::Denied | Class::ApprovalExpired => ("policy", 0),
+        // The policy refused this call before the tool ran, and its refusal
+        // names a narrower, permitted alternative (scope the path, a read
+        // instead of a write). One alternative is the point of that copy:
+        // halting on the refusal itself ended production turns after one
+        // attempt. Its own class, so a refusal does not share a budget with
+        // the user's denial, and a second refusal on the same operation and
+        // scope still stops.
+        Class::BlockedByPolicy => ("blocked_by_policy", 1),
+        // The user said no, or never answered. Asking again only re-prompts.
+        Class::Denied | Class::ApprovalExpired => ("policy", 0),
         // A shell command calling a program this host lacks (often a POSIX
         // tool on Windows) is a call the model can correct: one retry, with a
         // nudge naming the host OS and shell. Other tools keep zero.

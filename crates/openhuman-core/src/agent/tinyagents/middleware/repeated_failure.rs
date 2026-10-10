@@ -434,6 +434,7 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
                 "authentication",
                 "site_refused",
                 "policy",
+                "blocked_by_policy",
                 "unsupported",
                 "missing_window",
                 "missing_app",
@@ -479,10 +480,15 @@ impl Middleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
                         | "uncertain_side_effect"
                         | "unavailable"
                         | "service_refused"
+                        | "blocked_by_policy"
                 ) {
                     let instruction = match class {
                         "service_refused" => format!(
                             "The `{tool_name}` tool cannot be used in this session: the service refused the request ({}). Do not call `{tool_name}` again; continue with your other tools.",
+                            first_error_line(&failure_text)
+                        ),
+                        "blocked_by_policy" => format!(
+                            "The `{tool_name}` call was blocked by policy and did not run ({}). Try one narrower, permitted alternative (a scoped path, a bounded command, a read instead of a write) or continue with other tools; do not resend it unchanged, and a second refusal ends the turn.",
                             first_error_line(&failure_text)
                         ),
                         "validation" => "The last call failed validation. Correct its schema or arguments once before trying again.".to_owned(),
