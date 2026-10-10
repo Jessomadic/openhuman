@@ -1253,42 +1253,32 @@ fn replay_parked_approval(socket: &SocketRef, thread_id: &str) {
     };
     let client_id = socket.id.to_string();
     for row in gate.parked_requests_for_thread(thread_id) {
-        replay_one_parked_approval(socket, &gate, &row, thread_id, &client_id);
+        let expires_at = row.expires_at.map(|t| t.to_rfc3339());
+        let mut event = crate::core_host::web_chat::approval_request_event(
+            &row.request_id,
+            &row.tool_name,
+            &row.action_summary,
+            &row.args_redacted,
+            thread_id,
+            &client_id,
+            row.tool_call_id.as_deref(),
+            expires_at.as_deref(),
+            gate.request_is_detached(&row.request_id),
+        );
+        // Replay is a fresh emit to a newly-joined socket, not a resend of the
+        // original event, so stamp `ts` with "now" (same clock as
+        // `publish_web_channel_event`) rather than leaving it unset.
+        event.ts = Some(crate::core_host::web_chat::unix_epoch_ms());
+        let Ok(payload) = serde_json::to_value(&event) else {
+            continue;
+        };
+        log::info!(
+            "[socketio] replaying parked approval_request to joining socket client_id={client_id} thread_id={thread_id} request_id={} tool={}",
+            row.request_id,
+            row.tool_name
+        );
+        emit_with_aliases(socket, "approval_request", &payload);
     }
-}
-
-fn replay_one_parked_approval(
-    socket: &SocketRef,
-    gate: &crate::core_host::security::approval::ApprovalGate,
-    row: &crate::core_host::security::approval::PendingApproval,
-    thread_id: &str,
-    client_id: &str,
-) {
-    let expires_at = row.expires_at.map(|t| t.to_rfc3339());
-    let mut event = crate::core_host::web_chat::approval_request_event(
-        &row.request_id,
-        &row.tool_name,
-        &row.action_summary,
-        &row.args_redacted,
-        thread_id,
-        client_id,
-        row.tool_call_id.as_deref(),
-        expires_at.as_deref(),
-        gate.request_is_detached(&row.request_id),
-    );
-    // Replay is a fresh emit to a newly-joined socket, not a resend of the
-    // original event, so stamp `ts` with "now" (same clock as
-    // `publish_web_channel_event`) rather than leaving it unset.
-    event.ts = Some(crate::core_host::web_chat::unix_epoch_ms());
-    let Ok(payload) = serde_json::to_value(&event) else {
-        return;
-    };
-    log::info!(
-        "[socketio] replaying parked approval_request to joining socket client_id={client_id} thread_id={thread_id} request_id={} tool={}",
-        row.request_id,
-        row.tool_name
-    );
-    emit_with_aliases(socket, "approval_request", &payload);
 }
 
 /// Re-send the plan review parked on `thread_id`, if any, to the socket that
