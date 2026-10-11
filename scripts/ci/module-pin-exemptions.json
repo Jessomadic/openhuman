@@ -19,8 +19,8 @@
     },
     {
       "id": "tinyjuice",
-      "expect": "v0.6.1-2-gb085e82",
-      "reason": "OpenHuman integration is validating the v2 contract from tinyhumansai/tinyjuice#62 before its release. Replace this exception with the published v2 artifact and matching submodule pin before this PR is marked ready."
+      "expect": "v0.7.0-7-g7384294",
+      "reason": "The merged v2 contract and seven newer upstream commits are present in the source pin, while the registry continues to load the published v0.6.1 module. Remove this exception when a compatible artifact is published and the registry pin advances."
     }
   ]
 }
