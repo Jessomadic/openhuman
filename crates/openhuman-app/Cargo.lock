@@ -8196,7 +8196,7 @@ dependencies = [
 
 [[package]]
 name = "tinyjuice"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8222,10 +8222,11 @@ dependencies = [
 
 [[package]]
 name = "tinyjuice-bus"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
