@@ -33,6 +33,13 @@ fn default_pre_turn_waits_ten_seconds_for_memory() {
 }
 
 #[test]
+fn explicit_pre_turn_deadline_still_overrides_the_default() {
+    let config: MemoryConfig = toml::from_str("[recall]\npre_turn_timeout_ms = 5000")
+        .expect("the configured deadline parses");
+    assert_eq!(config.recall.pre_turn_timeout_ms, 5_000);
+}
+
+#[test]
 fn turning_the_github_split_off_survives_a_save() {
     // On is the default and is not written; off is, so it reads back off.
     let on = toml::to_string(&MemoryConfig::default()).unwrap();
