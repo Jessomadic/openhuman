@@ -28,8 +28,15 @@ fn defaults_select_tinyhumans_with_logging_and_recall_on() {
 }
 
 #[test]
-fn default_pre_turn_waits_five_seconds_for_memory() {
-    assert_eq!(MemoryConfig::default().recall.pre_turn_timeout_ms, 5_000);
+fn default_pre_turn_waits_ten_seconds_for_memory() {
+    assert_eq!(MemoryConfig::default().recall.pre_turn_timeout_ms, 10_000);
+}
+
+#[test]
+fn explicit_pre_turn_deadline_still_overrides_the_default() {
+    let config: MemoryConfig = toml::from_str("[recall]\npre_turn_timeout_ms = 5000")
+        .expect("the configured deadline parses");
+    assert_eq!(config.recall.pre_turn_timeout_ms, 5_000);
 }
 
 #[test]
