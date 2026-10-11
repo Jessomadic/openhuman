@@ -28,8 +28,8 @@ fn defaults_select_tinyhumans_with_logging_and_recall_on() {
 }
 
 #[test]
-fn default_pre_turn_waits_five_seconds_for_memory() {
-    assert_eq!(MemoryConfig::default().recall.pre_turn_timeout_ms, 5_000);
+fn default_pre_turn_waits_ten_seconds_for_memory() {
+    assert_eq!(MemoryConfig::default().recall.pre_turn_timeout_ms, 10_000);
 }
 
 #[test]
