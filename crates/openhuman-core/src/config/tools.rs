@@ -29,7 +29,7 @@ macro_rules! emit {
     }};
 }
 
-/// Read tool over an arg-less `async fn() -> Result<RpcOutcome<Value>, String>`.
+/// Read tool over an arg-less `async fn() -> Result<Outcome<Value>, String>`.
 macro_rules! read_tool {
     ($ty:ident, $name:literal, $fn:ident, $desc:literal) => {
         pub struct $ty;
@@ -37,6 +37,9 @@ macro_rules! read_tool {
         impl Tool for $ty {
             fn name(&self) -> &str {
                 $name
+            }
+            fn exposure(&self) -> tinytools::ToolExposure {
+                tinytools::ToolExposure::Deferred
             }
             fn description(&self) -> &str {
                 $desc
@@ -68,6 +71,10 @@ impl ConfigSnapshotTool {
 
 #[async_trait]
 impl Tool for ConfigSnapshotTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         "config_snapshot"
     }
@@ -94,11 +101,15 @@ impl Tool for ConfigSnapshotTool {
     }
 }
 
-/// Runtime flags (sync, returns RpcOutcome directly).
+/// Runtime flags (sync, returns Outcome directly).
 pub struct ConfigRuntimeFlagsTool;
 
 #[async_trait]
 impl Tool for ConfigRuntimeFlagsTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         "config_get_runtime_flags"
     }

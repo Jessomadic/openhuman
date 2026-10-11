@@ -1,16 +1,15 @@
 use super::{ArchetypeDelegationTool, DelegationTarget, SpawnSubagentTool, SpawnWorkerThreadTool};
 use crate::agent::harness::definition::AgentDefinitionRegistry;
 use crate::agent::harness::{with_parent_context, ParentExecutionContext};
-use crate::agent::messages::ChatMessage;
 use crate::agent::prompts::{ConnectedIntegration, ToolCallFormat};
-use crate::memory::conversations;
-use crate::memory::{Memory, MemoryCategory, MemoryEntry, NamespaceSummary, RecallOpts};
+use crate::threads::store as conversations;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde_json::json;
 use std::path::Path;
 use std::sync::Arc;
 use tinyagents_harness::context::RunConfig;
+use tinyagents_session::transcript::TranscriptMessage;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse};
 use tinytools::Tool;
@@ -33,7 +32,7 @@ async fn spawn_subagent_tool_runs_child_agent_e2e() {
         async {
             SpawnSubagentTool::new()
                 .execute(json!({
-                    "agent_id": "researcher",
+                    "agent_id": "task_manager_agent",
                     "prompt": format!("Investigate {SPAWN_SUBAGENT_CANARY}"),
                     "context": "parent supplied context",
                     "model": "test-model",
@@ -51,6 +50,68 @@ async fn spawn_subagent_tool_runs_child_agent_e2e() {
     assert!(provider.saw("parent supplied context"));
 }
 
+/// A child the harness stops early (failure breaker / iteration cap) is not a
+/// finished delegation: the parent's tool result must be a failure, so its own
+/// failure policy and its trace see it, and the `SubagentCompleted` progress
+/// event must say how the child was stopped.
+#[tokio::test]
+async fn spawn_subagent_reports_a_stopped_child_as_a_failed_tool_result() {
+    let _ = AgentDefinitionRegistry::init_global_builtins();
+    let workspace = tempfile::TempDir::new().expect("workspace");
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel(512);
+    let parent = parent_context(workspace.path(), Arc::new(LoopingToolModel), vec![]);
+    let result = with_parent_context(parent, async move {
+        // The live parent run a real turn hands the tool, with the turn's
+        // progress channel on the child's run context.
+        let live = super::ambient_parent_run_context("stopped-child-test").expect("parent");
+        let mut run_context = live.data.child();
+        run_context.progress = Some(progress_tx);
+        // Boxed: the inline spawn future is too large for a test thread's
+        // stack (the trait `execute` path boxes it the same way).
+        let tool = SpawnSubagentTool::new();
+        Box::pin(tool.execute_with_live_parent_context(
+            json!({
+                "agent_id": "task_manager_agent",
+                "prompt": "List the task sources",
+                "model": "test-model",
+                "blocking": true
+            }),
+            None,
+            run_context,
+            Some(&live),
+        ))
+        .await
+    })
+    .await
+    .expect("tool execution");
+
+    assert!(
+        result.is_error,
+        "a stopped child must fail the parent's tool call: {}",
+        result.output()
+    );
+    assert!(
+        result.output().contains("[SUBAGENT_INCOMPLETE]"),
+        "{}",
+        result.output()
+    );
+
+    let mut stop = None;
+    while let Ok(event) = progress_rx.try_recv() {
+        if let crate::agent::progress::AgentProgress::SubagentCompleted { stop: s, .. } = event {
+            stop = Some(s);
+        }
+    }
+    let stop = stop
+        .expect("SubagentCompleted was emitted")
+        .expect("SubagentCompleted carries the child's stop");
+    assert!(matches!(
+        stop.kind,
+        crate::agent::turn_stop::TurnStopKind::Breaker
+            | crate::agent::turn_stop::TurnStopKind::IterationCap
+    ));
+}
+
 #[tokio::test]
 async fn archetype_delegation_tool_runs_child_agent_e2e() {
     let _ = AgentDefinitionRegistry::init_global_builtins();
@@ -60,8 +121,8 @@ async fn archetype_delegation_tool_runs_child_agent_e2e() {
         "archetype-delegation-child-answer",
     )]));
     let tool = ArchetypeDelegationTool {
-        tool_name: "delegate_researcher".to_string(),
-        agent_id: DelegationTarget("researcher".to_string()),
+        tool_name: "delegate_task_manager_agent".to_string(),
+        agent_id: DelegationTarget("task_manager_agent".to_string()),
         tool_description: "Delegate research work.".to_string(),
     };
 
@@ -109,8 +170,8 @@ async fn archetype_delegation_defaults_to_async_with_durable_session_e2e() {
         "async-delegation-child-answer",
     )]));
     let tool = ArchetypeDelegationTool {
-        tool_name: "delegate_researcher".to_string(),
-        agent_id: DelegationTarget("researcher".to_string()),
+        tool_name: "delegate_task_manager_agent".to_string(),
+        agent_id: DelegationTarget("task_manager_agent".to_string()),
         tool_description: "Delegate research work.".to_string(),
     };
 
@@ -169,7 +230,7 @@ async fn archetype_delegation_defaults_to_async_with_durable_session_e2e() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     let session = finished.expect("durable session reached Idle after background completion");
-    assert_eq!(session.agent_id, "researcher");
+    assert_eq!(session.agent_id, "task_manager_agent");
     assert!(
         session
             .latest_history
@@ -179,11 +240,15 @@ async fn archetype_delegation_defaults_to_async_with_durable_session_e2e() {
     );
     // Completion queued for delivery back into the parent chat as a new turn.
     assert!(
-        crate::agent::orchestration::background_completions::has_pending("tools-e2e-async-session"),
+        !crate::agent::orchestration::background_completions::pending_for(
+            workspace.path(),
+            "thread-async-parent",
+        )
+        .is_empty(),
         "finished result queued for background delivery"
     );
-    let _ = crate::agent::orchestration::background_completions::take_pending(
-        "tools-e2e-async-session",
+    crate::agent::orchestration::background_completions::forget_workspace_for_test(
+        workspace.path(),
     );
 }
 
@@ -202,7 +267,9 @@ async fn continue_subagent_resumes_idle_durable_session_e2e() {
     let _ = env_logger::builder().is_test(true).try_init();
     let _ = AgentDefinitionRegistry::init_global_builtins();
     let registry = AgentDefinitionRegistry::global().expect("registry");
-    let definition = registry.get("researcher").expect("researcher definition");
+    let definition = registry
+        .get("task_manager_agent")
+        .expect("task_manager_agent definition");
     let workspace = tempfile::TempDir::new().expect("workspace");
     let provider = Arc::new(ScriptedModel::new(vec![(
         "continue-durable-canary",
@@ -223,8 +290,7 @@ async fn continue_subagent_resumes_idle_durable_session_e2e() {
             selector: SubagentSessionSelector {
                 parent_session: "tools-e2e-continue-session".into(),
                 parent_thread_id: Some("thread-continue-parent".into()),
-                agent_id: "researcher".into(),
-                toolkit: None,
+                agent_id: "task_manager_agent".into(),
                 // Pin the seeded session to the parent's scripted provider —
                 // continue_subagent forwards session.model into the resume, so
                 // without this the child would resolve the definition's managed
@@ -248,8 +314,8 @@ async fn continue_subagent_resumes_idle_durable_session_e2e() {
         "sub-earlier-task",
         &crate::agent::subagent_host::SubagentRunStatus::Completed,
         vec![
-            ChatMessage::user("original task from an earlier turn"),
-            ChatMessage::assistant("earlier proposal result"),
+            TranscriptMessage::user("original task from an earlier turn"),
+            TranscriptMessage::assistant("earlier proposal result"),
         ],
     )
     .expect("mark idle with history");
@@ -262,23 +328,40 @@ async fn continue_subagent_resumes_idle_durable_session_e2e() {
         RunConfig::new("continue-async-e2e").with_thread("thread-continue-parent"),
     );
     let session_id = session.subagent_session_id.clone();
-    let result = with_parent_context(ctx, async {
-        ContinueSubagentTool::new()
+    let (wrong_agent, result) = with_parent_context(ctx, async {
+        let tool = ContinueSubagentTool::new();
+        let wrong_agent = tool
             .execute_with_live_parent_context(
                 json!({
                     "task_id": session_id,
-                    "agent_id": "researcher",
+                    "agent_id": "unrelated_agent",
+                    "message": "this must not resume the worker"
+                }),
+                None,
+                parent_run.data.child(),
+                Some(&parent_run),
+            )
+            .await?;
+        let result = tool
+            .execute_with_live_parent_context(
+                json!({
+                    "task_id": session_id,
+                    // Production callers sometimes copy the roster's session
+                    // id into both fields; this is the regression case.
+                    "agent_id": session.subagent_session_id,
                     "message": "looks good — proceed with continue-durable-canary"
                 }),
                 None,
                 parent_run.data.child(),
                 Some(&parent_run),
             )
-            .await
+            .await?;
+        Ok::<_, anyhow::Error>((wrong_agent, result))
     })
     .await
     .expect("tool execution");
 
+    assert!(wrong_agent.is_error, "unrelated agent id must be rejected");
     assert!(!result.is_error, "{}", result.output());
     let out = result.output();
     assert!(
@@ -306,8 +389,8 @@ async fn continue_subagent_resumes_idle_durable_session_e2e() {
         provider.saw("original task from an earlier turn"),
         "persisted history was replayed into the resumed run"
     );
-    let _ = crate::agent::orchestration::background_completions::take_pending(
-        "tools-e2e-continue-session",
+    crate::agent::orchestration::background_completions::forget_workspace_for_test(
+        workspace.path(),
     );
 }
 
@@ -324,7 +407,7 @@ async fn continue_subagent_without_checkpoint_or_durable_session_names_the_roste
         ContinueSubagentTool::new()
             .execute(json!({
                 "task_id": "sub-does-not-exist",
-                "agent_id": "researcher",
+                "agent_id": "task_manager_agent",
                 "message": "hello?"
             }))
             .await
@@ -358,7 +441,7 @@ async fn spawn_worker_thread_tool_persists_worker_thread_e2e() {
         async {
             SpawnWorkerThreadTool::new()
                 .execute(json!({
-                    "agent_id": "researcher",
+                    "agent_id": "task_manager_agent",
                     "prompt": format!("Handle long task {WORKER_THREAD_CANARY}"),
                     "task_title": "Long delegated task",
                     "model": "test-model"
@@ -399,9 +482,7 @@ fn parent_context(
     ParentExecutionContext {
         workspace_descriptor: None,
         agent_definition_id: "orchestrator".into(),
-        allowed_subagent_ids: ["researcher".to_string(), "integrations_agent".to_string()]
-            .into_iter()
-            .collect(),
+        allowed_subagent_ids: ["task_manager_agent".to_string()].into_iter().collect(),
         turn_model_source: crate::agent::tinyagents::TurnModelSource::from_model(model),
         all_tools: Arc::new(Vec::new()),
         all_tool_specs: Arc::new(Vec::new()),
@@ -411,7 +492,6 @@ fn parent_context(
         model_name: "test-model".into(),
         temperature: 0.2,
         workspace_dir: workspace_dir.to_path_buf(),
-        memory: Arc::new(NoopMemory),
         agent_config: Default::default(),
         workflows: Arc::new(Vec::new()),
         memory_context: Arc::new(None),
@@ -485,60 +565,33 @@ fn flatten_messages(messages: &[Message]) -> String {
         .join("\n")
 }
 
-struct NoopMemory;
+/// A model that never stops asking for the same unavailable tool, so the child
+/// run can only end by being stopped.
+struct LoopingToolModel;
 
 #[async_trait]
-impl Memory for NoopMemory {
-    async fn store(
+impl ChatModel<()> for LoopingToolModel {
+    fn profile(&self) -> Option<&ModelProfile> {
+        static PROFILE: std::sync::OnceLock<ModelProfile> = std::sync::OnceLock::new();
+        Some(PROFILE.get_or_init(|| {
+            let mut profile = ModelProfile::default();
+            profile.tool_calling = true;
+            profile
+        }))
+    }
+
+    async fn invoke(
         &self,
-        _namespace: &str,
-        _key: &str,
-        _value: &str,
-        _category: MemoryCategory,
-        _source: Option<&str>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn recall(
-        &self,
-        _query: &str,
-        _limit: usize,
-        _opts: RecallOpts<'_>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        Ok(Vec::new())
-    }
-
-    async fn get(&self, _namespace: &str, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
-        Ok(None)
-    }
-
-    async fn list(
-        &self,
-        _namespace: Option<&str>,
-        _category: Option<&MemoryCategory>,
-        _source: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        Ok(Vec::new())
-    }
-
-    async fn forget(&self, _namespace: &str, _key: &str) -> anyhow::Result<bool> {
-        Ok(false)
-    }
-
-    async fn namespace_summaries(&self) -> anyhow::Result<Vec<NamespaceSummary>> {
-        Ok(Vec::new())
-    }
-
-    async fn count(&self) -> anyhow::Result<usize> {
-        Ok(0)
-    }
-
-    async fn health_check(&self) -> bool {
-        true
-    }
-
-    fn name(&self) -> &str {
-        "noop"
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        let mut response = ModelResponse::assistant("");
+        response.message.tool_calls = vec![tinyinference_llm::tool::ToolCall::new(
+            "call-loop",
+            "task_source_list",
+            json!({}),
+        )];
+        response.finish_reason = Some("tool_calls".to_string());
+        Ok(response)
     }
 }

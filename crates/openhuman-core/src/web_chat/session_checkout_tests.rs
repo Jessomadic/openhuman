@@ -14,13 +14,14 @@ use super::{
     checkin_session_agent, checkin_session_agent_if_vacant, checkout_session_agent,
     fingerprint_diff, CheckedOutSession, CheckoutPolicy,
 };
-use crate::agent::messages::{ChatMessage, ConversationMessage};
 use crate::agent::OpenHumanSessionHost;
 use crate::config::Config;
-use crate::web_chat::ops::{key_for, THREAD_SESSIONS};
+use crate::web_chat::ops::{key_for, thread_sessions};
 use crate::web_chat::types::SessionCacheFingerprint;
+use tinyagents_session::transcript::TranscriptMessage;
+use tinytools_agent::dialect::TranscriptEntry;
 
-fn test_config(tmp: &tempfile::TempDir) -> Config {
+pub(super) fn test_config(tmp: &tempfile::TempDir) -> Config {
     let config = Config {
         workspace_dir: tmp.path().join("workspace"),
         action_dir: tmp.path().join("workspace"),
@@ -31,7 +32,7 @@ fn test_config(tmp: &tempfile::TempDir) -> Config {
     config
 }
 
-fn unique_thread(tag: &str) -> String {
+pub(super) fn unique_thread(tag: &str) -> String {
     format!("thread-checkout-{tag}-{}", uuid::Uuid::new_v4())
 }
 
@@ -46,12 +47,11 @@ fn write_thread_transcript(workspace_dir: &Path, stem: &str, thread_id: &str, ro
         .enumerate()
         .map(|(index, text)| {
             if index % 2 == 0 {
-                ChatMessage::user(*text)
+                TranscriptMessage::user(*text)
             } else {
-                ChatMessage::assistant(*text)
+                TranscriptMessage::assistant(*text)
             }
         })
-        .map(|message| crate::agent::messages::transcript_message_from_chat(&message))
         .collect();
     let meta = TranscriptMeta {
         session_id: None,
@@ -65,6 +65,7 @@ fn write_thread_transcript(workspace_dir: &Path, stem: &str, thread_id: &str, ro
         created: "2026-09-20T15:33:42Z".into(),
         updated: "2026-09-20T15:36:32Z".into(),
         turn_count: rows.len() / 2,
+        prefix_message_count: None,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,
@@ -75,17 +76,17 @@ fn write_thread_transcript(workspace_dir: &Path, stem: &str, thread_id: &str, ro
     write_transcript(&path, &messages, &meta, None).unwrap();
 }
 
-fn prose(history: &[ConversationMessage]) -> Vec<String> {
+fn prose(history: &[TranscriptEntry]) -> Vec<String> {
     history
         .iter()
         .filter_map(|message| match message {
-            ConversationMessage::Chat(chat) => Some(chat.content.clone()),
+            TranscriptEntry::Chat(chat) => Some(chat.content.clone()),
             _ => None,
         })
         .collect()
 }
 
-fn host_seeded_with(config: &Config, marker: &str) -> OpenHumanSessionHost {
+pub(super) fn host_seeded_with(config: &Config, marker: &str) -> OpenHumanSessionHost {
     let mut host = OpenHumanSessionHost::from_config_for_agent(config, "orchestrator").unwrap();
     host.seed_resume_from_messages(
         vec![
@@ -99,7 +100,10 @@ fn host_seeded_with(config: &Config, marker: &str) -> OpenHumanSessionHost {
 }
 
 async fn evict(thread_id: &str) {
-    THREAD_SESSIONS.lock().await.remove(&key_for(thread_id));
+    thread_sessions()
+        .lock_owned()
+        .await
+        .remove(&key_for(thread_id));
 }
 
 #[tokio::test]
@@ -148,7 +152,7 @@ async fn checkout_cold_boots_from_the_thread_transcript_and_checkin_keeps_it_war
     );
 
     checkin_session_agent(&thread_id, agent, fingerprint).await;
-    assert!(THREAD_SESSIONS
+    assert!(thread_sessions()
         .lock()
         .await
         .contains_key(&key_for(&thread_id)));
@@ -172,7 +176,7 @@ async fn checkout_cold_boots_from_the_thread_transcript_and_checkin_keeps_it_war
         "warm checkout must carry the same history"
     );
     // Checked out means removed: nobody else can drive this agent meanwhile.
-    assert!(!THREAD_SESSIONS
+    assert!(!thread_sessions()
         .lock()
         .await
         .contains_key(&key_for(&thread_id)));
@@ -258,7 +262,7 @@ async fn a_fork_never_takes_or_returns_the_cached_agent() {
     // Built fresh: no transcript on disk for this thread, so an empty history.
     assert!(prose(&agent.history()).is_empty());
     // The primary's cached agent was left in place.
-    assert!(THREAD_SESSIONS
+    assert!(thread_sessions()
         .lock()
         .await
         .contains_key(&key_for(&thread_id)));
@@ -372,11 +376,13 @@ async fn a_thread_binds_one_stable_session_across_cold_boots() {
 fn sample_fingerprint() -> SessionCacheFingerprint {
     SessionCacheFingerprint {
         model_override: Some("hint:chat".to_string()),
+        effective_model: "openrouter/author/model".to_string(),
         temperature: Some(0.7),
         target_agent_id: "orchestrator".to_string(),
         provider_binding: "openhuman".to_string(),
         autonomy_signature: r#"{"approval_required":true,"action_dir":"/home/u/w"}"#.to_string(),
         model_registry_signature: r#"[{"id":"m","provider":"p","vision":false}]"#.to_string(),
+        workspace_dir: std::path::PathBuf::from("/ws/a"),
     }
 }
 
@@ -495,4 +501,190 @@ fn fingerprint_diff_reports_every_differing_field() {
         diff.iter().any(|d| d.starts_with("provider_binding:")),
         "{diff:?}"
     );
+}
+
+/// `[agent] chat_agent_id` is the only lever that moves the web-chat path off
+/// the orchestrator. A definition's `effective_max_iterations()` overwrites
+/// `agent.max_tool_iterations` in `session_host::builder::factory`, so an
+/// operator who needs a longer-running turn has to change *which agent
+/// answers*, not the cap — these cases pin that selection.
+#[test]
+fn chat_agent_id_selects_the_web_chat_agent_and_defaults_to_the_orchestrator() {
+    use super::pick_target_agent_id;
+    crate::agent::harness::AgentDefinitionRegistry::init_global_builtins().unwrap();
+
+    let mut config = crate::config::Config::default();
+    assert_eq!(
+        config.agent.chat_agent_id, None,
+        "the shipped default leaves it unset"
+    );
+    assert_eq!(
+        pick_target_agent_id(&config),
+        "orchestrator",
+        "unset falls back to what the app runs"
+    );
+
+    config.agent.chat_agent_id = Some("planner".to_string());
+    assert_eq!(pick_target_agent_id(&config), "planner");
+
+    // Padding is an operator typo in a hand-edited config.toml, not a request
+    // for an agent whose id has spaces in it.
+    config.agent.chat_agent_id = Some("  planner  ".to_string());
+    assert_eq!(pick_target_agent_id(&config), "planner");
+
+    // Blank is "unset", not "an agent named empty string": a turn routed at an
+    // id the registry cannot answer would fail chat outright.
+    for blank in ["", "   "] {
+        config.agent.chat_agent_id = Some(blank.to_string());
+        assert_eq!(
+            pick_target_agent_id(&config),
+            "orchestrator",
+            "blank {blank:?} falls back rather than routing nowhere"
+        );
+    }
+
+    config.agent.chat_agent_id = Some("typoed_agent".to_string());
+    assert_eq!(
+        pick_target_agent_id(&config),
+        "orchestrator",
+        "an unknown optional setting must not take web chat down"
+    );
+}
+
+/// A host-authored turn adopts the thread's agent whatever settings built it,
+/// but never one built against another workspace: after a different user
+/// signs in, the old user's live session must not answer for the new one.
+#[tokio::test]
+async fn a_system_turn_never_adopts_an_agent_from_another_workspace() {
+    let tmp_a = tempfile::tempdir().unwrap();
+    let tmp_b = tempfile::tempdir().unwrap();
+    let config_a = test_config(&tmp_a);
+    let config_b = test_config(&tmp_b);
+    let thread_id = unique_thread("workspace");
+    let built_for_a =
+        super::build_session_fingerprint(&config_a, None, None, "orchestrator".into(), "chat");
+    checkin_session_agent(
+        &thread_id,
+        host_seeded_with(&config_a, "user-a-history"),
+        built_for_a,
+    )
+    .await;
+
+    let CheckedOutSession { agent, fingerprint } = checkout_session_agent(
+        &config_b,
+        super::super::SYSTEM_CLIENT_ID,
+        &thread_id,
+        None,
+        None,
+        None,
+        CheckoutPolicy::AdoptCached,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !prose(&agent.history()).contains(&"user-a-history".to_string()),
+        "workspace B must not inherit workspace A's session"
+    );
+    assert_eq!(fingerprint.workspace_dir, config_b.workspace_dir);
+    evict(&thread_id).await;
+}
+
+#[test]
+fn fingerprint_diff_names_a_workspace_change() {
+    let base = sample_fingerprint();
+    let mut moved = base.clone();
+    moved.workspace_dir = std::path::PathBuf::from("/ws/b");
+    let diff = fingerprint_diff(&base, &moved);
+    assert_eq!(diff.len(), 1, "{diff:?}");
+    assert!(diff[0].starts_with("workspace_dir"), "{diff:?}");
+}
+
+/// Every checkout arms the reply language from THIS turn's locale, on a fresh
+/// build and on a reused cached agent alike, and a locale with no directive
+/// (English) clears a stale one. Before the fix the directive was computed
+/// only on a fresh build, logged, and dropped.
+#[tokio::test]
+async fn each_checkout_arms_the_reply_language_from_its_own_locale() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = test_config(&tmp);
+    let thread_id = unique_thread("locale");
+    let checkout = |locale: Option<&'static str>| {
+        let config = config.clone();
+        let thread_id = thread_id.clone();
+        async move {
+            checkout_session_agent(
+                &config,
+                "client-1",
+                &thread_id,
+                None,
+                None,
+                locale,
+                CheckoutPolicy::Exact,
+            )
+            .await
+            .unwrap()
+        }
+    };
+
+    // Fresh build, Spanish UI.
+    let CheckedOutSession { agent, fingerprint } = checkout(Some("es")).await;
+    let directive = agent
+        .reply_language_directive()
+        .expect("es arms a directive");
+    assert!(directive.contains("Spanish"), "{directive}");
+    checkin_session_agent(&thread_id, agent, fingerprint).await;
+
+    // Reused cached agent, the user switched the UI to English: the Spanish
+    // directives already in the history are superseded explicitly.
+    assert!(
+        thread_sessions()
+            .lock()
+            .await
+            .contains_key(&key_for(&thread_id)),
+        "fixture: the next checkout must reuse the cached agent"
+    );
+    let CheckedOutSession { agent, fingerprint } = checkout(Some("en")).await;
+    let directive = agent
+        .reply_language_directive()
+        .expect("switching to English supersedes the Spanish directive");
+    assert!(directive.contains("Respond in English"), "{directive}");
+    checkin_session_agent(&thread_id, agent, fingerprint).await;
+
+    // Reused again, now Hindi: re-armed with the new language.
+    assert!(thread_sessions()
+        .lock()
+        .await
+        .contains_key(&key_for(&thread_id)));
+    let CheckedOutSession { agent, .. } = checkout(Some("hi")).await;
+    let directive = agent
+        .reply_language_directive()
+        .expect("hi arms a directive");
+    assert!(directive.contains("Hindi"), "{directive}");
+    evict(&thread_id).await;
+}
+
+/// A session that has only ever been English gets no directive: replies keep
+/// following the language the user writes in. A turn that sends no locale (a
+/// host-authored one) carries none either.
+#[tokio::test]
+async fn an_english_only_session_and_a_locale_less_turn_carry_no_directive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = test_config(&tmp);
+    let thread_id = unique_thread("english");
+    for locale in [Some("en"), None] {
+        let CheckedOutSession { agent, fingerprint } = checkout_session_agent(
+            &config,
+            "client-1",
+            &thread_id,
+            None,
+            None,
+            locale,
+            CheckoutPolicy::Exact,
+        )
+        .await
+        .unwrap();
+        assert_eq!(agent.reply_language_directive(), None, "{locale:?}");
+        checkin_session_agent(&thread_id, agent, fingerprint).await;
+    }
+    evict(&thread_id).await;
 }

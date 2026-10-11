@@ -5,8 +5,6 @@ import { cn } from '../../lib/cn';
 
 export const DropdownMenuRoot = DropdownMenuPrimitive.Root;
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
-export const DropdownMenuGroup = DropdownMenuPrimitive.Group;
-export const DropdownMenuLabel = DropdownMenuPrimitive.Label;
 
 export interface DropdownMenuContentProps extends ComponentPropsWithoutRef<
   typeof DropdownMenuPrimitive.Content
@@ -49,16 +47,6 @@ export const DropdownMenuItem = ({
       'data-disabled:pointer-events-none data-disabled:opacity-50',
       className
     )}
-    {...rest}
-  />
-);
-
-export const DropdownMenuSeparator = ({
-  className,
-  ...rest
-}: ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>) => (
-  <DropdownMenuPrimitive.Separator
-    className={cn('my-1 h-px bg-line-subtle', className)}
     {...rest}
   />
 );

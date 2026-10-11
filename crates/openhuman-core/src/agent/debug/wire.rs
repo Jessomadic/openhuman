@@ -85,9 +85,6 @@ pub fn render(dumped: &DumpedPrompt) -> String {
     out.push_str(" WHAT THE MODEL RECEIVES, BEFORE THE USER SAYS ANYTHING\n");
     out.push_str("════════════════════════════════════════════════════════════════════\n");
     let _ = writeln!(out, " agent          {}", dumped.agent_id);
-    if let Some(toolkit) = &dumped.toolkit {
-        let _ = writeln!(out, " toolkit        {toolkit}");
-    }
     let _ = writeln!(out, " model          {}", dumped.model);
     let _ = writeln!(out, " workspace      {}", dumped.workspace_dir.display());
     out.push('\n');

@@ -300,14 +300,14 @@ fn digest_is_pinned(record: &super::ModuleRecord, sha256: &str) -> bool {
     // official module without changing the confidential-call policy.
     //
     // This is the linux x86_64 library shipped inside
-    // tinywallet-module-0.5.1-ubuntu-22.04-x86_64.tar.gz. Its archive checksum
+    // tinywallet-module-0.5.3-ubuntu-22.04-x86_64.tar.gz. Its archive checksum
     // remains in the registry above; the two digests intentionally cover
     // different bytes.
-    const TINYWALLET_0_5_1_UBUNTU_22_04_X86_64_LIBRARY_SHA256: &str =
-        "2bd70433707c44dbfe6b3cc3b4cc835299fe951fcb375b49c940d8d3fc1d4061";
+    const TINYWALLET_0_5_3_UBUNTU_22_04_X86_64_LIBRARY_SHA256: &str =
+        "d2e663e465c6c245cbf9b37c037ae655db7df0f93a0df9b7fa17a28027ebaa9d";
 
     release_archive_is_pinned
-        || sha256.eq_ignore_ascii_case(TINYWALLET_0_5_1_UBUNTU_22_04_X86_64_LIBRARY_SHA256)
+        || sha256.eq_ignore_ascii_case(TINYWALLET_0_5_3_UBUNTU_22_04_X86_64_LIBRARY_SHA256)
 }
 
 /// Load the wallet module if it is not already serving.
@@ -375,27 +375,6 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
         out
     })
-}
-
-/// Decode lowercase hex from the module.
-fn unhex(value: &str) -> Result<Vec<u8>, WalletCallError> {
-    if !value.len().is_multiple_of(2) {
-        return Err(WalletCallError::Failed(
-            "the module returned a payload with an odd number of hex characters".to_string(),
-        ));
-    }
-    value
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            std::str::from_utf8(pair)
-                .ok()
-                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-                .ok_or_else(|| {
-                    WalletCallError::Failed("the module returned a non-hex payload".to_string())
-                })
-        })
-        .collect()
 }
 
 #[cfg(test)]

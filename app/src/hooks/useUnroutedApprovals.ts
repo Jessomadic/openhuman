@@ -30,7 +30,7 @@
  * as an event on a bus nobody is listening to at that moment".
  *
  * It is also origin-agnostic. Anything the gate parks and no one claims shows
- * up here — `ExternalChannel` and `TrustedAutomation{GoalContinuation}` parks
+ * up here — `ExternalChannel` and `TrustedAutomation{Workflow}` parks
  * included, not just triage.
  *
  * ## The discriminator, and which way it fails
@@ -86,12 +86,18 @@ export function useUnroutedApprovals(enabled = true): UseUnroutedApprovalsResult
     state => state.chatRuntime.pendingApprovalByThread
   );
 
+  // Every request id a chat card has ever shown, not only the ones it shows
+  // now. Deciding from the chat card clears its entry at once, while the
+  // polled rows keep that park until the next poll (up to 15 s); matching on
+  // "shown right now" would put the answered park back here as a second card
+  // whose decide then fails with "already decided". A chat-owned park is
+  // never unrouted, so once seen it stays excluded.
+  const everChatRoutedIds = useRef(new Set<string>());
   const chatRoutedIds = useMemo(() => {
-    const ids = new Set<string>();
     for (const approval of Object.values(pendingApprovalByThread ?? {})) {
-      if (approval?.requestId) ids.add(approval.requestId);
+      if (approval?.requestId) everChatRoutedIds.current.add(approval.requestId);
     }
-    return ids;
+    return new Set(everChatRoutedIds.current);
   }, [pendingApprovalByThread]);
 
   const approvals = useMemo(

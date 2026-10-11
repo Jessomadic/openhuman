@@ -4,10 +4,13 @@
 
 use serde_json::{Map, Value};
 
+use tinyagents_session::run_ledger::command_center::{apply_control, list_agent_work, ControlVerb};
+
+use crate::agent::harness::definition::AgentDefinitionRegistry;
 use crate::config::rpc as config_rpc;
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 
 /// Controller schemas exposed by the command center.
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
@@ -95,7 +98,7 @@ fn handle_agent_work_list(params: Map<String, Value>) -> ControllerFuture {
             .get("limit")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
-        let view = super::ops::list_agent_work(&config, limit).map_err(|e| {
+        let view = list_agent_work(&config.workspace_dir, limit, &resolve_display_name).map_err(|e| {
             let s = e.to_string();
             log::warn!(target: "command_center_rpc", "[command_center_rpc][{cid}] list.error err={s}");
             s
@@ -115,7 +118,7 @@ fn handle_agent_work_control(params: Map<String, Value>) -> ControllerFuture {
             })?;
         let run_id = require_str(&params, "runId")?;
         let action = require_str(&params, "action")?;
-        let verb = super::ControlVerb::parse(&action).ok_or_else(|| {
+        let verb = ControlVerb::parse(&action).ok_or_else(|| {
             let s = format!("unknown control action: {action}");
             log::warn!(target: "command_center_rpc", "[command_center_rpc][{cid}] control.unknown_action action={action}");
             s
@@ -123,12 +126,13 @@ fn handle_agent_work_control(params: Map<String, Value>) -> ControllerFuture {
         let message = opt_str(&params, "message");
         let reason = opt_str(&params, "reason");
         log::debug!(target: "command_center_rpc", "[command_center_rpc][{cid}] control.parsed run_id={run_id} verb={}", verb.as_str());
-        let row = super::apply_control(
-            &config,
+        let row = apply_control(
+            &config.workspace_dir,
             &run_id,
             verb,
             message.as_deref(),
             reason.as_deref(),
+            &resolve_display_name,
         )
         .map_err(|e| {
             let s = e.to_string();
@@ -140,8 +144,18 @@ fn handle_agent_work_control(params: Map<String, Value>) -> ControllerFuture {
     })
 }
 
+/// Resolve an agent id to its registry display name, if the registry is up and
+/// the agent is known. Returns `None` otherwise (e.g. custom/removed agents).
+fn resolve_display_name(agent_id: &str) -> Option<String> {
+    AgentDefinitionRegistry::current().and_then(|registry| {
+        registry
+            .get(agent_id)
+            .map(|definition| definition.display_name().to_string())
+    })
+}
+
 fn to_json<T: serde::Serialize>(value: T) -> Result<Value, String> {
-    RpcOutcome::new(value, vec![]).into_cli_compatible_json()
+    Outcome::new(value, vec![]).into_cli_compatible_json()
 }
 
 fn new_correlation_id() -> String {

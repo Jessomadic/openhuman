@@ -20,11 +20,26 @@ use super::fetch::{connectable_toolkit_slugs, resolve_toolkit_description};
 ///
 /// Returns `None` when we couldn't even build a client (no auth),
 /// signalling the caller should NOT cache this result.
-pub(super) async fn fetch_connected_integrations_uncached(
+///
+/// Returned boxed and `#[inline(never)]` on purpose: an `async fn` body is
+/// otherwise re-instantiated inside every crate / codegen unit that awaits it,
+/// and these state machines are large. Boxing here keeps one copy, compiled in
+/// this crate.
+#[inline(never)]
+pub(super) fn fetch_connected_integrations_uncached(
+    config: &Config,
+) -> futures::future::BoxFuture<'_, Option<Vec<ConnectedIntegration>>> {
+    Box::pin(fetch_connected_integrations_uncached_inner(config))
+}
+
+async fn fetch_connected_integrations_uncached_inner(
     config: &Config,
 ) -> Option<Vec<ConnectedIntegration>> {
-    use super::super::client::{
-        create_composio_client, direct_list_connections, ComposioClientKind,
+    use super::super::client::{direct_list_connections, resolve_composio_route, ComposioRoute};
+    use super::super::module_client::{self as connectors, methods};
+    use super::super::types::{
+        ComposioConnectionsResponse, ComposioListToolsRequest, ComposioToolkitsResponse,
+        ComposioToolsResponse,
     };
 
     // Route via the mode-aware factory so the chat-agent's
@@ -38,7 +53,7 @@ pub(super) async fn fetch_connected_integrations_uncached(
     // a different set of toolkits). Resolving per call closes the
     // loop: `ComposioConfigChangedSubscriber` invalidates the cache on
     // toggle and the next miss re-populates it from the live tenant.
-    let kind = match create_composio_client(config) {
+    let kind = match resolve_composio_route(config) {
         Ok(kind) => kind,
         Err(e) => {
             tracing::debug!(
@@ -68,11 +83,16 @@ pub(super) async fn fetch_connected_integrations_uncached(
         Vec<super::super::types::ComposioToolSchema>,
         std::collections::HashMap<String, String>,
     ) = match &kind {
-        ComposioClientKind::Backend(client) => {
+        ComposioRoute::Backend => {
             let (allowlist, catalog_descriptions): (
                 Vec<String>,
                 std::collections::HashMap<String, String>,
-            ) = match client.list_toolkits().await {
+            ) = match connectors::call_bare::<ComposioToolkitsResponse>(
+                config,
+                methods::LIST_TOOLKITS,
+            )
+            .await
+            {
                 Ok(resp) => {
                     // Index the dynamic catalog's descriptions by lowercased
                     // slug so the prompt builder can prefer them over the
@@ -123,7 +143,12 @@ pub(super) async fn fetch_connected_integrations_uncached(
                 return Some(Vec::new());
             }
 
-            let connections = match client.list_connections().await {
+            let connections = match connectors::call_bare::<ComposioConnectionsResponse>(
+                config,
+                methods::LIST_CONNECTIONS,
+            )
+            .await
+            {
                 Ok(resp) => resp.connections,
                 Err(e) => {
                     tracing::warn!(
@@ -149,9 +174,16 @@ pub(super) async fn fetch_connected_integrations_uncached(
             let tools = if connected_slugs_for_tools.is_empty() {
                 Vec::new()
             } else {
-                match client
-                    .list_tools(Some(&connected_slugs_for_tools), None)
-                    .await
+                match connectors::call::<_, ComposioToolsResponse>(
+                    config,
+                    methods::LIST_TOOLS,
+                    ComposioListToolsRequest {
+                        toolkits: connected_slugs_for_tools.clone(),
+                        tags: Vec::new(),
+                        apply_user_scopes: false,
+                    },
+                )
+                .await
                 {
                     Ok(resp) => resp.tools,
                     Err(e) => {
@@ -165,7 +197,7 @@ pub(super) async fn fetch_connected_integrations_uncached(
 
             (allowlist, connections, tools, catalog_descriptions)
         }
-        ComposioClientKind::Direct(direct) => {
+        ComposioRoute::Direct(direct) => {
             // Direct mode: walk the user's personal Composio tenant
             // for *connection state* (active accounts on their key) —
             // there's no central allowlist in direct mode, so the
@@ -182,10 +214,8 @@ pub(super) async fn fetch_connected_integrations_uncached(
             // execution itself (via `ComposioActionTool` / Wave 1
             // factory) still routes to the user's tenant. Direct-only
             // users without a backend session get empty tools — that
-            // matches `composio_list_tools`'s direct-mode policy and
-            // the `subagent_host` LazyToolkitResolver still resolves
-            // tools lazily at delegation time.
-            let connections = match direct_list_connections(direct).await {
+            // matches `composio_list_tools`'s direct-mode policy.
+            let connections = match direct_list_connections(config, direct).await {
                 Ok(resp) => resp.connections,
                 Err(e) => {
                     tracing::warn!(
@@ -216,30 +246,24 @@ pub(super) async fn fetch_connected_integrations_uncached(
                 "[composio-direct] fetch_connected_integrations: using direct tenant's active set as allowlist (no central allowlist in direct mode)"
             );
 
-            // Best-effort: pull tool schemas via the backend client
-            // (definitional source). Failure is non-fatal — we fall
-            // back to empty tools and let lazy resolution handle it.
-            let tools = match super::super::client::build_composio_client(config) {
-                Some(backend_client) => {
-                    match backend_client.list_tools(Some(&allowlist), None).await {
-                        Ok(resp) => {
-                            tracing::debug!(
-                            count = resp.tools.len(),
-                            "[composio-direct] fetch_connected_integrations: pulled tool schemas from backend (tenant-agnostic definitional source)"
-                        );
-                            resp.tools
-                        }
-                        Err(e) => {
-                            tracing::info!(
-                            "[composio-direct] fetch_connected_integrations: backend list_tools failed (will use lazy fallback at delegation time): {e:#}"
-                        );
-                            Vec::new()
-                        }
-                    }
+            // Tool schemas are tenant-agnostic, but direct mode must keep
+            // every Composio request on the user's direct route. Failure is
+            // non-fatal — lazy resolution can still discover actions later.
+            let tools = match super::super::client::direct_list_tools(
+                config, direct, &allowlist, None,
+            )
+            .await
+            {
+                Ok(resp) => {
+                    tracing::debug!(
+                        count = resp.tools.len(),
+                        "[composio-direct] fetch_connected_integrations: pulled tool schemas from direct route"
+                    );
+                    resp.tools
                 }
-                None => {
+                Err(e) => {
                     tracing::info!(
-                        "[composio-direct] fetch_connected_integrations: no backend session for schema fetch; lazy fallback at delegation time"
+                        "[composio-direct] fetch_connected_integrations: direct list_tools failed (will use lazy fallback at delegation time): {e:#}"
                     );
                     Vec::new()
                 }
@@ -263,9 +287,8 @@ pub(super) async fn fetch_connected_integrations_uncached(
         .filter(|toolkit| !toolkit.is_empty())
         .collect();
 
-    // Most-informative *non-active* status per toolkit slug. Lets the
-    // integrations_agent spawn-gate (#2365) emit a precise message
-    // when a connection row exists but isn't usable yet (`INITIATED`
+    // Most-informative *non-active* status per toolkit slug (#2365):
+    // distinguishes a connection row that isn't usable yet (`INITIATED`
     // — OAuth still in progress) or any longer (`EXPIRED` / `FAILED`)
     // — instead of the legacy generic "available but not authorized".
     //
@@ -363,9 +386,8 @@ pub(super) async fn fetch_connected_integrations_uncached(
         let (tools, gated_tools): (Vec<ConnectedIntegrationTool>, Vec<GatedIntegrationTool>) =
             if connected {
                 // Apply the same curated-whitelist + user-scope filter the
-                // meta-tool layer uses, so the integrations_agent prompt
-                // only advertises actions the agent is actually allowed to
-                // call. One pref load per toolkit (not per action).
+                // meta-tool layer uses, so a prompt only advertises actions
+                // the agent is actually allowed to call. One pref load per toolkit (not per action).
                 //
                 // Actions that the catalog *does* know about but the user's
                 // current scope pref denies are routed into `gated_tools` so

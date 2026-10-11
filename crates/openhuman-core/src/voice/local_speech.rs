@@ -1,10 +1,11 @@
 //! OpenHuman configuration adapter for local Piper text-to-speech.
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
-use crate::voice::reply_speech::{ReplySpeechResult, VisemeFrame};
+use crate::core::Outcome;
 #[cfg(test)]
 use tinyinference_voice::piper::synthetic_viseme_timeline;
+use tinyinference_voice::reply::ReplySpeech as ReplySpeechResult;
+use tinyinference_voice::VisemeFrame;
 
 /// Default Piper voice id.
 pub const DEFAULT_PIPER_VOICE: &str = "en_US-lessac-medium";
@@ -21,7 +22,7 @@ pub async fn synthesize_piper(
     config: &Config,
     text: &str,
     options: &PiperOptions,
-) -> Result<RpcOutcome<ReplySpeechResult>, String> {
+) -> Result<Outcome<ReplySpeechResult>, String> {
     if text.trim().is_empty() {
         return Err("text is required".to_string());
     }
@@ -37,7 +38,7 @@ pub async fn synthesize_piper(
         .unwrap_or(DEFAULT_PIPER_VOICE);
     log::debug!("[voice-tts] synthesizing voice={voice}");
     let speech = tinyinference_voice::piper::synthesize(&binary, model.as_ref(), text).await?;
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         ReplySpeechResult {
             audio_base64: speech.audio_base64,
             audio_mime: speech.audio_mime,

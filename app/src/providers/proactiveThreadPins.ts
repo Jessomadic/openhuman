@@ -25,7 +25,7 @@ export const PROACTIVE_VOICE_THREAD_ID = 'proactive:voice';
 /**
  * Whether a `proactive:` id names an ongoing *conversation surface* — many
  * sequential turns that all belong to a single chat — rather than a one-shot
- * interruption (morning brief, subconscious update, worker handoff). A
+ * interruption (morning brief, scheduled-job update, worker handoff). A
  * conversation surface pins the visible thread it first resolves to and reuses
  * it for the session; a one-shot keeps the fresh-or-create behaviour so it never
  * lands in the user's active chat (#3713). Today only realtime voice qualifies.

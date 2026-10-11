@@ -43,6 +43,7 @@ impl ApprovalGate {
             ttl,
             waiters: Mutex::new(HashMap::new()),
             thread_to_request: Mutex::new(HashMap::new()),
+            request_routes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -73,24 +74,27 @@ impl ApprovalGate {
     }
 
     /// Resolve the actual park duration from the gate's own `effective_ttl`
-    /// plus the `copilot_stream` clamp ([`COPILOT_APPROVAL_TTL`]) when that
-    /// origin is active. A clamp only ever *shortens* the park — it can never
+    /// plus the `copilot_stream` clamp ([`COPILOT_APPROVAL_TTL`]) and the
+    /// sub-agent clamp ([`SUBAGENT_APPROVAL_TTL`]) when those apply. A clamp only ever *shortens* the park — it can never
     /// extend `effective_ttl` past what the gate itself allows (e.g. a debug
     /// env override). Split out (rather than inlined at the call site) so it is
     /// unit testable without needing to actually park a future.
-    fn resolve_park_ttl(effective_ttl: Duration, copilot_stream: bool) -> Duration {
+    fn resolve_park_ttl(effective_ttl: Duration, copilot_stream: bool, subagent: bool) -> Duration {
         let mut ttl = effective_ttl;
         if copilot_stream {
             ttl = ttl.min(COPILOT_APPROVAL_TTL);
         }
+        if subagent {
+            ttl = ttl.min(SUBAGENT_APPROVAL_TTL);
+        }
         ttl
     }
 
-    /// Whether `tool_name` is on the user's "Always allow" list. Prefers the
+    /// Whether `tool_name` is on the user's "Always allow" list. Prefers the agent or
     /// process-global live policy (so a grant made this session is seen
     /// immediately) and falls back to the gate's boot-time config snapshot.
     fn tool_is_auto_approved(&self, tool_name: &str) -> bool {
-        if let Some(policy) = crate::security::live_policy::current() {
+        if let Some(policy) = crate::security::live_policy::effective() {
             return policy.auto_approve.iter().any(|t| t == tool_name);
         }
         self.config
@@ -106,12 +110,11 @@ impl ApprovalGate {
     /// fallback pattern so a toggle made this session (config save + live
     /// policy reload) takes effect on the very next tool call.
     ///
-    /// Callers MUST still exclude `TrustedAutomationSource::SubconsciousTainted`
-    /// and `AgentTurnOrigin::Unknown` before trusting this flag — see the
-    /// `matches!` guard at the call site below. This method only reports the
+    /// Callers MUST still exclude `AgentTurnOrigin::Unknown` before trusting
+    /// this flag — see the `matches!` guard at the call site below. This method only reports the
     /// user's setting; it does not know about origin.
     fn is_auto_approve_all_enabled(&self) -> bool {
-        if let Some(policy) = crate::security::live_policy::current() {
+        if let Some(policy) = crate::security::live_policy::effective() {
             return policy.auto_approve_all;
         }
         self.config.autonomy.auto_approve_all
@@ -137,6 +140,29 @@ impl ApprovalGate {
             .0
     }
 
+    /// Require an explicit, one-time decision for this exact action. This
+    /// entry point ignores all ordinary auto-approval and origin shortcuts.
+    /// A turn without a routable WebChat origin fails closed.
+    pub async fn intercept_forced(
+        &self,
+        tool_name: &str,
+        action_summary: &str,
+        args_redacted: serde_json::Value,
+    ) -> GateOutcome {
+        let mut _park_bound_elapsed = false;
+        self.intercept_audited_inner(
+            tool_name,
+            action_summary,
+            args_redacted,
+            None,
+            &mut _park_bound_elapsed,
+            None,
+            true,
+        )
+        .await
+        .0
+    }
+
     /// Audited variant of [`Self::intercept`].
     ///
     /// Returns `(outcome, Some(request_id))` when the call was
@@ -156,6 +182,23 @@ impl ApprovalGate {
         action_summary: &str,
         args_redacted: serde_json::Value,
     ) -> (GateOutcome, Option<String>) {
+        self.intercept_audited_for_call(tool_name, action_summary, args_redacted, None)
+            .await
+    }
+
+    /// Like [`Self::intercept_audited`], but threads the gated tool call's
+    /// provider-assigned call id through so `ApprovalRequested`/`ApprovalDecided`
+    /// and the persisted `pending_approvals` row can correlate back to the
+    /// exact `tool_call` timeline row instead of matching on tool name alone.
+    /// `None` for callers with no tracked call id (a legacy path, or a call
+    /// not driven through the tinyagents harness).
+    pub async fn intercept_audited_for_call(
+        &self,
+        tool_name: &str,
+        action_summary: &str,
+        args_redacted: serde_json::Value,
+        tool_call_id: Option<&str>,
+    ) -> (GateOutcome, Option<String>) {
         // No caller-supplied park bound: identical behavior to before. With
         // `park_bound = None` the inner never takes the caller-bound abandon
         // path, so the out-flag stays `false` and is discarded here.
@@ -166,6 +209,8 @@ impl ApprovalGate {
             args_redacted,
             None,
             &mut _park_bound_elapsed,
+            tool_call_id,
+            false,
         )
         .await
     }
@@ -202,6 +247,8 @@ impl ApprovalGate {
                 args_redacted,
                 park_bound,
                 &mut park_bound_elapsed,
+                None,
+                false,
             )
             .await;
         if park_bound_elapsed {

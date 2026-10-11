@@ -1,46 +1,21 @@
-//! Mode-aware Composio client construction: [`build_composio_client`]
-//! (backend-mode constructor), [`ComposioClientKind`] (the tagged
-//! backend/direct union), and [`create_composio_client`] (the factory that
-//! reads `config.composio.mode`).
+//! Mode-aware Composio route resolution.
+//!
+//! Every Composio operation runs in the `tinyconnectors` module
+//! (`module_client`). What stays on the host is the decision the module
+//! deliberately does not make: which route the current config selects and
+//! whether the credential for it exists. [`resolve_composio_route`] answers
+//! that with the actionable, user-facing messages (a missing direct key, a
+//! missing backend session, a typo in `composio.mode`) instead of the opaque
+//! "no connector route" the module reports when it is configured without one
+//! (#1710).
+//!
+//! [`ComposioRoute::Direct`] carries the credential (key and validated base
+//! URL) the direct reads are made with, including the host-pinned and loopback
+//! overrides the module's single configured route cannot express per call.
 
 use std::sync::Arc;
 
-use super::connections::ComposioClient;
-
-/// Backend-mode [`ComposioClient`] constructor. **Internal to the
-/// composio module** — external callers should use
-/// [`create_composio_client`] (factory) or
-/// [`crate::agent::subagent_host::user_is_signed_in_to_composio`]
-/// (probe) instead.
-///
-/// Direct exposure leaked through several call sites during the early
-/// direct-mode rollout (#1710), where the backend-only nature caused
-/// direct-mode users to false-negative the "signed in" check (the
-/// agent-tool registration gate, slack sync RPC, `tools.composio_execute`
-/// controller, and heartbeat calendar collector all silently dropped
-/// direct-mode users). Locking down here prevents future regressions —
-/// any new probe or execution path is forced through the mode-aware
-/// surface.
-///
-/// Composio is **always enabled** — there are no configuration flags
-/// gating it. The backend URL and auth token come from the shared
-/// core defaults (`config.api_url` plus the app-session JWT) via
-/// [`crate::integrations::build_client`]. The only reason
-/// this returns `None` is that the user isn't signed in to the backend
-/// (no JWT). Direct-mode availability is orthogonal — see
-/// [`create_composio_client`].
-pub(crate) fn build_composio_client(config: &crate::config::Config) -> Option<ComposioClient> {
-    let inner = crate::integrations::build_client(config)?;
-    Some(ComposioClient::new(inner))
-}
-
-// ── Direct-mode factory ─────────────────────────────────────────────
-//
-// Mirrors `tinyinference-embeddings/src/factory.rs` so anyone reading both can
-// pattern-match between domains: string-matched mode, explicit error
-// on unknown mode, explicit error when `direct` is selected without an
-// API key.
-
+use super::DirectCredential;
 use crate::config::schema::{COMPOSIO_MODE_BACKEND, COMPOSIO_MODE_DIRECT};
 
 // Re-declare the mode strings as local consts so they can be used as
@@ -51,94 +26,73 @@ use crate::config::schema::{COMPOSIO_MODE_BACKEND, COMPOSIO_MODE_DIRECT};
 // without the "unreachable pattern" warning chain.
 const MODE_BACKEND_PAT: &str = COMPOSIO_MODE_BACKEND;
 const MODE_DIRECT_PAT: &str = COMPOSIO_MODE_DIRECT;
+const MODE_DISABLED_PAT: &str = crate::config::schema::COMPOSIO_MODE_DISABLED;
 
-/// Tagged variant returned by [`create_composio_client`].
+/// The route [`resolve_composio_route`] selected.
 ///
-/// `Backend` wraps the existing backend-proxied [`ComposioClient`]
-/// (calls `api.tinyhumans.ai/agent-integrations/composio/*`).
-///
-/// `Direct` wraps the existing direct-mode HTTP wrapper from
-/// `composio/tools/direct.rs` that calls
-/// `https://backend.composio.dev/api/v{2,3}` with `x-api-key`. The
-/// direct client does not currently cover every endpoint the
-/// backend-proxied path exposes (no per-toolkit allowlist, no
-/// HMAC-verified trigger fan-out, no `/agent-integrations/pricing`),
-/// so most existing call-sites continue to use `Backend` for now.
-/// Direct-mode integration of the full surface (especially trigger
-/// webhooks) is a follow-up.
-pub enum ComposioClientKind {
-    Backend(ComposioClient),
-    /// Held inside an `Arc` so the variant stays cheap to clone — this
-    /// matches the rest of the tool registry which juggles
-    /// `Arc<dyn Tool>` for the same direct-mode tool elsewhere.
-    Direct(Arc<crate::tools::ComposioTool>),
+/// `Backend` is a unit: the backend-proxied route is reached through the
+/// connector module, whose configuration (`modules::connectors::module_config`)
+/// carries the base URL and bearer. `Direct` wraps the user's own key and its
+/// base URL (see the module docs).
+pub enum ComposioRoute {
+    Backend,
+    /// Held inside an `Arc` so the variant stays cheap to clone.
+    Direct(Arc<DirectCredential>),
 }
 
-pub(crate) fn create_direct_composio_tool_for_api_key(
-    config: &crate::config::Config,
+impl ComposioRoute {
+    /// Returns `"backend"` or `"direct"` — handy for logging and tests.
+    pub fn mode(&self) -> &'static str {
+        match self {
+            ComposioRoute::Backend => COMPOSIO_MODE_BACKEND,
+            ComposioRoute::Direct(_) => COMPOSIO_MODE_DIRECT,
+        }
+    }
+}
+
+pub(crate) fn create_direct_client_for_api_key(
     api_key: &str,
-) -> anyhow::Result<Arc<crate::tools::ComposioTool>> {
+) -> anyhow::Result<Arc<DirectCredential>> {
+    direct_client(api_key, None)
+}
+
+fn direct_client(
+    api_key: &str,
+    base_urls: Option<&crate::config::ComposioDirectBaseUrls>,
+) -> anyhow::Result<Arc<DirectCredential>> {
     let api_key = api_key.trim();
     if api_key.is_empty() {
         anyhow::bail!("composio direct api key must not be empty");
     }
 
-    // The direct client takes a `SecurityPolicy` for `Tool::execute`
-    // gating, but the factory's job is only to materialize a *client*
-    // — it does not actually invoke `execute()` itself, so the
-    // default policy is sufficient here. Callers that go through
-    // the `Tool` surface re-acquire the live policy from their own
-    // context.
-    let security = Arc::new(crate::security::SecurityPolicy::default());
+    if let Some(urls) = base_urls {
+        let client =
+            DirectCredential::new_with_base_urls(api_key, urls.v2.clone(), urls.v3.clone())?;
+        return Ok(Arc::new(client));
+    }
     #[cfg(debug_assertions)]
-    let tool = match (
+    let client = match (
         std::env::var("OPENHUMAN_COMPOSIO_DIRECT_BASE_V2").ok(),
         std::env::var("OPENHUMAN_COMPOSIO_DIRECT_BASE_V3").ok(),
     ) {
         (Some(base_v2), Some(base_v3)) => {
-            crate::tools::ComposioTool::new_with_base_urls_for_loopback(
-                api_key,
-                Some(config.composio.entity_id.as_str()),
-                security,
-                base_v2,
-                base_v3,
-            )
-            .map_err(|e| {
-                anyhow::anyhow!("invalid debug composio direct loopback base override: {e}")
-            })?
+            DirectCredential::new_with_base_urls_for_loopback(api_key, base_v2, base_v3).map_err(
+                |e| anyhow::anyhow!("invalid debug composio direct loopback base override: {e}"),
+            )?
         }
-        _ => crate::tools::ComposioTool::new(
-            api_key,
-            Some(config.composio.entity_id.as_str()),
-            security,
-        ),
+        _ => DirectCredential::new(api_key),
     };
     #[cfg(not(debug_assertions))]
-    let tool = crate::tools::ComposioTool::new(
-        api_key,
-        Some(config.composio.entity_id.as_str()),
-        security,
-    );
-    Ok(Arc::new(tool))
+    let client = DirectCredential::new(api_key);
+    Ok(Arc::new(client))
 }
 
-impl ComposioClientKind {
-    /// Returns `"backend"` or `"direct"` — handy for logging and tests.
-    pub fn mode(&self) -> &'static str {
-        match self {
-            ComposioClientKind::Backend(_) => COMPOSIO_MODE_BACKEND,
-            ComposioClientKind::Direct(_) => COMPOSIO_MODE_DIRECT,
-        }
-    }
-}
-
-/// Construct a [`ComposioClientKind`] from the root config.
+/// Resolve the [`ComposioRoute`] the root config selects.
 ///
 /// Supported `config.composio.mode` values:
 ///
-/// - `"backend"` (default) — backend-proxied; identical to
-///   [`build_composio_client`]. Returns
-///   `Err("no backend session")` when the user is not signed in.
+/// - `"backend"` (default) — backend-proxied through the connector module.
+///   Returns `Err("no backend session token")` when the user is not signed in.
 /// - `"direct"` — BYO key against `backend.composio.dev`. Requires a
 ///   stored Composio API key under the
 ///   [`crate::security::credentials::COMPOSIO_DIRECT_PROVIDER`]
@@ -146,13 +100,22 @@ impl ComposioClientKind {
 ///   stored key takes precedence so the encrypted keychain remains the
 ///   source of truth — `config.toml` is a fallback for power users.
 ///
+/// - `"disabled"` — Composio is off; always `Err`, so no tools register.
+///
+/// A host-pinned credential (`config.composio.host_credential`) takes
+/// precedence over both the mode and the credential store.
+///
 /// Any other mode string is rejected with an explicit error so a typo
 /// in `config.toml` fails loud instead of silently downgrading.
-pub fn create_composio_client(
-    config: &crate::config::Config,
-) -> anyhow::Result<ComposioClientKind> {
+pub fn resolve_composio_route(config: &crate::config::Config) -> anyhow::Result<ComposioRoute> {
+    if let Some(pinned) = config.composio.host_credential.as_ref() {
+        let client = direct_client(pinned.api_key(), pinned.direct_base_urls())?;
+        tracing::debug!("[composio-factory] resolved host-pinned direct variant (key redacted)");
+        return Ok(ComposioRoute::Direct(client));
+    }
+
     let mode = config.composio.mode.trim();
-    tracing::debug!(mode = %mode, "[composio-factory] resolving client");
+    tracing::debug!(mode = %mode, "[composio-factory] resolving route");
 
     match mode {
         // Empty string is treated as the default for forward compatibility
@@ -160,14 +123,14 @@ pub fn create_composio_client(
         // already gives us "backend" for missing fields, but a literal
         // empty string in TOML would otherwise be rejected.
         "" | MODE_BACKEND_PAT => {
-            let client = build_composio_client(config).ok_or_else(|| {
-                anyhow::anyhow!(
+            if crate::integrations::build_client(config).is_none() {
+                anyhow::bail!(
                     "composio backend mode unavailable: no backend session token. \
-                     Sign in first (auth_store_session)."
-                )
-            })?;
+                     Sign in or set a TinyHumans API key."
+                );
+            }
             tracing::debug!("[composio-factory] resolved backend variant");
-            Ok(ComposioClientKind::Backend(client))
+            Ok(ComposioRoute::Backend)
         }
         MODE_DIRECT_PAT => {
             // Prefer keychain-stored key; fall back to `config.toml`.
@@ -189,17 +152,23 @@ pub fn create_composio_client(
                     )
                 })?;
 
-            let tool = create_direct_composio_tool_for_api_key(config, &api_key)?;
+            let client = create_direct_client_for_api_key(&api_key)?;
             tracing::debug!(
                 key_len = api_key.len(),
                 "[composio-factory] resolved direct variant (key redacted)"
             );
-            Ok(ComposioClientKind::Direct(tool))
+            Ok(ComposioRoute::Direct(client))
+        }
+        MODE_DISABLED_PAT => {
+            tracing::debug!("[composio-factory] composio disabled by config");
+            Err(anyhow::anyhow!(
+                "composio is disabled (composio.mode = \"disabled\")"
+            ))
         }
         unknown => {
             tracing::warn!(mode = %unknown, "[composio-factory] unknown composio mode");
             Err(anyhow::anyhow!(
-                "unknown composio mode: \"{unknown}\". Supported: \"backend\", \"direct\""
+                "unknown composio mode: \"{unknown}\". Supported: \"backend\", \"direct\", \"disabled\""
             ))
         }
     }

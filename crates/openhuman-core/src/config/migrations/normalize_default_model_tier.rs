@@ -7,7 +7,7 @@
 //! a tier slug in between.
 //!
 //! `config.default_model` selects the managed-backend tier for the implicit
-//! turns that read it (triage classification, the subconscious cloud tick,
+//! turns that read it (triage classification,
 //! escalation base, chat-fallback). Older builds shipped a heavier default:
 //! `reasoning-v1` was the `DEFAULT_MODEL` constant for a window in 2026, and the
 //! `reasoning-quick-v1` alias (which resolves to `chat-v1`) was the default for

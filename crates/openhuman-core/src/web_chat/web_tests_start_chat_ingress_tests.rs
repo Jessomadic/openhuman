@@ -14,7 +14,7 @@ async fn start_chat_validates_required_fields() {
     )
     .await
     .expect_err("client id should be required");
-    assert!(err.contains("client_id is required"));
+    assert!(err.to_string().contains("client_id is required"));
 
     let err = start_chat(
         "client",
@@ -28,7 +28,7 @@ async fn start_chat_validates_required_fields() {
     )
     .await
     .expect_err("thread id should be required");
-    assert!(err.contains("thread_id is required"));
+    assert!(err.to_string().contains("thread_id is required"));
 
     let err = start_chat(
         "client",
@@ -42,7 +42,7 @@ async fn start_chat_validates_required_fields() {
     )
     .await
     .expect_err("message should be required");
-    assert!(err.contains("message is required"));
+    assert!(err.to_string().contains("message is required"));
 }
 
 #[tokio::test]
@@ -60,7 +60,22 @@ async fn start_chat_rejects_prompt_injection_payload() {
     .await
     .expect_err("prompt-injection payload should be rejected");
 
-    let lower = err.to_ascii_lowercase();
+    // Structured now (StartChatError::Guardrail{verdict,score,reasons}), not
+    // a plain string — assert the classifiable shape as well as the
+    // human-readable copy `Display` still gives a plain-string consumer.
+    match &err {
+        StartChatError::Guardrail { verdict, .. } => {
+            assert!(
+                verdict == "block" || verdict == "review_blocked",
+                "unexpected guardrail verdict: {verdict}"
+            );
+        }
+        StartChatError::Other(message) => {
+            panic!("expected a Guardrail rejection, got Other({message})");
+        }
+    }
+
+    let lower = err.to_string().to_ascii_lowercase();
     assert!(
         lower.contains("blocked by a security policy")
             || lower.contains("flagged for security review"),
@@ -195,73 +210,6 @@ fn classify_inference_error_managed_insufficient_budget_400_is_budget_exhausted(
         "must guide the user to switch routing: {}",
         classified.message
     );
-}
-
-#[test]
-fn extract_provider_error_detail_pulls_openai_message() {
-    let raw = r#"custom_openai API error (404 Not Found): {"error":{"message":"Project `proj_X` does not have access to model `gpt-5.5`","type":"invalid_request_error","param":null,"code":"model_not_found"}}"#;
-    let detail = extract_provider_error_detail(raw).expect("expected JSON message");
-    assert!(
-        detail.contains("does not have access to model"),
-        "got: {detail}"
-    );
-    assert!(detail.contains("gpt-5.5"));
-}
-
-#[test]
-fn extract_provider_error_detail_returns_none_for_transport_errors() {
-    // Plain transport failure — no provider JSON body to quote. Surfacing
-    // raw transport text would leak internal infra URLs.
-    let raw = "error sending request for url (https://internal-api.example.invalid/openai/v1/chat/completions)";
-    assert!(extract_provider_error_detail(raw).is_none());
-}
-
-#[test]
-fn extract_provider_error_detail_decodes_standard_json_escapes() {
-    // The escaped solidus matters most in practice: provider bodies routinely
-    // carry URLs as `https:\/\/…`. `\r`, `\b` and `\f` complete the JSON
-    // standard set. Every one of them must decode — none may survive as a
-    // literal backslash.
-    let raw = r#"provider API error (400): {"error":{"message":"GET https:\/\/api.example.com\/v1\/models failed\r\nretry\tlater\b\f done"}}"#;
-    let detail = extract_provider_error_detail(raw).expect("expected JSON message");
-    assert!(
-        !detail.contains('\\'),
-        "no escape should survive decoding, got: {detail:?}"
-    );
-    assert!(
-        detail.contains("https://api.example.com/v1/models"),
-        "escaped solidus must decode, got: {detail:?}"
-    );
-    assert!(
-        detail.contains('\r'),
-        "carriage return must decode: {detail:?}"
-    );
-    assert!(detail.contains('\n'), "newline must decode: {detail:?}");
-    assert!(detail.contains('\t'), "tab must decode: {detail:?}");
-    assert!(
-        detail.contains('\u{8}'),
-        "backspace must decode: {detail:?}"
-    );
-    assert!(
-        detail.contains('\u{c}'),
-        "form feed must decode: {detail:?}"
-    );
-}
-
-#[test]
-fn extract_provider_error_detail_preserves_unknown_escapes() {
-    // Genuinely unsupported sequences keep both characters — an unhandled
-    // `\uXXXX` is better shown to the user as visible literal text than
-    // silently mangled into a character nobody asked for. `\"` and `\\`
-    // keep their existing meaning.
-    let raw = r#"provider API error: {"error":{"message":"quote \" hi and slash \\ then unicode \u263A and \q \s \&"}}"#;
-    let detail = extract_provider_error_detail(raw).expect("expected JSON message");
-    assert!(detail.contains("quote \" hi"), "got: {detail:?}");
-    assert!(detail.contains("slash \\ then"), "got: {detail:?}");
-    assert!(detail.contains(r"\u263A"), "got: {detail:?}");
-    assert!(detail.contains(r"\q"), "got: {detail:?}");
-    assert!(detail.contains(r"\s"), "got: {detail:?}");
-    assert!(detail.contains(r"\&"), "got: {detail:?}");
 }
 
 #[test]
@@ -679,4 +627,31 @@ fn timeout_bound_tag_separates_the_two_harness_ceilings() {
         "none",
         "a non-timeout error must not carry a timeout bound"
     );
+}
+
+/// The hosted path sanitizes the harness's timeout text, so the bound reaches
+/// the Sentry tag through the typed `HostedError::timeout_bound` field. The
+/// user-facing class must stay `turn_timeout` for both bounds.
+#[test]
+fn hosted_timeout_bound_reaches_the_sentry_tag_and_keeps_the_user_class() {
+    use tinyagents_harness::runtime::{HostedError, HostedErrorKind, TimeoutBound};
+
+    for (bound, tag) in [
+        (TimeoutBound::PerModelCall, "per_model_call"),
+        (TimeoutBound::Run, "run_remaining"),
+    ] {
+        let hosted = HostedError {
+            kind: HostedErrorKind::Timeout,
+            message: "hosted agent invocation timed out".to_string(),
+            timeout_bound: Some(bound),
+            run: None,
+        };
+        let err = crate::agent::tinyagents::hosted_error::run_error_from_hosted(hosted);
+        let flattened = format!("run_chat_task failed error=tinyagents harness run failed: {err}");
+        assert_eq!(super::super::ops::timeout_bound_tag(&flattened), tag);
+        assert_eq!(
+            super::super::web_errors::classify_inference_error(&flattened).error_type,
+            "turn_timeout"
+        );
+    }
 }

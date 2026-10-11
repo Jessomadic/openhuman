@@ -20,7 +20,7 @@ static SHUTDOWN_HANDLE: OnceLock<SubscriptionHandle> = OnceLock::new();
 ///
 /// Idempotent: subsequent calls return immediately if the subscriber is already
 /// registered. Owned by the service domain — called from the shared subscriber
-/// bootstrap so jsonrpc.rs stays transport-focused.
+/// bootstrap so the JSON-RPC transport stays transport-focused.
 pub fn register_restart_subscriber() {
     if RESTART_HANDLE.get().is_some() {
         return;
@@ -41,7 +41,7 @@ pub fn register_restart_subscriber() {
 /// Register the [`ShutdownSubscriber`] on the global event bus.
 ///
 /// Mirrors [`register_restart_subscriber`] — idempotent, owned by the service
-/// domain, called from the shared subscriber bootstrap in `jsonrpc.rs`.
+/// domain, called from the shared subscriber bootstrap in `core/runtime/subscribers.rs`.
 pub fn register_shutdown_subscriber() {
     if SHUTDOWN_HANDLE.get().is_some() {
         return;

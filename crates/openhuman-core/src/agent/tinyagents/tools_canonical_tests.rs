@@ -147,6 +147,82 @@ async fn canonical_adapter_preserves_spec_policy_context_and_result() {
     );
 }
 
+struct OriginObservingTool(Arc<AtomicBool>);
+
+#[async_trait]
+impl Tool for OriginObservingTool {
+    fn name(&self) -> &str {
+        "origin_observer"
+    }
+    fn description(&self) -> &str {
+        "Observes the per-turn core authority."
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type":"object"})
+    }
+    async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("executed"))
+    }
+    async fn execute_with_context(
+        &self,
+        _args: serde_json::Value,
+        _options: ToolCallOptions,
+        _context: Option<&dyn ToolRunContext>,
+    ) -> anyhow::Result<ToolResult> {
+        self.0.store(
+            matches!(
+                crate::core::runtime::CoreContext::current_turn_origin(),
+                Some(crate::agent::turn_origin::AgentTurnOrigin::ExternalChannel { .. })
+            ),
+            Ordering::SeqCst,
+        );
+        Ok(ToolResult::success("executed"))
+    }
+}
+
+#[tokio::test]
+async fn canonical_adapter_scopes_tool_execution_to_the_run_origin() {
+    use tinyagents_harness::context::RunConfig;
+
+    let context =
+        crate::core::runtime::CoreContext::for_test(crate::core::runtime::DomainSet::full(), None);
+    let observed = Arc::new(AtomicBool::new(false));
+    let tools: Vec<Arc<Vec<Box<dyn Tool>>>> = vec![Arc::new(vec![Box::new(OriginObservingTool(
+        observed.clone(),
+    ))])];
+    let adapter = CanonicalSharedToolAdapter::for_name(tools, "origin_observer").unwrap();
+    let mut host = crate::agent::tinyagents::host::OpenHumanRunContext::new();
+    host.origin = Some(
+        crate::agent::turn_origin::AgentTurnOrigin::ExternalChannel {
+            sender_name: None,
+            channel: "test".into(),
+            sender: None,
+            reply_target: "room".into(),
+            message_id: "message".into(),
+            history_key: None,
+        },
+    );
+    let run = host.into_tinyagents(RunConfig::new("origin-observer"));
+    let tool_context = tinyagents_harness::tool::ToolExecutionContext::from_run_context(
+        &run,
+        tinyagents_harness::ids::CallId::new("call"),
+    );
+
+    crate::core::runtime::CoreContext::scope(context, async {
+        adapter
+            .execute_with_context(
+                serde_json::json!({}),
+                ToolCallOptions::default(),
+                Some(&tool_context),
+            )
+            .await
+            .expect("tool execution succeeds");
+        assert!(observed.load(Ordering::SeqCst));
+        assert!(crate::core::runtime::CoreContext::current_turn_origin().is_none());
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn canonical_adapter_fails_closed_when_the_registered_tool_is_gone() {
     let adapter = CanonicalSharedToolAdapter {
@@ -155,6 +231,7 @@ async fn canonical_adapter_fails_closed_when_the_registered_tool_is_gone() {
         description: "missing".to_string(),
         parameters_schema: serde_json::json!({"type": "object"}),
         early_exit: None,
+        force_deferred: false,
     };
 
     let result = adapter
@@ -241,4 +318,27 @@ fn adapter_advertises_admitted_hidden_tools_and_keeps_deferred_ones_deferred() {
     assert_eq!(exposure("direct"), tinytools::ToolExposure::Direct);
     assert_eq!(exposure("hidden"), tinytools::ToolExposure::Direct);
     assert_eq!(exposure("deferred"), tinytools::ToolExposure::Deferred);
+}
+
+/// A tool the session defers for its own agent (`deferred_tools` →
+/// `OpenHumanRunContext::deferred_tool_names`) registers as `Deferred`, so the
+/// harness keeps it off the wire and indexes it for `tool_search`. Deferral only
+/// subtracts: a forced `Hidden` tool stays `Hidden` instead of becoming
+/// searchable, and an already-`Deferred` tool is unchanged.
+#[test]
+fn session_deferred_adapter_reports_deferred_but_never_surfaces_a_hidden_tool() {
+    let set: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![
+        Box::new(ExposedTool("direct", tinytools::ToolExposure::Direct)),
+        Box::new(ExposedTool("hidden", tinytools::ToolExposure::Hidden)),
+        Box::new(ExposedTool("deferred", tinytools::ToolExposure::Deferred)),
+    ]);
+    let forced = |name: &str| {
+        CanonicalSharedToolAdapter::for_name(vec![set.clone()], name)
+            .expect("registered")
+            .deferred()
+            .exposure()
+    };
+    assert_eq!(forced("direct"), tinytools::ToolExposure::Deferred);
+    assert_eq!(forced("hidden"), tinytools::ToolExposure::Hidden);
+    assert_eq!(forced("deferred"), tinytools::ToolExposure::Deferred);
 }

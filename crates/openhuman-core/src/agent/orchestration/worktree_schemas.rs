@@ -21,8 +21,8 @@ use serde_json::{json, Map, Value};
 
 use crate::config::rpc as config_rpc;
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 use tinyagents_harness::workspace::{
     detect_worktree_overlaps, git_worktree_diff_summary, git_worktree_status, list_git_worktrees,
     remove_git_worktree, GitWorktreeError, GitWorktreeStatus, GIT_WORKTREE_SUBDIR,
@@ -291,7 +291,7 @@ fn overlaps_json(worktrees: &[GitWorktreeStatus]) -> Vec<Value> {
 }
 
 fn to_json<T: serde::Serialize>(value: T) -> Result<Value, String> {
-    RpcOutcome::new(value, vec![]).into_cli_compatible_json()
+    Outcome::new(value, vec![]).into_cli_compatible_json()
 }
 
 fn new_correlation_id() -> String {

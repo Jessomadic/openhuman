@@ -9,6 +9,53 @@ use tinyinference_llm::tool::ToolCall;
 use tinytools::Tool;
 use tinytools::ToolResult;
 
+#[test]
+fn subagent_transcript_keeps_cumulative_spend_separate_from_unknown_last_call() {
+    let workspace = tempfile::tempdir().unwrap();
+    let usage = AggregatedUsage {
+        input_tokens: 120,
+        output_tokens: 30,
+        cached_input_tokens: 40,
+        cost: crate::agent::cost::CostTally {
+            known_usd: 0.01,
+            source: crate::agent::cost::CostSource::Charged,
+        },
+    };
+    super::transcript::persist_subagent_transcript(
+        workspace.path(),
+        "root__usage",
+        "worker",
+        "task",
+        "mock",
+        "model",
+        &[TranscriptMessage::assistant("done")],
+        &usage,
+        None,
+        200_000,
+        "test",
+        2,
+    );
+    let root = crate::agent::session_store::transcript_root(workspace.path());
+    let path = tinyagents_session::transcript::resolve_keyed_transcript_path(&root, "root__usage")
+        .unwrap();
+    let transcript = tinyagents_session::transcript::read_transcript(&path).unwrap();
+    let recorded = &transcript
+        .messages
+        .last()
+        .unwrap()
+        .turn_usage
+        .as_ref()
+        .unwrap()
+        .usage;
+    assert_eq!(recorded.input, 120);
+    assert_eq!(recorded.output, 30);
+    assert_eq!(recorded.cached_input, 40);
+    assert_eq!(recorded.context_window, 200_000);
+    assert_eq!(recorded.cost_usd, 0.01);
+    assert_eq!(recorded.last_call_input, 0);
+    assert_eq!(recorded.last_call_output, 0);
+}
+
 fn native_tool_profile() -> &'static ModelProfile {
     static PROFILE: std::sync::LazyLock<ModelProfile> = std::sync::LazyLock::new(|| ModelProfile {
         provider: Some("subagent-graph-test".to_string()),
@@ -104,7 +151,7 @@ async fn explicit_worker_thread_replaces_parent_for_model_run_and_transcript() {
     let workspace = tempfile::tempdir().expect("workspace");
     let mut parent = crate::agent::tinyagents::host::OpenHumanRunContext::new();
     parent.thread_id = Some("parent-thread".to_owned());
-    let mut history = vec![ChatMessage::user("finish this")];
+    let mut history = vec![TranscriptMessage::user("finish this")];
 
     run_subagent_via_graph(
         crate::agent::tinyagents::TurnModelSource::from_model(Arc::new(TwoStepProvider {
@@ -132,7 +179,6 @@ async fn explicit_worker_thread_replaces_parent_for_model_run_and_transcript() {
         false,
         "root__worker-thread",
         "test",
-        None,
         AgentTokenjuiceCompression::Off,
         None,
     )
@@ -158,7 +204,7 @@ async fn subagent_runs_through_the_graph_engine_with_real_tools() {
     let parent_tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(EchoTool)]);
     let mut allowed = HashSet::new();
     allowed.insert("echo".to_string());
-    let mut history = vec![ChatMessage::user("please echo hi")];
+    let mut history = vec![TranscriptMessage::user("please echo hi")];
 
     let (output, iterations, usage, early_exit, hit_cap, _breaker) = run_subagent_via_graph(
         crate::agent::tinyagents::TurnModelSource::from_model(provider),
@@ -184,7 +230,6 @@ async fn subagent_runs_through_the_graph_engine_with_real_tools() {
         false,
         "root-session__real_tools",
         "mock-channel",
-        None,
         AgentTokenjuiceCompression::Off,
         // No host config in tests: the graph takes byte-cap-only
         // context defaults instead of reading the developer machine's
@@ -245,7 +290,7 @@ impl ChatModel<()> for ThinkingStreamProvider {
 async fn child_text_and_thinking_deltas_are_scoped_to_the_subagent() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentProgress>(64);
     let parent_tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![]);
-    let mut history = vec![ChatMessage::user("hi")];
+    let mut history = vec![TranscriptMessage::user("hi")];
 
     let (output, _iters, _usage, _early, _hit_cap, _breaker) = run_subagent_via_graph(
         crate::agent::tinyagents::TurnModelSource::from_model(Arc::new(ThinkingStreamProvider)),
@@ -271,7 +316,6 @@ async fn child_text_and_thinking_deltas_are_scoped_to_the_subagent() {
         false,
         "root-session__scoped_deltas",
         "mock-channel",
-        None,
         AgentTokenjuiceCompression::Off,
         // No host config in tests: the graph takes byte-cap-only
         // context defaults instead of reading the developer machine's
@@ -382,7 +426,7 @@ async fn ask_user_clarification_pauses_and_surfaces_the_question() {
     let parent_tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(AskTool)]);
     let mut allowed = HashSet::new();
     allowed.insert("ask_user_clarification".to_string());
-    let mut history = vec![ChatMessage::user("help me")];
+    let mut history = vec![TranscriptMessage::user("help me")];
 
     let (output, iterations, _usage, early_exit, _hit_cap, _breaker) = run_subagent_via_graph(
         crate::agent::tinyagents::TurnModelSource::from_model(provider.clone()),
@@ -408,7 +452,6 @@ async fn ask_user_clarification_pauses_and_surfaces_the_question() {
         false,
         "root-session__clarification",
         "mock-channel",
-        None,
         AgentTokenjuiceCompression::Off,
         // No host config in tests: the graph takes byte-cap-only
         // context defaults instead of reading the developer machine's
@@ -475,7 +518,7 @@ async fn cap_hit_summarizes_a_resumable_checkpoint() {
     let parent_tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(NoopTool)]);
     let mut allowed = HashSet::new();
     allowed.insert("noop".to_string());
-    let mut history = vec![ChatMessage::user("do a big task")];
+    let mut history = vec![TranscriptMessage::user("do a big task")];
 
     let (output, iterations, _usage, early_exit, hit_cap, _breaker) = run_subagent_via_graph(
         crate::agent::tinyagents::TurnModelSource::from_model(Arc::new(LoopForeverProvider)),
@@ -501,7 +544,6 @@ async fn cap_hit_summarizes_a_resumable_checkpoint() {
         false,
         "root-session__cap_hit",
         "mock-channel",
-        None,
         AgentTokenjuiceCompression::Off,
         // No host config in tests: the graph takes byte-cap-only
         // context defaults instead of reading the developer machine's

@@ -26,29 +26,19 @@ export type CloudProvider = {
   endpoint: string;
   authStyle: AuthStyle;
   maskedKey: string;
+  caCertPem?: string;
 };
 
-export type OllamaState =
-  | 'disabled'
-  | 'missing'
-  | 'stopped'
-  | 'starting'
-  | 'running'
-  | 'degraded'
-  | 'error';
+/**
+ * State of the user-run local endpoint. `unreachable` and `stopped` are both
+ * offline; `degraded` is reachable but unhealthy. The app never installs or
+ * starts the runtime, so there are no install / start / download states.
+ */
+export type OllamaState = 'disabled' | 'stopped' | 'running' | 'degraded' | 'unreachable';
 
 export type OllamaModel = { id: string; sizeBytes: number; family: string };
 
-export type WorkloadId =
-  | 'chat'
-  | 'reasoning'
-  | 'agentic'
-  | 'coding'
-  | 'vision'
-  | 'memory'
-  | 'heartbeat'
-  | 'learning'
-  | 'subconscious';
+export type WorkloadId = 'chat' | 'reasoning' | 'agentic' | 'coding' | 'vision' | 'memory';
 
 export type WorkloadGroup = 'chat' | 'background';
 
@@ -126,9 +116,6 @@ export const ROUTING_WORKLOAD_IDS: WorkloadId[] = [
   'coding',
   'vision',
   'memory',
-  'heartbeat',
-  'learning',
-  'subconscious',
 ];
 
 export const BUILTIN_RESERVED_SLUGS = [
@@ -214,24 +201,6 @@ export const WORKLOADS: Workload[] = [
     labelKey: 'settings.ai.routing.workload.memory.label',
     descriptionKey: 'settings.ai.routing.workload.memory.description',
   },
-  {
-    id: 'heartbeat',
-    group: 'background',
-    labelKey: 'settings.ai.routing.workload.heartbeat.label',
-    descriptionKey: 'settings.ai.routing.workload.heartbeat.description',
-  },
-  {
-    id: 'learning',
-    group: 'background',
-    labelKey: 'settings.ai.routing.workload.learning.label',
-    descriptionKey: 'settings.ai.routing.workload.learning.description',
-  },
-  {
-    id: 'subconscious',
-    group: 'background',
-    labelKey: 'settings.ai.routing.workload.subconscious.label',
-    descriptionKey: 'settings.ai.routing.workload.subconscious.description',
-  },
 ];
 
 // i18n keys for the per-workload "Recommended: …" hints (resolved with `t()`).
@@ -242,9 +211,6 @@ export const WORKLOAD_MODEL_HINT_KEYS: Record<WorkloadId, string> = {
   coding: 'settings.ai.routing.workload.coding.hint',
   vision: 'settings.ai.routing.workload.vision.hint',
   memory: 'settings.ai.routing.workload.memory.hint',
-  heartbeat: 'settings.ai.routing.workload.heartbeat.hint',
-  learning: 'settings.ai.routing.workload.learning.hint',
-  subconscious: 'settings.ai.routing.workload.subconscious.hint',
 };
 
 export const EMPTY_ROUTING: RoutingMap = {
@@ -254,9 +220,6 @@ export const EMPTY_ROUTING: RoutingMap = {
   coding: { kind: 'default' },
   vision: { kind: 'default' },
   memory: { kind: 'default' },
-  heartbeat: { kind: 'default' },
-  learning: { kind: 'default' },
-  subconscious: { kind: 'default' },
 };
 
 export const EMPTY_SETTINGS: AISettings = {

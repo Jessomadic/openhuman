@@ -1,7 +1,6 @@
 //! OpenHuman policy admission for a `spawn_parallel_agents` task batch:
-//! identity, the parent's subagent allowlist, the integrations toolkit
-//! requirement, and whether a worker can write the shared workspace at all —
-//! plus the crate-side arbitration over the resulting workspace claims.
+//! identity, the parent's subagent allowlist, and whether a worker can write
+//! the shared workspace at all — plus the crate-side arbitration over the resulting workspace claims.
 //!
 //! **Write safety.** Whether a worker *needs* a claim on the shared workspace is
 //! an OpenHuman decision — it reads sandbox mode, tool permissions and the
@@ -53,7 +52,6 @@ pub(crate) enum ParallelTaskRejectionKind {
     MissingAgentOrPrompt,
     UnknownAgent,
     OutsideAllowlist,
-    MissingToolkit,
     RequiresIsolation,
 }
 
@@ -98,16 +96,6 @@ pub(crate) fn worktree_request_for_task(task: &ParallelAgentTask) -> ParallelWor
     }
 }
 
-fn disallowed_tool_matches(disallowed: &[String], name: &str) -> bool {
-    disallowed.iter().any(|entry| {
-        if let Some(prefix) = entry.strip_suffix('*') {
-            name.starts_with(prefix)
-        } else {
-            entry == name
-        }
-    })
-}
-
 fn definition_visible_tool_permissions(
     definition: &AgentDefinition,
     parent: &ParentExecutionContext,
@@ -121,7 +109,7 @@ fn definition_visible_tool_permissions(
         .iter()
         .filter_map(|tool| {
             let name = tool.name();
-            if disallowed_tool_matches(&definition.disallowed_tools, name) {
+            if crate::tools::rules::glob_list_matches(&definition.disallowed_tools, name) {
                 return None;
             }
             if let Some(prefix) = skill_prefix.as_deref() {
@@ -251,10 +239,9 @@ pub(crate) fn prepare_spawn_parallel_tasks_from_defs(
     definitions: &HashMap<String, AgentDefinition>,
     parent: &ParentExecutionContext,
 ) -> Vec<SpawnParallelTaskPreflight> {
-    // Pass 1 — OpenHuman policy. Identity, the parent's subagent allowlist, the
-    // integrations toolkit requirement, and whether a worker can write the
-    // shared workspace at all are all product decisions, so they are settled
-    // here and rejected in their own vocabulary. What survives carries a
+    // Pass 1 — OpenHuman policy. Identity, the parent's subagent allowlist, and
+    // whether a worker can write the shared workspace at all are all product
+    // decisions, so they are settled here and rejected in their own vocabulary. What survives carries a
     // `WorkspaceClaim` describing only what the arbiter needs to know.
     enum Admission {
         Admitted(Box<AdmittedParallelTask>),
@@ -298,22 +285,6 @@ pub(crate) fn prepare_spawn_parallel_tasks_from_defs(
                     ),
                     ownership: task.ownership,
                     kind: ParallelTaskRejectionKind::OutsideAllowlist,
-                });
-            }
-
-            if definition.id == "integrations_agent"
-                && task
-                    .toolkit
-                    .as_ref()
-                    .map(|s| s.trim().is_empty())
-                    .unwrap_or(true)
-            {
-                return Admission::Rejected(ParallelTaskRejection {
-                    task_id,
-                    agent_id,
-                    error: "integrations_agent requires toolkit".to_string(),
-                    ownership: task.ownership,
-                    kind: ParallelTaskRejectionKind::MissingToolkit,
                 });
             }
 

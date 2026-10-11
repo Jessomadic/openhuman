@@ -49,6 +49,8 @@ pub mod factory;
 #[cfg(feature = "voice")]
 pub mod hotkey;
 #[cfg(feature = "voice")]
+pub mod live;
+#[cfg(feature = "voice")]
 mod ops;
 #[cfg(feature = "voice")]
 pub mod realtime;
@@ -60,8 +62,6 @@ pub mod reply_speech;
 mod schemas;
 #[cfg(feature = "voice")]
 pub mod server;
-#[cfg(feature = "voice")]
-pub mod text_input;
 #[cfg(feature = "voice")]
 mod types;
 

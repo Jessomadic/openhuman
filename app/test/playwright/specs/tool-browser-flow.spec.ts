@@ -15,6 +15,7 @@ function unwrapStatus(raw: unknown): ServerStatus {
 interface AgentDef {
   id?: string;
   tools?: unknown;
+  direct_tool_names?: string[];
 }
 
 interface ListDefinitionsResult {
@@ -27,24 +28,21 @@ test.describe('System tools - Browser (open URL + automation registry)', () => {
     await bootAuthenticatedPage(page, 'pw-tool-browser-' + testSlug, '/home');
   });
 
-  test('agent runtime is reachable and tools_agent is registered', async () => {
+  test('agent runtime is reachable and the orchestrator can discover tools', async () => {
     const status = unwrapStatus(await callCoreRpc<unknown>('openhuman.agent_server_status', {}));
     expect(status.running).toBe(true);
 
     const list = await callCoreRpc<ListDefinitionsResult>('openhuman.agent_list_definitions', {});
     const defs = list.definitions ?? [];
-    const toolsAgent = defs.find(def => def?.id === 'tools_agent');
-    expect(toolsAgent).toBeDefined();
-    expect(toolsAgent?.tools).toBeDefined();
-  });
-
-  test('browser-bearing agent definitions are exposed in the live registry', async () => {
-    const list = await callCoreRpc<ListDefinitionsResult>('openhuman.agent_list_definitions', {});
-    const defs = list.definitions ?? [];
-    const browserBearing = defs.filter(def =>
-      ['tools_agent', 'integrations_agent', 'researcher', 'planner'].includes(def?.id ?? '')
-    );
-    expect(browserBearing.length).toBeGreaterThan(0);
+    const orchestrator = defs.find(def => def?.id === 'orchestrator');
+    expect(orchestrator).toBeDefined();
+    // Browser tools are reached through on-demand discovery, not a
+    // browser-bearing specialist (`tools_agent` / `integrations_agent` /
+    // `researcher` are retired).
+    expect(orchestrator?.direct_tool_names ?? []).toContain('tool_search');
+    for (const retired of ['tools_agent', 'integrations_agent', 'researcher']) {
+      expect(defs.find(def => def?.id === retired)).toBeUndefined();
+    }
   });
 
   test.skip('future chat tool_calls drive browser_open end-to-end via deterministic mock LLM', async () => {});

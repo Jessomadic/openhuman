@@ -125,7 +125,6 @@ async fn run_one_parallel_task(
     tracing::debug!(
         task_id = %task_id,
         agent_id = %definition.id,
-        toolkit = task.toolkit.as_deref().unwrap_or(""),
         context_chars = task.context.as_ref().map(|s| s.chars().count()).unwrap_or(0),
         prompt_chars = prompt.chars().count(),
         isolated = worktree_path.is_some(),
@@ -138,7 +137,6 @@ async fn run_one_parallel_task(
     });
     let options = SubagentRunOptions {
         skill_filter_override: None,
-        toolkit_override: task.toolkit.clone(),
         context: task.context.clone(),
         model_override: None,
         task_id: Some(task_id.clone()),

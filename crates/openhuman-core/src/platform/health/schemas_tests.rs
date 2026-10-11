@@ -30,13 +30,6 @@ fn system_info_schema() {
 }
 
 #[test]
-fn unknown_function_returns_unknown() {
-    let s = schemas("bad");
-    assert_eq!(s.function, "unknown");
-    assert_eq!(s.namespace, "health");
-}
-
-#[test]
 fn schemas_and_controllers_match() {
     let s = all_controller_schemas();
     let c = all_registered_controllers();
@@ -67,7 +60,7 @@ async fn handle_system_info_returns_json_object() {
 
 #[test]
 fn to_json_helper() {
-    let outcome = RpcOutcome::single_log(serde_json::json!({"ok": true}), "log");
+    let outcome = Outcome::single_log(serde_json::json!({"ok": true}), "log");
     assert!(to_json(outcome).is_ok());
 }
 

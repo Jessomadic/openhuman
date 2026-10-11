@@ -22,7 +22,7 @@
 //! [`std::fs::canonicalize`] would be the stricter comparison: it resolves
 //! symlinks, so two spellings of one directory would agree. It is wrong
 //! here for two reasons. It is blocking I/O, and the primary caller is the
-//! SSE stream in [`crate::core::jsonrpc`], whose `tokio_stream` `filter_map`
+//! SSE stream in the JSON-RPC server (`openhuman_rpc::server`), whose `tokio_stream` `filter_map`
 //! closure is synchronous — a disk hit per streamed event is exactly the
 //! cost this handle exists to avoid. And it fails on a directory that no
 //! longer exists, which a *stale-workspace* event is precisely the case

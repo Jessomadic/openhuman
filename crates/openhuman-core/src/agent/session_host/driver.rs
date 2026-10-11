@@ -13,11 +13,11 @@ use async_trait::async_trait;
 use tinyagents_runtime::{
     DriverFailure, DriverOutcome, DriverRequest, RuntimeError, SessionDriver, TranscriptPartial,
 };
+use tinyagents_session::transcript::TranscriptMessage;
 use tinyinference_llm::message::Message;
 use tinytools_agent::dialect::ToolDialect;
 
 use crate::agent::{
-    messages::ChatMessage,
     session_host::turn::graph::{self, ChatTurnGraph},
     tinyagents::{host::OpenHumanHostBase, host::OpenHumanRunContext, TurnModelSource},
 };
@@ -32,7 +32,6 @@ pub struct OpenHumanSessionDriver {
     model_name: String,
     temperature: f64,
     max_iterations: usize,
-    max_history_messages: usize,
     model_vision: bool,
     run_queue:
         Option<Arc<tinyagents_harness::run_queue::RunQueue<crate::agent::queued_turn::QueuedTurn>>>,
@@ -50,7 +49,6 @@ impl OpenHumanSessionDriver {
         model_name: String,
         temperature: f64,
         max_iterations: usize,
-        max_history_messages: usize,
         model_vision: bool,
         run_queue: Option<
             Arc<tinyagents_harness::run_queue::RunQueue<crate::agent::queued_turn::QueuedTurn>>,
@@ -66,7 +64,6 @@ impl OpenHumanSessionDriver {
             model_name,
             temperature,
             max_iterations,
-            max_history_messages,
             model_vision,
             run_queue,
             workspace,
@@ -81,8 +78,11 @@ impl OpenHumanSessionDriver {
 impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
     async fn execute(
         &self,
-        request: DriverRequest<OpenHumanRunContext>,
+        mut request: DriverRequest<OpenHumanRunContext>,
     ) -> Result<DriverOutcome, DriverFailure> {
+        // Heal a head persisted before #6721 was fixed, before anything reads
+        // the history: this turn then commits a clean generation.
+        repair_orphaned_tool_head(&mut request.history);
         // These two inputs are prepared by the OpenHuman lifecycle hook for
         // this exact request.  Falling back to the snapshots captured when the
         // long-lived driver was constructed would let a later channel/tool
@@ -123,12 +123,8 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
         }
         let sidecar = request.run_context.data.session_sidecar.clone();
         let started = Instant::now();
-        let user_message = request
-            .history
-            .iter()
-            .rev()
-            .find(|message| matches!(message, Message::User(_)))
-            .map(Message::text)
+        let user_message = crate::agent::tinyagents::last_user_message(&request.history)
+            .map(crate::agent::message_convert::user_text_with_markers)
             .unwrap_or_default();
         let context_window = self
             .turn_model_source
@@ -144,14 +140,12 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
             )
             .map_err(driver_error)?;
 
-        let mut messages: Vec<ChatMessage> = request
+        let mut messages: Vec<TranscriptMessage> = request
             .history
             .iter()
             .filter_map(crate::agent::message_convert::message_to_native_chat_message)
             .collect();
-        if (turn_models.supports_vision() || self.model_vision)
-            && crate::agent::multimodal::has_image_placeholders(&messages)
-        {
+        if crate::agent::multimodal::has_image_placeholders(&messages) {
             messages = crate::agent::multimodal::rehydrate_image_placeholders(&messages);
         }
 
@@ -219,7 +213,6 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
                     &snapshot,
                     &sidecar,
                     started.elapsed(),
-                    &self.model_name,
                 ));
             }
         };
@@ -303,7 +296,25 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
         history.extend(appended);
 
         let required_output = request.run_context.data.required_output.clone();
+        let classified_halt = outcome
+            .breaker_halt
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("Stopping after "));
         let required_repair = match required_output.as_ref() {
+            Some(contract) if classified_halt => {
+                if !tinyagents_harness::config::output_satisfies_contract(&output, contract) {
+                    output.push_str("\n\n");
+                    output.push_str(&tinyagents_harness::config::synthesize_block(contract));
+                    if history
+                        .last()
+                        .is_some_and(|message| matches!(message, Message::Assistant(_)))
+                    {
+                        history.pop();
+                    }
+                    history.push(Message::assistant(output.clone()));
+                }
+                None
+            }
             Some(contract) => {
                 grounded_close::repair_required_output(
                     &self.turn_model_source,
@@ -332,7 +343,6 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
             }
             history.push(Message::assistant(output.clone()));
         }
-        trim_history(&mut history, self.max_history_messages);
 
         // This is deliberately an out-of-band observation rather than a
         // second history or transcript.  The runtime only reads it from
@@ -376,40 +386,107 @@ impl SessionDriver<OpenHumanRunContext> for OpenHumanSessionDriver {
                 + repair_usage
                     .map(|usage| usage.cached_input_tokens)
                     .unwrap_or_default();
-            observed.cost_usd = outcome.charged_amount_usd
-                + close
-                    .as_ref()
-                    .map(|close| close.usage.charged_amount_usd)
-                    .unwrap_or_default()
-                + repair_usage
-                    .map(|usage| usage.charged_amount_usd)
-                    .unwrap_or_default();
+            let mut cost = outcome.cost;
+            if let Some(close) = close.as_ref() {
+                cost.merge(close.usage.cost);
+            }
+            if let Some(repair) = repair_usage {
+                cost.merge(repair.cost);
+            }
+            observed.cost = cost;
+            let loop_last_call = snapshot
+                .lock()
+                .ok()
+                .map(|guard| (guard.last_call_input_tokens, guard.last_call_output_tokens));
+            (
+                observed.last_call_input_tokens,
+                observed.last_call_output_tokens,
+            ) = final_call_tokens(
+                loop_last_call,
+                close.as_ref().map(|close| &close.usage),
+                repair_usage,
+            );
             observed.duration = Some(started.elapsed());
+            observed.driver_finished_at = Some(std::time::Instant::now());
             observed.tool_outcomes = outcome.tool_outcomes.clone();
             observed.hit_cap = outcome.hit_cap;
             observed.wrap_up_injected = outcome.wrap_up_injected;
+            // How the harness stopped the turn, if it did. The wind-down
+            // middleware marked the sidecar during the run.
+            observed.stop = crate::agent::turn_stop::TurnStop::classify(
+                outcome.breaker_halt.as_deref(),
+                observed.wind_down,
+                outcome.hit_cap,
+            );
+            if let Some(stop) = &observed.stop {
+                tracing::debug!(
+                    model = %self.model_name,
+                    "[session-driver] turn stopped early; recording on the sidecar {}",
+                    stop.status_message()
+                );
+            }
             observed.resolved_route = outcome.resolved_route.clone();
         }
+        // The turn compacted its context: persist the compacted history, so the
+        // next turn starts from the checkpoint. The runtime session seals the
+        // current generation and opens the next (the history no longer extends
+        // it), so the full conversation stays on disk.
+        let history = match &outcome.compaction {
+            Some(carry) => carry.apply(history),
+            None => history,
+        };
         Ok(DriverOutcome {
             history,
             output: Some(output),
             partial: None,
             interrupted: outcome.early_exit_tool.is_some() || outcome.hit_cap,
+            // `None` lets the runtime derive the outcome from `interrupted`.
+            outcome: None,
         })
     }
 }
 
-/// Preserve the stable system prefix while bounding durable conversational
-/// history.  The runtime owns history replacement, so this must happen before
-/// its successful `DriverOutcome` is committed.
-fn trim_history(history: &mut Vec<Message>, max_history_messages: usize) {
-    let prefix_len = history
+/// Input and output tokens of the turn's final model call.
+///
+/// The grounded close and the required-output repair both run after the
+/// harness loop, in that order, so the newest of them that reached the
+/// provider made the final call; without either, the loop's last answered
+/// call did.
+fn final_call_tokens(
+    loop_last_call: Option<(u64, u64)>,
+    close: Option<&grounded_close::RepairUsage>,
+    repair: Option<&grounded_close::RepairUsage>,
+) -> (u64, u64) {
+    [repair, close]
+        .into_iter()
+        .flatten()
+        .find(|usage| usage.last_call_input_tokens > 0 || usage.last_call_output_tokens > 0)
+        .map(|usage| (usage.last_call_input_tokens, usage.last_call_output_tokens))
+        .or(loop_last_call)
+        .unwrap_or_default()
+}
+
+fn system_prefix_len(history: &[Message]) -> usize {
+    history
         .iter()
         .take_while(|message| matches!(message, Message::System(_)))
-        .count();
-    let retained = history.len().saturating_sub(prefix_len);
-    if retained > max_history_messages {
-        history.drain(prefix_len..prefix_len + retained - max_history_messages);
+        .count()
+}
+
+/// Drop `tool` messages that open the history right after the system prefix.
+/// Their assistant turn is gone (an old unpaired trim, #6721), and the provider
+/// rejects every request that carries them, so the thread can never recover
+/// without this. Later system rows (e.g. a steering nudge) are kept.
+fn repair_orphaned_tool_head(history: &mut Vec<Message>) {
+    let prefix_len = system_prefix_len(history);
+    let orphans =
+        tinyagents_harness::summarization::advance_past_orphan_tools(&history[prefix_len..], 0);
+    if orphans > 0 {
+        tracing::warn!(
+            orphans,
+            "[session_host::driver] repaired orphaned tool head: dropped {orphans} leading tool message(s)"
+        );
+        history.drain(prefix_len..prefix_len + orphans);
     }
 }
 
@@ -421,6 +498,7 @@ fn driver_failure(error: impl std::fmt::Display) -> DriverFailure {
     DriverFailure {
         error: RuntimeError::Driver(error.to_string()),
         partial: None,
+        outcome: None,
     }
 }
 
@@ -453,14 +531,28 @@ fn ensure_snapshot_tools_are_executable(
 }
 
 fn driver_error_with_snapshot(
-    error: impl std::fmt::Display,
+    error: anyhow::Error,
     snapshot: &crate::agent::tinyagents::TranscriptSnapshotSink,
     sidecar: &std::sync::Arc<
         std::sync::Mutex<crate::agent::tinyagents::host::run_context::SessionTurnSidecar>,
     >,
     elapsed: std::time::Duration,
-    fallback_model: &str,
 ) -> DriverFailure {
+    // Classify from the typed harness error when the chain carries one, rather
+    // than matching on its rendered text.
+    let typed = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<tinyagents_harness::TinyAgentsError>());
+    let stalled = matches!(
+        typed,
+        Some(tinyagents_harness::TinyAgentsError::GenerationStalled)
+    );
+    let terminal = typed.map(|typed| {
+        tinyagents_harness::terminal::TerminalOutcome::from_error(
+            typed,
+            tinyagents_harness::terminal::TimeoutPhase::AfterTurn,
+        )
+    });
     let error = error.to_string();
     let guard = snapshot
         .lock()
@@ -479,42 +571,43 @@ fn driver_error_with_snapshot(
         observed.input_tokens = guard.input_tokens;
         observed.output_tokens = guard.output_tokens;
         observed.cached_input_tokens = guard.cached_input_tokens;
-        observed.cost_usd = if guard.charged_amount_usd > 0.0 {
-            guard.charged_amount_usd
-        } else {
-            let pricing_model = guard
-                .resolved_route
-                .as_ref()
-                .map(|route| route.route.as_str())
-                .filter(|route| !route.trim().is_empty())
-                .unwrap_or(fallback_model);
-            crate::agent::cost::estimate_call_cost_usd(
-                pricing_model,
-                &crate::inference::provider::UsageInfo {
-                    input_tokens: guard.input_tokens,
-                    output_tokens: guard.output_tokens,
-                    context_window: 0,
-                    cached_input_tokens: guard.cached_input_tokens,
-                    cache_creation_tokens: 0,
-                    reasoning_tokens: 0,
-                    charged_amount_usd: 0.0,
-                },
-            )
-        };
+        observed.last_call_input_tokens = guard.last_call_input_tokens;
+        observed.last_call_output_tokens = guard.last_call_output_tokens;
+        // Each answered call was priced as it arrived (reported charge, else
+        // catalog estimate, else unknown); nothing is re-estimated here.
+        observed.cost = guard.cost;
         observed.duration = Some(elapsed);
         observed.tool_outcomes = guard.tool_outcomes.clone();
         observed.resolved_route = guard.resolved_route.clone();
     }
     if guard.messages.is_empty() {
-        return driver_failure(error);
+        let mut failure = driver_failure(error);
+        failure.outcome = terminal;
+        return failure;
     }
     let accepted_end = guard.accepted_end();
     let history = guard.messages[..accepted_end].to_vec();
     let unanswered =
         crate::agent::tinyagents::render_unanswered_steps(&guard.messages[accepted_end..]);
-    let display = match unanswered {
-        Some(steps) => format!("The turn stopped before completion: {error}.\n\n{steps}"),
-        None => format!("The turn stopped before completion: {error}."),
+    let display = if stalled {
+        // The model's streamed narration was stopped before it could repeat
+        // indefinitely. Preserve the completed tools as a useful, bounded
+        // partial rather than showing only the failed model's process text.
+        let results = crate::agent::session_host::turn_checkpoint::results_from_tool_outcomes(
+            &guard.tool_outcomes,
+        );
+        let evidence = crate::agent::session_host::turn_checkpoint::render_tool_results(
+            &results,
+            crate::agent::session_host::turn_checkpoint::CHECKPOINT_TOTAL_CHARS,
+        );
+        format!(
+            "I stopped a repetitive model response before it could finish. Here are the completed tool results I can report:\n{evidence}"
+        )
+    } else {
+        match unanswered {
+            Some(steps) => format!("The turn stopped before completion: {error}.\n\n{steps}"),
+            None => format!("The turn stopped before completion: {error}."),
+        }
     };
     DriverFailure {
         error: RuntimeError::Driver(error),
@@ -523,7 +616,9 @@ fn driver_error_with_snapshot(
             output: None,
             partial: Some(TranscriptPartial::new(display)),
             interrupted: true,
+            outcome: terminal.clone(),
         }),
+        outcome: terminal,
     }
 }
 

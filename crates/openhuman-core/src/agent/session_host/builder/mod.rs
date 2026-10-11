@@ -6,13 +6,20 @@
 //! registry from a loaded [`Config`]. Per-turn behaviour lives in
 //! [`super::turn`]; accessors and run-helpers live in [`super::runtime`].
 
+#[cfg(feature = "flows")]
 pub(crate) use factory::provider_role_for_definition;
 
 mod builder_build;
 mod dispatcher;
 mod factory;
-mod helpers;
+mod host_only;
+mod host_tools;
+mod iteration_cap;
+mod permanent_tool;
 mod setters;
+
+pub use host_only::HostOnlyToolPolicy;
+pub use host_tools::{HostTools, HostTurnTools, TurnContext};
 
 #[cfg(test)]
 mod builder_tests;
@@ -27,8 +34,8 @@ use tinytools::{Tool, ToolSpec};
 /// Anthropic (and other strict providers) rejects a chat/completions
 /// request that lists two tools with the same name — OpenHuman's own
 /// backend and OpenAI silently accept duplicates, which hid the
-/// underlying collision (researcher sub-agent's `delegate_name =
-/// "research"` shadowing a same-named skill tool) until #1710's
+/// underlying collision (a sub-agent's `delegate_name` shadowing a
+/// same-named skill tool) until #1710's
 /// per-role routing started sending the same tool list to Anthropic.
 ///
 /// Called from every place that materialises the visible tool spec
@@ -136,7 +143,8 @@ pub(super) fn visible_tool_specs_for_policy(
             // below already does the real per-tool narrowing via `is_callable`
             // (and drops the spec entirely when nothing survives), so this
             // filter only needs to gate *other* tools on the static ceiling.
-            spec.name == crate::tools::toolpacks::USE_SKILL || tool_policy.is_allowed(&spec.name)
+            spec.name == tinyagents_harness::tool::packs::USE_SKILL
+                || tool_policy.is_allowed(&spec.name)
         })
         .cloned()
         .filter_map(|mut spec| {
@@ -152,7 +160,7 @@ pub(super) fn visible_tool_specs_for_policy(
                 }
                 return Some(spec);
             }
-            if spec.name == crate::tools::toolpacks::USE_SKILL {
+            if spec.name == tinyagents_harness::tool::packs::USE_SKILL {
                 // `false` means no pack has a callable tool: an empty index and
                 // an empty enum are not a tool, so drop it rather than ship one.
                 // `Arc::make_mut`, not `&mut spec`: the three spec views share
@@ -161,7 +169,8 @@ pub(super) fn visible_tool_specs_for_policy(
                 // `durable_tool_specs` is meant to stay the unscoped truth.
                 // This copies exactly the one spec being rewritten and leaves
                 // the other ~48 visible schemas shared.
-                return crate::tools::toolpacks::scope_use_skill_spec(
+                return tinyagents_harness::tool::packs::scope_use_skill_spec(
+                    &crate::tools::toolpacks::CATALOG,
                     Arc::make_mut(&mut spec),
                     &is_callable,
                 )
@@ -172,7 +181,7 @@ pub(super) fn visible_tool_specs_for_policy(
         .collect()
 }
 
-/// Ensure the CCR recovery tool (`tinyjuice_retrieve`) is a member of a
+/// Ensure the CCR recovery tool (`juice_retrieve`) is a member of a
 /// non-empty visibility allowlist. Compaction runs on every agent's tool
 /// output, so any agent with a curated `ToolScope::Named` list must still be
 /// able to act on a `⟦tj:…⟧` marker. Only the live tool is added; the legacy
@@ -180,13 +189,18 @@ pub(super) fn visible_tool_specs_for_policy(
 /// off the wire. An empty set already means "no filter" (all tools visible),
 /// so it is left untouched — including the deliberately tool-less
 /// `Named([])` case, which must stay tool-less.
+///
+/// `recovery_needed` is whether anything can hand this agent a recovery
+/// pointer: the compaction router (`context.compaction_enabled`) or
+/// TinyJuice's summary stage ([`summarizes_tool_output`]), whose footer names
+/// the retrieve tool even when the router is off.
 pub(super) fn ensure_recovery_tool_visible(
     visible: &mut std::collections::HashSet<String>,
-    compaction_enabled: bool,
+    recovery_needed: bool,
 ) {
-    // With compaction off nothing ever emits a `⟦tj:…⟧` marker, so the
-    // recovery tool would be a schema with nothing to recover.
-    if !compaction_enabled {
+    // Nothing emits a `⟦tj:…⟧` marker or a summary footer, so the recovery
+    // tool would be a schema with nothing to recover.
+    if !recovery_needed {
         return;
     }
     // `is_empty_tool_scope`, not `is_empty`: a belt holding only
@@ -199,6 +213,48 @@ pub(super) fn ensure_recovery_tool_visible(
             visible.insert((*name).to_string());
         }
     }
+}
+
+/// The recovery tool, plus the REPL tools the handle preview names, for a belt.
+pub(super) fn ensure_tinyjuice_tools_visible(
+    visible: &mut std::collections::HashSet<String>,
+    agent_id: &str,
+    config: &crate::config::Config,
+) {
+    ensure_recovery_tool_visible(
+        visible,
+        config.context.compaction_enabled || summarizes_tool_output(agent_id, config),
+    );
+    ensure_repl_tools_visible(
+        visible,
+        crate::inference::tokenjuice::repl_handle_active(config),
+    );
+}
+
+/// Ensure the REPL tools (`juice_find`, `juice_extract`, `juice_summarize`) are
+/// members of a non-empty visibility allowlist while large results are stored
+/// behind a handle. The handle preview names them, so a curated
+/// `ToolScope::Named` belt that lacked them would be told to call a tool it
+/// cannot see. Same rules as [`ensure_recovery_tool_visible`]: an empty set
+/// means "no filter", and a zero-tool belt stays zero-tool.
+pub(super) fn ensure_repl_tools_visible(
+    visible: &mut std::collections::HashSet<String>,
+    handle_mode_active: bool,
+) {
+    if !handle_mode_active {
+        return;
+    }
+    if !crate::agent::harness::definition::is_empty_tool_scope(visible) {
+        for name in crate::inference::tokenjuice::REPL_TOOL_NAMES {
+            visible.insert((*name).to_string());
+        }
+    }
+}
+
+/// Whether TinyJuice may summarize this agent's tool output. Only the
+/// orchestrator gets a summary model, and a zero threshold turns it off.
+pub(super) fn summarizes_tool_output(agent_id: &str, config: &crate::config::Config) -> bool {
+    crate::inference::tokenjuice::summarizes_tool_output(agent_id, config)
 }
 
 pub(super) fn should_synthesize_delegation_tools(def: &AgentDefinition) -> bool {
@@ -223,7 +279,7 @@ pub(super) fn should_synthesize_delegation_tools(def: &AgentDefinition) -> bool 
 /// the name extends at an `_` boundary. Empty when the registry is not up or
 /// the id resolves to nothing, which leaves the schema untouched.
 fn allowed_subagent_ids_for(agent_id: &str) -> Vec<String> {
-    let Some(registry) = crate::agent::harness::AgentDefinitionRegistry::global() else {
+    let Some(registry) = crate::agent::harness::AgentDefinitionRegistry::current() else {
         return Vec::new();
     };
     let definition = registry.get(agent_id).or_else(|| {

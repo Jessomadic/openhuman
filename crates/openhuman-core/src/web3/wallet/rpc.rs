@@ -2,16 +2,14 @@
 //!
 //! JSON-RPC is used for EVM and Solana. REST is used for BTC (Esplora) and
 //! Tron (TronGrid). Both honor an `OPENHUMAN_WALLET_RPC_<CHAIN>` env override
-//! so tests can point everything at an axum mock.
+//! so tests can point everything at an axum mock. The wallet engine reaches
+//! these through [`super::transport::OpenHumanTransport`].
 
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
-
-use super::defaults::{rpc_url_for_chain, rpc_url_for_evm_network, EvmNetwork};
-use super::ops::WalletChain;
 
 const LOG_PREFIX: &str = "[wallet::rpc]";
 
@@ -46,25 +44,6 @@ fn client() -> reqwest::Client {
 enum RpcCallError {
     Transport(String),
     Rpc(String),
-}
-
-/// JSON-RPC POST against a chain's default/override endpoint.
-///
-pub async fn rpc_call<T: DeserializeOwned>(
-    chain: WalletChain,
-    method: &str,
-    params: Value,
-) -> Result<T, String> {
-    rpc_call_to(&rpc_url_for_chain(chain), method, params).await
-}
-
-/// JSON-RPC POST against a specific EVM network's RPC URL.
-pub async fn evm_rpc_call<T: DeserializeOwned>(
-    network: EvmNetwork,
-    method: &str,
-    params: Value,
-) -> Result<T, String> {
-    rpc_call_to(&rpc_url_for_evm_network(network), method, params).await
 }
 
 pub async fn rpc_call_to<T: DeserializeOwned>(
@@ -153,12 +132,6 @@ pub async fn rest_get_text(url: &str) -> Result<String, String> {
     Ok(body)
 }
 
-pub async fn rest_get_json<T: DeserializeOwned>(url: &str) -> Result<T, String> {
-    let body = rest_get_text(url).await?;
-    serde_json::from_str(&body)
-        .map_err(|e| format!("wallet REST GET decode failed: {e}; body={body}"))
-}
-
 /// Plain REST POST with a raw text body (e.g. Esplora /tx accepts hex).
 pub async fn rest_post_text(url: &str, body: &str, content_type: &str) -> Result<String, String> {
     log::debug!(
@@ -184,29 +157,6 @@ pub async fn rest_post_text(url: &str, body: &str, content_type: &str) -> Result
         ));
     }
     Ok(text)
-}
-
-/// REST POST with a JSON body.
-pub async fn rest_post_json<T: DeserializeOwned>(url: &str, body: &Value) -> Result<T, String> {
-    log::debug!("{LOG_PREFIX} rest_post_json url={}", redact_rpc_url(url));
-    let response = client()
-        .post(url)
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| format!("wallet REST POST transport failed: {e}"))?;
-    let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("wallet REST POST read body failed: {e}"))?;
-    if !status.is_success() {
-        return Err(format!(
-            "wallet REST POST HTTP failure: status={status} body={text}"
-        ));
-    }
-    serde_json::from_str(&text)
-        .map_err(|e| format!("wallet REST POST decode failed: {e}; body={text}"))
 }
 
 #[cfg(test)]

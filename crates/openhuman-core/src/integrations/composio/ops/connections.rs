@@ -2,10 +2,10 @@
 
 use std::collections::HashMap;
 
-use super::super::client::{create_composio_client, direct_list_connections, ComposioClientKind};
+use super::super::client::{direct_list_connections, resolve_composio_route, ComposioRoute};
 use super::super::module_client::{self as connectors, methods};
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::super::connected_integrations::{
     fetch_connected_integrations_status, invalidate_connected_integrations_cache,
@@ -20,19 +20,18 @@ use super::error_utils::{
     backend_mode_without_session, direct_mode_without_key, report_composio_op_error, OpResult,
     COMPOSIO_NO_SESSION,
 };
-use super::memory_cleanup::composio_memory_targets_for_connection;
-use tinymemory_api::composio::normalize_connection_identifier;
+use crate::integrations::composio::contract::normalize_connection_identifier;
 
 pub async fn composio_list_connections(
     config: &Config,
-) -> OpResult<RpcOutcome<ComposioConnectionsResponse>> {
+) -> OpResult<Outcome<ComposioConnectionsResponse>> {
     tracing::debug!("[composio] rpc list_connections");
     if direct_mode_without_key(config)? {
         tracing::debug!(
             "[composio] list_connections: direct mode selected, no api key configured yet \
              — returning empty connection list (valid setup state, not an error)"
         );
-        return Ok(RpcOutcome::new(
+        return Ok(Outcome::new(
             ComposioConnectionsResponse {
                 connections: Vec::new(),
             },
@@ -43,8 +42,7 @@ pub async fn composio_list_connections(
         // No session means no proxy route, so the connector module cannot
         // answer — but the connections may well exist server-side. That makes
         // this "unavailable", not "none": callers that tell the two apart
-        // (`memory::sources::reconcile` hides nothing on `Err`,
-        // `flows::validate_connection_refs` fails open on `Err`) must keep
+        // (`flows::validate_connection_refs` fails open on `Err`) must keep
         // doing so, which an empty `Ok` would silently defeat. It is also not
         // a fault, so it is not reported here: nothing reaches Sentry for a
         // user who has simply not signed in yet (#6176). The wording is the one
@@ -71,15 +69,17 @@ pub async fn composio_list_connections(
     // host-side because its client accepts the local loopback overrides used
     // by desktop development and its v3 response mapper lives here.
     let resp = if config.composio.mode.trim() == crate::config::schema::COMPOSIO_MODE_DIRECT {
-        let ComposioClientKind::Direct(direct) = create_composio_client(config)
+        let ComposioRoute::Direct(direct) = resolve_composio_route(config)
             .map_err(|error| format!("[composio-direct] list_connections: {error:#}"))?
         else {
             unreachable!("direct Composio mode must construct a direct client")
         };
-        direct_list_connections(&direct).await.map_err(|error| {
-            report_composio_op_error("list_connections", &error);
-            format!("[composio-direct] list_connections: {error:#}")
-        })?
+        direct_list_connections(config, &direct)
+            .await
+            .map_err(|error| {
+                report_composio_op_error("list_connections", &error);
+                format!("[composio-direct] list_connections: {error:#}")
+            })?
     } else {
         connectors::call_bare::<ComposioConnectionsResponse>(config, methods::LIST_CONNECTIONS)
             .await
@@ -91,9 +91,17 @@ pub async fn composio_list_connections(
 
     let active = resp.connections.iter().filter(|c| c.is_active()).count();
     let total = resp.connections.len();
-    sync_cache_with_connections(&resp.connections);
+    if sync_cache_with_connections(&resp.connections) {
+        // The Settings poll also catches OAuth completions that outlive the
+        // connection-created subscriber's readiness window. Re-warm here so
+        // the next chat turn does not perform the three discovery requests.
+        let config = config.clone();
+        tokio::spawn(async move {
+            let _ = fetch_connected_integrations_status(&config).await;
+        });
+    }
     let resp = enrich_connections_with_identity(config, resp).await;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         resp,
         vec![format!(
             "composio: {total} connection(s) listed ({active} active)"
@@ -105,7 +113,7 @@ pub async fn composio_authorize(
     config: &Config,
     toolkit: &str,
     extra_params: Option<serde_json::Value>,
-) -> OpResult<RpcOutcome<ComposioAuthorizeResponse>> {
+) -> OpResult<Outcome<ComposioAuthorizeResponse>> {
     tracing::debug!(toolkit = %toolkit, has_extra_params = extra_params.is_some(), "[composio] rpc authorize");
     // The module owns the whole handoff: the Meta pre-clean, the 429 backoff,
     // and the guidance message that replaces an unhelpful rate-limit error.
@@ -133,54 +141,36 @@ pub async fn composio_authorize(
         },
     );
 
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         resp,
         vec![format!("composio: authorize flow started for {toolkit}")],
     ))
 }
 
+/// The `composio.delete_connection` reply.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ComposioDeleteResult {
+    /// Whether the backend confirmed the deletion.
+    pub deleted: bool,
+}
+
 pub async fn composio_delete_connection(
     config: &Config,
     connection_id: &str,
-    clear_memory: bool,
-) -> OpResult<RpcOutcome<ComposioDeleteResponse>> {
+) -> OpResult<Outcome<ComposioDeleteResult>> {
     tracing::debug!(connection_id = %connection_id, "[composio] rpc delete_connection");
-    let toolkit = match resolve_toolkit_for_connection(config, connection_id).await {
-        Ok(toolkit) => Some(toolkit),
-        Err(error) if clear_memory => {
-            return Err(format!(
-                "[composio] delete_connection cannot clear memory without resolving toolkit: {error}"
-            ));
-        }
-        Err(_) => None,
-    };
-    let memory_targets = if clear_memory {
-        // Target discovery takes the config and resolves the bound driver
-        // itself — the notion arm reads sync state through the driver's `Graph`
-        // family. This used to resolve the LIVE in-process client here
-        // (`memory::ops::helpers::active_memory_client`) and hand it down;
-        // openhuman#5560 deleted that engine, and the binding is what replaced
-        // it. Discovery still refuses before the connection is deleted rather
-        // than after, so a memory store this host cannot reach aborts the
-        // delete instead of orphaning the user's synced pages.
-        composio_memory_targets_for_connection(config, toolkit.as_deref(), connection_id)
-            .await
-            .map_err(|error| {
-                format!("[composio] delete_connection cannot enumerate memory targets: {error:#}")
-            })?
-    } else {
-        Vec::new()
-    };
-    // Only the Composio-side removal crosses the bus. Everything around it —
-    // the memory targets, the identity facets, PROFILE.md, the memory_sources
-    // row — is this host's own bookkeeping about a connection it no longer has,
-    // and the module knows nothing about any of it.
-    let mut resp = connectors::call::<_, ComposioDeleteResponse>(
+    // The toolkit names the identity facets to drop; an unresolvable toolkit
+    // skips that cleanup only.
+    let toolkit = resolve_toolkit_for_connection(config, connection_id)
+        .await
+        .ok();
+    // Only the Composio-side removal crosses the bus. The identity facets
+    // are this host's own bookkeeping about a connection it no longer has.
+    let resp = connectors::call::<_, ComposioDeleteResponse>(
         config,
         methods::DELETE_CONNECTION,
         ComposioDeleteConnectionRequest {
             connection_id: connection_id.to_string(),
-            clear_memory,
         },
     )
     .await
@@ -188,22 +178,6 @@ pub async fn composio_delete_connection(
         report_composio_op_error("delete_connection", &anyhow::anyhow!("{error}"));
         format!("[composio] delete_connection failed: {error}")
     })?;
-    let mut memory_chunks_deleted = 0;
-    let mut memory_clear_errors = Vec::new();
-    for target in &memory_targets {
-        match target.delete(config).await {
-            Ok(deleted) => {
-                memory_chunks_deleted += deleted;
-            }
-            Err(error) => {
-                memory_clear_errors.push(format!(
-                    "[composio] connection deleted, but failed to clear memory chunks for {}: {error:#}",
-                    target.label()
-                ));
-            }
-        }
-    }
-    resp.memory_chunks_deleted = memory_chunks_deleted;
     if let Some(toolkit) = toolkit.as_deref() {
         let deleted = delete_connected_identity_facets(config, toolkit, connection_id)
             .await
@@ -222,33 +196,6 @@ pub async fn composio_delete_connection(
             facets_deleted = deleted,
             "[composio] deleted connected identity facets after connection removal"
         );
-        if let Err(e) = super::super::profile_md::remove_provider_from_profile_md(
-            &config.workspace_dir,
-            toolkit,
-            connection_id,
-        ) {
-            tracing::warn!(
-                toolkit = %toolkit,
-                connection_id = %connection_id,
-                error = %e,
-                "[composio] PROFILE.md bullet removal failed (non-fatal)"
-            );
-        }
-    }
-    match crate::memory::sources::registry::remove_composio_source_by_connection_id(connection_id)
-        .await
-    {
-        Ok(0) => {}
-        Ok(removed) => tracing::debug!(
-            connection_id = %connection_id,
-            removed,
-            "[composio] pruned memory_sources entry after connection deletion"
-        ),
-        Err(e) => tracing::warn!(
-            connection_id = %connection_id,
-            error = %e,
-            "[composio] failed to prune memory_sources entry after connection deletion (non-fatal)"
-        ),
     }
     crate::core::bus::BUS.publish(
         crate::core::events::DomainEvent::ComposioConnectionDeleted {
@@ -272,13 +219,41 @@ pub async fn composio_delete_connection(
             );
         }
     }
-    if !memory_clear_errors.is_empty() {
-        return Err(memory_clear_errors.join("; "));
-    }
-    Ok(RpcOutcome::new(
-        resp,
+    Ok(Outcome::new(
+        ComposioDeleteResult {
+            deleted: resp.deleted,
+        },
         vec![format!("composio: connection {connection_id} deleted")],
     ))
+}
+
+/// The ids of every active connection of `toolkit` (matched
+/// case-insensitively), through the connector module's `ListConnections`.
+///
+/// # Errors
+///
+/// The connector call fails.
+pub async fn active_connection_ids(config: &Config, toolkit: &str) -> OpResult<Vec<String>> {
+    let toolkit = toolkit.trim().to_ascii_lowercase();
+    let resp =
+        connectors::call_bare::<ComposioConnectionsResponse>(config, methods::LIST_CONNECTIONS)
+            .await
+            .map_err(|error| {
+                report_composio_op_error("active_connection_ids", &anyhow::anyhow!("{error}"));
+                format!("[composio] list_connections failed: {error}")
+            })?;
+    let ids: Vec<String> = resp
+        .connections
+        .into_iter()
+        .filter(|c| c.is_active() && c.normalized_toolkit() == toolkit)
+        .map(|c| c.id)
+        .collect();
+    tracing::debug!(
+        toolkit = %toolkit,
+        active = ids.len(),
+        "[composio] active_connection_ids"
+    );
+    Ok(ids)
 }
 
 /// Look up the toolkit slug for an existing connection.

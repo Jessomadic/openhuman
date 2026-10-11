@@ -17,10 +17,11 @@
 
 pub use tinyjuice_bus::types::{
     AgentTokenjuiceCompression, CompressOptions, CompressedOutput, CompressorKind, ContentHint,
-    ContentKind,
+    ContentKind, LlmSummaryMode,
 };
 pub use tinyjuice_bus::wire::{
-    CacheStats, CompactResponse, InstallRequest, RangeUnit, RetrieveRange,
+    CacheStats, CompactRequest, CompactResponse, GenerateRequest, InstallRequest, RangeUnit,
+    RetrieveRange,
 };
 
 #[cfg(test)]

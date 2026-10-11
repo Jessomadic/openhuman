@@ -5,8 +5,7 @@ use tinytools::{RankCandidate, RankContext, ToolRanker};
 
 use super::*;
 
-/// Embeds a text as a bag of three hand-picked words, so similarity is
-/// deterministic and readable.
+/// Counts embed calls and maps every text to a fixed three-word bag.
 struct BagEmbedder {
     calls: AtomicUsize,
 }
@@ -50,107 +49,34 @@ fn candidates() -> Vec<RankCandidate> {
     ]
 }
 
+/// The provider adapter carries the embedding through to the vendor ranker, and
+/// the provider's signature keys the disk cache it writes.
 #[tokio::test]
-async fn ranks_by_cosine_and_embeds_the_catalogue_once() {
+async fn the_ranker_ranks_through_the_provider_and_keys_its_cache_by_signature() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("cache.json");
     let embedder = Arc::new(BagEmbedder {
         calls: AtomicUsize::new(0),
     });
-    let ranker = EmbeddingToolRanker::new(embedder.clone());
-    assert_eq!(ranker.kind(), "embedding");
-
+    let ranker = embedding_tool_ranker(embedder.clone()).with_disk_cache(path.clone());
     let hits = ranker
-        .rank("ping alex", &RankContext::empty(), &candidates(), 2)
+        .rank("ping alex", &RankContext::empty(), &candidates(), 1)
         .await
         .unwrap();
     assert_eq!(hits[0].key, "SLACK_SEND_MESSAGE");
-    assert!(hits[0].confidence.is_none());
-    assert_eq!(hits.len(), 2);
-    // One batch for the catalogue plus one for the intent.
-    assert_eq!(embedder.calls.load(Ordering::SeqCst), 2);
-
-    let hits = ranker
-        .rank("mail the report", &RankContext::empty(), &candidates(), 1)
-        .await
-        .unwrap();
-    assert_eq!(hits[0].key, "GMAIL_SEND_EMAIL");
-    // Only the intent was embedded this time.
-    assert_eq!(embedder.calls.load(Ordering::SeqCst), 3);
+    let on_disk: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(on_disk["signature"], "provider=bag;model=bag-v1;dims=3");
 }
 
-#[tokio::test]
-async fn disk_cache_round_trips_and_is_keyed_by_signature() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("cache").join("tool_search_embeddings.json");
-    let embedder = Arc::new(BagEmbedder {
-        calls: AtomicUsize::new(0),
-    });
-    let ranker = EmbeddingToolRanker::new(embedder.clone()).with_disk_cache(path.clone());
-    ranker
-        .rank("ping", &RankContext::empty(), &candidates(), 1)
-        .await
-        .unwrap();
-    assert!(path.exists());
-
-    let embedder2 = Arc::new(BagEmbedder {
-        calls: AtomicUsize::new(0),
-    });
-    let warm = EmbeddingToolRanker::new(embedder2.clone()).with_disk_cache(path.clone());
-    warm.rank("ping", &RankContext::empty(), &candidates(), 1)
-        .await
-        .unwrap();
-    assert_eq!(
-        embedder2.calls.load(Ordering::SeqCst),
-        1,
-        "a warm cache embeds only the intent"
-    );
-}
-
-#[tokio::test]
-async fn empty_intent_is_rejected_and_none_provider_is_unusable() {
-    let ranker = EmbeddingToolRanker::new(Arc::new(BagEmbedder {
-        calls: AtomicUsize::new(0),
-    }));
-    assert!(ranker
-        .rank("  ", &RankContext::empty(), &candidates(), 1)
-        .await
-        .is_err());
+#[test]
+fn the_none_provider_is_unusable() {
     let none = crate::inference::embedding_host::TinyInferenceEmbeddingProvider::new(
         tinyinference_embeddings::NoopEmbeddingModel,
     );
-    assert!(!EmbeddingToolRanker::provider_is_usable(&none));
-}
-
-/// A tool that appears later — a newly connected toolkit's actions, a
-/// rewritten description — is embedded on its own; the rest is a cache hit.
-#[tokio::test]
-async fn a_new_or_changed_tool_is_embedded_incrementally() {
-    let embedder = Arc::new(BagEmbedder {
+    assert!(!embedding_provider_is_usable(&none));
+    let bag = BagEmbedder {
         calls: AtomicUsize::new(0),
-    });
-    let ranker = EmbeddingToolRanker::new(embedder.clone());
-    ranker
-        .rank("ping", &RankContext::empty(), &candidates(), 1)
-        .await
-        .unwrap();
-    assert_eq!(
-        embedder.calls.load(Ordering::SeqCst),
-        2,
-        "catalogue + intent"
-    );
-
-    let mut grown = candidates();
-    grown.push(RankCandidate::new("NOTION_CREATE_PAGE", "create a page").with_family("notion"));
-    grown[2] = RankCandidate::new("file_read", "read a file from disk");
-    ranker
-        .rank("ping", &RankContext::empty(), &grown, 1)
-        .await
-        .unwrap();
-    // One batch for the two unseen texts (the new tool and the changed one),
-    // plus the intent — never the whole catalogue again.
-    assert_eq!(embedder.calls.load(Ordering::SeqCst), 4);
-    assert_eq!(
-        ranker.cache.read().unwrap().len(),
-        5,
-        "old and new descriptions both cached; a stale entry is harmless"
-    );
+    };
+    assert!(embedding_provider_is_usable(&bag));
 }

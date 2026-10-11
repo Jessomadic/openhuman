@@ -2,19 +2,13 @@
 /**
  * Chat background-activity panel — end-to-end.
  *
- * Feature E2E for the chat-header "Background tasks" surface. Proves the full
- * user flow: open a thread → click the Background tasks toggle in the chat
- * header → the right-hand panel mounts and renders its stacked, view-only
- * sections (this chat's sub-agents, scheduled cron jobs, and memory syncing),
- * then closes on Escape.
- *
- * The section headers and empty states render independently of which core
- * transport is live, so this asserts the always-present scaffolding rather
- * than transport-specific data — keeping it deterministic in the web session.
+ * The former chat-header background tasks drawer was removed from the current
+ * conversation surface. Keep a desktop E2E guard against restoring its retired
+ * toggle while opening a fresh thread.
  */
 import { waitForApp } from '../helpers/app-helpers';
 import { chatMounted, clickByTitle, getSelectedThreadId } from '../helpers/chat-harness';
-import { textExists } from '../helpers/element-helpers';
+import { waitForElementAbsence } from '../helpers/element-helpers';
 import { resetApp } from '../helpers/reset-app';
 import { navigateViaHash } from '../helpers/shared-flows';
 import { startMockServer, stopMockServer } from '../mock-server';
@@ -35,7 +29,7 @@ describe('Chat background-activity panel', () => {
     await stopMockServer();
   });
 
-  it('opens the Background tasks panel and renders its sections', async () => {
+  it('does not render the retired Background tasks toggle in chat', async () => {
     await navigateViaHash('/chat');
     await browser.waitUntil(async () => await chatMounted(), {
       timeout: 15_000,
@@ -49,24 +43,8 @@ describe('Chat background-activity panel', () => {
       timeoutMsg: 'thread.selectedThreadId never populated',
     });
 
-    const toggle = await $('[data-testid="background-processes-toggle"]');
-    await toggle.waitForExist({ timeout: 10_000 });
-    await toggle.click();
-
-    // The drawer mounts...
-    const panel = await $('[data-testid="background-processes-panel"]');
-    await panel.waitForExist({ timeout: 10_000 });
-    expect(await panel.isDisplayed()).toBe(true);
-
-    // ...with its stacked section scaffolding present (always rendered).
-    expect(await textExists('In this chat')).toBe(true);
-    expect(await textExists('Scheduled jobs')).toBe(true);
-    expect(await textExists('Memory syncing')).toBe(true);
-    console.log(`${LOG_PREFIX} panel + sections rendered`);
-
-    // Escape closes the drawer.
-    await browser.keys(['Escape']);
-    await panel.waitForExist({ timeout: 8_000, reverse: true });
-    console.log(`${LOG_PREFIX} passed — panel closed on Escape`);
+    await waitForElementAbsence('//*[@data-testid="background-processes-toggle"]', 5_000);
+    await waitForElementAbsence('//*[@data-testid="background-processes-panel"]', 5_000);
+    console.log(`${LOG_PREFIX} retired background tasks UI remains absent`);
   });
 });

@@ -18,7 +18,6 @@ use tokio::sync::mpsc::Sender;
 
 use crate::agent::harness::definition::SandboxMode;
 use crate::agent::harness::fork_context::{AgentContextPreparedSource, ParentExecutionContext};
-use crate::agent::harness::tool_result_artifacts::ToolResultArtifactIndexStore;
 use crate::agent::progress::AgentProgress;
 use crate::agent::stop_hooks::StopHook;
 use crate::agent::subagent_host::SubagentUsage;
@@ -27,6 +26,7 @@ use crate::agent::tinyagents::{
     turn_outcome::ToolCallOutcome, turn_policy::ToolPolicyEnforcement, TurnContextMiddleware,
 };
 use crate::agent::turn_origin::AgentTurnOrigin;
+use tinyagents_harness::store::InMemoryStore as ToolResultArtifactIndexStore;
 use tinyinference_llm::model::ResolvedModelRoute;
 
 /// Allocate a durable-unique root [`RunConfig`](tinyagents_harness::context::RunConfig).
@@ -62,7 +62,13 @@ pub(crate) fn direct_subagent_child(
         .data
         .child()
         .with_cancellation(parent.cancellation.clone());
-    let child = parent.child(child_config, child_data)?;
+    let mut child = parent.child(child_config, child_data)?;
+    // TinyAgents gives the child a linked `child_token()` of the parent's, so a
+    // parent cancel cascades down but cancelling the child (policy timeout,
+    // steering) leaves the parent running. Point the host carrier at that same
+    // child token; otherwise it keeps the parent's token and the host tools
+    // observe (and could trigger) the wrong scope.
+    child.data.cancellation = child.cancellation.clone();
     Ok((task_key, child))
 }
 
@@ -81,9 +87,24 @@ pub struct LastTurnUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
-    pub cost_usd: f64,
+    /// The turn's cost including children, or `None` when any call's cost is
+    /// unknown (no reported charge and no catalogued price). Never a guess.
+    pub cost_usd: Option<f64>,
+    /// Whether `cost_usd` is entirely provider-charged or includes a catalog
+    /// estimate (`Unknown` exactly when `cost_usd` is `None`).
+    pub cost_source: crate::agent::cost::CostSource,
     pub context_window: u64,
+    /// Tokens the root agent's context held after the turn's final model call
+    /// (that call's input plus its reply): the numerator of the context-window
+    /// gauge. The token fields above are the turn's spend, summed over every
+    /// call, and may exceed the window many times over on a long tool loop.
+    /// Sub-agents are excluded, as each runs in its own window.
+    pub context_tokens: u64,
     pub subagents: Vec<SubagentUsageEntry>,
+    /// Reasoning/thinking tokens the turn's own model calls spent. Reported
+    /// only for a turn run with a response-shape scope (library agent turns,
+    /// `agent::tinyagents::response_shape`); `0` elsewhere.
+    pub reasoning_tokens: u64,
 }
 
 /// Runtime-written sidecars for one OpenHuman session transition.
@@ -98,7 +119,14 @@ pub(crate) struct SessionTurnSidecar {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
-    pub cost_usd: f64,
+    /// The turn's own cost (sub-agents excluded): every call's reported
+    /// charge, else catalog estimate, else unknown.
+    pub cost: crate::agent::cost::CostTally,
+    /// Input and output tokens of the turn's final model call. The totals
+    /// above sum every call of the turn (its spend); these are the context the
+    /// model last held, the numerator of the context-window gauge.
+    pub last_call_input_tokens: u64,
+    pub last_call_output_tokens: u64,
     /// The selected model's context window for this exact request.  The
     /// provider response's generic usage cannot represent this host datum.
     pub context_window: u64,
@@ -111,6 +139,17 @@ pub(crate) struct SessionTurnSidecar {
     pub hit_cap: bool,
     pub wrap_up_injected: bool,
     pub resolved_route: Option<ResolvedModelRoute>,
+    /// When the driver handed its candidate to the runtime. `after_commit`
+    /// subtracts it from its own start to log how long the durable commit
+    /// took (`[session-runtime] post-commit`).
+    pub driver_finished_at: Option<std::time::Instant>,
+    /// Set by the deadline wind-down middleware when it paused this turn
+    /// (`tinyagents::deadline_wind_down`).
+    pub wind_down: bool,
+    /// How the turn was stopped early, if it was (breaker, wind-down,
+    /// iteration cap). The driver classifies it; `after_commit` carries it on
+    /// `TurnCompleted` so the trace shows a stopped turn at `WARNING`.
+    pub stop: Option<crate::agent::turn_stop::TurnStop>,
 }
 
 /// Immutable inputs to the host's pre-dispatch policy.
@@ -231,12 +270,21 @@ impl TurnDispatchState {
 /// the provider route or cost roll-up subsequently read by its parent.
 #[derive(Clone)]
 pub struct OpenHumanRunContext {
+    /// Explicit shared model-call budget inherited by synchronous children.
+    pub model_budget: Option<super::super::budget::ModelBudget>,
+    /// A host can narrow synchronous delegation depth; children inherit this.
+    pub max_spawn_depth: Option<usize>,
     /// Trust/routing source used by OpenHuman approval and attribution policy.
     pub origin: Option<AgentTurnOrigin>,
     /// UI/event progress receiver for this turn tree.
     pub progress: Option<Sender<AgentProgress>>,
     /// Stop policies evaluated after each model call.
     pub stop_hooks: Vec<Arc<dyn StopHook>>,
+    /// Wall-clock deadline of the top-level turn this run belongs to, set
+    /// only by the session turn entry point from the web backstop
+    /// (`agent::turn_deadline`). The harness winds the run down and clamps
+    /// its wall clock against it. `None` for turns without a backstop.
+    pub turn_deadline: Option<crate::agent::turn_deadline::TurnDeadline>,
     /// Parent runtime snapshot used by canonical recursive tool dispatch.
     pub parent: Option<ParentExecutionContext>,
     /// Context-preparation sources already consumed in this turn.
@@ -288,6 +336,19 @@ pub struct OpenHumanRunContext {
     /// Exact executable dynamic/delegation tools selected with
     /// [`Self::current_tools`] for this turn.
     pub(crate) current_synthesized_tools: Option<Arc<Vec<Box<dyn tinytools::Tool>>>>,
+    /// Tools the session serves through `tool_search` for this turn although
+    /// their own exposure is `Direct` (the agent definition's
+    /// `deferred_tools`). Turn assembly registers them as `Deferred`, so the
+    /// harness keeps them off the wire, indexes them for search and still
+    /// admits a call by name. Empty for every turn without such a list.
+    pub(crate) deferred_tool_names: Arc<std::collections::HashSet<String>>,
+    /// Tool rules for this turn (`crate::tools::rules`): the operator's and
+    /// the agent definition's layers, evaluated in this turn's channel/agent
+    /// context. Installed as the harness `RunPolicy::tool_rules`, which
+    /// applies them to the catalogue, `tool_search` and every call. A child
+    /// run inherits its parent's layers (see [`Self::child`]) and may only add
+    /// to them. `None` restricts nothing.
+    pub(crate) tool_rules: Option<Arc<tinyagents_harness::tool::ToolRulePolicy>>,
     /// Context middleware snapshot prepared for this exact turn.
     pub(crate) context_middleware: Option<TurnContextMiddleware>,
     /// Model/harness sidecars consumed only after a durable commit.
@@ -301,6 +362,19 @@ pub struct OpenHumanRunContext {
     /// the registry that recovers positional / code-style calls; `Auto`
     /// (the default) leaves the harness to choose from the model profile.
     pub(crate) tool_dialect: tinyagents_harness::config::ToolDispatcher,
+    /// This turn's memory (`memory::lifecycle::hooks::MemoryTurn`): the pack
+    /// recalled before the model ran, which `MemoryPackMiddleware` adds to
+    /// every model request of the turn ephemerally (never committed), and the
+    /// binding the compaction summarizer recalls under. A child run has its
+    /// own and does not inherit it.
+    pub(crate) memory_turn: Option<Arc<crate::memory::lifecycle::hooks::MemoryTurn>>,
+}
+
+/// Minimal immutable authority view exposed to shared tools through the
+/// harness's typed state-view seam.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HostOperationContext {
+    pub(crate) origin: Option<AgentTurnOrigin>,
 }
 
 impl Default for OpenHumanRunContext {
@@ -314,9 +388,12 @@ impl OpenHumanRunContext {
     /// actually owns; `None` is an explicit absence, not an ambient fallback.
     pub fn new() -> Self {
         Self {
+            model_budget: super::super::budget::current(),
+            max_spawn_depth: super::super::budget::spawn_depth_limit(),
             origin: None,
             progress: None,
-            stop_hooks: Vec::new(),
+            stop_hooks: crate::agent::stop_hooks::current_stop_hooks(),
+            turn_deadline: None,
             parent: None,
             prepared_context_sources: Arc::new(Vec::new()),
             file_state_agent_id: None,
@@ -329,7 +406,7 @@ impl OpenHumanRunContext {
             subagent_usage: Arc::new(Mutex::new(Vec::new())),
             parent_subagent_usage: None,
             resolved_route: Arc::new(Mutex::new(None)),
-            cancellation: tinyagents_harness::cancel::CancellationToken::new(),
+            cancellation: crate::agent::host_overrides::current_cancellation(),
             thread_id: None,
             root_run_id: None,
             workspace: None,
@@ -337,10 +414,13 @@ impl OpenHumanRunContext {
             tool_policy: None,
             current_tools: None,
             current_synthesized_tools: None,
+            deferred_tool_names: Arc::new(std::collections::HashSet::new()),
+            tool_rules: None,
             context_middleware: None,
             session_sidecar: Arc::new(Mutex::new(SessionTurnSidecar::default())),
             required_output: None,
             tool_dialect: tinyagents_harness::config::ToolDispatcher::Auto,
+            memory_turn: None,
         }
     }
 
@@ -431,6 +511,7 @@ impl OpenHumanRunContext {
         child.parent_subagent_usage = Some(self.subagent_usage.clone());
         child.subagent_usage = Arc::new(Mutex::new(Vec::new()));
         child.resolved_route = Arc::new(Mutex::new(None));
+        child.memory_turn = None;
         child
     }
 
@@ -466,17 +547,16 @@ impl OpenHumanRunContext {
         }
         let cancellation = self.cancellation.clone();
         let workspace = self.workspace.clone();
+        let host_operations = Arc::new(HostOperationContext {
+            origin: self.origin.clone(),
+        });
         let context = tinyagents_harness::context::RunContext::new(config, self)
-            .with_cancellation(cancellation);
+            .with_cancellation(cancellation)
+            .with_state_view(host_operations);
         match workspace {
             Some(workspace) => context.with_workspace(workspace),
             None => context,
         }
-    }
-
-    /// Returns this context's file-state identity for explicit tool plumbing.
-    pub fn file_state_scope(&self) -> Option<&str> {
-        self.file_state_agent_id.as_deref()
     }
 
     /// Records a child usage entry without relying on a task-local collector.

@@ -1,7 +1,7 @@
 id = "task_manager_agent"
 display_name = "Task Manager Agent"
 delegate_name = "manage_tasks"
-when_to_use = "Task-source, workflow-bundle and artifact specialist: proactive feeds from GitHub/Linear/Notion/ClickUp, workflow install/uninstall, artifacts. Use when the user asks to add, preview, fetch, update, remove or summarize task sources, workflows or artifacts."
+when_to_use = "Task-source and artifact specialist: proactive feeds from GitHub/Linear/Notion/ClickUp, and workspace artifacts. Use when the user asks to add, preview, fetch, update, remove or summarize task sources or artifacts."
 temperature = 0.2
 max_iterations = 8
 iteration_policy = "extended"
@@ -10,8 +10,6 @@ agent_tier = "worker"
 omit_identity = true
 omit_memory_context = false
 omit_safety_preamble = false
-omit_profile = false
-omit_memory_md = false
 
 [model]
 hint = "agentic"
@@ -27,13 +25,6 @@ named = [
     "task_source_add",
     "task_source_update",
     "task_source_remove",
-    "agent_workflow_list",
-    "agent_workflow_read",
-    "agent_workflow_phase_info",
-    "agent_workflow_create",
-    "agent_workflow_uninstall",
-    "workflow_load",
-    "workflow_phase",
     "artifact_list",
     "artifact_get",
     "artifact_delete",

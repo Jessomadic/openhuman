@@ -41,7 +41,7 @@ fn schemas_config_get_has_no_inputs() {
 
 #[test]
 fn there_is_no_install_from_the_catalog_any_more() {
-    // Installing is declaring a server in mcp.json; the catalog is browse-only.
+    // Installing is declaring a server in mcp.json; the catalog has no install RPC.
     assert_eq!(schemas("install").function, "unknown");
     assert_eq!(schemas("config_assist").function, "unknown");
 }
@@ -58,13 +58,6 @@ fn schemas_tool_call_requires_three_fields() {
     let s = schemas("tool_call");
     let required: Vec<_> = s.inputs.iter().filter(|f| f.required).collect();
     assert_eq!(required.len(), 3);
-}
-
-#[test]
-fn schemas_unknown_function_returns_placeholder() {
-    let s = schemas("not-a-real-function");
-    assert_eq!(s.function, "unknown");
-    assert_eq!(s.outputs[0].name, "error");
 }
 
 // ── all_controller_schemas / all_registered_controllers ────────────────────
@@ -91,12 +84,6 @@ fn all_controller_schemas_covers_expected_methods() {
     // The #3495 OAuth/auth-detection additions are present.
     assert!(functions.contains(&"detect_auth"));
     assert!(functions.contains(&"oauth_begin"));
-}
-
-#[test]
-fn all_registered_controllers_has_handler_per_schema() {
-    let controllers = all_registered_controllers();
-    assert_eq!(controllers.len(), 17);
 }
 
 #[test]

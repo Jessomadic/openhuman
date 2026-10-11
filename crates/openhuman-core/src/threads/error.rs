@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use crate::rpc::StructuredRpcError;
+use crate::core::StructuredRpcError;
 
 /// Stable JSON-RPC discriminator used by the frontend to handle stale thread
 /// references without string matching or user-facing error toasts.

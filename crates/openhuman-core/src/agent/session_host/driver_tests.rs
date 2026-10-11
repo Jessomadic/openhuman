@@ -23,11 +23,10 @@ fn graph_failure_persists_only_accepted_snapshot_history() {
         },
     ));
     let failure = driver_error_with_snapshot(
-        "provider rejected follow-up",
+        anyhow::anyhow!("provider rejected follow-up"),
         &snapshot,
         &sidecar(),
         std::time::Duration::from_millis(1),
-        "chat-v1",
     );
     let partial = failure.partial.expect("snapshot should produce a partial");
     assert_eq!(partial.history.len(), 2);
@@ -41,6 +40,46 @@ fn graph_failure_persists_only_accepted_snapshot_history() {
 }
 
 #[test]
+fn stalled_model_stream_reports_completed_evidence_instead_of_its_narration() {
+    let snapshot = Arc::new(std::sync::Mutex::new(
+        crate::agent::tinyagents::TranscriptSnapshot {
+            messages: vec![Message::user("Find information about Jev")],
+            accepted_len: 1,
+            request_base_len: 1,
+            tool_outcomes: vec![crate::agent::tinyagents::ToolCallOutcome {
+                call_id: "search-1".into(),
+                name: "web_search_tool".into(),
+                arguments: serde_json::json!({"query": "Jev TypeSafe"}),
+                success: true,
+                content: "TypeSafe describes Jev as a System One model".into(),
+                duration_ms: 12,
+            }],
+            ..Default::default()
+        },
+    ));
+    let failure = driver_error_with_snapshot(
+        anyhow::Error::new(tinyagents_harness::TinyAgentsError::GenerationStalled),
+        &snapshot,
+        &sidecar(),
+        std::time::Duration::from_millis(1),
+    );
+    let terminal = failure.outcome.as_ref().expect("typed terminal outcome");
+    assert_eq!(
+        terminal.reason,
+        tinyagents_harness::terminal::TerminalReason::ProviderFailed(Some(
+            tinyagents_harness::retry::FailoverReason::classify(
+                &tinyagents_harness::TinyAgentsError::GenerationStalled
+            )
+        ))
+    );
+    let partial = failure.partial.expect("interrupted partial");
+    let display = partial.partial.expect("display partial").content;
+    assert!(display.contains("stopped a repetitive model response"));
+    assert!(display.contains("TypeSafe describes Jev as a System One model"));
+    assert!(!display.contains("Let me"));
+}
+
+#[test]
 fn graph_failure_copies_snapshot_usage_and_failed_tool_outcome_to_sidecar() {
     let snapshot = Arc::new(std::sync::Mutex::new(
         crate::agent::tinyagents::TranscriptSnapshot {
@@ -50,7 +89,12 @@ fn graph_failure_copies_snapshot_usage_and_failed_tool_outcome_to_sidecar() {
             input_tokens: 21,
             output_tokens: 8,
             cached_input_tokens: 3,
-            charged_amount_usd: 0.004,
+            last_call_input_tokens: 13,
+            last_call_output_tokens: 5,
+            cost: crate::agent::cost::CostTally {
+                known_usd: 0.004,
+                source: crate::agent::cost::CostSource::Charged,
+            },
             resolved_route: Some(tinyinference_llm::model::ResolvedModelRoute::new(
                 "openhuman",
                 "chat-concrete",
@@ -70,11 +114,10 @@ fn graph_failure_copies_snapshot_usage_and_failed_tool_outcome_to_sidecar() {
     ));
     let sidecar = sidecar();
     let failure = driver_error_with_snapshot(
-        "tool follow-up was rejected",
+        anyhow::anyhow!("tool follow-up was rejected"),
         &snapshot,
         &sidecar,
         std::time::Duration::from_millis(25),
-        "chat-v1",
     );
     let partial = failure.partial.expect("recoverable snapshot partial");
     assert_eq!(partial.history, vec![Message::user("request")]);
@@ -88,7 +131,19 @@ fn graph_failure_copies_snapshot_usage_and_failed_tool_outcome_to_sidecar() {
         ),
         (2, 21, 8, 3)
     );
-    assert!((observed.cost_usd - 0.004).abs() < f64::EPSILON);
+    // The final call's own size, not the two calls' sum, reaches the gauge.
+    assert_eq!(
+        (
+            observed.last_call_input_tokens,
+            observed.last_call_output_tokens
+        ),
+        (13, 5)
+    );
+    assert!((observed.cost.known_usd - 0.004).abs() < f64::EPSILON);
+    assert_eq!(
+        observed.cost.source,
+        crate::agent::cost::CostSource::Charged
+    );
     let route = observed
         .resolved_route
         .as_ref()
@@ -130,4 +185,73 @@ fn tool_snapshot_with_no_executable_source_fails_closed_before_graph() {
     )
     .expect_err("a declared tool must have a request-scoped executable source");
     assert!(error.error.to_string().contains("revoked_tool"));
+}
+
+#[test]
+fn empty_snapshot_failure_still_carries_the_typed_terminal_outcome() {
+    let snapshot = Arc::new(std::sync::Mutex::new(
+        crate::agent::tinyagents::TranscriptSnapshot::default(),
+    ));
+    let typed = driver_error_with_snapshot(
+        anyhow::Error::new(tinyagents_harness::TinyAgentsError::Cancelled),
+        &snapshot,
+        &sidecar(),
+        std::time::Duration::from_millis(1),
+    );
+    assert!(typed.partial.is_none());
+    let terminal = typed.outcome.expect("typed outcome on the empty branch");
+    assert_eq!(
+        terminal.reason,
+        tinyagents_harness::terminal::TerminalReason::Cancelled
+    );
+
+    let untyped = driver_error_with_snapshot(
+        anyhow::anyhow!("plain failure"),
+        &snapshot,
+        &sidecar(),
+        std::time::Duration::from_millis(1),
+    );
+    assert!(untyped.outcome.is_none());
+}
+
+/// The context gauge reads the turn's final call. Repair runs after the
+/// grounded close, which runs after the harness loop, so the newest of them
+/// that reached the provider wins; a step that made no call is skipped.
+#[test]
+fn final_call_tokens_prefer_the_newest_call_that_reached_the_provider() {
+    let call = |input: u64, output: u64| grounded_close::RepairUsage {
+        model_calls: 1,
+        last_call_input_tokens: input,
+        last_call_output_tokens: output,
+        ..Default::default()
+    };
+    let loop_last = Some((90_000, 400));
+
+    assert_eq!(final_call_tokens(loop_last, None, None), (90_000, 400));
+    assert_eq!(
+        final_call_tokens(loop_last, Some(&call(95_000, 300)), None),
+        (95_000, 300)
+    );
+    assert_eq!(
+        final_call_tokens(loop_last, Some(&call(0, 300)), None),
+        (0, 300)
+    );
+    assert_eq!(
+        final_call_tokens(
+            loop_last,
+            Some(&call(95_000, 300)),
+            Some(&call(96_000, 200))
+        ),
+        (96_000, 200)
+    );
+    // A close that recorded no provider usage did not make the final call.
+    assert_eq!(
+        final_call_tokens(
+            loop_last,
+            Some(&grounded_close::RepairUsage::default()),
+            None
+        ),
+        (90_000, 400)
+    );
+    assert_eq!(final_call_tokens(None, None, None), (0, 0));
 }

@@ -1,7 +1,7 @@
 //! Background skill run spawning and outcome polling.
 //!
 //! `spawn_workflow_run_background` is re-used by both the `skills_run`
-//! JSON-RPC controller and the `run_skill` agent tool (skill chaining).
+//! JSON-RPC controller and the `run_workflow` agent tool (skill chaining).
 //! `await_run_outcome` lets the model poll a spawned run's log file for a
 //! terminal result without busy-waiting.
 
@@ -29,13 +29,13 @@ pub struct WorkflowRunStarted {
 }
 
 /// Spawn a single autonomous workflow_run as a detached `tokio::spawn`. Used by
-/// both the `openhuman.skills_run` JSON-RPC controller and the `run_skill`
+/// both the `openhuman.skills_run` JSON-RPC controller and the `run_workflow`
 /// agent tool (which lets the orchestrator chain one skill into another —
 /// e.g. `github-issue-crusher` → `pr-review-shepherd` once the draft PR is
 /// open).
 ///
 /// Returns immediately with the run handle; the actual work runs in the
-/// background until DONE / DEGENERATE / FAILED. Errors (unknown skill,
+/// background until DONE / STOPPED / DEGENERATE / FAILED. Errors (unknown skill,
 /// missing required inputs) surface as `Err(String)` *before* the spawn so
 /// callers can reject malformed invocations synchronously.
 pub async fn spawn_workflow_run_background(
@@ -56,7 +56,7 @@ pub async fn spawn_workflow_run_background(
 
     // ── Preflight gates ─────────────────────────────────────────────
     // Run BEFORE the orchestrator is built so failures surface
-    // synchronously to the caller (skills_run RPC or the run_skill
+    // synchronously to the caller (skills_run RPC or the run_workflow
     // agent tool) instead of leaking through as cryptic orchestrator
     // output. Today only the [github] gate exists; future gates can
     // chain here.
@@ -148,9 +148,9 @@ pub async fn spawn_workflow_run_background(
     // Detached: build the orchestrator Agent inside the spawn so config /
     // toolchain are loaded fresh per run; the parent returns the handle
     // immediately. Same flow handle_skills_run used to inline — extracted
-    // so the `run_skill` agent tool can re-use it for skill chaining.
+    // so the `run_workflow` agent tool can re-use it for skill chaining.
     let inherited_origin = crate::agent::turn_origin::current()
-        .unwrap_or(crate::agent::turn_origin::AgentTurnOrigin::Cli);
+        .unwrap_or(crate::agent::turn_origin::AgentTurnOrigin::Unknown);
     {
         let run_id = run_id.clone();
         let workflow_id = workflow_id.clone();
@@ -246,7 +246,7 @@ pub async fn spawn_workflow_run_background(
             };
             agent.set_on_progress(None);
             drop(agent);
-            let _ = bridge.await;
+            let stop = bridge.await.ok().flatten();
 
             let ms = started.elapsed().as_millis() as u64;
             run_log::unregister_run_cancel(&run_id);
@@ -256,6 +256,20 @@ pub async fn spawn_workflow_run_background(
                         run_log::write_footer(&log_path, "CANCELLED", ms, "Run stopped by user.")
                             .await;
                     tracing::info!(run_id = %run_id, "[workflows] workflow_run: cancelled");
+                }
+                Some(Ok(out)) if stop.is_some() => {
+                    // The harness stopped the run's turn early (breaker,
+                    // wind-down, iteration cap): it did not finish, so it is
+                    // not `DONE`. `run_workflow` reports `STOPPED` as a failure.
+                    let summary = stop
+                        .as_ref()
+                        .map(|s| s.status_message())
+                        .unwrap_or_default();
+                    let _ = run_log::write_footer(&log_path, "STOPPED", ms, &out).await;
+                    tracing::warn!(
+                        run_id = %run_id,
+                        "[skills] workflow_run: turn stopped early, not marking DONE {summary}"
+                    );
                 }
                 Some(Ok(out)) => {
                     if let Some((line, count)) = run_log::detect_repeated_line(&out, 30, 4) {
@@ -295,7 +309,7 @@ pub async fn spawn_workflow_run_background(
 
 /// Poll a spawned run's log file until its terminal footer lands or the
 /// `budget` elapses. Returns `Some(outcome)` the moment the footer is
-/// readable (DONE / DEGENERATE / FAILED), or `None` if the run is still
+/// readable (DONE / STOPPED / DEGENERATE / FAILED), or `None` if the run is still
 /// `RUNNING` when the budget runs out — the caller then auto-detaches and
 /// hands back the `run_id` so the work continues in the background.
 ///

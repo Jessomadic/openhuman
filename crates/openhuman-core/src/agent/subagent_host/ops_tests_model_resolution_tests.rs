@@ -241,9 +241,6 @@ async fn typed_mode_progress_emission_is_a_noop_without_sink() {
     assert_eq!(outcome.iterations, 1);
 }
 
-// Truncation tests live in ops_truncation_tests.rs to keep this file
-// under the ~500-line guideline.
-
 // ── resolve_subagent_source ───────────────────────────────────────────
 
 #[test]
@@ -353,7 +350,7 @@ fn resolve_subagent_source_inline_override_wins_over_config_model() {
 }
 
 #[test]
-fn resolve_subagent_source_config_alias_matches_issue_team_examples() {
+fn resolve_subagent_source_agent_suffix_resolves_its_team_pin() {
     use crate::config::{Config, TeamModelConfig};
 
     let mut config = Config::default();
@@ -368,7 +365,7 @@ fn resolve_subagent_source_config_alias_matches_issue_team_examples() {
     let parent: Arc<dyn ChatModel<()>> = ScriptedProvider::new(vec![]);
     let (_source, resolved_model) = super::super::resolve_subagent_source(
         &ModelSpec::Hint("agentic".to_string()),
-        "researcher",
+        "research_agent",
         Some(&config),
         crate::agent::tinyagents::TurnModelSource::from_model(parent),
         "parent-model-x".to_string(),
@@ -483,7 +480,7 @@ fn direct_mode_user_with_stored_key_passes_signed_in_check() {
     let mut config = crate::config::Config::default();
     config.config_path = tmp.path().join("config.toml");
     // Direct mode + inline API key (the `config.composio.api_key`
-    // fallback path inside `create_composio_client` — equivalent to a
+    // fallback path inside `resolve_composio_route` — equivalent to a
     // stored direct key as far as the probe is concerned).
     config.composio.mode = crate::config::schema::COMPOSIO_MODE_DIRECT.to_string();
     config.composio.api_key = Some("test-direct-key".into());
@@ -600,37 +597,4 @@ fn nested_subagent_dispatch_runs_on_a_constrained_worker_stack() {
          answer, got: {}",
         outcome.output
     );
-}
-
-// ── Repro: issue #3152 — near-miss write slug fails to resolve ──────
-//
-// The model emits `NOTION_SEARCH_NOTION` (drops the `_PAGE` suffix). The
-// real action `NOTION_SEARCH_NOTION_PAGE` is the unique superstring, yet
-// find_action's three tiers (exact / case-insensitive / normalized) all
-// miss → None → lazy registration never fires → allowlist gate blocks the
-// write. Asserts DESIRED post-fix behaviour → RED until the unique
-// prefix/superstring resolution tier lands. Must stay conservative: a
-// fabricated slug with no unique match must still resolve to None (covered
-// by `lazy_resolver_tolerates_near_miss_slugs`).
-#[test]
-fn repro_3152_near_miss_write_slug_resolves_uniquely() {
-    use crate::agent::prompts::ConnectedIntegrationTool;
-    let mk = |name: &str| ConnectedIntegrationTool {
-        name: name.into(),
-        description: "d".into(),
-        parameters: None,
-    };
-    let resolver = LazyToolkitResolver {
-        config: std::sync::Arc::new(crate::config::Config::default()),
-        actions: vec![
-            mk("NOTION_SEARCH_NOTION_PAGE"),
-            mk("NOTION_CREATE_NOTION_PAGE"),
-            mk("NOTION_FETCH_DATA"),
-        ],
-        resolved: std::sync::Mutex::default(),
-    };
-    let resolved = resolver
-        .resolve("NOTION_SEARCH_NOTION")
-        .expect("#3152: near-miss write slug must resolve to its unique superstring");
-    assert_eq!(resolved.name(), "NOTION_SEARCH_NOTION_PAGE");
 }

@@ -4,8 +4,6 @@ import { type ComponentPropsWithoutRef, type ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 
 export const DialogRoot = DialogPrimitive.Root;
-export const DialogTrigger = DialogPrimitive.Trigger;
-export const DialogClose = DialogPrimitive.Close;
 export const DialogTitle = DialogPrimitive.Title;
 export const DialogDescription = DialogPrimitive.Description;
 

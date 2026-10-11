@@ -24,7 +24,7 @@ export function isAllowedExternalHref(rawHref: string): boolean {
  * Custom inline tag any agent can drop inside a chat bubble to render
  * an in-app navigation pill, e.g.
  *
- *     <openhuman-link path="settings/notifications">Allow notifications</openhuman-link>
+ *     <openhuman-link path="settings/account">Open account settings</openhuman-link>
  *
  * The conversation UI (`AgentMessageBubble`) parses these out of the
  * raw text, splitting the message into ordered text/link segments.
@@ -32,8 +32,8 @@ export function isAllowedExternalHref(rawHref: string): boolean {
  * a clickable pill that calls `react-router`'s navigate(`/${path}`) on
  * click — no deep-link round-trip, no host browser involvement.
  *
- * Path is the hash route under HashRouter (e.g. `settings/notifications`
- * → `#/settings/notifications`). Leading/trailing slashes are tolerated.
+ * Path is the hash route under HashRouter (e.g. `settings/account`
+ * → `#/settings/account`). Leading/trailing slashes are tolerated.
  */
 interface OpenhumanLinkSegment {
   kind: 'link';

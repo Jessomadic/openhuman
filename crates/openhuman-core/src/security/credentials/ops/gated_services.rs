@@ -12,7 +12,32 @@ use crate::config::Config;
 /// that config's path and never touch the operator's global
 /// `~/.openhuman/active_user.toml` / `users/` tree.
 pub(super) fn is_embedder_host() -> bool {
-    crate::core::runtime::context::CoreContext::current_embedder_config().is_some()
+    crate::core::runtime::context::CoreContext::with_current_embedder_config(|_| ()).is_some()
+}
+
+/// Populate the process cache away from the next chat turn after startup or a
+/// credential change. Connection changes have their own invalidation paths.
+pub(super) fn spawn_integrations_cache_warm(config: &Config) {
+    let integration_config = config.clone();
+    tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        match crate::integrations::composio::fetch_connected_integrations_status(
+            &integration_config,
+        )
+        .await
+        {
+            crate::integrations::composio::FetchConnectedIntegrationsStatus::Authoritative(
+                entries,
+            ) => log::info!(
+                "[services] integrations cache warmed entries={} elapsed_ms={}",
+                entries.len(),
+                started.elapsed().as_millis()
+            ),
+            crate::integrations::composio::FetchConnectedIntegrationsStatus::Unavailable => {
+                log::debug!("[services] integrations cache warm unavailable; first turn may retry")
+            }
+        }
+    });
 }
 
 /// Start all login-gated background services (local AI and voice). Called both
@@ -51,13 +76,27 @@ pub async fn start_credential_gated_services(config: &Config) {
         return;
     }
 
+    // An embedder's task-local user-root policy does not cross spawn_blocking;
+    // its first agent build warms the correctly scoped cache instead.
+    if !is_embedder_host() {
+        let skills_workspace = config.workspace_dir.clone();
+        // Detached on purpose: the warm-up must not delay startup.
+        tokio::task::spawn_blocking(move || {
+            let count = crate::skills::load_workflow_metadata(&skills_workspace).len();
+            log::debug!("[services] skill metadata cache warmed entries={count}");
+        });
+    }
+
+    spawn_integrations_cache_warm(config);
+
     let started = std::time::Instant::now();
     // (service label, task) pairs so a panic surfaced on join is attributed to
     // the specific stage rather than an anonymous "a service failed".
     let mut tasks: Vec<(&'static str, tokio::task::JoinHandle<()>)> = Vec::new();
 
-    // 1. Local AI (Ollama, embeddings) — the heaviest single warm-up,
-    //    so keeping it off the critical path for the others is the biggest win.
+    // 1. Local AI — a read-only probe of the user's own runtime endpoint
+    //    (`bootstrap` never spawns a runtime or pulls a model). Kept off the
+    //    critical path so a slow endpoint cannot delay the other services.
     {
         let config = config.clone();
         tasks.push((
@@ -65,13 +104,13 @@ pub async fn start_credential_gated_services(config: &Config) {
             tokio::spawn(async move {
                 if config.local_ai.runtime_enabled {
                     let step = std::time::Instant::now();
-                    log::debug!("[services] local AI bootstrap starting");
+                    log::debug!("[services] local AI endpoint probe starting");
                     let runtime = crate::inference::local_runtime_config(&config);
                     crate::inference::host_runtime::global(&config)
                         .bootstrap(&runtime)
                         .await;
                     log::debug!(
-                        "[services] local AI bootstrapped after login ({} ms)",
+                        "[services] local AI endpoint probed after login ({} ms)",
                         step.elapsed().as_millis()
                     );
                 } else {
@@ -154,9 +193,10 @@ pub async fn stop_credential_gated_services(config: &Config) {
         log::info!("[services] voice server stopped on logout");
     }
 
-    // 4. Local AI — reset state to idle. We don't kill the Ollama process
-    //    (it may be serving other clients or mid-download), but we clear
-    //    the internal state so it re-bootstraps on next login.
+    // 4. Local AI — reset state to idle. OpenHuman never owns the local
+    //    runtime process (the user runs Ollama / LM Studio / MLX), so there is
+    //    nothing to stop; we only clear the cached probe verdict so the
+    //    endpoint is re-probed on next login.
     if config.local_ai.runtime_enabled {
         let service = crate::inference::host_runtime::global(config);
         let runtime = crate::inference::local_runtime_config(config);

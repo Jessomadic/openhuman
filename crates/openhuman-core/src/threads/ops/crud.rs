@@ -5,9 +5,11 @@ use super::support::{
     counts, envelope, message_to_record, record_to_message, run_to_completion, thread_to_summary,
     workspace_dir,
 };
-use crate::memory::conversations;
-use crate::memory::conversations::{ConversationMessagePatch, CrossThreadHit};
-use crate::memory::{
+use crate::core::Outcome;
+use crate::threads::store as conversations;
+use crate::threads::store::{ConversationMessagePatch, CrossThreadHit};
+use crate::threads::ThreadsError;
+use crate::threads::{
     ApiEnvelope, AppendConversationMessageRequest, ConversationMessageRecord,
     ConversationMessagesRequest, ConversationMessagesResponse, ConversationThreadSummary,
     ConversationThreadsListResponse, CreateConversationThreadRequest,
@@ -15,16 +17,14 @@ use crate::memory::{
     UpdateConversationMessageRequest, UpdateConversationThreadLabelsRequest,
     UpdateConversationThreadTitleRequest, UpsertConversationThreadRequest,
 };
-use crate::rpc::RpcOutcome;
-use crate::threads::turn_state;
-use crate::threads::ThreadsError;
 use crate::web_chat as web_channel;
 use std::path::PathBuf;
+use tinyagents_session::turn_state;
 
 /// Lists all conversation threads.
 pub async fn threads_list(
     _request: EmptyRequest,
-) -> Result<RpcOutcome<ApiEnvelope<ConversationThreadsListResponse>>, String> {
+) -> Result<Outcome<ApiEnvelope<ConversationThreadsListResponse>>, String> {
     let dir = workspace_dir().await?;
     let threads = conversations::blocking::list_threads(dir)
         .await?
@@ -42,7 +42,7 @@ pub async fn threads_list(
 /// Creates or refreshes a conversation thread.
 pub async fn thread_upsert(
     request: UpsertConversationThreadRequest,
-) -> Result<RpcOutcome<ApiEnvelope<ConversationThreadSummary>>, String> {
+) -> Result<Outcome<ApiEnvelope<ConversationThreadSummary>>, String> {
     let dir = workspace_dir().await?;
     let thread = conversations::blocking::ensure_thread(
         dir,
@@ -53,6 +53,7 @@ pub async fn thread_upsert(
             parent_thread_id: request.parent_thread_id,
             labels: request.labels,
             personality_id: request.personality_id,
+            working_dir: None,
         },
     )
     .await?;
@@ -66,8 +67,9 @@ pub async fn thread_upsert(
 /// Creates a new conversation thread with auto-generated ID and title.
 pub async fn thread_create_new(
     request: CreateConversationThreadRequest,
-) -> Result<RpcOutcome<ApiEnvelope<ConversationThreadSummary>>, String> {
+) -> Result<Outcome<ApiEnvelope<ConversationThreadSummary>>, String> {
     let dir = workspace_dir().await?;
+    let working_dir = super::working_dir::validate_working_dir(request.action_dir.as_deref())?;
     let id = format!("thread-{}", uuid::Uuid::new_v4());
     let now = chrono::Local::now();
     let title = format!("Chat {} {}", now.format("%b %-d"), now.format("%-I:%M %p"));
@@ -84,12 +86,14 @@ pub async fn thread_create_new(
             // of truth for default labels.
             labels: request.labels,
             personality_id: request.personality_id,
+            working_dir,
         },
     )
     .await?;
     tracing::debug!(
         thread_id = %thread.id,
         labels = ?thread.labels,
+        working_dir_bound = thread.working_dir.is_some(),
         "[threads] created new thread"
     );
     Ok(envelope(
@@ -102,7 +106,7 @@ pub async fn thread_create_new(
 /// Lists messages for a conversation thread.
 pub async fn messages_list(
     request: ConversationMessagesRequest,
-) -> Result<RpcOutcome<ApiEnvelope<ConversationMessagesResponse>>, String> {
+) -> Result<Outcome<ApiEnvelope<ConversationMessagesResponse>>, String> {
     let dir = workspace_dir().await?;
     let messages = conversations::blocking::get_messages(dir, request.thread_id.clone())
         .await?
@@ -150,10 +154,121 @@ pub async fn transcript_search(
 /// Appends a message to a conversation thread.
 pub async fn message_append(
     request: AppendConversationMessageRequest,
-) -> Result<RpcOutcome<ApiEnvelope<ConversationMessageRecord>>, ThreadsError> {
-    let dir = workspace_dir().await?;
+) -> Result<Outcome<ApiEnvelope<ConversationMessageRecord>>, ThreadsError> {
+    let origin = crate::core::runtime::CoreContext::current_turn_origin();
+    let config = crate::config::rpc::load_config_with_timeout()
+        .await
+        .map_err(|error| ThreadsError::Message(format!("load config: {error}")))?;
+    let persistence_dir = workspace_dir().await.map_err(ThreadsError::Message)?;
+    message_append_with_config(request, &config, origin.as_ref(), &persistence_dir).await
+}
+
+async fn message_append_with_config(
+    mut request: AppendConversationMessageRequest,
+    config: &crate::config::Config,
+    origin: Option<&crate::agent::turn_origin::AgentTurnOrigin>,
+    persistence_dir: &std::path::Path,
+) -> Result<Outcome<ApiEnvelope<ConversationMessageRecord>>, ThreadsError> {
+    if request.message.sender == "user" {
+        let raw_upload = request.message.content.contains("[IMAGE:")
+            || request.message.content.contains("[FILE:");
+        let durable_files = crate::agent::attachments::parse(&request.message.content).1;
+        let durable_upload = !durable_files.is_empty();
+        if durable_upload {
+            let image_count = durable_files
+                .iter()
+                .filter(|file| file.mime.starts_with("image/"))
+                .count();
+            let (without_images, raw_images) =
+                tinyagents_harness::multimodal::markers::parse_image_markers(
+                    &request.message.content,
+                );
+            let (_, raw_files) =
+                tinyagents_harness::multimodal::markers::parse_file_markers(&without_images);
+            let (max_images, image_mb) = config.multimodal.effective_limits();
+            let (max_files, file_mb, _) = config.multimodal_files.effective_limits();
+            if config.multimodal_files.max_files == 0
+                || image_count + raw_images.len() > max_images
+                || durable_files.len() - image_count + raw_files.len() > max_files
+                || (image_count > 0 && config.multimodal.max_images == 0)
+                || matches!(
+                    origin,
+                    Some(crate::agent::turn_origin::AgentTurnOrigin::ExternalChannel { .. })
+                )
+            {
+                return Err(ThreadsError::Message(
+                    "attachment count exceeds configured limit".into(),
+                ));
+            }
+            for file in &durable_files {
+                let scope = crate::agent::attachments::AttachmentAccessScope {
+                    external_channel: matches!(
+                        origin,
+                        Some(crate::agent::turn_origin::AgentTurnOrigin::ExternalChannel { .. })
+                    ),
+                    workspace: Some(config.action_dir.clone()),
+                };
+                let path = crate::agent::attachments::resolve_path(config, &file.path, &scope)
+                    .await
+                    .map_err(|error| {
+                        ThreadsError::Message(format!("validate user attachment: {error}"))
+                    })?;
+                let metadata = tokio::fs::metadata(path).await.map_err(|error| {
+                    ThreadsError::Message(format!("validate user attachment: {error}"))
+                })?;
+                let cap = if file.mime.starts_with("image/") {
+                    image_mb
+                } else {
+                    file_mb
+                } * 1024
+                    * 1024;
+                if !metadata.is_file() || metadata.len() > cap as u64 {
+                    return Err(ThreadsError::Message(
+                        "attachment exceeds configured file limit".into(),
+                    ));
+                }
+            }
+        }
+        let byte_fields = [
+            "attachmentDataUris",
+            "attachmentData",
+            "attachmentDataUri",
+            "attachmentPosters",
+            "attachmentPoster",
+            "attachmentPreviews",
+            "attachmentPreview",
+        ];
+        let has_upload_bytes = byte_fields.iter().any(|field| {
+            request
+                .message
+                .extra_metadata
+                .get(*field)
+                .is_some_and(|value| !value.is_null() && value != &serde_json::json!([]))
+        });
+        if has_upload_bytes && !raw_upload && !durable_upload {
+            return Err(ThreadsError::Message(
+                "user upload bytes require attachment markers before persistence".into(),
+            ));
+        }
+        request.message.content = crate::agent::attachments::stage_turn(
+            &request.message.content,
+            Some(config),
+            None,
+            Some(&request.thread_id),
+            origin,
+        )
+        .await
+        .map_err(|error| ThreadsError::Message(format!("stage user attachments: {error}")))?;
+        if raw_upload || durable_upload {
+            if let Some(metadata) = request.message.extra_metadata.as_object_mut() {
+                for field in byte_fields {
+                    metadata.remove(field);
+                }
+            }
+        }
+    }
     let message = conversations::blocking::append_message(
-        dir,
+        persistence_dir.to_path_buf(),
         request.thread_id.clone(),
         record_to_message(request.message),
     )
@@ -166,6 +281,10 @@ pub async fn message_append(
     ))
 }
 
+#[cfg(test)]
+#[path = "crud_message_append_tests.rs"]
+mod message_append_tests;
+
 /// Updates labels for a conversation thread.
 ///
 /// An empty `labels` vec is valid and clears all labels from the thread,
@@ -173,7 +292,7 @@ pub async fn message_append(
 /// ensure this is intentional.
 pub async fn thread_update_labels(
     request: UpdateConversationThreadLabelsRequest,
-) -> Result<RpcOutcome<ApiEnvelope<ConversationThreadSummary>>, String> {
+) -> Result<Outcome<ApiEnvelope<ConversationThreadSummary>>, String> {
     let dir = workspace_dir().await?;
     let thread = conversations::blocking::update_thread_labels(
         dir,
@@ -197,7 +316,7 @@ pub async fn thread_update_labels(
 /// Sets a user-specified title on a conversation thread, bypassing AI generation.
 pub async fn thread_update_title(
     request: UpdateConversationThreadTitleRequest,
-) -> Result<RpcOutcome<ApiEnvelope<ConversationThreadSummary>>, String> {
+) -> Result<Outcome<ApiEnvelope<ConversationThreadSummary>>, String> {
     let dir = workspace_dir().await?;
     let title = request.title.trim().to_string();
     if title.is_empty() {
@@ -226,7 +345,7 @@ pub async fn thread_update_title(
 /// Updates metadata on an existing conversation message.
 pub async fn message_update(
     request: UpdateConversationMessageRequest,
-) -> Result<RpcOutcome<ApiEnvelope<ConversationMessageRecord>>, String> {
+) -> Result<Outcome<ApiEnvelope<ConversationMessageRecord>>, String> {
     let dir = workspace_dir().await?;
     let message = conversations::blocking::update_message(
         dir,
@@ -244,6 +363,29 @@ pub async fn message_update(
     ))
 }
 
+/// Truncates a thread's message log at `message_id`: removes that message and
+/// everything appended after it, keeping everything before it. Backs
+/// `threads.edit_message` / `threads.regenerate` (`web_chat::ops::edit`),
+/// which cut the message log's tail before restarting the turn from an
+/// earlier point.
+///
+/// `Ok(None)` means `message_id` was not found in the thread — the caller
+/// should treat that as "nothing to truncate" (e.g. a stale/already-edited
+/// message id), not as an empty thread.
+pub async fn delete_after(
+    thread_id: &str,
+    message_id: &str,
+) -> Result<Option<usize>, ThreadsError> {
+    let dir = workspace_dir().await?;
+    conversations::blocking::delete_messages_from(
+        dir,
+        thread_id.to_string(),
+        message_id.to_string(),
+    )
+    .await
+    .map_err(|err| ThreadsError::from_thread_scoped_store_error(thread_id, err))
+}
+
 /// Deletes a conversation thread and its message log.
 ///
 /// The store mutation and every cleanup step it implies run inside one
@@ -252,15 +394,18 @@ pub async fn message_update(
 /// snapshot still live.
 pub async fn thread_delete(
     request: DeleteConversationThreadRequest,
-) -> Result<RpcOutcome<ApiEnvelope<DeleteConversationThreadResponse>>, String> {
-    let dir = workspace_dir().await?;
-    run_to_completion("thread_delete", thread_delete_inner(dir, request)).await
+) -> Result<Outcome<ApiEnvelope<DeleteConversationThreadResponse>>, String> {
+    let config = crate::config::rpc::load_config_with_timeout()
+        .await
+        .map_err(|e| format!("load config: {e}"))?;
+    run_to_completion("thread_delete", thread_delete_inner(config, request)).await
 }
 
 async fn thread_delete_inner(
-    dir: PathBuf,
+    config: crate::config::Config,
     request: DeleteConversationThreadRequest,
-) -> Result<RpcOutcome<ApiEnvelope<DeleteConversationThreadResponse>>, String> {
+) -> Result<Outcome<ApiEnvelope<DeleteConversationThreadResponse>>, String> {
+    let dir: PathBuf = config.workspace_dir.clone();
     let deleted = conversations::blocking::delete_thread(
         dir.clone(),
         request.thread_id.clone(),
@@ -280,8 +425,10 @@ async fn thread_delete_inner(
     // nowhere left to deliver to — abort + cleanup is the whole behavior.
     let cancelled =
         crate::agent::orchestration::running_subagents::cancel_for_thread(&request.thread_id);
-    let discarded =
-        crate::agent::orchestration::background_completions::discard_for_thread(&request.thread_id);
+    let discarded = crate::agent::orchestration::background_completions::discard_for_thread(
+        &dir,
+        &request.thread_id,
+    );
     log::debug!(
         "[threads] thread_delete thread_id={} cancelled_subagents={} discarded_completions={}",
         request.thread_id,
@@ -296,12 +443,22 @@ async fn thread_delete_inner(
     // mirrors conversation-derived state) remains on disk; the
     // thread row itself is already gone at this point so the caller
     // sees a partial failure they can act on instead of silent drift.
-    turn_state::store::delete(dir, &request.thread_id).map_err(|err| {
+    turn_state::store::delete(dir.clone(), &request.thread_id).map_err(|err| {
         format!(
             "thread {} deleted but turn-snapshot cleanup failed: {err}",
             request.thread_id
         )
     })?;
+    // The thread's conversation memory goes too, for good (by `memory_ids`).
+    // Memory off (signed out) or a failed forget queues the deletion for the
+    // next sign-in (`memory::deletion`) rather than failing the delete: the
+    // thread itself is already gone.
+    let forgotten = crate::memory::deletion::forget_thread(&config, &request.thread_id).await;
+    log::debug!(
+        "[threads] thread_delete thread_id={} memory_items_forgotten={}",
+        request.thread_id,
+        forgotten
+    );
     Ok(envelope(
         DeleteConversationThreadResponse { deleted },
         None,

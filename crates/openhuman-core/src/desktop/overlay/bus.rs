@@ -3,7 +3,7 @@
 //! Mirrors the pattern used by `voice::dictation_listener`: a single
 //! `tokio::sync::broadcast` channel wrapped in a `Lazy` static so any
 //! module in the core can publish without threading a sender around.
-//! The Socket.IO bridge in `core::socketio::spawn_web_channel_bridge`
+//! The Socket.IO bridge in `openhuman_rpc::server::socketio::spawn_web_channel_bridge`
 //! subscribes here and forwards every event to the overlay window as
 //! an `overlay:attention` Socket.IO message.
 

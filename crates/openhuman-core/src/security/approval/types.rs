@@ -35,6 +35,17 @@ pub struct PendingApproval {
     /// optional and additive so the chat path's wire shape never changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_context: Option<ApprovalSourceContext>,
+    /// The gated tool call's provider-assigned call id, when the parked call
+    /// originated from a tracked tool-call turn. Lets a frontend correlate
+    /// the approval card back to the exact `tool_call` timeline row instead
+    /// of matching on tool name. `None` for non-tracked callers (CLI, cron,
+    /// workflows) and for rows persisted before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// The embedded agent whose turn parked this call. `None` for the
+    /// process's own sessions and for rows persisted before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
 }
 
 impl PendingApproval {
@@ -55,6 +66,8 @@ impl PendingApproval {
             created_at: Utc::now(),
             expires_at,
             source_context: None,
+            tool_call_id: None,
+            agent_id: None,
         }
     }
 
@@ -65,6 +78,12 @@ impl PendingApproval {
     pub fn with_source_context(mut self, ctx: ApprovalSourceContext) -> Self {
         self.source_context = Some(ctx);
         self
+    }
+
+    /// Whether this row is visible to `agent`: `None` sees the process's own
+    /// rows, `Some(id)` sees only that agent's.
+    pub fn belongs_to(&self, agent: Option<&str>) -> bool {
+        self.agent_id.as_deref() == agent
     }
 }
 

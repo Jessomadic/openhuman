@@ -12,7 +12,7 @@
  * that showed nothing would be the bug it is fixing.
  */
 import { configureStore } from '@reduxjs/toolkit';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { Provider } from 'react-redux';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,7 +22,10 @@ import {
   fetchPendingApprovals,
   type PendingApproval,
 } from '../../services/api/approvalApi';
-import chatRuntimeReducer, { setPendingApprovalForThread } from '../../store/chatRuntimeSlice';
+import chatRuntimeReducer, {
+  clearPendingApprovalForThread,
+  setPendingApprovalForThread,
+} from '../../store/chatRuntimeSlice';
 import threadReducer from '../../store/threadSlice';
 import { resetFlowPendingApprovalsStoreForTests } from '../flowPendingApprovalsStore';
 import { useUnroutedApprovals } from '../useUnroutedApprovals';
@@ -51,7 +54,7 @@ function mount(seed?: (store: ReturnType<typeof buildStore>) => void) {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <Provider store={store}>{children}</Provider>
   );
-  return renderHook(() => useUnroutedApprovals(), { wrapper });
+  return { store, ...renderHook(() => useUnroutedApprovals(), { wrapper }) };
 }
 
 function buildStore() {
@@ -111,6 +114,34 @@ describe('useUnroutedApprovals', () => {
 
     await waitFor(() => expect(vi.mocked(fetchPendingApprovals)).toHaveBeenCalled());
     await waitFor(() => expect(result.current.approvals).toEqual([]));
+  });
+
+  it('does not resurface a chat approval once its transcript card clears', async () => {
+    // The poll caught the park while the chat card owned it. Deciding from the
+    // chat card clears the card locally, but the polled list still holds the
+    // row until the next poll — it must not reappear here as a second card
+    // whose Deny then fails with "already decided".
+    vi.mocked(fetchPendingApprovals).mockResolvedValue([row({ request_id: 'req-chat' })]);
+    const { result, store } = mount(store => {
+      store.dispatch(
+        setPendingApprovalForThread({
+          threadId: 't1',
+          approval: {
+            requestId: 'req-chat',
+            toolName: 'GOOGLECALENDAR_CREATE_EVENT',
+            message: 'm',
+          },
+        })
+      );
+    });
+    await waitFor(() => expect(vi.mocked(fetchPendingApprovals)).toHaveBeenCalled());
+    await waitFor(() => expect(result.current.approvals).toEqual([]));
+
+    act(() => {
+      store.dispatch(clearPendingApprovalForThread({ threadId: 't1' }));
+    });
+
+    expect(result.current.approvals).toEqual([]);
   });
 
   it('shows a background park raised alongside an unrelated chat approval', async () => {

@@ -1,13 +1,14 @@
-//! Agent, autonomy, paths, activity-level, and memory-sync config operations.
+//! Agent, autonomy, paths, and memory-sync config operations.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::loader::{load_config_with_timeout, snapshot_config_json};
+use super::tool_dispatcher as td;
 
 /// Partial update for the `[autonomy]` block — the agent's filesystem access
 /// mode. Each `None` field is left unchanged. `trusted_roots`, `allowed_commands`,
@@ -31,9 +32,8 @@ pub struct AutonomySettingsPatch {
     pub max_actions_per_hour: Option<u32>,
     /// "Always allow" allowlist — tool names the gate skips prompting for.
     pub auto_approve: Option<Vec<String>>,
-    /// Blanket "auto-approve everything" bypass. `SubconsciousTainted` and
-    /// `Unknown` origins are still denied by the gate regardless of this
-    /// setting.
+    /// Blanket "auto-approve everything" bypass. `Unknown` origins are still
+    /// denied by the gate regardless of this setting.
     pub auto_approve_all: Option<bool>,
 }
 
@@ -46,37 +46,34 @@ pub struct AgentSettingsPatch {
     /// Tool/action wall-clock timeout in seconds. Validated to
     /// `tool_timeout::MIN_TIMEOUT_SECS..=tool_timeout::MAX_TIMEOUT_SECS`.
     pub agent_timeout_secs: Option<u64>,
+    /// Agent the web-chat path routes a turn to (`[agent] chat_agent_id`).
+    /// `Some("")`/whitespace clears the override and reverts to the
+    /// orchestrator; `Some(id)` sets it; `None` leaves it unchanged.
+    ///
+    /// Settable over RPC and not only in the TOML because the file on disk is
+    /// not reliably the file the core reads: once a user dir is active its
+    /// per-user `config.toml` takes precedence, so a value pre-written to the
+    /// root (or to a guessed user dir) is silently ignored. Going through the
+    /// running core writes wherever `Config::save` actually points.
+    pub chat_agent_id: Option<String>,
+    /// How tool calls are spoken to the model (`[agent] tool_dispatcher`):
+    /// one of [`TOOL_DISPATCHER_CHOICES`](super::tool_dispatcher::TOOL_DISPATCHER_CHOICES). `None` leaves it
+    /// unchanged. Applies to new sessions; resumed threads keep their dialect.
+    pub tool_dispatcher: Option<String>,
 }
 
 /// Partial update for the agent's editable filesystem roots.
 ///
-/// Only `action_dir` is editable today (issue #3240). `workspace_dir` and
-/// `projects_dir` are intentionally read-only and not part of this patch.
+/// `action_dir` (issue #3240) and the files folder (#5505) are editable.
+/// `workspace_dir` and `projects_dir` are intentionally read-only.
 #[derive(Debug, Clone, Default)]
 pub struct AgentPathsPatch {
     /// New action sandbox root. `Some("")`/whitespace clears the override and
     /// reverts to the default; `Some(path)` sets it; `None` leaves it unchanged.
     pub action_dir: Option<String>,
-}
-
-/// Partial update for the agent activity level (0–4).
-#[derive(Debug, Clone, Default)]
-pub struct ActivityLevelSettingsPatch {
-    /// "off" | "minimal" | "moderate" | "active" | "always_on" (or "0"-"4").
-    pub level: Option<String>,
-}
-
-/// Patch for the global memory-sync cadence (#3302).
-///
-/// `sync_interval_secs` carries the new value to store in
-/// [`Config::memory_sync_interval_secs`]:
-/// - omitted / `null` → reset to "use the default cadence" (`None`)
-/// - `0` → "Manual only" (periodic auto-sync disabled)
-/// - `n > 0` → sync every `n` seconds (applied per source as a floor over the
-///   provider default by the scheduler)
-#[derive(Debug, Default)]
-pub struct MemorySyncSettingsPatch {
-    pub sync_interval_secs: Option<u64>,
+    /// New folder for agent deliverables. Same `Some("")` / `Some(path)` /
+    /// `None` semantics as `action_dir`. Affects new artifacts only.
+    pub files_dir: Option<String>,
 }
 
 /// Updates the `[autonomy]` (agent access mode) settings in the configuration.
@@ -87,7 +84,7 @@ pub struct MemorySyncSettingsPatch {
 pub async fn apply_autonomy_settings(
     config: &mut Config,
     update: AutonomySettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     use crate::security::AutonomyLevel;
 
     if let Some(enabled) = update.enabled {
@@ -141,7 +138,7 @@ pub async fn apply_autonomy_settings(
     crate::core::bus::BUS.publish(crate::core::events::DomainEvent::AutonomyConfigChanged);
 
     let snapshot = snapshot_config_json(config)?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         snapshot,
         vec![format!(
             "autonomy settings saved to {}",
@@ -153,16 +150,16 @@ pub async fn apply_autonomy_settings(
 /// Loads the configuration, applies autonomy settings updates, and saves it.
 pub async fn load_and_apply_autonomy_settings(
     update: AutonomySettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let mut config = load_config_with_timeout().await?;
     apply_autonomy_settings(&mut config, update).await
 }
 
 /// Returns the current `[autonomy]` settings block as JSON (no secrets).
-pub async fn get_autonomy_settings() -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn get_autonomy_settings() -> Result<Outcome<serde_json::Value>, String> {
     let config = load_config_with_timeout().await?;
     let value = serde_json::to_value(&config.autonomy).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::single_log(value, "autonomy settings read"))
+    Ok(Outcome::single_log(value, "autonomy settings read"))
 }
 
 fn auto_approve_write_lock() -> &'static tokio::sync::Mutex<()> {
@@ -205,7 +202,7 @@ pub async fn add_auto_approve_tool(tool_name: &str) -> Result<(), String> {
 pub async fn apply_agent_settings(
     config: &mut Config,
     update: AgentSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     use crate::tools::timeout::{MAX_TIMEOUT_SECS, MIN_TIMEOUT_SECS};
 
     if let Some(timeout_secs) = update.agent_timeout_secs {
@@ -217,7 +214,34 @@ pub async fn apply_agent_settings(
                 "agent_timeout_secs must be between {MIN_TIMEOUT_SECS} and {MAX_TIMEOUT_SECS} seconds (got {timeout_secs})"
             ));
         }
+    }
+
+    if let Some(chat_agent_id) = update.chat_agent_id.as_deref() {
+        let trimmed = chat_agent_id.trim();
+        if !trimmed.is_empty()
+            && !crate::agent::OpenHumanSessionHost::is_runnable_agent_id(config, trimmed)
+        {
+            return Err(format!(
+                "chat_agent_id '{trimmed}' is not a runnable agent definition"
+            ));
+        }
+    }
+
+    let tool_dispatcher = td::normalize_optional(update.tool_dispatcher.as_deref())?;
+
+    if let Some(timeout_secs) = update.agent_timeout_secs {
         config.agent.agent_timeout_secs = timeout_secs;
+    }
+
+    td::apply_tool_dispatcher(config, tool_dispatcher);
+
+    if let Some(chat_agent_id) = update.chat_agent_id {
+        let trimmed = chat_agent_id.trim();
+        config.agent.chat_agent_id = (!trimmed.is_empty()).then(|| trimmed.to_string());
+        log::debug!(
+            "[config][agent] chat_agent_id -> {:?}",
+            config.agent.chat_agent_id
+        );
     }
 
     config.save().await.map_err(|e| e.to_string())?;
@@ -230,7 +254,7 @@ pub async fn apply_agent_settings(
     );
 
     let snapshot = snapshot_config_json(config)?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         snapshot,
         vec![format!(
             "agent settings saved to {}",
@@ -242,7 +266,7 @@ pub async fn apply_agent_settings(
 /// Loads the configuration, applies agent settings updates, and saves it.
 pub async fn load_and_apply_agent_settings(
     update: AgentSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let mut config = load_config_with_timeout().await?;
     apply_agent_settings(&mut config, update).await
 }
@@ -250,7 +274,7 @@ pub async fn load_and_apply_agent_settings(
 /// Returns the agent execution settings (currently the action timeout) plus the
 /// runtime-effective value and whether the `OPENHUMAN_TOOL_TIMEOUT_SECS` env var
 /// is overriding the configured value, so the UI can explain a no-op control.
-pub async fn get_agent_settings() -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn get_agent_settings() -> Result<Outcome<serde_json::Value>, String> {
     let config = load_config_with_timeout().await?;
     crate::tools::timeout::set_tool_timeout_secs(config.agent.agent_timeout_secs);
     let value = serde_json::json!({
@@ -259,8 +283,10 @@ pub async fn get_agent_settings() -> Result<RpcOutcome<serde_json::Value>, Strin
         "env_override": crate::tools::timeout::env_override_active(),
         "min_timeout_secs": crate::tools::timeout::MIN_TIMEOUT_SECS,
         "max_timeout_secs": crate::tools::timeout::MAX_TIMEOUT_SECS,
+        "tool_dispatcher": config.agent.tool_dispatcher,
+        "tool_dispatcher_env_override": td::tool_dispatcher_env_override(),
     });
-    Ok(RpcOutcome::single_log(value, "agent settings read"))
+    Ok(Outcome::single_log(value, "agent settings read"))
 }
 
 /// Expand a leading `~/` to the user's home directory, building the path
@@ -376,6 +402,28 @@ pub async fn ensure_agent_dirs(config: &mut Config) {
         action = %redact_home(&action_dir),
         "[startup] workspace (internal state) and action sandbox (tool cwd) directories configured"
     );
+
+    // Agent deliverables are written to the visible files folder (#5505).
+    // Create it up front, and move this account's pre-#5505 artifact files out
+    // of the hidden workspace (idempotent; a no-op once migrated).
+    let files_dir = config.files_dir();
+    if let Err(e) = tokio::fs::create_dir_all(&files_dir).await {
+        tracing::warn!(
+            dir = %redact_home(&files_dir),
+            error = %e,
+            "[startup] could not create files folder"
+        );
+    }
+    let report =
+        crate::agent::artifacts::migrate_legacy_artifacts(&config.workspace_dir, &files_dir).await;
+    if report != crate::agent::artifacts::MigrationReport::default() {
+        tracing::info!(
+            moved = report.moved,
+            cleaned = report.cleaned,
+            failed = report.failed,
+            "[startup] moved legacy artifact files into the files folder"
+        );
+    }
 }
 
 /// Ensure `dir` is usable as a process working directory: it must exist (we
@@ -421,7 +469,73 @@ fn agent_paths_payload(config: &Config) -> serde_json::Value {
         "workspace_dir": config.workspace_dir.display().to_string(),
         "projects_dir": projects_dir.display().to_string(),
         "action_dir_source": action_dir_source(config),
+        "files_dir": config.files_dir().display().to_string(),
+        "default_files_dir": crate::config::default_files_dir().display().to_string(),
+        "files_dir_source": if config.files_dir_override.is_some() { "override" } else { "default" },
     })
+}
+
+/// Validate a user-chosen files folder (#5505) and create it. Fail-closed:
+/// the path must be absolute, not an existing file, not a protected location
+/// (credential stores, OS directories), and not inside the OpenHuman data
+/// directory — the point of the folder is that the user can see it, and the
+/// data dir holds internal state.
+async fn validate_files_dir(raw: &str, config: &Config) -> Result<PathBuf, String> {
+    let expanded = expand_tilde(raw);
+    let candidate = PathBuf::from(&expanded);
+    if !candidate.is_absolute() {
+        return Err(format!(
+            "files_dir must be an absolute path (got '{expanded}')"
+        ));
+    }
+    if candidate.is_file() {
+        return Err(format!(
+            "files_dir must be a folder, not a file: {expanded}"
+        ));
+    }
+    if crate::security::SecurityPolicy::is_always_forbidden(&candidate) {
+        return Err(format!(
+            "files_dir cannot be a protected system or credential folder: {expanded}"
+        ));
+    }
+    let mut internal = vec![config.workspace_dir.clone()];
+    if let Ok(root) = crate::config::default_root_openhuman_dir() {
+        internal.push(root);
+    }
+    if internal.iter().any(|dir| path_within(&candidate, dir)) {
+        return Err(format!(
+            "files_dir must not be inside the OpenHuman data folder: {expanded}"
+        ));
+    }
+    tokio::fs::create_dir_all(&candidate)
+        .await
+        .map_err(|e| format!("failed to create files_dir {expanded}: {e}"))?;
+    Ok(candidate)
+}
+
+/// `path` equals or sits under `dir`, comparing canonical forms so a
+/// symlinked spelling (e.g. macOS `/var` → `/private/var`) cannot slip into
+/// the data dir. A path that does not exist yet is canonicalized through its
+/// nearest existing ancestor.
+fn path_within(path: &Path, dir: &Path) -> bool {
+    canonical_prefix(path).starts_with(canonical_prefix(dir))
+}
+
+fn canonical_prefix(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut cursor = path;
+    loop {
+        if let Ok(canon) = cursor.canonicalize() {
+            return rest.iter().rev().fold(canon, |acc, part| acc.join(part));
+        }
+        match (cursor.parent(), cursor.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                cursor = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 /// Applies an edit to the agent's `action_dir` sandbox root.
@@ -444,7 +558,7 @@ fn agent_paths_payload(config: &Config) -> serde_json::Value {
 pub async fn apply_agent_paths_settings(
     config: &mut Config,
     update: AgentPathsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let mut notes: Vec<String> = Vec::new();
 
     if let Some(raw) = update.action_dir {
@@ -504,13 +618,41 @@ pub async fn apply_agent_paths_settings(
         );
     }
 
-    Ok(RpcOutcome::new(agent_paths_payload(config), notes))
+    if let Some(raw) = update.files_dir {
+        let trimmed = raw.trim();
+        log::debug!(
+            "[config][agent_paths] apply files_dir edit (input_len={})",
+            trimmed.len()
+        );
+        let previous = config.files_dir();
+        if trimmed.is_empty() {
+            config.files_dir_override = None;
+            notes.push("files_dir override cleared (reverted to default)".to_string());
+        } else {
+            let candidate = validate_files_dir(trimmed, config).await?;
+            notes.push(format!("files_dir set to {}", candidate.display()));
+            config.files_dir_override = Some(candidate);
+        }
+        // Existing artifacts stay where they are, so the folder they were
+        // made in must stay trusted by the artifact escape guard.
+        if previous != config.files_dir() && !config.files_dir_history.contains(&previous) {
+            config.files_dir_history.push(previous);
+        }
+        config.save().await.map_err(|e| e.to_string())?;
+        crate::core::bus::BUS.publish(crate::core::events::DomainEvent::AgentPathsChanged);
+        log::debug!(
+            "[config][agent_paths] files_dir now '{}'",
+            config.files_dir().display()
+        );
+    }
+
+    Ok(Outcome::new(agent_paths_payload(config), notes))
 }
 
 /// Loads the configuration, applies agent-paths updates, and saves it.
 pub async fn load_and_apply_agent_paths_settings(
     update: AgentPathsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let mut config = load_config_with_timeout().await?;
     apply_agent_paths_settings(&mut config, update).await
 }
@@ -524,9 +666,9 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
 
 /// Reports the agent's filesystem roots so the UI can render them live
 /// instead of hard-coding strings that drift away from `Config`.
-pub async fn get_agent_paths() -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn get_agent_paths() -> Result<Outcome<serde_json::Value>, String> {
     let config = load_config_with_timeout().await?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         agent_paths_payload(&config),
         vec![format!(
             "agent paths resolved (action={}, workspace={}, source={})",
@@ -535,149 +677,4 @@ pub async fn get_agent_paths() -> Result<RpcOutcome<serde_json::Value>, String> 
             action_dir_source(&config),
         )],
     ))
-}
-
-/// Returns the current activity level and its derived settings.
-pub async fn get_activity_level_settings() -> Result<RpcOutcome<serde_json::Value>, String> {
-    let config = load_config_with_timeout().await?;
-    let level = config.agent_activity_level;
-    let (cost_min, cost_max) = level.estimated_monthly_cost_range();
-    let value = serde_json::json!({
-        "level": level as u8,
-        "level_label": level.as_str(),
-        "sync_interval_secs": level.sync_interval_secs(),
-        "heartbeat_enabled": level.heartbeat_enabled(),
-        "subconscious_enabled": level.subconscious_enabled(),
-        "token_budget_per_cycle": level.token_budget_per_cycle(),
-        "estimated_monthly_cost_min_usd": cost_min,
-        "estimated_monthly_cost_max_usd": cost_max,
-    });
-    Ok(RpcOutcome::single_log(
-        value,
-        "activity level settings read",
-    ))
-}
-
-/// Updates the agent activity level and pushes it into the scheduler gate.
-pub async fn apply_activity_level_settings(
-    config: &mut Config,
-    update: ActivityLevelSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
-    use crate::config::schema::activity_level::AgentActivityLevel;
-    use crate::config::SchedulerGateMode;
-
-    if let Some(level_str) = update.level {
-        let level = AgentActivityLevel::from_str_opt(&level_str).ok_or_else(|| {
-            format!(
-                "invalid activity level '{}' \
-                 (expected off|minimal|moderate|active|always_on or 0-4)",
-                level_str
-            )
-        })?;
-        config.agent_activity_level = level;
-    }
-
-    let level = config.agent_activity_level;
-    let gate_mode = match level {
-        AgentActivityLevel::Off => SchedulerGateMode::Off,
-        AgentActivityLevel::Minimal | AgentActivityLevel::Moderate => SchedulerGateMode::Auto,
-        AgentActivityLevel::Active | AgentActivityLevel::AlwaysOn => SchedulerGateMode::AlwaysOn,
-    };
-    config.scheduler_gate.mode = gate_mode;
-
-    config.save().await.map_err(|e| e.to_string())?;
-
-    let gate_cfg = config.scheduler_gate.clone();
-    crate::cron::scheduler_gate::gate::update_config(gate_cfg);
-
-    tracing::info!(
-        level = %level.as_str(),
-        gate_mode = %gate_mode.as_str(),
-        "[config:activity_level] activity level updated"
-    );
-
-    let (cost_min, cost_max) = level.estimated_monthly_cost_range();
-    let value = serde_json::json!({
-        "level": level as u8,
-        "level_label": level.as_str(),
-        "sync_interval_secs": level.sync_interval_secs(),
-        "heartbeat_enabled": level.heartbeat_enabled(),
-        "subconscious_enabled": level.subconscious_enabled(),
-        "token_budget_per_cycle": level.token_budget_per_cycle(),
-        "estimated_monthly_cost_min_usd": cost_min,
-        "estimated_monthly_cost_max_usd": cost_max,
-    });
-    Ok(RpcOutcome::new(
-        value,
-        vec![format!(
-            "activity level set to '{}' — saved to {}",
-            level.as_str(),
-            config.config_path.display()
-        )],
-    ))
-}
-
-/// Loads the configuration, applies activity level settings, and saves it.
-pub async fn load_and_apply_activity_level_settings(
-    update: ActivityLevelSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
-    let mut config = load_config_with_timeout().await?;
-    apply_activity_level_settings(&mut config, update).await
-}
-
-fn memory_sync_settings_value(stored: Option<u64>) -> serde_json::Value {
-    let is_manual = stored == Some(0);
-    let is_default = stored.is_none();
-    let selected_secs = stored.unwrap_or(crate::config::DEFAULT_MEMORY_SYNC_INTERVAL_SECS);
-    json!({
-        "sync_interval_secs": stored,
-        "selected_secs": selected_secs,
-        "is_manual": is_manual,
-        "is_default": is_default,
-        "default_secs": crate::config::DEFAULT_MEMORY_SYNC_INTERVAL_SECS,
-        "presets": crate::config::MEMORY_SYNC_INTERVAL_PRESETS_SECS,
-    })
-}
-
-/// Returns the current global memory-sync cadence and its derived view.
-pub async fn get_memory_sync_settings() -> Result<RpcOutcome<serde_json::Value>, String> {
-    let config = load_config_with_timeout().await?;
-    let value = memory_sync_settings_value(config.memory_sync_interval_secs);
-    Ok(RpcOutcome::single_log(value, "memory sync settings read"))
-}
-
-/// Updates the global memory-sync cadence and persists it. The running
-/// scheduler reads `config.memory_sync_interval_secs` fresh on each tick, so
-/// the new cadence takes effect from the next tick without a restart.
-pub async fn apply_memory_sync_settings(
-    config: &mut Config,
-    update: MemorySyncSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
-    config.memory_sync_interval_secs = update.sync_interval_secs;
-    config.save().await.map_err(|e| e.to_string())?;
-
-    tracing::info!(
-        sync_interval_secs = ?config.memory_sync_interval_secs,
-        "[config:memory_sync] memory sync interval updated"
-    );
-
-    let stored = config.memory_sync_interval_secs;
-    let value = memory_sync_settings_value(stored);
-    let msg = match stored {
-        Some(0) => "memory sync set to Manual only".to_string(),
-        Some(n) => format!("memory sync interval set to {n}s"),
-        None => "memory sync interval reset to default".to_string(),
-    };
-    Ok(RpcOutcome::new(
-        value,
-        vec![format!("{msg} — saved to {}", config.config_path.display())],
-    ))
-}
-
-/// Loads the configuration, applies memory-sync settings, and saves it.
-pub async fn load_and_apply_memory_sync_settings(
-    update: MemorySyncSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
-    let mut config = load_config_with_timeout().await?;
-    apply_memory_sync_settings(&mut config, update).await
 }

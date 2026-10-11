@@ -16,6 +16,7 @@ fn subagent_transcript_persists_interleaved_prose_and_tools() {
         prompt: String::new(),
         worker_thread_id: None,
         display_name: Some("Researcher".into()),
+        parent_call_id: None,
     });
     // Reasoning (two same-iteration deltas, must coalesce), then a tool, then
     // visible narration — the order must be preserved in the transcript.
@@ -61,6 +62,9 @@ fn subagent_transcript_persists_interleaved_prose_and_tools() {
         elapsed_ms: 12,
         iteration: 1,
         failure: None,
+        display_label: None,
+        display_detail: None,
+        structured: None,
     });
 
     let activity = m.snapshot().tool_timeline[0]
@@ -107,109 +111,6 @@ fn subagent_transcript_persists_interleaved_prose_and_tools() {
     );
 }
 
-/// When a streaming turn is interrupted and a root transcript already exists,
-/// `finish()` appends the partial streamed answer (display-only) to the file.
-#[test]
-fn finish_appends_interrupted_partial_to_existing_transcript() {
-    let dir = tempdir().expect("tempdir");
-    let thread_id = "thr_abc";
-    let path = seed_root_transcript(dir.path(), thread_id);
-
-    let store = TurnStateStore::new(dir.path().to_path_buf());
-    let mut m = TurnStateMirror::new(store, thread_id, "req-9");
-    m.observe(&AgentProgress::IterationStarted {
-        iteration: 2,
-        max_iterations: 25,
-    });
-    m.observe(&AgentProgress::ThinkingDelta {
-        delta: "hmm".into(),
-        iteration: 2,
-    });
-    m.observe(&AgentProgress::TextDelta {
-        delta: "half an ".into(),
-        iteration: 2,
-    });
-    m.observe(&AgentProgress::TextDelta {
-        delta: "answer".into(),
-        iteration: 2,
-    });
-    // No TurnCompleted — the bridge exits, marking the turn interrupted.
-    m.finish();
-
-    // Model context must NOT carry the partial.
-    let model = read_transcript(&path).expect("read model context");
-    assert!(
-        !model
-            .messages
-            .iter()
-            .any(|msg| msg.content.contains("half an answer")),
-        "interrupted partial must be excluded from the model context"
-    );
-
-    // Display projection carries the flagged partial with request_id + thinking.
-    let display = read_transcript_display(&path).expect("read display");
-    let partial = display
-        .records
-        .iter()
-        .find_map(|r| match r {
-            DisplayRecord::Message(msg) if msg.interrupted => Some(msg),
-            _ => None,
-        })
-        .expect("display must include the interrupted partial");
-    assert_eq!(partial.message.content, "half an answer");
-    assert_eq!(partial.request_id.as_deref(), Some("req-9"));
-    assert_eq!(partial.iteration, Some(2));
-    assert_eq!(partial.reasoning_content.as_deref(), Some("hmm"));
-}
-
-/// A completed turn never writes an interrupted partial.
-#[test]
-fn finish_after_completion_writes_no_partial() {
-    let dir = tempdir().expect("tempdir");
-    let thread_id = "thr_done";
-    let path = seed_root_transcript(dir.path(), thread_id);
-
-    let store = TurnStateStore::new(dir.path().to_path_buf());
-    let mut m = TurnStateMirror::new(store, thread_id, "req-done");
-    m.observe(&AgentProgress::TextDelta {
-        delta: "final answer".into(),
-        iteration: 1,
-    });
-    m.observe(&AgentProgress::TurnCompleted { iterations: 1 });
-    m.finish();
-
-    let display = read_transcript_display(&path).expect("read display");
-    assert!(
-        !display
-            .records
-            .iter()
-            .any(|r| matches!(r, DisplayRecord::Message(msg) if msg.interrupted)),
-        "a completed turn must not append an interrupted partial"
-    );
-}
-
-/// An interrupted FIRST turn (no root transcript file yet) is a no-op — the
-/// partial stays in the turn_state snapshot only, and finish() does not panic.
-#[test]
-fn finish_first_turn_without_transcript_is_noop() {
-    let dir = tempdir().expect("tempdir");
-    let store = TurnStateStore::new(dir.path().to_path_buf());
-    let mut m = TurnStateMirror::new(store, "thr_new", "req-first");
-    m.observe(&AgentProgress::TextDelta {
-        delta: "orphan partial".into(),
-        iteration: 1,
-    });
-    // Must not panic even though no session_raw transcript exists.
-    m.finish();
-    // The snapshot itself still records the interrupted turn.
-    let listed = TurnStateStore::new(dir.path().to_path_buf())
-        .get("thr_new")
-        .expect("get")
-        .expect("snapshot present");
-    assert_eq!(listed.lifecycle, TurnLifecycle::Interrupted);
-    assert_eq!(listed.streaming_text, "orphan partial");
-}
-
 /// A sub-agent's child tool call must persist the arguments it was invoked
 /// with. Live, the `subagent_tool_call` socket event carries them; before
 /// #5987 the snapshot did not, so a reloaded child row came back with no
@@ -226,6 +127,7 @@ fn subagent_tool_call_persists_its_arguments() {
         prompt: String::new(),
         worker_thread_id: None,
         display_name: Some("Researcher".into()),
+        parent_call_id: None,
     });
     m.observe(&AgentProgress::SubagentToolCallStarted {
         agent_id: "researcher".into(),
@@ -277,6 +179,7 @@ fn null_child_arguments_are_not_persisted_at_start() {
         prompt: String::new(),
         worker_thread_id: None,
         display_name: Some("Researcher".into()),
+        parent_call_id: None,
     });
     m.observe(&AgentProgress::SubagentToolCallStarted {
         agent_id: "researcher".into(),
@@ -318,6 +221,7 @@ fn oversized_child_arguments_are_truncated() {
         prompt: String::new(),
         worker_thread_id: None,
         display_name: Some("Writer".into()),
+        parent_call_id: None,
     });
     let huge = "x".repeat(32 * 1024);
     let arguments = serde_json::json!({ "path": "notes.md", "content": huge });
@@ -397,6 +301,7 @@ fn tinyagents_path_backfills_arguments_from_the_completion_event() {
         prompt: String::new(),
         worker_thread_id: None,
         display_name: Some("Researcher".into()),
+        parent_call_id: None,
     });
     // Start carries no arguments — exactly what the tinyagents bridge sends.
     m.observe(&AgentProgress::SubagentToolCallStarted {
@@ -421,6 +326,9 @@ fn tinyagents_path_backfills_arguments_from_the_completion_event() {
         elapsed_ms: 12,
         iteration: 1,
         failure: None,
+        display_label: None,
+        display_detail: None,
+        structured: None,
     });
 
     let activity = m.snapshot().tool_timeline[0]
@@ -450,6 +358,7 @@ fn completion_arguments_do_not_overwrite_arguments_captured_at_start() {
         prompt: String::new(),
         worker_thread_id: None,
         display_name: Some("Researcher".into()),
+        parent_call_id: None,
     });
     m.observe(&AgentProgress::SubagentToolCallStarted {
         agent_id: "researcher".into(),
@@ -473,6 +382,9 @@ fn completion_arguments_do_not_overwrite_arguments_captured_at_start() {
         elapsed_ms: 12,
         iteration: 1,
         failure: None,
+        display_label: None,
+        display_detail: None,
+        structured: None,
     });
 
     let activity = m.snapshot().tool_timeline[0]

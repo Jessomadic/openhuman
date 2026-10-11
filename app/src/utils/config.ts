@@ -90,13 +90,17 @@ export const DEV_FORCE_ONBOARDING =
   import.meta.env.DEV && import.meta.env.VITE_DEV_FORCE_ONBOARDING === 'true';
 
 /**
- * Consumer-first-session UX (intent picker, home IA, trust affordances).
- * **Default off** so `main` stays unchanged until slices ship behind this flag.
- * Opt in locally or in staging: `VITE_CONSUMER_FIRST_SESSION=true` in `app/.env.local`.
- * Spec: `docs/plans/consumer-first-session-spec.md`.
+ * Dev only: treat onboarding and the walkthrough tour as done, so a debugging
+ * session lands straight in the app. A signed-in user whose core still has
+ * `onboarding_completed=false` gets it set to `true` through the core (so the
+ * flag really persists). `scripts/run-dev-web.sh` sets
+ * `VITE_DEV_SKIP_ONBOARDING=true` unless run with `--onboarding`.
+ * `VITE_DEV_FORCE_ONBOARDING` wins when both are set.
  */
-export const CONSUMER_FIRST_SESSION_ENABLED =
-  import.meta.env.VITE_CONSUMER_FIRST_SESSION === 'true';
+export const DEV_SKIP_ONBOARDING =
+  import.meta.env.DEV &&
+  import.meta.env.VITE_DEV_SKIP_ONBOARDING === 'true' &&
+  !DEV_FORCE_ONBOARDING;
 
 /**
  * Master kill-switch for chat multimodal attachments (image / video / document).
@@ -259,7 +263,7 @@ const SUPPORT_URL_OVERRIDE = (import.meta.env.VITE_SUPPORT_URL as string | undef
 /**
  * Where "Contact Support" on the crash screen sends the user.
  *
- * The default is the community Discord — `https://tinyhumans.ai/support` 404s
+ * The default is the community site — `https://tinyhumans.ai/support` 404s
  * (#5870). It is the same value as `links.ts`'s `DISCORD_INVITE_URL` and is
  * imported from there rather than repeated, so moving the vanity domain is one
  * edit and not two.
@@ -274,8 +278,8 @@ export const SUPPORT_URL = SUPPORT_URL_OVERRIDE || DISCORD_INVITE_URL;
  * Whether {@link SUPPORT_URL} is a destination that can consume
  * `?ref=<sentryEventId>`.
  *
- * Only an explicitly configured endpoint can: a Discord invite renders a join
- * page and ignores the query entirely, so appending a ref there produces a
+ * Only an explicitly configured endpoint can: the community destination is
+ * not configured to accept that query, so appending a ref there produces a
  * link that looks like it carries the crash id and does not — the correlation
  * the ref exists for silently stops happening (tinysweeper on #5953).
  *
@@ -286,8 +290,8 @@ export const SUPPORT_URL = SUPPORT_URL_OVERRIDE || DISCORD_INVITE_URL;
  * Defaults to "an override is configured", because `VITE_SUPPORT_URL` exists
  * for deployment-specific *support endpoints* and one of those can consume a
  * ref by definition. Set `VITE_SUPPORT_URL_ACCEPTS_REF=false` for the case
- * that inference gets wrong — an override pointed at a chat invite, which
- * ignores the query the same way the Discord default does. The escape hatch is
+ * that inference gets wrong — an override pointed at a community site, which
+ * ignores the query the same way the default does. The escape hatch is
  * an opt-OUT rather than an opt-in on purpose: defaulting to `false` would
  * make the *useful* behaviour the one a deployer can forget to switch on, and
  * forgetting it fails silently, which is the exact failure this whole flag
@@ -331,27 +335,13 @@ export const MASCOT_VOICE_MODEL_ID =
   'eleven_multilingual_v2';
 
 /**
- * Gates the realtime ElevenLabs Agents voice mode (#5399). On by default in
- * every build (local, staging, production) so the Settings toggle is exposed
- * without any build-time env wiring; set `VITE_VOICE_MODE=false` to hide it
- * (kill switch). This gates only the UI switch — the realtime code paths
- * additionally check the persisted `mascot.voiceMode`, so the feature still
- * ships dark until the user opts in via the toggle.
- */
-export const VOICE_MODE_FLAG_ENABLED =
-  (import.meta.env.VITE_VOICE_MODE as string | undefined)?.trim() !== 'false';
-
-/**
  * Which voice entry point the Human tab offers (#5399).
  *
- * On by default in every build: the tab shows the realtime "Start voice chat"
- * control where the push-to-talk mic used to sit. Set
- * `VITE_HUMAN_VOICE_REALTIME=false` to fall back to the classic tap-and-speak
- * composer — the kill switch for the realtime path on this surface.
- *
- * Distinct from {@link VOICE_MODE_FLAG_ENABLED}, which gates the *chat* tab's
- * mascot stage against the persisted `mascot.voiceMode`. Keep them separate:
- * one surface's rollback must not silently change the other's.
+ * On by default in every build: the tab shows the live voice-agent control
+ * (`LiveVoiceControls`, the core's `/ws/live-voice` session). Set
+ * `VITE_HUMAN_VOICE_REALTIME=false` for a mascot-only stage — the kill switch
+ * for the voice control on this surface. The chat tab's mascot stage always
+ * uses the live voice agent.
  */
 export const HUMAN_VOICE_REALTIME_ENABLED =
   (import.meta.env.VITE_HUMAN_VOICE_REALTIME as string | undefined)?.trim() !== 'false';

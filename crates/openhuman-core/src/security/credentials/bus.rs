@@ -11,8 +11,11 @@
 //!    re-enters the gate during teardown also stalls.
 //! 2. Call [`clear_session`] to remove the stored JWT, clear the
 //!    active-user marker, and stop login-gated services
-//!    (voice / autocomplete / local AI / dictation /
-//!    subconscious). Idempotent — repeat events are safe.
+//!    (voice / autocomplete / local AI / dictation).
+//!    Idempotent — repeat events are safe.
+//!
+//! In SaaS mode the handler does nothing process-wide: each user's
+//! credential is theirs, and the gateway refreshes it.
 //!
 //! Without this subscriber, a 401 from a background LLM call would only
 //! be detected but never acted on, and the same loop would 401 again on
@@ -52,9 +55,30 @@ impl EventHandler<DomainEvent> for SessionExpiredSubscriber {
     }
 
     async fn handle(&self, event: &DomainEvent) {
+        self.handle_with(crate::core::runtime::is_saas(), event)
+            .await;
+    }
+}
+
+impl SessionExpiredSubscriber {
+    /// [`EventHandler::handle`] with the process mode passed in, so the SaaS
+    /// early return is testable without the process-wide mode lock.
+    pub(crate) async fn handle_with(&self, saas: bool, event: &DomainEvent) {
         let DomainEvent::SessionExpired { source, reason } = event else {
             return;
         };
+
+        // SaaS: the credential belongs to one user and the gateway owns its
+        // refresh (`profiles.set_credential`). Nothing process-wide is torn
+        // down; the failing call already reports the 401 to that user.
+        if saas {
+            tracing::warn!(
+                source = %source,
+                reason = %reason,
+                "[auth] SessionExpired in SaaS mode — left to the gateway; no process-wide teardown"
+            );
+            return;
+        }
 
         // (1) Stand down background workers immediately — before any async work.
         //     Cheap atomic flip; safe to call repeatedly from concurrent publishers.
@@ -75,14 +99,15 @@ impl EventHandler<DomainEvent> for SessionExpiredSubscriber {
                     scheduler_gate::set_signed_out(false);
                     return;
                 }
-                let is_local_session = crate::api::jwt::get_session_token(&config)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|token| {
-                        crate::security::credentials::session_support::is_local_session_token(
-                            &token,
-                        )
-                    });
+                let is_local_session =
+                    crate::security::credentials::jwt::get_session_token(&config)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|token| {
+                            crate::security::credentials::session_support::is_local_session_token(
+                                &token,
+                            )
+                        });
                 if is_local_session {
                     tracing::warn!(
                         source = %source,

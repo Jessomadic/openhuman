@@ -2,7 +2,7 @@ import debugFactory from 'debug';
 import { useEffect, useRef, useState } from 'react';
 
 import PageSectionHeader from '../components/layout/PageSectionHeader';
-import { Card, CenteredLoadingState, EmptyState } from '../components/ui';
+import { Badge, Card, CenteredLoadingState, EmptyState } from '../components/ui';
 import Button from '../components/ui/Button';
 import { useClipboardFeedback } from '../hooks/useClipboardFeedback';
 import { useUser } from '../hooks/useUser';
@@ -36,13 +36,11 @@ const CodeRow = ({ invite }: { invite: InviteCode }) => {
       </div>
       <div className="flex items-center gap-2 ml-3">
         {claimed ? (
-          <span className="text-xs px-2 py-1 rounded-full bg-surface-strong text-content-faint">
-            {t('common.disabled')}
-          </span>
+          <Badge dot={false}>{t('common.disabled')}</Badge>
         ) : (
-          <span className="text-xs px-2 py-1 rounded-full bg-sage-500/20 text-sage-500">
+          <Badge variant="success" dot={false}>
             {t('common.enabled')}
-          </span>
+          </Badge>
         )}
         <Button
           iconOnly

@@ -39,11 +39,15 @@ import { providerIcon } from './providerIcons';
  *  common, which is the thing a wrapped pill row could not express. */
 export const ProviderGroup = ({
   title,
+  description,
+  headerRight,
   children,
   card = false,
   'data-testid': testId,
 }: {
   title: string;
+  description?: string;
+  headerRight?: ReactNode;
   children: ReactNode;
   /** Use the shared Card primitive when this group is a top-level section. */
   card?: boolean;
@@ -52,7 +56,12 @@ export const ProviderGroup = ({
   const list = <ul className="flex w-full flex-col divide-y divide-line-subtle">{children}</ul>;
 
   return card ? (
-    <Card title={title} data-testid={testId} className="w-full">
+    <Card
+      title={title}
+      description={description}
+      headerRight={headerRight}
+      data-testid={testId}
+      className="w-full">
       {list}
     </Card>
   ) : (
@@ -121,7 +130,7 @@ export const ProviderSwatch = ({
       aria-hidden
       data-slot="provider-swatch"
       className={cn(
-        'flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-semibold ring-1',
+        'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-xs font-semibold ring-1',
         PROVIDER_SWATCH_TONES[slug] ?? 'bg-[#27272A] text-content-inverted ring-content-inverted/30'
       )}>
       {icon ?? (label.trim().charAt(0).toUpperCase() || '?')}
@@ -139,6 +148,7 @@ export const ProviderListRow = ({
   control,
   actions = [],
   actionsLabel,
+  swatch,
   'data-testid': testId,
 }: {
   /** Provider slug, used to look up the brand mark. */
@@ -160,31 +170,27 @@ export const ProviderListRow = ({
   /** Accessible name for the overflow trigger. Required when `actions` is
    *  non-empty — an unnamed icon button is announced as just "button". */
   actionsLabel?: string;
+  /** Replaces the LLM brand swatch, for lists whose providers are not LLM
+   *  providers (web search) and so have no entry in the LLM icon map. */
+  swatch?: ReactNode;
   'data-testid'?: string;
 }) => {
   const { t } = useT();
   return (
-    <li
-      data-slot="provider-row"
-      data-testid={testId}
-      className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-surface-hover">
-      <ProviderSwatch slug={slug} label={label} tone={tone} />
+    <li data-slot="provider-row" data-testid={testId} className="flex items-center gap-3 px-4 py-3">
+      {swatch ?? <ProviderSwatch slug={slug} label={label} tone={tone} />}
 
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-medium text-content">{label}</span>
+          <span className="truncate text-sm font-semibold text-content">{label}</span>
           {badge}
         </div>
-        <span
-          className={cn(
-            'truncate text-[11px] leading-4 text-content-muted',
-            detailMono && 'font-mono'
-          )}>
+        <span className={cn('truncate text-xs text-content-muted', detailMono && 'font-mono')}>
           {detail}
         </span>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="flex shrink-0 items-center gap-2">
         {control}
         {actions.length > 0 && (
           <DropdownMenuRoot>

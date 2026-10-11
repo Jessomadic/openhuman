@@ -30,18 +30,26 @@
 //! `crate::agent`, which re-exports them from this module.
 //! The child files are an implementation detail.
 
+#[cfg(feature = "flows")]
 pub(crate) use builder::provider_role_for_definition;
+pub use builder::{HostOnlyToolPolicy, HostTools, HostTurnTools, TurnContext};
 
 mod builder;
 mod codec;
 mod driver;
 mod factory;
 mod hooks;
+// Tool surface for live voice sessions (`voice::live`).
+#[cfg(feature = "voice")]
+mod live_tools;
+mod managed_tools;
 mod policy;
 mod prefix_snapshot;
+mod recorded_tools;
 mod runtime;
 mod runtime_session;
 mod session_api;
+pub(crate) mod stop_summary;
 #[cfg(test)]
 mod tool_progress;
 mod turn;
@@ -67,4 +75,10 @@ mod announcement_notes;
 mod artifact_wiring;
 
 #[cfg(test)]
+mod orphaned_head_resume_tests;
+#[cfg(test)]
 mod runtime_adapter_tests;
+#[cfg(test)]
+mod transcript_compat_tests;
+#[cfg(test)]
+mod typed_transcript_compat_tests;

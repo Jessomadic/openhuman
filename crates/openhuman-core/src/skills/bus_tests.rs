@@ -34,85 +34,34 @@ async fn ensure_triggered_workflow_subscriber_is_idempotent_and_safe() {
     ensure_triggered_workflow_subscriber(tmp.path());
 }
 
-// ── TriggerPattern::parse ────────────────────────────────────────────────
+// ── Event matching (grammar is tested in tinyskills) ─────────────────────
 
 #[test]
-fn parse_bare_domain() {
-    let p = TriggerPattern::parse("composio").unwrap();
-    assert_eq!(p.domain, "composio");
-    assert!(p.event_slug.is_none());
-}
-
-#[test]
-fn parse_domain_with_slug() {
-    let p = TriggerPattern::parse("composio/trigger_received").unwrap();
-    assert_eq!(p.domain, "composio");
-    assert_eq!(p.event_slug.as_deref(), Some("trigger_received"));
-}
-
-#[test]
-fn parse_domain_with_wildcard_slug_is_bare() {
-    let p = TriggerPattern::parse("cron/*").unwrap();
-    assert_eq!(p.domain, "cron");
-    assert!(p.event_slug.is_none());
-}
-
-#[test]
-fn parse_normalises_to_lowercase() {
-    let p = TriggerPattern::parse("Composio/TRIGGER_RECEIVED").unwrap();
-    assert_eq!(p.domain, "composio");
-    assert_eq!(p.event_slug.as_deref(), Some("trigger_received"));
-}
-
-#[test]
-fn parse_empty_is_none() {
-    assert!(TriggerPattern::parse("").is_none());
-    assert!(TriggerPattern::parse("   ").is_none());
-}
-
-#[test]
-fn parse_empty_domain_with_slug_is_none() {
-    assert!(TriggerPattern::parse("/event_slug").is_none());
-}
-
-// ── TriggerPattern::matches ──────────────────────────────────────────────
-
-#[test]
-fn bare_domain_matches_any_event_in_domain() {
+fn bare_domain_matches_only_events_in_that_domain() {
     let p = TriggerPattern::parse("cron").unwrap();
-    let event = DomainEvent::CronJobTriggered {
+    let cron = DomainEvent::CronJobTriggered {
         job_id: "j1".into(),
         job_name: "test".into(),
         job_type: "shell".into(),
     };
-    assert!(p.matches(&event));
-}
-
-#[test]
-fn bare_domain_does_not_match_other_domain() {
-    let p = TriggerPattern::parse("cron").unwrap();
-    let event = DomainEvent::SystemStartup {
+    let startup = DomainEvent::SystemStartup {
         component: "core".into(),
     };
-    assert!(!p.matches(&event));
+    assert!(pattern_matches_event(&p, &cron));
+    assert!(!pattern_matches_event(&p, &startup));
 }
 
 #[test]
-fn slugged_pattern_rejected_until_slug_api_exists() {
-    // A slug-qualified pattern like "cron/job_triggered" must NOT match
-    // the entire cron domain — returning true here would over-fire for
-    // every cron event regardless of the declared slug.
+fn slugged_pattern_stays_inert_until_slug_api_exists() {
+    // A slug-qualified pattern must NOT match the entire cron domain —
+    // returning true here would over-fire for every cron event.
     let p = TriggerPattern::parse("cron/job_triggered").unwrap();
-    assert_eq!(p.event_slug.as_deref(), Some("job_triggered"));
     let event = DomainEvent::CronJobTriggered {
         job_id: "j1".into(),
         job_name: "test".into(),
         job_type: "shell".into(),
     };
-    assert!(
-        !p.matches(&event),
-        "slugged pattern must not match until DomainEvent::slug() exists"
-    );
+    assert!(!pattern_matches_event(&p, &event));
 }
 
 // ── TriggeredWorkflowIndex ──────────────────────────────────────────────────

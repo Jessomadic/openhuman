@@ -7,8 +7,133 @@ use crate::session::test_support::{
 };
 use std::sync::Arc;
 
+#[tokio::test]
+async fn bound_session_restores_only_at_issuing_backend_without_forwarding() {
+    let _global = ENV_LOCK.lock().await;
+    let issuer = Backend::start(vec![MeAnswer::Ok(me_user())]).await;
+    let other = Backend::start(vec![MeAnswer::Ok(me_user())]).await;
+    let core = FakeCore::new(&issuer.url);
+    let first = manager(&core);
+    first.store_session_token(&LIVE_JWT, None).await.unwrap();
+    assert_eq!(
+        core.session().unwrap().issuing_backend.as_deref(),
+        Some(issuer.url.as_str())
+    );
+    let restored = manager(&core);
+    restored.current_user(true).await.unwrap();
+    assert_eq!(issuer.me_calls(), 2);
+    *core.api_url.lock().unwrap() = other.url.clone();
+    let error = restored.current_user(true).await.unwrap_err();
+    assert!(
+        matches!(error, SessionError::Backend(ref message) if message.contains("SESSION_BACKEND_MISMATCH"))
+    );
+    assert_eq!(
+        other.me_calls(),
+        0,
+        "no Authorization may reach the changed backend"
+    );
+    assert!(other.consume_calls().is_empty());
+    assert!(
+        core.session().is_some(),
+        "restore does not erase a session for another deployment"
+    );
+}
+
+#[tokio::test]
+async fn expected_backend_rejects_changed_configuration_before_any_credential_send() {
+    let _global = ENV_LOCK.lock().await;
+    let issuer = Backend::start(vec![MeAnswer::Ok(me_user())]).await;
+    let changed = Backend::start(vec![MeAnswer::Ok(me_user())]).await;
+    let core = FakeCore::new(&changed.url);
+    let manager = manager(&core);
+    for result in [
+        manager
+            .login_with_token_for_backend("synthetic-one-time", &issuer.url)
+            .await,
+        manager
+            .store_session_token_for_backend(&LIVE_JWT, None, &issuer.url)
+            .await,
+    ] {
+        assert!(
+            matches!(result, Err(SessionError::Backend(ref message)) if message.starts_with("SESSION_BACKEND_MISMATCH"))
+        );
+    }
+    assert_eq!(changed.me_calls(), 0);
+    assert!(changed.consume_calls().is_empty());
+    assert_eq!(issuer.me_calls(), 0);
+    assert!(issuer.consume_calls().is_empty());
+    assert!(core.session().is_none());
+    *core.api_url.lock().unwrap() = issuer.url.clone();
+    manager
+        .store_session_token_for_backend(
+            &LIVE_JWT,
+            None,
+            &format!("{}/ignored-path?discarded=nonsecret#fragment", issuer.url),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        issuer.me_calls(),
+        1,
+        "matching canonical origin accepts the callback"
+    );
+}
+
 fn manager(core: &Arc<FakeCore>) -> Arc<SessionManager<FakeCore>> {
     SessionManager::new(Arc::clone(core), ClientHeaders::new("openhuman"))
+}
+
+#[tokio::test]
+async fn exchange_and_validation_use_one_backend_when_configuration_changes() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct SwitchingLink {
+        core: Arc<FakeCore>,
+        changed_url: String,
+        reads: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl CoreLink for SwitchingLink {
+        async fn invoke(&self, method: &str, params: Value) -> Result<Value, String> {
+            if method == link::CONFIG_RESOLVE_API_URL
+                && self.reads.fetch_add(1, Ordering::SeqCst) > 0
+            {
+                return Ok(json!({"api_url":self.changed_url}));
+            }
+            self.core.invoke(method, params).await
+        }
+    }
+    let _global = ENV_LOCK.lock().await;
+    let issuer = Backend::start(vec![MeAnswer::Ok(me_user())]).await;
+    let other = Backend::start(vec![MeAnswer::Ok(me_user())]).await;
+    let core = FakeCore::new(&issuer.url);
+    let manager = SessionManager::new(
+        Arc::new(SwitchingLink {
+            core: core.clone(),
+            changed_url: other.url.clone(),
+            reads: AtomicUsize::new(0),
+        }),
+        ClientHeaders::new("openhuman"),
+    );
+    assert!(matches!(
+        manager.login_with_token("synthetic-one-time").await,
+        Err(SessionError::Backend(_))
+    ));
+    assert_eq!(issuer.consume_calls().len(), 1);
+    assert_eq!(
+        issuer.me_calls(),
+        1,
+        "validation stays with the exchange client"
+    );
+    assert_eq!(
+        other.me_calls(),
+        0,
+        "the new JWT never reaches the changed backend"
+    );
+    assert!(other.consume_calls().is_empty());
+    assert_eq!(
+        core.session().unwrap().issuing_backend.as_deref(),
+        Some(issuer.url.as_str())
+    );
 }
 
 async fn drain(rx: &mut tokio::sync::broadcast::Receiver<SessionEvent>) -> Vec<SessionEvent> {
@@ -137,15 +262,15 @@ async fn failed_core_handoff_keeps_the_prior_pending_session_revalidation_runnin
 
     // A is stored pending because the backend is unreachable; its own
     // background revalidation loop starts.
-    let core = FakeCore::new("http://127.0.0.1:9");
+    let backend = Backend::start(vec![MeAnswer::Status(503)]).await;
+    let core = FakeCore::new(&backend.url);
     let m = manager(&core);
     m.store_session_token(&LIVE_JWT, None).await.unwrap();
     assert!(m.revalidation.lock().unwrap().is_some());
 
     // The backend becomes reachable and confirms the token via /auth/me
     // (the successful-validation arm), but the core handoff itself fails.
-    let backend = Backend::start(vec![MeAnswer::Ok(me_user())]).await;
-    *core.api_url.lock().unwrap() = backend.url.clone();
+    *backend.state.me.lock().unwrap() = vec![MeAnswer::Ok(me_user())].into();
     *core.fail_method.lock().unwrap() = Some(link::AUTH_SET_CREDENTIAL.to_string());
 
     assert!(matches!(
@@ -170,15 +295,15 @@ async fn failed_core_handoff_keeps_the_prior_pending_session_revalidation_runnin
 async fn a_failed_confirmation_handoff_keeps_the_revalidation_loop_retrying() {
     let _global = ENV_LOCK.lock().await;
 
-    let core = FakeCore::new("http://127.0.0.1:9");
+    let backend = Backend::start(vec![MeAnswer::Status(503)]).await;
+    let core = FakeCore::new(&backend.url);
     let m = manager(&core);
     m.store_session_token(&LIVE_JWT, None).await.unwrap();
     assert!(m.revalidation.lock().unwrap().is_some());
 
     // The backend becomes reachable and will confirm the token, but the
     // core handoff itself fails.
-    let backend = Backend::start(vec![MeAnswer::Ok(me_user())]).await;
-    *core.api_url.lock().unwrap() = backend.url.clone();
+    *backend.state.me.lock().unwrap() = vec![MeAnswer::Ok(me_user())].into();
     *core.fail_method.lock().unwrap() = Some(link::AUTH_SET_CREDENTIAL.to_string());
 
     // Let the loop's first attempt (after REVALIDATION_INITIAL_DELAY) run.
@@ -302,6 +427,132 @@ async fn current_user_rejection_signs_out_and_emits_expired() {
     assert!(!state.core.is_authenticated);
 }
 
+/// Linking a second provider to the same account is a session refresh, not a
+/// different user (matrix 1.2.2).
+///
+/// Nothing the client can see says *which* provider logged you in: `/auth/me`
+/// returns no provider field and this crate models none, so "signing in with
+/// GitHub when you already signed in with Google" arrives here as nothing more
+/// than a second login token that redeems to a **different JWT for the same
+/// backend user id**. That is the whole of multi-provider linking as far as the
+/// desktop app is concerned, and it is the only part of matrix 1.2.2 that is
+/// testable client-side.
+///
+/// It matters because `store_session_token` signs the previous user out when
+/// the user id changes. If a same-user re-login were ever treated as a user
+/// change, linking a second provider would wipe the first provider's session
+/// state on every login.
+#[tokio::test]
+async fn relinking_the_same_user_with_a_new_token_refreshes_rather_than_switches_user() {
+    let _global = ENV_LOCK.lock().await;
+    let backend = Backend::start(vec![MeAnswer::Ok(me_user()), MeAnswer::Ok(me_user())]).await;
+    let core = FakeCore::new(&backend.url);
+    let m = manager(&core);
+
+    m.login_with_token("via-google").await.unwrap();
+    assert_eq!(core.session().unwrap().token, *LIVE_JWT);
+    assert_eq!(identity::peek_user_id().as_deref(), Some("user-123"));
+
+    // The second provider's login redeems to a different JWT. Same claims —
+    // same `sub`, same `exp` — so the same backend user; only the signature
+    // differs, exactly as a freshly issued session would.
+    let second_jwt = format!("{}x", *LIVE_JWT);
+    *backend.state.consume_jwt.lock().unwrap() = Some(second_jwt.clone());
+
+    let mut rx = m.subscribe();
+    let state = m.login_with_token("via-github").await.unwrap();
+
+    assert!(state.core.is_authenticated);
+    assert_eq!(
+        state.core.user_id.as_deref(),
+        Some("user-123"),
+        "a second provider for the same account must not change the user id"
+    );
+    assert_eq!(
+        core.session().unwrap().token,
+        second_jwt,
+        "the newly issued session token should have replaced the old one"
+    );
+    assert_eq!(
+        identity::peek_user_id().as_deref(),
+        Some("user-123"),
+        "the identity slot must survive a same-user re-login"
+    );
+
+    // No sign-out anywhere in the transition. `SessionEvent::Expired` or a
+    // `Changed` carrying `!is_authenticated` would mean the app bounced the
+    // user to Welcome midway through linking a provider.
+    let events = drain(&mut rx).await;
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::Expired { .. })),
+        "same-user re-login emitted an Expired event: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::Changed(s) if !s.core.is_authenticated)),
+        "same-user re-login emitted a signed-out state: {events:?}"
+    );
+}
+
+/// Server-side revocation must clear the identity slot and the user cache, not
+/// just the core credential (matrix 1.4.3).
+///
+/// `current_user_rejection_signs_out_and_emits_expired` above covers the
+/// credential and the events; it does not look at `identity::peek_user_id()`
+/// or `cache().peek()`. `logout_clears_the_session_and_identity` checks both,
+/// but only for an *explicit* logout — so a revocation path that forgot either
+/// one would pass the whole suite.
+///
+/// Both matter, for different reasons:
+///   * the identity slot is the process-global `Sentry before_send` reads
+///     (`session/identity.rs` — *"Only the id is kept"*), so a stale id there
+///     attributes every later event to a user who was signed out, silently and
+///     for the life of the process.
+///   * a surviving `CurrentUserCache` entry lets `current_user(false)` serve
+///     the revoked user's profile from memory after the backend already
+///     refused it.
+#[tokio::test]
+async fn current_user_rejection_also_clears_identity_and_cache() {
+    let backend = Backend::start(vec![MeAnswer::Ok(me_user()), MeAnswer::Status(401)]).await;
+    let core = FakeCore::new(&backend.url);
+    let m = manager(&core);
+    m.login_with_token("tok").await.unwrap();
+
+    // Precondition, asserted rather than assumed: a rejection test that starts
+    // from an already-empty identity slot proves nothing about clearing it.
+    assert!(
+        identity::peek_user_id().is_some(),
+        "login should have populated the identity slot; without that this test \
+         cannot show the rejection cleared it"
+    );
+    assert!(
+        m.cache().peek().is_some(),
+        "login should have populated the user cache; without that this test \
+         cannot show the rejection cleared it"
+    );
+
+    assert!(matches!(
+        m.current_user(true).await,
+        Err(SessionError::Rejected(_))
+    ));
+
+    assert_eq!(
+        identity::peek_user_id(),
+        None,
+        "a revoked session left its user id in the process-global identity \
+         slot; Sentry would keep attributing events to a signed-out user"
+    );
+    assert_eq!(
+        m.cache().peek(),
+        None,
+        "a revoked session left its profile in the current-user cache; a later \
+         current_user(false) would serve it from memory"
+    );
+}
+
 #[tokio::test]
 async fn clearing_a_rejected_session_reports_a_surviving_api_key() {
     let backend = Backend::start(vec![]).await;
@@ -311,6 +562,7 @@ async fn clearing_a_rejected_session_reports_a_surviving_api_key() {
         token: LIVE_JWT.clone(),
         user_id: Some("user-123".to_string()),
         user: Some(me_user()),
+        issuing_backend: None,
     });
     *core.api_key.lock().unwrap() = Some("sk-fallback".to_string());
     let m = manager(&core);
@@ -349,6 +601,7 @@ async fn current_user_confirms_a_pending_session_once_the_backend_answers() {
         token: LIVE_JWT.clone(),
         user_id: Some("user-123".into()),
         user: Some(serde_json::json!({ PENDING_BACKEND_VALIDATION_FIELD: true })),
+        issuing_backend: None,
     });
     let m = manager(&core);
     let current = m.current_user(false).await.unwrap();
@@ -385,6 +638,7 @@ async fn rejection_of_a_superseded_token_leaves_the_new_session_alone() {
         token: crate::session::test_support::LIVE_JWT_NO_SUB.clone(),
         user_id: Some("user-456".into()),
         user: Some(serde_json::json!({ "_id": "user-456" })),
+        issuing_backend: None,
     };
     *core.session.lock().unwrap() = Some(replacement.clone());
     let current = refresh.await.unwrap().unwrap();
@@ -439,6 +693,7 @@ async fn pending_confirmation_after_logout_does_not_restore_the_session() {
         token: LIVE_JWT.clone(),
         user_id: Some("user-123".into()),
         user: Some(serde_json::json!({ PENDING_BACKEND_VALIDATION_FIELD: true })),
+        issuing_backend: None,
     });
     let m = manager(&core);
     let refresh = {

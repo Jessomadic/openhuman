@@ -121,6 +121,10 @@ fn proxy_config_has_any_proxy_url_ignores_whitespace_urls() {
 
 #[test]
 fn is_supported_proxy_service_selector_accepts_known_keys_case_insensitive() {
+    assert!(is_supported_proxy_service_selector("providers.list_models"));
+    assert!(is_supported_proxy_service_selector(
+        "inference.model_limits"
+    ));
     for key in SUPPORTED_PROXY_SERVICE_KEYS {
         assert!(is_supported_proxy_service_selector(key));
         assert!(is_supported_proxy_service_selector(
@@ -416,4 +420,67 @@ fn supported_service_keys_is_nonempty() {
 #[test]
 fn supported_service_selectors_is_nonempty() {
     assert!(!ProxyConfig::supported_service_selectors().is_empty());
+}
+
+// ── process env export ─────────────────────────────────────────
+
+#[test]
+fn apply_and_clear_process_env_follow_the_proxy_scope() {
+    let _lock = crate::config::TEST_ENV_LOCK.blocking_lock();
+    let keys = [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+    ];
+    let saved: Vec<_> = keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
+    for key in keys {
+        std::env::remove_var(key);
+    }
+
+    let env_scope = ProxyConfig {
+        enabled: true,
+        scope: ProxyScope::Environment,
+        all_proxy: Some("socks5h://proxy.example:1080".into()),
+        ..ProxyConfig::default()
+    };
+    env_scope.apply_to_process_env();
+    assert_eq!(
+        std::env::var("ALL_PROXY").as_deref(),
+        Ok("socks5h://proxy.example:1080")
+    );
+    assert_eq!(
+        std::env::var("all_proxy").as_deref(),
+        Ok("socks5h://proxy.example:1080")
+    );
+    assert!(std::env::var("NO_PROXY").is_err());
+    ProxyConfig::clear_process_env();
+    assert!(std::env::var("ALL_PROXY").is_err());
+    assert!(std::env::var("all_proxy").is_err());
+
+    let openhuman_scope = ProxyConfig {
+        enabled: true,
+        scope: ProxyScope::OpenHuman,
+        http_proxy: Some("https://proxy.example".into()),
+        no_proxy: vec![" local.test ".into()],
+        ..ProxyConfig::default()
+    };
+    openhuman_scope.apply_to_process_env();
+    assert_eq!(
+        std::env::var("HTTP_PROXY").as_deref(),
+        Ok("https://proxy.example")
+    );
+    assert_eq!(std::env::var("NO_PROXY").as_deref(), Ok("local.test"));
+    ProxyConfig::clear_process_env();
+
+    for (key, value) in saved {
+        match value {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
 }

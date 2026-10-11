@@ -110,12 +110,6 @@ fn tts_schema_has_optional_output_path() {
 }
 
 #[test]
-fn unknown_schema_returns_fallback() {
-    let s = voice_schemas("voice_nonexistent");
-    assert_eq!(s.function, "unknown");
-}
-
-#[test]
 fn deserialize_params_applies_defaults() {
     let params = Map::from_iter([
         ("audio_path".to_string(), json!("/tmp/audio.wav")),
@@ -139,7 +133,7 @@ fn deserialize_params_rejects_wrong_type() {
 #[test]
 fn to_json_returns_inner_value() {
     let json =
-        to_json(RpcOutcome::single_log(json!({"ok": true}), "done")).expect("serialize outcome");
+        to_json(Outcome::single_log(json!({"ok": true}), "done")).expect("serialize outcome");
     assert_eq!(json["ok"], true);
 }
 

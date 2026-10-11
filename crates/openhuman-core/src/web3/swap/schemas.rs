@@ -5,9 +5,9 @@
 use serde_json::{Map, Value};
 
 use crate::core::all::{ControllerFuture, RegisteredController};
-use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
+use crate::core::{ControllerSchema, FieldSchema, Outcome, TypeSchema};
 
-use super::super::store::execute_quote;
+use super::super::seams::service;
 use super::super::types::{ExecuteQuoteParams, SwapQuoteParams};
 use super::super::{execute_inputs, json_result, opt_str, req_json};
 
@@ -88,9 +88,8 @@ fn handle_quote(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let parsed: SwapQuoteParams = serde_json::from_value(Value::Object(params))
             .map_err(|e| format!("invalid params: {e}"))?;
-        super::super::ops::quote_swap(parsed)
-            .await?
-            .into_cli_compatible_json()
+        let quote = service().quote_swap(parsed).await?;
+        Outcome::new(quote, vec!["web3 swap prepared".to_string()]).into_cli_compatible_json()
     })
 }
 
@@ -98,14 +97,16 @@ fn handle_execute(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let parsed: ExecuteQuoteParams = serde_json::from_value(Value::Object(params))
             .map_err(|e| format!("invalid params: {e}"))?;
-        execute_quote(parsed).await?.into_cli_compatible_json()
+        let result = service().execute_quote(parsed).await?;
+        Outcome::new(result, vec!["web3 transaction broadcast".to_string()])
+            .into_cli_compatible_json()
     })
 }
 
 fn handle_routes(_params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
-        super::super::ops::routes()
-            .await?
+        let routes = service().routes().await?;
+        Outcome::new(routes, vec!["web3 supported routes listed".to_string()])
             .into_cli_compatible_json()
     })
 }

@@ -1,3 +1,4 @@
+import { RefreshCw, RotateCcw } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
@@ -10,23 +11,12 @@ import {
   type TokenjuiceSettingsPatch,
   updateTokenjuiceSettings,
 } from '../../../utils/tauriCommands/tokenjuice';
-import Button from '../../ui/Button';
-import {
-  SettingsNumberField,
-  SettingsRow,
-  SettingsSection,
-  SettingsStatusLine,
-  SettingsSwitch,
-} from '../controls';
+import { formatCurrency } from '../../dashboard/formatCurrency';
+import { Button, Card, Field, NumberField, StatusLine, Switch } from '../../ui';
 import SettingsPanel from '../layout/SettingsPanel';
 
 function formatInt(n: number): string {
   return Math.round(n).toLocaleString();
-}
-
-function formatUsd(n: number): string {
-  if (n > 0 && n < 0.01) return '<$0.01';
-  return `$${n.toFixed(2)}`;
 }
 
 function formatBytes(n: number): string {
@@ -42,11 +32,38 @@ interface StatTileProps {
 }
 
 const StatTile = ({ label, value, hint }: StatTileProps) => (
-  <div className="rounded-2xl border border-line p-4 bg-linear-to-br from-surface to-surface-subtle">
-    <div className="text-xs font-medium text-content-muted">{label}</div>
-    <div className="mt-1 text-2xl font-semibold text-content tabular-nums">{value}</div>
-    {hint && <div className="mt-0.5 text-xs text-content-faint">{hint}</div>}
+  <div className="rounded-lg bg-surface-muted px-3 py-2.5">
+    <div className="text-xs text-content-muted">{label}</div>
+    <div className="mt-0.5 text-xl font-semibold tabular-nums text-content">{value}</div>
+    {hint && <div className="mt-0.5 truncate text-xs text-content-faint">{hint}</div>}
   </div>
+);
+
+interface ToggleRowProps {
+  id: string;
+  label: string;
+  description: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (next: boolean) => void;
+}
+
+/** One labelled switch row; the label is wired to the switch through `htmlFor`. */
+const ToggleRow = ({ id, label, description, checked, disabled, onChange }: ToggleRowProps) => (
+  <Field
+    htmlFor={id}
+    label={label}
+    description={description}
+    control={
+      <Switch
+        id={id}
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onChange}
+        aria-label={label}
+      />
+    }
+  />
 );
 
 interface TokenUsagePanelProps {
@@ -147,16 +164,34 @@ const TokenUsagePanel = ({ embedded = false }: TokenUsagePanelProps = {}) => {
   const total = savings?.total;
 
   const body = (
-    <>
+    <div className="space-y-4">
       {/* ── Savings statistics ─────────────────────────────────────────── */}
-      <SettingsSection
+      <Card
         title={t('settings.tokenUsage.savingsTitle')}
         description={
           savings
             ? t('settings.tokenUsage.attributedTo').replace('{model}', savings.attributionModel)
             : undefined
+        }
+        headerRight={
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              leadingIcon={<RefreshCw className="h-3.5 w-3.5" aria-hidden />}
+              onClick={() => void loadSavings()}>
+              {t('settings.tokenUsage.refresh')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              leadingIcon={<RotateCcw className="h-3.5 w-3.5" aria-hidden />}
+              onClick={() => void onReset()}>
+              {t('settings.tokenUsage.reset')}
+            </Button>
+          </div>
         }>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 px-1">
+        <div className="grid grid-cols-2 gap-2 p-4 lg:grid-cols-4">
           <StatTile
             label={t('settings.tokenUsage.tokensSaved')}
             value={total ? formatInt(total.tokensSaved) : '—'}
@@ -168,7 +203,7 @@ const TokenUsagePanel = ({ embedded = false }: TokenUsagePanelProps = {}) => {
           />
           <StatTile
             label={t('settings.tokenUsage.costSaved')}
-            value={total ? formatUsd(total.costSavedUsd) : '—'}
+            value={total ? formatCurrency(total.costSavedUsd, 'USD') : '—'}
           />
           <StatTile
             label={t('settings.tokenUsage.cacheOccupancy')}
@@ -182,168 +217,113 @@ const TokenUsagePanel = ({ embedded = false }: TokenUsagePanelProps = {}) => {
         </div>
 
         {savings && Object.keys(savings.byCompressor).length > 0 && (
-          <div className="px-1 mt-3">
-            <div className="text-xs font-medium text-content-muted mb-1.5">
+          <div className="px-4 py-3">
+            <div className="mb-1 text-xs font-medium text-content-muted">
               {t('settings.tokenUsage.byCompressor')}
             </div>
-            <div className="rounded-xl border border-line divide-y divide-line-subtle">
+            <div className="divide-y divide-line-subtle">
               {Object.entries(savings.byCompressor)
                 .sort((a, b) => b[1].tokensSaved - a[1].tokensSaved)
                 .map(([name, b]) => (
-                  <div key={name} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <div key={name} className="flex items-center justify-between py-1.5 text-sm">
                     <span className="font-mono text-content-secondary">{name}</span>
                     <span className="tabular-nums text-content-muted">
-                      {formatInt(b.tokensSaved)} tok · {formatUsd(b.costSavedUsd)}
+                      {t('settings.tokenUsage.tokensAndCost', '{tokens} tok · {cost}')
+                        .replace('{tokens}', formatInt(b.tokensSaved))
+                        .replace('{cost}', formatCurrency(b.costSavedUsd, 'USD'))}
                     </span>
                   </div>
                 ))}
             </div>
           </div>
         )}
-
-        <div className="px-1 mt-3 flex items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={() => void loadSavings()}>
-            {t('settings.tokenUsage.refresh')}
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => void onReset()}>
-            {t('settings.tokenUsage.reset')}
-          </Button>
-        </div>
-      </SettingsSection>
+      </Card>
 
       {/* ── Compression toggles ────────────────────────────────────────── */}
-      <SettingsSection
+      <Card
         title={t('settings.tokenUsage.compressionTitle')}
         description={t('settings.tokenUsage.compressionDesc')}>
-        <div className="rounded-xl border border-line divide-y divide-line-subtle">
-          <SettingsRow
-            label={t('settings.tokenUsage.routerEnabled')}
-            description={t('settings.tokenUsage.routerEnabledDesc')}
-            control={
-              <SettingsSwitch
-                id="tj-router-enabled"
-                checked={settings?.router_enabled ?? false}
-                disabled={settings === null}
-                onCheckedChange={v => void patch({ router_enabled: v })}
-                aria-label={t('settings.tokenUsage.routerEnabled')}
-              />
-            }
-          />
-          <SettingsRow
-            label={t('settings.tokenUsage.search')}
-            description={t('settings.tokenUsage.searchDesc')}
-            control={
-              <SettingsSwitch
-                id="tj-search-enabled"
-                checked={settings?.search_enabled ?? false}
-                disabled={settings === null}
-                onCheckedChange={v => void patch({ search_enabled: v })}
-                aria-label={t('settings.tokenUsage.search')}
-              />
-            }
-          />
-          <SettingsRow
-            label={t('settings.tokenUsage.code')}
-            description={t('settings.tokenUsage.codeDesc')}
-            control={
-              <SettingsSwitch
-                id="tj-code-enabled"
-                checked={settings?.code_enabled ?? false}
-                disabled={settings === null}
-                onCheckedChange={v => void patch({ code_enabled: v })}
-                aria-label={t('settings.tokenUsage.code')}
-              />
-            }
-          />
-          <SettingsRow
-            label={t('settings.tokenUsage.html')}
-            description={t('settings.tokenUsage.htmlDesc')}
-            control={
-              <SettingsSwitch
-                id="tj-html-enabled"
-                checked={settings?.html_enabled ?? false}
-                disabled={settings === null}
-                onCheckedChange={v => void patch({ html_enabled: v })}
-                aria-label={t('settings.tokenUsage.html')}
-              />
-            }
-          />
-          <SettingsRow
-            label={t('settings.tokenUsage.ml')}
-            description={t('settings.tokenUsage.mlDesc')}
-            control={
-              <SettingsSwitch
-                id="tj-ml-enabled"
-                checked={settings?.ml_compression_enabled ?? false}
-                disabled={settings === null}
-                onCheckedChange={v => void patch({ ml_compression_enabled: v })}
-                aria-label={t('settings.tokenUsage.ml')}
-              />
-            }
-          />
-        </div>
-      </SettingsSection>
+        <ToggleRow
+          id="tj-router-enabled"
+          label={t('settings.tokenUsage.routerEnabled')}
+          description={t('settings.tokenUsage.routerEnabledDesc')}
+          checked={settings?.router_enabled ?? false}
+          disabled={settings === null}
+          onChange={v => void patch({ router_enabled: v })}
+        />
+        <ToggleRow
+          id="tj-search-enabled"
+          label={t('settings.tokenUsage.search')}
+          description={t('settings.tokenUsage.searchDesc')}
+          checked={settings?.search_enabled ?? false}
+          disabled={settings === null}
+          onChange={v => void patch({ search_enabled: v })}
+        />
+        <ToggleRow
+          id="tj-code-enabled"
+          label={t('settings.tokenUsage.code')}
+          description={t('settings.tokenUsage.codeDesc')}
+          checked={settings?.code_enabled ?? false}
+          disabled={settings === null}
+          onChange={v => void patch({ code_enabled: v })}
+        />
+        <ToggleRow
+          id="tj-html-enabled"
+          label={t('settings.tokenUsage.html')}
+          description={t('settings.tokenUsage.htmlDesc')}
+          checked={settings?.html_enabled ?? false}
+          disabled={settings === null}
+          onChange={v => void patch({ html_enabled: v })}
+        />
+      </Card>
 
       {/* ── CCR cache ──────────────────────────────────────────────────── */}
-      <SettingsSection
+      <Card
         title={t('settings.tokenUsage.ccrTitle')}
         description={t('settings.tokenUsage.ccrDesc')}>
-        <div className="rounded-xl border border-line divide-y divide-line-subtle">
-          <SettingsRow
-            label={t('settings.tokenUsage.ccrEnabled')}
-            description={t('settings.tokenUsage.ccrEnabledDesc')}
-            control={
-              <SettingsSwitch
-                id="tj-ccr-enabled"
-                checked={settings?.ccr_enabled ?? false}
-                disabled={settings === null}
-                onCheckedChange={v => void patch({ ccr_enabled: v })}
-                aria-label={t('settings.tokenUsage.ccrEnabled')}
-              />
-            }
-          />
-          <SettingsRow
-            stacked
-            label={t('settings.tokenUsage.ccrMinTokens')}
-            description={t('settings.tokenUsage.ccrMinTokensDesc')}
-            control={
-              <SettingsNumberField
-                id="tj-ccr-min-tokens"
-                value={minTokensInput}
-                onChange={setMinTokensInput}
-                onCommit={commitMinTokens}
-                min={0}
-                max={1000000}
-                unit={t('settings.tokenUsage.tokensUnit')}
-                disabled={settings === null}
-                aria-label={t('settings.tokenUsage.ccrMinTokens')}
-              />
-            }
-          />
-          <SettingsRow
-            label={t('settings.tokenUsage.ccrDisk')}
-            description={t('settings.tokenUsage.ccrDiskDesc')}
-            control={
-              <SettingsSwitch
-                id="tj-ccr-disk"
-                checked={settings?.ccr_disk_enabled ?? false}
-                disabled={settings === null}
-                onCheckedChange={v => void patch({ ccr_disk_enabled: v })}
-                aria-label={t('settings.tokenUsage.ccrDisk')}
-              />
-            }
-          />
-        </div>
-        <div className="px-1 mt-2">
-          <SettingsStatusLine
-            saving={saving}
-            savedNote={savedNote}
-            error={error}
-            savingLabel={t('settings.tokenUsage.saving')}
-          />
-        </div>
-      </SettingsSection>
-    </>
+        <ToggleRow
+          id="tj-ccr-enabled"
+          label={t('settings.tokenUsage.ccrEnabled')}
+          description={t('settings.tokenUsage.ccrEnabledDesc')}
+          checked={settings?.ccr_enabled ?? false}
+          disabled={settings === null}
+          onChange={v => void patch({ ccr_enabled: v })}
+        />
+        <Field
+          htmlFor="tj-ccr-min-tokens"
+          label={t('settings.tokenUsage.ccrMinTokens')}
+          description={t('settings.tokenUsage.ccrMinTokensDesc')}
+          control={
+            <NumberField
+              id="tj-ccr-min-tokens"
+              value={minTokensInput}
+              onChange={setMinTokensInput}
+              onCommit={commitMinTokens}
+              min={0}
+              max={1000000}
+              unit={t('settings.tokenUsage.tokensUnit')}
+              disabled={settings === null}
+              aria-label={t('settings.tokenUsage.ccrMinTokens')}
+            />
+          }
+        />
+        <ToggleRow
+          id="tj-ccr-disk"
+          label={t('settings.tokenUsage.ccrDisk')}
+          description={t('settings.tokenUsage.ccrDiskDesc')}
+          checked={settings?.ccr_disk_enabled ?? false}
+          disabled={settings === null}
+          onChange={v => void patch({ ccr_disk_enabled: v })}
+        />
+      </Card>
+
+      <StatusLine
+        saving={saving}
+        savedNote={savedNote}
+        error={error}
+        savingLabel={t('settings.tokenUsage.saving')}
+      />
+    </div>
   );
 
   if (embedded) return body;

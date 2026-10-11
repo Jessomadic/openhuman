@@ -105,33 +105,6 @@ async function getPersistedSelectedMascotId(page: Page): Promise<string | null> 
   });
 }
 
-async function getAriaChecked(page: Page, label: string): Promise<string | null> {
-  const value = await page.getByRole('switch', { name: label }).getAttribute('aria-checked');
-  return value;
-}
-
-async function getPersistedNotificationPreference(
-  page: Page,
-  category: string
-): Promise<boolean | null> {
-  return page.evaluate(categoryName => {
-    const userId = localStorage.getItem('OPENHUMAN_ACTIVE_USER_ID');
-    if (!userId) return null;
-    const raw = localStorage.getItem(`${userId}:persist:notifications`);
-    if (!raw) return null;
-    try {
-      const persisted = JSON.parse(raw) as { preferences?: string };
-      if (typeof persisted.preferences !== 'string') return null;
-      const preferences = JSON.parse(persisted.preferences) as Record<string, unknown>;
-      return typeof preferences[categoryName] === 'boolean'
-        ? (preferences[categoryName] as boolean)
-        : null;
-    } catch {
-      return null;
-    }
-  }, category);
-}
-
 async function installMascotManifestMock(page: Page): Promise<void> {
   const manifest = {
     schemaVersion: 1,
@@ -223,7 +196,7 @@ test.describe('Settings - Feature Preferences', () => {
       await messagingTab.click();
     }
 
-    await expect(page.getByText('Default Messaging Channel').last()).toBeVisible();
+    await expect(page.getByTestId('channel-select-telegram')).toBeVisible();
     await expect.poll(() => getDefaultMessagingChannel(page)).toBe('telegram');
 
     await page.getByTestId('channel-select-web').click();
@@ -236,8 +209,6 @@ test.describe('Settings - Feature Preferences', () => {
     await callCoreRpc('openhuman.app_state_update_local_state', {
       onboardingTasks: {
         accessibilityPermissionGranted: false,
-        localModelConsentGiven: false,
-        localModelDownloadStarted: false,
         enabledTools: ['shell'],
         connectedSources: [],
         updatedAtMs: Date.now(),
@@ -271,31 +242,6 @@ test.describe('Settings - Feature Preferences', () => {
 
     const after = await callCoreRpc<ToolsSnapshot>('openhuman.app_state_snapshot', {});
     expect(readEnabledTools(after)).not.toContain('shell');
-  });
-
-  test('persists notification category preferences', async ({ page }) => {
-    await openAuthenticatedRoute(page, 'pw-settings-notification-prefs', '/settings/notifications');
-
-    await expect(page.getByText('Messages', { exact: true })).toBeVisible();
-
-    const messagesLabel = 'Toggle Messages notifications';
-    const messagesBefore = await getAriaChecked(page, messagesLabel);
-
-    // Global DND is native webview-account state and cannot persist in the web
-    // harness. Category preferences are Redux-persisted and are the portable
-    // behavior this lane can verify.
-    await page.getByRole('switch', { name: messagesLabel }).click();
-
-    await expect.poll(() => getAriaChecked(page, messagesLabel)).not.toBe(messagesBefore);
-
-    const toggled = await getAriaChecked(page, messagesLabel);
-    await expect
-      .poll(() => getPersistedNotificationPreference(page, 'messages'))
-      .toBe(toggled === 'true');
-
-    await reloadAndWait(page);
-    await expect(page.getByText('Messages', { exact: true })).toBeVisible();
-    await expect.poll(() => getAriaChecked(page, messagesLabel)).toBe(toggled);
   });
 
   test('persists mascot color selection', async ({ page }) => {

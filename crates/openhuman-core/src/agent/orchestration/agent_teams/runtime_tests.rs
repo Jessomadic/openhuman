@@ -18,7 +18,6 @@ use crate::agent::harness::definition::AgentDefinitionRegistry;
 use crate::agent::harness::fork_context::{with_parent_context, ParentExecutionContext};
 use crate::agent::prompts::ToolCallFormat;
 use crate::config::{AgentConfig, Config};
-use crate::memory::{Memory, MemoryCategory, MemoryEntry, NamespaceSummary, RecallOpts};
 use tinyagents_orchestration::teams::{SessionTeamLedger, TeamService};
 use tinyagents_session::run_ledger::{
     self, AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTaskStatus,
@@ -28,57 +27,6 @@ use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 use tinytools::Tool;
 
 // ── Mocks (mirror workflow_runs::engine_tests) ──────────────────────────────
-
-#[derive(Default)]
-struct NoopMemory;
-
-#[async_trait]
-impl Memory for NoopMemory {
-    async fn store(
-        &self,
-        _ns: &str,
-        _key: &str,
-        _content: &str,
-        _cat: MemoryCategory,
-        _sid: Option<&str>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn recall(
-        &self,
-        _q: &str,
-        _l: usize,
-        _o: RecallOpts<'_>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        Ok(Vec::new())
-    }
-    async fn get(&self, _ns: &str, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
-        Ok(None)
-    }
-    async fn list(
-        &self,
-        _ns: Option<&str>,
-        _cat: Option<&MemoryCategory>,
-        _sid: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        Ok(Vec::new())
-    }
-    async fn forget(&self, _ns: &str, _key: &str) -> anyhow::Result<bool> {
-        Ok(false)
-    }
-    async fn namespace_summaries(&self) -> anyhow::Result<Vec<NamespaceSummary>> {
-        Ok(Vec::new())
-    }
-    async fn count(&self) -> anyhow::Result<usize> {
-        Ok(0)
-    }
-    async fn health_check(&self) -> bool {
-        true
-    }
-    fn name(&self) -> &str {
-        "noop"
-    }
-}
 
 fn text_response(text: impl Into<String>) -> ModelResponse {
     ModelResponse::assistant(text)
@@ -121,7 +69,6 @@ fn mock_parent(model: Arc<dyn ChatModel<()>>) -> ParentExecutionContext {
         model_name: "test-model".to_string(),
         temperature: 0.0,
         workspace_dir: std::env::temp_dir(),
-        memory: Arc::new(NoopMemory),
         agent_config: AgentConfig::default(),
         workflows: Arc::new(Vec::new()),
         memory_context: Arc::new(None),
@@ -220,7 +167,7 @@ async fn drive_member_completes_task_with_worker_output_as_evidence() {
     AgentDefinitionRegistry::init_global_builtins().unwrap();
     let (_dir, config) = test_config();
     seed_team(&config, "team-1");
-    seed_member(&config, "team-1", "m1", Some("code_executor"));
+    seed_member(&config, "team-1", "m1", Some("task_manager_agent"));
     seed_task(
         &config,
         "team-1",
@@ -254,7 +201,7 @@ async fn drive_member_completes_task_with_worker_output_as_evidence() {
             &config,
             "team-1",
             "m1",
-            "code_executor",
+            "task_manager_agent",
             &task,
             "teamrun-x",
             Some("test-model".into()),
@@ -289,7 +236,7 @@ async fn run_member_loop_drives_member_under_ambient_parent() {
     AgentDefinitionRegistry::init_global_builtins().unwrap();
     let (_dir, config) = test_config();
     seed_team(&config, "team-1");
-    seed_member(&config, "team-1", "m1", Some("code_executor"));
+    seed_member(&config, "team-1", "m1", Some("task_manager_agent"));
     seed_task(
         &config,
         "team-1",
@@ -322,7 +269,7 @@ async fn run_member_loop_drives_member_under_ambient_parent() {
             &config,
             "team-1",
             "m1",
-            "code_executor",
+            "task_manager_agent",
             task,
             "teamrun-y",
             Some("test-model".into()),
@@ -346,7 +293,7 @@ async fn drive_member_releases_task_when_worker_fails() {
     AgentDefinitionRegistry::init_global_builtins().unwrap();
     let (_dir, config) = test_config();
     seed_team(&config, "team-1");
-    seed_member(&config, "team-1", "m1", Some("code_executor"));
+    seed_member(&config, "team-1", "m1", Some("task_manager_agent"));
     seed_task(
         &config,
         "team-1",
@@ -379,7 +326,7 @@ async fn drive_member_releases_task_when_worker_fails() {
             &config,
             "team-1",
             "m1",
-            "code_executor",
+            "task_manager_agent",
             &task,
             "teamrun-x",
             Some("test-model".into()),
@@ -408,7 +355,7 @@ async fn drive_member_releases_task_when_worker_fails() {
 async fn start_member_run_blocks_on_unmet_dependency() {
     let (_dir, config) = test_config();
     seed_team(&config, "team-1");
-    seed_member(&config, "team-1", "m1", Some("code_executor"));
+    seed_member(&config, "team-1", "m1", Some("task_manager_agent"));
     seed_task(
         &config,
         "team-1",
@@ -440,8 +387,8 @@ async fn start_member_run_blocks_on_unmet_dependency() {
 async fn start_member_run_reports_already_claimed() {
     let (_dir, config) = test_config();
     seed_team(&config, "team-1");
-    seed_member(&config, "team-1", "m1", Some("code_executor"));
-    seed_member(&config, "team-1", "m2", Some("code_executor"));
+    seed_member(&config, "team-1", "m1", Some("task_manager_agent"));
+    seed_member(&config, "team-1", "m2", Some("task_manager_agent"));
     seed_task(
         &config,
         "team-1",
@@ -464,7 +411,7 @@ async fn start_member_run_reports_already_claimed() {
 async fn start_member_run_no_claimable_and_unknown_task() {
     let (_dir, config) = test_config();
     seed_team(&config, "team-1");
-    seed_member(&config, "team-1", "m1", Some("code_executor"));
+    seed_member(&config, "team-1", "m1", Some("task_manager_agent"));
     // No tasks at all → nothing claimable.
     let none = start_member_run(&config, "team-1", "m1", None, None)
         .await

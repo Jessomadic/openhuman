@@ -10,7 +10,6 @@ use std::path::PathBuf;
 fn dump(text: &str, specs: Vec<serde_json::Value>) -> DumpedPrompt {
     DumpedPrompt {
         agent_id: "test_agent".to_string(),
-        toolkit: None,
         mode: "session",
         model: "test-model".to_string(),
         workspace_dir: PathBuf::from("/tmp/ws"),

@@ -22,16 +22,35 @@
 //! Follows the same `with_connection` shape as `notifications/store.rs`
 //! and `cron/store.rs`: synchronous `rusqlite::Connection` opened per
 //! call, schema applied idempotently.
+//!
+//! When the host configured a storage backend ([`crate::storage`]), every
+//! function here uses `store_documents` instead: the same operations on the
+//! `tinystoragedrivers` document port, under the current call's storage
+//! scope (the acting agent; `local` on a single-user host; refused in SaaS
+//! mode without one). With no backend — the desktop default — nothing
+//! changes and `approval/approval.db` is used as before.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, types::Type, Connection};
 
+use super::store_documents::Docs;
 use crate::config::Config;
-use crate::memory::safety::sanitize_text;
+use crate::core::bus::BUS;
+use crate::core::events::DomainEvent;
+use crate::security::scrub::sanitize_text;
 
 use super::types::{
     ApprovalAuditEntry, ApprovalDecision, ApprovalSourceContext, ExecutionOutcome, PendingApproval,
+};
+
+// Flow pre-authorization + per-flow tool trust persistence, split out to keep
+// this file under the repo's per-file line budget — see that module's doc.
+#[path = "store_flow_trust.rs"]
+mod store_flow_trust;
+pub use store_flow_trust::{
+    delete_flow_trust, insert_flow_trust, is_flow_tool_trusted, list_flow_trust,
+    record_flow_preauthorization,
 };
 
 /// SQL schema applied on every `with_connection` call.
@@ -113,13 +132,35 @@ fn migrate_columns(conn: &Connection) -> Result<()> {
             "source_context",
             "ALTER TABLE pending_approvals ADD COLUMN source_context TEXT",
         ),
+        (
+            "tool_call_id",
+            "ALTER TABLE pending_approvals ADD COLUMN tool_call_id TEXT",
+        ),
+        (
+            "agent_id",
+            "ALTER TABLE pending_approvals ADD COLUMN agent_id TEXT",
+        ),
     ] {
         if !have.contains(col) {
-            conn.execute(ddl, params![])
-                .with_context(|| format!("[approval::store] add column {col}"))?;
+            // Two cores can open the same workspace during startup (for
+            // example, a reconnecting desktop shell and its replacement).
+            // Both may observe the old schema before either ALTER commits;
+            // SQLite then reports a harmless duplicate-column race here.
+            if let Err(error) = conn.execute(ddl, params![]) {
+                if !error.to_string().contains("duplicate column name") {
+                    return Err(error)
+                        .with_context(|| format!("[approval::store] add column {col}"));
+                }
+            }
             tracing::info!(column = col, "[approval::store] migrated v1 schema");
         }
     }
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_pending_approvals_agent
+             ON pending_approvals(agent_id, decided_at)",
+        params![],
+    )
+    .context("[approval::store] create agent index")?;
     Ok(())
 }
 
@@ -162,10 +203,14 @@ fn migrate_session_id_scrub(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn db_path(config: &Config) -> std::path::PathBuf {
+    config.workspace_dir.join("approval").join("approval.db")
+}
+
 /// Open (and migrate) the approval DB, then call `f` with a live
 /// connection. Mirrors `notifications/store.rs::with_connection`.
 fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-    let db_path = config.workspace_dir.join("approval").join("approval.db");
+    let db_path = db_path(config);
 
     tracing::trace!(
         path = %db_path.display(),
@@ -201,6 +246,9 @@ fn with_connection<T>(config: &Config, f: impl FnOnce(&Connection) -> Result<T>)
 /// internal correlation only and is never re-exposed on
 /// [`PendingApproval`] (see that type's doc-comment).
 pub fn insert_pending(config: &Config, pending: &PendingApproval, session_id: &str) -> Result<()> {
+    if let Some(docs) = super::store_documents::current(config)? {
+        return docs.insert_pending(pending, session_id);
+    }
     with_connection(config, |conn| {
         let args = serde_json::to_string(&pending.args_redacted)
             .context("[approval::store] serialize args_redacted")?;
@@ -215,8 +263,8 @@ pub fn insert_pending(config: &Config, pending: &PendingApproval, session_id: &s
         conn.execute(
             "INSERT INTO pending_approvals
                 (request_id, tool_name, action_summary, args_redacted,
-                 session_id, created_at, expires_at, source_context)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 session_id, created_at, expires_at, source_context, tool_call_id, agent_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 pending.request_id,
                 pending.tool_name,
@@ -226,53 +274,11 @@ pub fn insert_pending(config: &Config, pending: &PendingApproval, session_id: &s
                 created,
                 expires,
                 source_context,
+                pending.tool_call_id,
+                pending.agent_id,
             ],
         )
         .context("[approval::store] insert pending row")?;
-        Ok(())
-    })
-}
-
-/// Record a save-time flow pre-authorization in the durable audit trail as a
-/// born-decided row (`decided_at = created_at`, decision
-/// `approve_always_for_flow`): it never appears in `list_pending` (which
-/// filters `decided_at IS NULL`) but does surface in
-/// `list_recent_decisions`, so Settings → Approval history shows exactly
-/// when and for which tool the user granted blanket trust. The
-/// `source_context` carries an empty `run_id` — no run existed yet — which
-/// also keeps it invisible to `list_pending_for_flow_run`.
-pub fn record_flow_preauthorization(
-    config: &Config,
-    flow_id: &str,
-    tool_name: &str,
-    session_id: &str,
-) -> Result<()> {
-    with_connection(config, |conn| {
-        let now = Utc::now().to_rfc3339();
-        let source_context = serde_json::to_string(&ApprovalSourceContext::Flow {
-            flow_id: flow_id.to_string(),
-            run_id: String::new(),
-            node_id: None,
-        })
-        .context("[approval::store] serialize preauthorization source_context")?;
-        conn.execute(
-            "INSERT INTO pending_approvals
-                (request_id, tool_name, action_summary, args_redacted,
-                 session_id, created_at, expires_at, source_context,
-                 decided_at, decision)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?6, ?8)",
-            params![
-                uuid::Uuid::new_v4().to_string(),
-                tool_name,
-                "Pre-authorized for this flow when it was saved and enabled",
-                "{}",
-                session_id,
-                now,
-                source_context,
-                ApprovalDecision::ApproveAlwaysForFlow.as_str(),
-            ],
-        )
-        .context("[approval::store] insert preauthorization audit row")?;
         Ok(())
     })
 }
@@ -286,20 +292,31 @@ pub fn record_flow_preauthorization(
 /// (`decided_at` + `decision`) without leaving expired rows pending
 /// forever.
 pub fn expire_stale(config: &Config) -> Result<usize> {
-    with_connection(config, |conn| expire_stale_with_now(conn, Utc::now()))
+    if let Some(docs) = super::store_documents::current(config)? {
+        let expired = docs.expire_stale(Utc::now())?;
+        publish_expired(&expired);
+        return Ok(expired.len());
+    }
+    with_connection(config, |conn| {
+        Ok(expire_stale_with_now(conn, Utc::now())?.len())
+    })
 }
 
 /// List all rows that are still awaiting user input, regardless of
 /// which launch queued them. Orphan rows from prior sessions remain
 /// visible until they are explicitly decided or expire.
 pub fn list_pending(config: &Config) -> Result<Vec<PendingApproval>> {
+    if let Some(docs) = super::store_documents::current(config)? {
+        publish_expired(&docs.expire_stale(Utc::now())?);
+        return docs.list_pending();
+    }
     with_connection(config, |conn| {
         expire_stale_with_now(conn, Utc::now())?;
 
         let mut stmt = conn
             .prepare(
                 "SELECT request_id, tool_name, action_summary, args_redacted,
-                        session_id, created_at, expires_at, source_context
+                        session_id, created_at, expires_at, source_context, tool_call_id, agent_id
                  FROM pending_approvals
                  WHERE decided_at IS NULL
                  ORDER BY created_at ASC",
@@ -322,6 +339,9 @@ pub fn list_pending(config: &Config) -> Result<Vec<PendingApproval>> {
 /// where the TTL elapses concurrently with a committed approval
 /// (CodeRabbit review on PR #2367).
 pub fn get_decision(config: &Config, request_id: &str) -> Result<Option<ApprovalDecision>> {
+    if let Some(docs) = super::store_documents::current(config)? {
+        return docs.get_decision(request_id);
+    }
     with_connection(config, |conn| {
         let mut stmt = conn
             .prepare(
@@ -343,6 +363,33 @@ pub fn get_decision(config: &Config, request_id: &str) -> Result<Option<Approval
     })
 }
 
+/// The document store of the current call, for a caller that decides later
+/// from outside this call's task scope (a `Drop`), where the acting agent is
+/// no longer installed. A scope that cannot be resolved is kept as an error,
+/// so the later decision fails instead of switching to the SQLite store.
+pub(super) fn capture_docs(config: &Config) -> Result<Option<Docs>, String> {
+    super::store_documents::current(config).map_err(|error| error.to_string())
+}
+
+/// [`decide`] against a store captured by [`capture_docs`].
+pub(super) fn decide_captured(
+    config: &Config,
+    captured: &Result<Option<Docs>, String>,
+    request_id: &str,
+    decision: ApprovalDecision,
+) -> Result<Option<PendingApproval>> {
+    match captured {
+        Ok(Some(docs)) => {
+            publish_expired(&docs.expire_stale(Utc::now())?);
+            docs.decide(request_id, decision)
+        }
+        Ok(None) => decide(config, request_id, decision),
+        Err(error) => Err(anyhow::anyhow!(
+            "[approval::store] storage scope was unresolved when the request parked: {error}"
+        )),
+    }
+}
+
 /// Mark a pending row as decided and return the now-decided row.
 /// Returns `Ok(None)` if no row matched (already decided, expired, or
 /// unknown id).
@@ -351,6 +398,10 @@ pub fn decide(
     request_id: &str,
     decision: ApprovalDecision,
 ) -> Result<Option<PendingApproval>> {
+    if let Some(docs) = super::store_documents::current(config)? {
+        publish_expired(&docs.expire_stale(Utc::now())?);
+        return docs.decide(request_id, decision);
+    }
     with_connection(config, |conn| {
         expire_stale_with_now(conn, Utc::now())?;
 
@@ -370,7 +421,7 @@ pub fn decide(
         let mut stmt = conn
             .prepare(
                 "SELECT request_id, tool_name, action_summary, args_redacted,
-                        session_id, created_at, expires_at, source_context
+                        session_id, created_at, expires_at, source_context, tool_call_id, agent_id
                  FROM pending_approvals WHERE request_id = ?1",
             )
             .context("[approval::store] prepare select decided")?;
@@ -407,6 +458,9 @@ pub fn record_execution(
     outcome: ExecutionOutcome,
     error: Option<&str>,
 ) -> Result<bool> {
+    if let Some(docs) = super::store_documents::current(config)? {
+        return docs.record_execution(request_id, outcome, error);
+    }
     with_connection(config, |conn| {
         let now = Utc::now().to_rfc3339();
         // Sanitize before truncation so the durable audit row can't
@@ -452,6 +506,9 @@ pub fn record_execution(
 /// List recently decided approval rows for durable audit views.
 pub fn list_recent_decisions(config: &Config, limit: usize) -> Result<Vec<ApprovalAuditEntry>> {
     let limit = limit.clamp(1, 500);
+    if let Some(docs) = super::store_documents::current(config)? {
+        return docs.list_recent_decisions(limit);
+    }
     with_connection(config, |conn| {
         let mut stmt = conn
             .prepare(
@@ -477,6 +534,9 @@ pub fn list_recent_decisions(config: &Config, limit: usize) -> Result<Vec<Approv
 /// Drop all rows owned by `session_id` — called when the gate detects
 /// a session changeover so stale parked rows do not accumulate.
 pub fn purge_session(config: &Config, session_id: &str) -> Result<usize> {
+    if let Some(docs) = super::store_documents::current(config)? {
+        return docs.purge_session(session_id);
+    }
     with_connection(config, |conn| {
         let removed = conn
             .execute(
@@ -512,99 +572,44 @@ pub fn list_pending_for_flow_run(
         .collect())
 }
 
-/// Grant "approve always for this flow" trust to a `(flow_id, tool_name)`
-/// pair — inserted when the user picks `ApproveAlwaysForFlow` on a
-/// flow-origin park. `INSERT OR IGNORE` makes re-granting an already-trusted
-/// pair a harmless no-op rather than a primary-key error.
-pub fn insert_flow_trust(config: &Config, flow_id: &str, tool_name: &str) -> Result<()> {
-    with_connection(config, |conn| {
-        conn.execute(
-            "INSERT OR IGNORE INTO flow_tool_trust (flow_id, tool_name, created_at)
-             VALUES (?1, ?2, ?3)",
-            params![flow_id, tool_name, Utc::now().to_rfc3339()],
-        )
-        .context("[approval::store] insert_flow_trust")?;
-        Ok(())
-    })
-}
-
-/// List every `tool_name` currently holding "approve always for this flow"
-/// trust for `flow_id`, ordered by name for stable output. Used by the
-/// save-time pre-authorization manifest (`flows_approval_manifest`) to diff
-/// "what the graph needs" against "what is already granted".
-pub fn list_flow_trust(config: &Config, flow_id: &str) -> Result<Vec<String>> {
-    with_connection(config, |conn| {
-        let mut stmt = conn
-            .prepare(
-                "SELECT tool_name FROM flow_tool_trust
-                 WHERE flow_id = ?1 ORDER BY tool_name",
-            )
-            .context("[approval::store] list_flow_trust prepare")?;
-        let names = stmt
-            .query_map(params![flow_id], |row| row.get::<_, String>(0))
-            .context("[approval::store] list_flow_trust query")?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .context("[approval::store] list_flow_trust rows")?;
-        Ok(names)
-    })
-}
-
-/// Delete flow trust rows for `flow_id`. With `tool_names: None` every grant
-/// for the flow is removed (flow deletion cleanup); with `Some(names)` only
-/// the named grants are revoked. Returns the number of rows removed. Deleting
-/// a name that was never granted is a no-op, keeping the call idempotent.
-pub fn delete_flow_trust(
-    config: &Config,
-    flow_id: &str,
-    tool_names: Option<&[String]>,
-) -> Result<usize> {
-    with_connection(config, |conn| {
-        let removed = match tool_names {
-            None => conn
-                .execute(
-                    "DELETE FROM flow_tool_trust WHERE flow_id = ?1",
-                    params![flow_id],
-                )
-                .context("[approval::store] delete_flow_trust all")?,
-            Some(names) => {
-                let mut removed = 0usize;
-                for name in names {
-                    removed += conn
-                        .execute(
-                            "DELETE FROM flow_tool_trust
-                             WHERE flow_id = ?1 AND tool_name = ?2",
-                            params![flow_id, name],
-                        )
-                        .context("[approval::store] delete_flow_trust named")?;
-                }
-                removed
-            }
-        };
-        Ok(removed)
-    })
-}
-
-/// Whether `(flow_id, tool_name)` was previously granted "approve always for
-/// this flow" trust. Consulted by [`super::gate::ApprovalGate::intercept_audited`]
-/// before parking a `Workflow`-origin tool call.
-pub fn is_flow_tool_trusted(config: &Config, flow_id: &str, tool_name: &str) -> Result<bool> {
-    with_connection(config, |conn| {
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(
-                     SELECT 1 FROM flow_tool_trust WHERE flow_id = ?1 AND tool_name = ?2
-                 )",
-                params![flow_id, tool_name],
-                |row| row.get(0),
-            )
-            .context("[approval::store] is_flow_tool_trusted")?;
-        Ok(exists)
-    })
-}
-
-fn expire_stale_with_now(conn: &Connection, now: DateTime<Utc>) -> Result<usize> {
+/// Lazily transition every stale (past-`expires_at`, undecided) row into a
+/// terminal `Deny` state and return the rows that were transitioned.
+///
+/// Fetches the about-to-expire rows BEFORE the `UPDATE` (their non-decision
+/// columns are immutable at that point) so the caller can publish a
+/// `DomainEvent::ApprovalDecided { resolution: "expired" }` per row — a sweep
+/// runs with no live `ApprovalGate` in scope (`list_pending`/`decide` are
+/// called through the store, not the gate), so this is the only place that
+/// observes an expiry and must be the one to tell the web channel a parked
+/// card is now stale.
+fn expire_stale_with_now(conn: &Connection, now: DateTime<Utc>) -> Result<Vec<PendingApproval>> {
     let now_rfc3339 = now.to_rfc3339();
     let deny = ApprovalDecision::Deny.as_str();
+
+    let mut about_to_expire: Vec<PendingApproval> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT request_id, tool_name, action_summary, args_redacted,
+                        session_id, created_at, expires_at, source_context, tool_call_id, agent_id
+                 FROM pending_approvals
+                 WHERE decided_at IS NULL
+                   AND expires_at IS NOT NULL
+                   AND strftime('%s', expires_at) <= strftime('%s', ?1)",
+            )
+            .context("[approval::store] prepare expire_stale select")?;
+        let rows = stmt
+            .query_map(params![now_rfc3339], |row| Ok(row_to_pending(row)))
+            .context("[approval::store] query expire_stale select")?;
+        for r in rows {
+            about_to_expire.push(r.context("[approval::store] expire_stale row decode")??);
+        }
+    }
+
+    if about_to_expire.is_empty() {
+        return Ok(about_to_expire);
+    }
+
     let updated = conn
         .execute(
             "UPDATE pending_approvals
@@ -615,7 +620,30 @@ fn expire_stale_with_now(conn: &Connection, now: DateTime<Utc>) -> Result<usize>
             params![now_rfc3339, deny, now_rfc3339],
         )
         .context("[approval::store] expire stale rows")?;
-    Ok(updated)
+    tracing::debug!(
+        rows = updated,
+        "[approval::store] lazily expired stale pending_approvals rows"
+    );
+    publish_expired(&about_to_expire);
+    Ok(about_to_expire)
+}
+
+/// Tells the web channel each expired row's parked card is now stale — a
+/// sweep runs with no live `ApprovalGate` in scope, so the store is the only
+/// place that observes an expiry.
+fn publish_expired(expired: &[PendingApproval]) {
+    for row in expired {
+        BUS.publish(DomainEvent::ApprovalDecided {
+            request_id: row.request_id.clone(),
+            tool_name: row.tool_name.clone(),
+            decision: ApprovalDecision::Deny.as_str().to_string(),
+            thread_id: None,
+            client_id: None,
+            tool_call_id: row.tool_call_id.clone(),
+            resolution: Some("expired".to_string()),
+            agent_id: row.agent_id.clone(),
+        });
+    }
 }
 
 fn row_to_audit_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApprovalAuditEntry> {
@@ -685,6 +713,10 @@ fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingApproval> 
             })
             .ok()
     });
+    // Column 8 (`tool_call_id`) is likewise absent on rows written before
+    // this field existed — tolerate a missing-column read error as `None`.
+    let tool_call_id: Option<String> = row.get(8).unwrap_or(None);
+    let agent_id: Option<String> = row.get(9).unwrap_or(None);
 
     // Note: column index 4 (`session_id`) is read on the SELECT but
     // intentionally not surfaced — see `PendingApproval` doc-comment.
@@ -696,6 +728,8 @@ fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingApproval> 
         created_at: parse_rfc3339(&created_str),
         expires_at: expires_opt.as_deref().map(parse_rfc3339),
         source_context,
+        tool_call_id,
+        agent_id,
     })
 }
 
@@ -704,6 +738,12 @@ fn parse_rfc3339(input: &str) -> DateTime<Utc> {
         .map(|t| t.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now())
 }
+
+#[path = "store_agent.rs"]
+mod agent_rows;
+#[path = "store_import.rs"]
+pub(super) mod import;
+pub use agent_rows::{exists, list_pending_for_agent, pending_agent};
 
 #[cfg(test)]
 #[path = "store_tests.rs"]

@@ -3,8 +3,8 @@ use serde_json::{Map, Value};
 
 use crate::config::rpc as config_rpc;
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 use crate::voice::audio_toolkit::types::{AudioFormat, AudioGenerateRequest, EmailPodcastRequest};
 
 #[derive(Debug, Deserialize)]
@@ -25,14 +25,6 @@ struct GenerateAndEmailParams {
     format: Option<AudioFormat>,
     #[serde(default)]
     attachment_name: Option<String>,
-}
-
-pub fn all_audio_toolkit_controller_schemas() -> Vec<ControllerSchema> {
-    vec![
-        audio_toolkit_schemas("generate_podcast"),
-        audio_toolkit_schemas("email_podcast"),
-        audio_toolkit_schemas("generate_and_email_podcast"),
-    ]
 }
 
 pub fn all_audio_toolkit_registered_controllers() -> Vec<RegisteredController> {
@@ -169,7 +161,7 @@ fn handle_generate_and_email_podcast(params: Map<String, Value>) -> ControllerFu
     })
 }
 
-fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     serde_json::to_value(outcome.value).map_err(|e| format!("serialize error: {e}"))
 }
 

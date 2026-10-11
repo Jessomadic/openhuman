@@ -92,7 +92,7 @@ pub async fn flows_set_enabled(
     config: &Config,
     id: &str,
     enabled: bool,
-) -> Result<RpcOutcome<Flow>, String> {
+) -> Result<Outcome<Flow>, String> {
     let flow = store::set_enabled(config, id, enabled).map_err(|e| e.to_string())?;
 
     if enabled {
@@ -119,7 +119,7 @@ pub async fn flows_set_enabled(
     }
 
     publish_flow_changed(id, "enabled_changed", "system");
-    Ok(RpcOutcome::new(flow, logs))
+    Ok(Outcome::new(flow, logs))
 }
 
 /// Registers the automatic-dispatch side effect for `flow`'s trigger kind, if
@@ -217,7 +217,8 @@ fn unbind_schedule_trigger(config: &Config, flow_id: &str) {
 
 /// Webhook trigger binding is a documented B2 stub (best-effort deviation):
 /// registering a real inbound route requires provisioning a backend tunnel
-/// (`webhooks::ops::create_tunnel`, a network call to the signed-in backend
+/// (`openhuman.webhooks_create_tunnel`, served by `openhuman-tinyhumans`, a
+/// network call to the signed-in backend
 /// account) plus a UI surface to show the resulting URL to the user — both
 /// are B3 territory. Rather than silently doing nothing, this logs a clear,
 /// actionable warning every time a `webhook`-trigger flow is enabled/disabled
@@ -243,6 +244,29 @@ fn log_webhook_trigger_deferred(flow: &Flow, enabled: bool) {
 /// was lost some other way) gets its schedule re-registered on the next
 /// boot without the user having to toggle it off and on.
 pub async fn reconcile_schedule_triggers_on_boot(config: &Config) -> Result<(), String> {
+    // `local`, then every agent that keeps its flows in its own storage scope
+    // (`crate::storage::agents`); each scope's flows get their cron jobs in
+    // that scope, where the scheduler visits them.
+    let mut errors = Vec::new();
+    for (agent, result) in
+        crate::storage::agents::for_each_scope("flows schedule reconcile", || {
+            reconcile_schedule_triggers_in_scope(config)
+        })
+        .await
+    {
+        if let Err(error) = result {
+            errors.push(format!("{}: {error}", agent.as_deref().unwrap_or("local")));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+/// [`reconcile_schedule_triggers_on_boot`] for the current storage scope.
+async fn reconcile_schedule_triggers_in_scope(config: &Config) -> Result<(), String> {
     let (flows, skipped) = store::list_enabled_flows(config).map_err(|e| e.to_string())?;
     if skipped > 0 {
         // R-M4: a corrupt/unmigratable row must not abort boot reconciliation

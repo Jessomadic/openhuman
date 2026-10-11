@@ -30,9 +30,6 @@ export function normalizeAnalyticsPagePath(path: string): string {
   if (/^\/settings\/team\/manage\/[^/]+$/.test(pathname)) {
     return '/settings/team/manage/:teamId';
   }
-  if (/^\/settings\/agents\/edit\/[^/]+$/.test(pathname)) {
-    return '/settings/agents/edit/:id';
-  }
   if (/^\/settings\/profiles\/edit\/[^/]+$/.test(pathname)) {
     return '/settings/profiles/edit/:id';
   }

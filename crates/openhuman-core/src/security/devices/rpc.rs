@@ -14,10 +14,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
-use crate::security::devices::crypto::{
-    base64url_decode, base64url_encode, DeviceKeypair, TunnelCipher,
-};
+use crate::core::Outcome;
+use crate::security::devices::crypto::{base64url_encode, DeviceKeypair, TunnelCipher};
 use crate::security::devices::store;
 use crate::security::devices::tunnel_client;
 use crate::security::devices::types::{
@@ -69,7 +67,7 @@ pub(crate) static ACTIVE_CIPHERS: once_cell::sync::Lazy<
 pub async fn devices_create_pairing(
     _config: &Config,
     label: Option<String>,
-) -> Result<RpcOutcome<CreatePairingResponse>, String> {
+) -> Result<Outcome<CreatePairingResponse>, String> {
     log::info!(
         "[devices/rpc] devices_create_pairing entry label={:?}",
         label
@@ -139,6 +137,9 @@ pub async fn devices_create_pairing(
             core_pubkey: core_pubkey.clone(),
             rpc_url: rpc_url.clone(),
             expires_at: expires_at.clone(),
+            agent: crate::core::runtime::current_tenant()
+                .ok()
+                .and_then(|tenant| tenant.agent),
         },
     );
 
@@ -160,7 +161,7 @@ pub async fn devices_create_pairing(
         reg.channel_id
     );
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         CreatePairingResponse {
             channel_id: reg.channel_id,
             pairing_token: reg.pairing_token,
@@ -177,7 +178,7 @@ pub async fn devices_create_pairing(
 // ---------------------------------------------------------------------------
 
 /// `openhuman.devices_list`
-pub async fn devices_list(config: &Config) -> Result<RpcOutcome<ListDevicesResponse>, String> {
+pub async fn devices_list(config: &Config) -> Result<Outcome<ListDevicesResponse>, String> {
     log::debug!("[devices/rpc] devices_list entry");
     let mut devices = store::list_devices(config)
         .map_err(|e| format!("[devices/rpc] list_devices failed: {e}"))?;
@@ -195,7 +196,7 @@ pub async fn devices_list(config: &Config) -> Result<RpcOutcome<ListDevicesRespo
         "[devices/rpc] devices_list returning {} device(s)",
         devices.len()
     );
-    Ok(RpcOutcome::new(ListDevicesResponse { devices }, vec![]))
+    Ok(Outcome::new(ListDevicesResponse { devices }, vec![]))
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +207,7 @@ pub async fn devices_list(config: &Config) -> Result<RpcOutcome<ListDevicesRespo
 pub async fn devices_revoke(
     config: &Config,
     channel_id: String,
-) -> Result<RpcOutcome<RevokeDeviceResponse>, String> {
+) -> Result<Outcome<RevokeDeviceResponse>, String> {
     log::info!("[devices/rpc] devices_revoke channel_id={}", channel_id);
 
     let revoked = store::revoke_device(config, &channel_id)
@@ -232,7 +233,7 @@ pub async fn devices_revoke(
         revoked
     );
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         RevokeDeviceResponse { success: revoked },
         format!("device {channel_id} revoked"),
     ))
@@ -274,52 +275,6 @@ fn build_secret_store(config: &Config) -> SecretStore {
         .parent()
         .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
     SecretStore::new(&data_dir, true)
-}
-
-/// Reconstruct a `DeviceKeypair` from the encrypted private key store.
-///
-/// Returns `None` when the channel has no persisted key or decryption fails.
-pub(crate) fn load_keypair_from_store(
-    config: &Config,
-    channel_id: &str,
-) -> Option<Arc<DeviceKeypair>> {
-    let enc = PERSISTED_KEYPAIRS
-        .lock()
-        .unwrap()
-        .get(channel_id)
-        .cloned()?;
-    let store = build_secret_store(config);
-    let private_b64 = store
-        .decrypt(&enc)
-        .map_err(|e| {
-            log::warn!(
-                "[devices/rpc] decrypt keypair failed channel_id={}: {e}",
-                channel_id
-            );
-        })
-        .ok()?;
-    let priv_bytes = base64url_decode(&private_b64)
-        .map_err(|e| {
-            log::warn!(
-                "[devices/rpc] base64url decode keypair failed channel_id={}: {e}",
-                channel_id
-            );
-        })
-        .ok()?;
-    if priv_bytes.len() != 32 {
-        log::warn!(
-            "[devices/rpc] loaded private key has wrong length {} channel_id={}",
-            priv_bytes.len(),
-            channel_id
-        );
-        return None;
-    }
-    let arr: [u8; 32] = priv_bytes.try_into().ok()?;
-    log::debug!(
-        "[devices/rpc] keypair restored from encrypted store channel_id={}",
-        channel_id
-    );
-    Some(Arc::new(DeviceKeypair::from_private_bytes(arr)))
 }
 
 // ---------------------------------------------------------------------------

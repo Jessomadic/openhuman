@@ -1,8 +1,8 @@
-//! Schemas for agent behaviour settings: autonomy, privacy, browser, sandbox, activity level, and memory sync.
+//! Schemas for agent behaviour settings: autonomy, privacy, browser, sandbox, and memory sync.
 
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
 
-use super::super::helpers::{json_output, optional_bool, optional_string};
+use super::super::helpers::{json_output, optional_bool, optional_number, optional_string};
 
 pub(super) fn lookup(function: &str) -> Option<ControllerSchema> {
     match function {
@@ -42,8 +42,13 @@ pub(super) fn lookup(function: &str) -> Option<ControllerSchema> {
                 optional_bool("allow_tool_install", "Allow the agent to install OS packages via install_tool (intended for Full mode)."),
                 FieldSchema {
                     name: "max_actions_per_hour",
-                    ty: TypeSchema::Option(Box::new(TypeSchema::U64)),
-                    comment: "Rate limit for side-effecting actions per hour.",
+                    // A non-zero `u32`: 0 is refused by the apply path, and
+                    // u32::MAX is the "unlimited" sentinel the UI saves.
+                    ty: TypeSchema::Option(Box::new(TypeSchema::BoundedU64 {
+                        min: 1,
+                        max: u32::MAX as u64,
+                    })),
+                    comment: "Rate limit for side-effecting actions per hour (1..=4294967295; 4294967295 = unlimited).",
                     required: false,
                 },
                 FieldSchema {
@@ -52,7 +57,7 @@ pub(super) fn lookup(function: &str) -> Option<ControllerSchema> {
                     comment: "Replace the \"Always allow\" allowlist (array of tool names the agent runs without an approval prompt). Empty array clears it.",
                     required: false,
                 },
-                optional_bool("auto_approve_all", "When true, auto-approve all tool calls without prompting. SubconsciousTainted and Unknown origins still denied. Hard security blocks unaffected."),
+                optional_bool("auto_approve_all", "When true, auto-approve all tool calls without prompting. Unknown origins still denied. Hard security blocks unaffected."),
             ],
             outputs: vec![json_output("snapshot", "Updated config snapshot.")],
         }),
@@ -79,17 +84,29 @@ pub(super) fn lookup(function: &str) -> Option<ControllerSchema> {
             inputs: vec![],
             outputs: vec![json_output(
                 "settings",
-                "Agent settings: agent_timeout_secs, effective_timeout_secs, env_override, min_timeout_secs, max_timeout_secs.",
+                "Agent settings: agent_timeout_secs, effective_timeout_secs, env_override, min_timeout_secs, max_timeout_secs, tool_dispatcher, tool_dispatcher_env_override.",
             )],
         }),
 "update_agent_settings" => Some( ControllerSchema {
             namespace: "config",
             function: "update_agent_settings",
-            description: "Update agent execution settings. Currently the action/tool wall-clock timeout (seconds). Applies to the next tool call without a restart; the OPENHUMAN_TOOL_TIMEOUT_SECS env var still overrides it when set.",
+            description: "Update agent execution settings: the action/tool wall-clock timeout (seconds) and the web-chat target agent. Applies to the next tool call without a restart; the OPENHUMAN_TOOL_TIMEOUT_SECS env var still overrides it when set.",
             inputs: vec![FieldSchema {
                 name: "agent_timeout_secs",
                 ty: TypeSchema::Option(Box::new(TypeSchema::U64)),
                 comment: "Wall-clock timeout for a single tool/action execution, in seconds (1–3600). Extend this when large local models are interrupted before finishing.",
+                required: false,
+            },
+            FieldSchema {
+                name: "chat_agent_id",
+                ty: TypeSchema::Option(Box::new(TypeSchema::String)),
+                comment: "Agent definition id the web-chat path routes turns to. Empty string reverts to the orchestrator. A named definition's own max_iterations governs the turn, so this is how a longer-running agent is selected.",
+                required: false,
+            },
+            FieldSchema {
+                name: "tool_dispatcher",
+                ty: TypeSchema::Option(Box::new(TypeSchema::String)),
+                comment: "How tool calls are spoken to the model: auto (default; native when supported, else JSON-in-tag) | native | xml | pformat | python | typescript. Applies to new sessions.",
                 required: false,
             }],
             outputs: vec![json_output("snapshot", "Updated config snapshot.")],
@@ -102,8 +119,34 @@ pub(super) fn lookup(function: &str) -> Option<ControllerSchema> {
                 optional_bool("enabled", "Enable browser integration."),
                 optional_string(
                     "backend",
-                    "Browser backend: agent_browser, playwright, rust_native, computer_use, or auto.",
+                    "Browser backend: tinycomputer (legacy values, including tinybrowser, accepted for migration).",
                 ),
+                optional_bool("headless", "Run Chrome without a visible window."),
+                optional_number("viewport_width", "Chrome viewport width in pixels (320-3840)."),
+                optional_number("viewport_height", "Chrome viewport height in pixels (240-2160)."),
+                optional_string("chrome_path", "Optional Chrome executable path; empty clears."),
+                optional_string("profile_mode", "fresh or persistent."),
+                optional_string("profile_path", "Persistent Chrome profile path; empty clears."),
+                optional_string("download_dir", "Absolute permitted download folder; empty clears."),
+                optional_number("max_task_steps", "Maximum Jev task steps (1-100)."),
+                optional_number("task_timeout_secs", "Browser task timeout in seconds (5-600)."),
+                optional_bool(
+                    "learn_from_tasks",
+                    "Keep the plan and elements a finished browser task used on a site, for the next task there.",
+                ),
+            ],
+            outputs: vec![json_output("snapshot", "Updated config snapshot.")],
+        }),
+"update_computer_settings" => Some( ControllerSchema {
+            namespace: "config",
+            function: "update_computer_settings",
+            description: "Update TinyComputer's decision, planner and rescue models.",
+            inputs: vec![
+                optional_string("decision_model", "Decision model: jev, open_jev, or sage."),
+                optional_bool("sage_fast", "Use Sage's fast mode."),
+                optional_string("planner_model", "Planner model id; empty restores the module default."),
+                optional_string("rescue_model", "Rescue model id for failed steps; empty restores the module default."),
+                optional_number("max_rescues", "Rescues allowed per task (0-5); 0 turns rescue off."),
             ],
             outputs: vec![json_output("snapshot", "Updated config snapshot.")],
         }),
@@ -123,39 +166,6 @@ pub(super) fn lookup(function: &str) -> Option<ControllerSchema> {
                 comment: "Updated runtime flag state.",
                 required: true,
             }],
-        }),
-"get_activity_level_settings" => Some( ControllerSchema {
-            namespace: "config",
-            function: "get_activity_level_settings",
-            description: "Get the agent activity level (0–4) and its derived settings: sync cadence, heartbeat/subconscious toggles, token budget, estimated monthly cost.",
-            inputs: vec![],
-            outputs: vec![json_output("settings", "Activity level settings with cost estimates.")],
-        }),
-"update_activity_level_settings" => Some( ControllerSchema {
-            namespace: "config",
-            function: "update_activity_level_settings",
-            description: "Set the agent activity level. Immediately updates the scheduler gate mode and persists the change.",
-            inputs: vec![optional_string("level", "Activity level: off | minimal | moderate | active | always_on (or 0–4).")],
-            outputs: vec![json_output("settings", "Updated activity level settings with cost estimates.")],
-        }),
-"get_memory_sync_settings" => Some( ControllerSchema {
-            namespace: "config",
-            function: "get_memory_sync_settings",
-            description: "Get the global memory-sync cadence applied to all opted-in sources: stored value, resolved selected cadence, manual/default flags, the 24h default, and the preset options (4h/12h/24h).",
-            inputs: vec![],
-            outputs: vec![json_output("settings", "Memory sync schedule settings.")],
-        }),
-"update_memory_sync_settings" => Some( ControllerSchema {
-            namespace: "config",
-            function: "update_memory_sync_settings",
-            description: "Set the global memory-sync cadence. Omit/null resets to the default; 0 means Manual only (auto-sync disabled); a positive value is seconds between syncs. Takes effect on the next scheduler tick.",
-            inputs: vec![FieldSchema {
-                name: "sync_interval_secs",
-                ty: TypeSchema::Option(Box::new(TypeSchema::U64)),
-                comment: "Seconds between auto-syncs. null = default (24h); 0 = Manual only; n>0 = sync every n seconds.",
-                required: false,
-            }],
-            outputs: vec![json_output("settings", "Updated memory sync schedule settings.")],
         }),
 "get_sandbox_settings" => Some( ControllerSchema {
             namespace: "config",

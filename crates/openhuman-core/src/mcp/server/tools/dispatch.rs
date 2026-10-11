@@ -9,21 +9,27 @@ use crate::security::{SecurityPolicy, ToolOperation};
 
 use super::super::write_dispatch;
 use super::params::{build_rpc_params, validate_controller_params};
-use super::specs::{
-    base_tool_specs, list_tools_result_for_config, list_tools_result_from_specs, tool_specs,
-};
-use super::types::ToolCallError;
+use super::specs::{base_tool_specs, tool_specs_for_loaded_config};
+use super::types::McpToolSpec;
+use tinymcp::ToolCallError;
 
-pub async fn list_tools_result() -> Value {
+/// The tools `tools/list` advertises and `tools/call` accepts: every tool the
+/// loaded config can serve, or only the config-independent base set when the
+/// config will not load. `method` names the MCP method for the log line.
+async fn available_tool_specs(method: &str) -> Vec<McpToolSpec> {
     match config_rpc::load_config_with_timeout().await {
-        Ok(config) => list_tools_result_for_config(&config),
+        Ok(config) => tool_specs_for_loaded_config(&config),
         Err(err) => {
             log::warn!(
-                "[mcp_server] tools/list config load failed; omitting config-gated tools: {err}"
+                "[mcp_server] {method} config load failed; omitting config-gated tools: {err}"
             );
-            list_tools_result_from_specs(base_tool_specs())
+            base_tool_specs()
         }
     }
+}
+
+pub async fn list_tool_specs() -> Vec<McpToolSpec> {
+    available_tool_specs("tools/list").await
 }
 
 pub async fn call_tool(
@@ -31,13 +37,14 @@ pub async fn call_tool(
     arguments: Value,
     client_info: &str,
 ) -> Result<Value, ToolCallError> {
-    let spec = tool_specs()
+    let specs = available_tool_specs("tools/call").await;
+    let spec = specs
         .into_iter()
         .find(|tool| tool.name == name)
         .ok_or_else(|| ToolCallError::InvalidParams(format!("unknown MCP tool `{name}`")))?;
 
     let audit_arguments = arguments.clone();
-    let mut params = match build_rpc_params(spec.name, arguments) {
+    let params = match build_rpc_params(spec.name, arguments) {
         Ok(params) => params,
         Err(err) => {
             if write_dispatch::is_write_tool(spec.name) {
@@ -68,7 +75,7 @@ pub async fn call_tool(
             enforce_act_policy(spec.name).await?;
             return run_subagent_tool(&params).await;
         }
-        "memory.store" | "memory.note" | "tree.tag" => {
+        "memory.learn" | "memory.forget" => {
             let config = write_dispatch::load_write_config(spec.name).await?;
             if let Err(err) = write_dispatch::enforce_write_policy_for_config(spec.name, &config) {
                 write_dispatch::audit_write_rejection(
@@ -81,10 +88,6 @@ pub async fn call_tool(
                 );
                 return Err(err);
             }
-            params.insert(
-                "source_type".to_string(),
-                Value::String(client_info.to_string()),
-            );
             if let Err(err) = validate_controller_params(&spec, &params) {
                 write_dispatch::audit_write_rejection(
                     &config,
@@ -96,8 +99,15 @@ pub async fn call_tool(
                 );
                 return Err(err);
             }
+            let rpc_method = spec.rpc_method.ok_or_else(|| {
+                ToolCallError::Internal(format!(
+                    "MCP tool `{}` is missing its RPC mapping",
+                    spec.name
+                ))
+            })?;
             return write_dispatch::dispatch_write_tool(
                 spec.name,
+                rpc_method,
                 &params,
                 &audit_arguments,
                 client_info,
@@ -256,34 +266,9 @@ async fn core_tool_instructions() -> Result<Value, ToolCallError> {
     ))
 }
 
-/// Why `agent.run_subagent` will refuse `agent_id`, or `None` when it will run it.
-///
-/// One source for the refusal and for what `agent.list_subagents` publishes, so
-/// the catalogue cannot advertise a delegate that dispatch turns away. The list
-/// enumerates the whole registry and each entry's `when_to_use` invites the
-/// model to delegate; before this, a brain reached `integrations_agent` through
-/// that invitation and only learned it was unreachable from the error, after
-/// spending the round trip (#5755).
-pub fn mcp_dispatch_block_reason(agent_id: &str) -> Option<&'static str> {
-    (agent_id == "integrations_agent").then_some(
-        "agent.run_subagent does not yet support `integrations_agent`; first-level MCP support is currently limited to standalone agents that do not require toolkit binding",
-    )
-}
-
-/// One bullet of the `agent.list_subagents` summary.
-///
-/// Pure so the "not dispatchable" marker is asserted without standing up a
-/// config and an agent registry.
-pub fn subagent_summary_line(id: &str, when_to_use: &str) -> String {
-    match mcp_dispatch_block_reason(id) {
-        Some(reason) => format!("- **{id}** (not dispatchable over MCP — {reason}): {when_to_use}"),
-        None => format!("- **{id}**: {when_to_use}"),
-    }
-}
-
 async fn list_subagents() -> Result<Value, ToolCallError> {
     let config = load_config_and_init_registry().await?;
-    let registry = AgentDefinitionRegistry::global().ok_or_else(|| {
+    let registry = AgentDefinitionRegistry::current().ok_or_else(|| {
         ToolCallError::Internal("AgentDefinitionRegistry missing after init".to_string())
     })?;
 
@@ -301,10 +286,6 @@ async fn list_subagents() -> Result<Value, ToolCallError> {
                 "tool_scope": def.tools,
                 "subagents": def.subagents,
                 "source": def.source,
-                // Advertised alongside the invitation, not discovered from the
-                // error of acting on it (#5755).
-                "dispatchable_over_mcp": mcp_dispatch_block_reason(&def.id).is_none(),
-                "not_dispatchable_reason": mcp_dispatch_block_reason(&def.id),
             })
         })
         .collect::<Vec<_>>();
@@ -317,7 +298,7 @@ async fn list_subagents() -> Result<Value, ToolCallError> {
             .map(|def| {
                 let id = def.get("id").and_then(Value::as_str).unwrap_or("<unknown>");
                 let when = def.get("when_to_use").and_then(Value::as_str).unwrap_or("");
-                subagent_summary_line(id, when)
+                format!("- **{id}**: {when}")
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -336,14 +317,10 @@ async fn list_subagents() -> Result<Value, ToolCallError> {
 
 async fn run_subagent_tool(params: &Map<String, Value>) -> Result<Value, ToolCallError> {
     use super::super::subagent_depth;
-    use super::params::required_non_empty_string;
+    use tinymcp::server::args::required_non_empty_string;
 
     let agent_id = required_non_empty_string(params, "agent_id")?;
     let prompt = required_non_empty_string(params, "prompt")?;
-    if let Some(reason) = mcp_dispatch_block_reason(&agent_id) {
-        return Err(ToolCallError::InvalidParams(reason.to_string()));
-    }
-
     // Bound nested recursion per delegation chain (CC → run_subagent → CC → …).
     // `current_depth()` is the depth of THIS chain (carried across the loopback
     // MCP hop via the depth header); the subagent we're about to spawn sits one
@@ -378,6 +355,7 @@ async fn run_subagent_tool(params: &Map<String, Value>) -> Result<Value, ToolCal
     // remote-controlled and any external_effect tool the agent tries to
     // run must route through the gate's audit + TTL-deny path.
     let origin = crate::agent::turn_origin::AgentTurnOrigin::ExternalChannel {
+        sender_name: None,
         channel: "mcp_server".to_string(),
         // MCP server callers don't carry a per-user identity at this
         // layer — the calling MCP client is the addressing primitive.
@@ -386,6 +364,7 @@ async fn run_subagent_tool(params: &Map<String, Value>) -> Result<Value, ToolCal
         sender: None,
         reply_target: agent_id.clone(),
         message_id: uuid::Uuid::new_v4().to_string(),
+        history_key: None,
     };
     // Run the subagent one level deeper in the chain, so its own Claude Code
     // turns stamp `child_depth` onto any grandchildren they spawn. The agent

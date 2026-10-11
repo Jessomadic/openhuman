@@ -5,7 +5,7 @@
 //! file. That is the right cost for a *decision* — the notification bridge
 //! pays it for the handful of workspace-bound events a supervisor tick
 //! produces — and the wrong cost for a *stream*. The developer Event Log in
-//! [`crate::core::jsonrpc`] has to stamp every domain event the process
+//! the JSON-RPC server (`openhuman_rpc::server`) has to stamp every domain event the process
 //! publishes, and its `tokio_stream` `filter_map` closure is synchronous, so
 //! it could not await a disk read even if the cost were acceptable.
 //!
@@ -23,7 +23,7 @@
 //!
 //! `None` means "not resolved since the last change", not "no workspace".
 //! Callers that cannot resolve must treat it as unknown rather than as a
-//! mismatch — see the Event Log's handling in `core::jsonrpc`.
+//! mismatch — see the Event Log's handling in `openhuman_rpc::server::http::events`.
 //!
 //! # Why the env-injectable loader does not publish
 //!

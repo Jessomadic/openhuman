@@ -1,4 +1,4 @@
-//! Agent tool: `tokenjuice_retrieve` — fetch the original of a compacted result.
+//! Agent tool: `juice_retrieve` — fetch the original of a compacted result.
 //!
 //! The content router may replace a large tool result with a compacted view and
 //! a `⟦tj:<hash>⟧` marker, stashing the original in the CCR store
@@ -35,9 +35,10 @@ impl Tool for TokenjuiceRetrieveTool {
     }
 
     fn description(&self) -> &str {
-        "Retrieve the full text of a tool result that was compacted to save context. \
-         Pass the token from its `⟦tj:a1b2c3d4⟧` marker; optionally a `range` for a \
-         byte or line slice. Only when you need the dropped detail."
+        "Return the whole original of a compacted or stored tool output, or a `range` \
+         of its lines or bytes. Pass the token its footer names (or the hash in a \
+         `⟦tj:…⟧` marker). To read or search only part of it, use juice_find with \
+         the same value as `handle` when that tool is offered."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -46,7 +47,7 @@ impl Tool for TokenjuiceRetrieveTool {
             "properties": {
                 "token": {
                     "type": "string",
-                    "description": "The hash from a ⟦tj:…⟧ marker."
+                    "description": "The token named in the output's footer (or a ⟦tj:…⟧ marker's hash)."
                 },
                 "range": {
                     "type": "object",
@@ -76,9 +77,10 @@ impl Tool for TokenjuiceRetrieveTool {
             .map(str::trim)
             .filter(|s| !s.is_empty());
         let Some(token) = token else {
-            return Ok(ToolResult::error(
-                "tokenjuice_retrieve: missing required 'token' argument".to_string(),
-            ));
+            return Ok(ToolResult::error(format!(
+                "{}: missing required 'token' argument",
+                super::RETRIEVE_TOOL_NAME
+            )));
         };
 
         // Optional range.
@@ -129,12 +131,13 @@ fn miss_message(token: &str) -> String {
     // parent agent re-delegated forever on an evicted subagent result). Tell the
     // model to proceed with the compacted summary it already has instead.
     format!(
-        "tokenjuice_retrieve: the full original for token '{token}' is no longer cached \
+        "{tool}: the full original for token '{token}' is no longer cached \
          (evicted, or from an earlier session). Do NOT re-run the same tool call to \
          regenerate it — that will produce the same oversized result and be compacted \
          again. Proceed using the compacted summary already shown above; only if a \
          specific missing detail is essential, retry with narrower arguments (a tighter \
-         query, filter, or smaller limit) so the result is small enough to keep in full."
+         query, filter, or smaller limit) so the result is small enough to keep in full.",
+        tool = super::RETRIEVE_TOOL_NAME
     )
 }
 

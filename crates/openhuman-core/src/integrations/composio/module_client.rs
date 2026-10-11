@@ -115,23 +115,6 @@ where
         .map_err(|error| normalize_error(member, error))
 }
 
-/// Call a long-running member with a deadline sized for it (see
-/// `modules::connectors::call_slow` for why `Sync` needs one).
-#[cfg(feature = "modules")]
-pub async fn call_slow<Request, Reply>(
-    config: &crate::config::Config,
-    member: &str,
-    request: Request,
-) -> Result<Reply, String>
-where
-    Request: serde::Serialize + Send,
-    Reply: serde::de::DeserializeOwned,
-{
-    crate::modules::connectors::call_slow(config, member, request)
-        .await
-        .map_err(|error| normalize_error(member, error))
-}
-
 /// Call one member with an argument. Always fails without the `modules` feature.
 ///
 /// # Errors
@@ -139,24 +122,6 @@ where
 /// Always, explaining that this build has no module loader.
 #[cfg(not(feature = "modules"))]
 pub async fn call<Request, Reply>(
-    _config: &crate::config::Config,
-    member: &str,
-    _request: Request,
-) -> Result<Reply, String>
-where
-    Request: serde::Serialize + Send,
-    Reply: serde::de::DeserializeOwned,
-{
-    Err(format!("{member}: {WITHOUT_MODULES}"))
-}
-
-/// Call a long-running member. Always fails without the `modules` feature.
-///
-/// # Errors
-///
-/// Always, explaining that this build has no module loader.
-#[cfg(not(feature = "modules"))]
-pub async fn call_slow<Request, Reply>(
     _config: &crate::config::Config,
     member: &str,
     _request: Request,
@@ -186,6 +151,70 @@ pub async fn reconcile_route_if_loaded(config: &crate::config::Config) -> Result
 #[cfg(not(feature = "modules"))]
 pub async fn reconcile_route_if_loaded(_config: &crate::config::Config) -> Result<(), String> {
     Ok(())
+}
+
+/// Call a member that carries its own credential and leaves the configured
+/// route alone (the stateless direct reads).
+///
+/// # Errors
+///
+/// As [`call`].
+#[cfg(feature = "modules")]
+pub async fn call_stateless<Request, Reply>(
+    config: &crate::config::Config,
+    member: &str,
+    request: Request,
+) -> Result<Reply, String>
+where
+    Request: serde::Serialize + Send,
+    Reply: serde::de::DeserializeOwned,
+{
+    crate::modules::connectors::call_stateless(config, member, request).await
+}
+
+/// Call a stateless member. Always fails without the `modules` feature.
+///
+/// # Errors
+///
+/// Always, explaining that this build has no module loader.
+#[cfg(not(feature = "modules"))]
+pub async fn call_stateless<Request, Reply>(
+    _config: &crate::config::Config,
+    member: &str,
+    _request: Request,
+) -> Result<Reply, String>
+where
+    Request: serde::Serialize + Send,
+    Reply: serde::de::DeserializeOwned,
+{
+    Err(format!("{member}: {WITHOUT_MODULES}"))
+}
+
+/// The message a stateless member's failure carries, with the transport layers
+/// peeled off.
+///
+/// The bus renders a member failure as `<Member>: ai.tinyhumans.tinybus.Error.<Kind>: <message>`.
+/// For the direct reads `<message>` is the text users have always been shown
+/// (`Composio v3 connected_accounts failed: HTTP 401: Invalid API key`), and the
+/// host's invalid-key gate and failure classification key on it, so it must come
+/// back exactly. Anything not shaped like a member failure (the module could
+/// not be loaded or reached) is returned unchanged.
+#[must_use]
+pub fn member_failure_message(member: &str, error: &str) -> String {
+    const WIRE_ERROR_PREFIX: &str = "ai.tinyhumans.tinybus.Error.";
+    let Some(mut message) = error
+        .strip_prefix(member)
+        .and_then(|rest| rest.strip_prefix(": "))
+    else {
+        return error.to_string();
+    };
+    while let Some(tail) = message
+        .strip_prefix(WIRE_ERROR_PREFIX)
+        .and_then(|rest| rest.split_once(": ").map(|(_, tail)| tail))
+    {
+        message = tail;
+    }
+    message.to_string()
 }
 
 /// Call a member that takes no arguments.

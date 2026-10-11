@@ -37,7 +37,7 @@
  */
 
 // Actions
-export { default as Button, buttonVariants, type ButtonProps } from './Button';
+export { default as Button, type ButtonProps } from './Button';
 
 // Form controls
 export { default as Input, type InputProps } from './Input';
@@ -62,31 +62,21 @@ export { default as Field, type FieldProps } from './Field';
 export {
   RadioGroupItem,
   RadioGroupRoot,
-  radioGroupItemVariants,
   type RadioGroupItemProps,
   type RadioGroupRootProps,
 } from './RadioGroup';
-export { default as Toggle, toggleVariants, type ToggleProps } from './Toggle';
+export { default as Toggle, type ToggleProps } from './Toggle';
 export {
   ToggleGroupItem,
   ToggleGroupRoot,
   type ToggleGroupItemProps,
   type ToggleGroupProps,
 } from './ToggleGroup';
-export {
-  default as Slider,
-  sliderThumbVariants,
-  sliderTrackVariants,
-  type SliderProps,
-  type SliderSize,
-} from './Slider';
+export { default as Slider, type SliderProps, type SliderSize } from './Slider';
 export {
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectRoot,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
   type SelectContentProps,
@@ -96,27 +86,28 @@ export {
 
 // Surfaces & content
 export { default as Card, type CardProps } from './Card';
+export { Tile, TileGrid, type TileGridProps, type TileProps } from './TileGrid';
 export {
   Alert,
   AlertDescription,
   AlertTitle,
-  alertVariants,
   type AlertDensity,
   type AlertProps,
   type AlertVariant,
 } from './Alert';
-export { default as Badge, badgeVariants, type BadgeProps, type BadgeVariant } from './Badge';
+export { default as Badge, type BadgeProps, type BadgeVariant } from './Badge';
 export { default as Separator, type SeparatorProps } from './Separator';
 export { default as EmptyState, type EmptyStateProps } from './EmptyState';
 export { default as StatusLine, type StatusLineProps } from './StatusLine';
 export { default as ListRow, type ListRowProps } from './ListRow';
 export { default as Progress, type ProgressProps } from './Progress';
+export { default as Skeleton, type SkeletonProps } from './Skeleton';
+export { default as Stepper, type StepperProps } from './Stepper';
 export { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './Table';
 export {
   default as DataTable,
   type DataTableColumn,
   type DataTableFilter,
-  DataTableFilterMenu,
   type DataTableProps,
   type DataTableSearch,
 } from './DataTable';
@@ -126,10 +117,6 @@ export {
   AccordionItem,
   AccordionRoot,
   AccordionTrigger,
-  accordionContentVariants,
-  accordionItemVariants,
-  accordionTriggerVariants,
-  accordionVariants,
   type AccordionContentProps,
   type AccordionItemProps,
   type AccordionRootProps,
@@ -141,9 +128,6 @@ export {
   CollapsibleContent,
   CollapsibleRoot,
   CollapsibleTrigger,
-  collapsibleContentVariants,
-  collapsibleTriggerVariants,
-  collapsibleVariants,
   type CollapsibleContentProps,
   type CollapsibleRootProps,
   type CollapsibleSize,
@@ -153,13 +137,10 @@ export {
 
 // Overlays
 export {
-  DialogClose,
   DialogContent,
   DialogDescription,
-  DialogOverlay,
   DialogRoot,
   DialogTitle,
-  DialogTrigger,
   type DialogContentProps,
 } from './Dialog';
 export {
@@ -168,7 +149,6 @@ export {
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
-  AlertDialogOverlay,
   AlertDialogRoot,
   AlertDialogTitle,
   AlertDialogTrigger,
@@ -176,31 +156,12 @@ export {
   type AlertDialogContentProps,
   type AlertDialogOverlayProps,
 } from './AlertDialog';
-export {
-  SheetClose,
-  SheetContent,
-  SheetDescription,
-  SheetRoot,
-  SheetTitle,
-  SheetTrigger,
-  sheetVariants,
-  type SheetContentProps,
-} from './Sheet';
-export {
-  PopoverAnchor,
-  PopoverClose,
-  PopoverContent,
-  PopoverRoot,
-  PopoverTrigger,
-  type PopoverContentProps,
-} from './Popover';
+export { SheetContent, SheetRoot, SheetTitle, SheetTrigger, type SheetContentProps } from './Sheet';
+export { PopoverContent, PopoverRoot, PopoverTrigger, type PopoverContentProps } from './Popover';
 export {
   DropdownMenuContent,
-  DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuRoot,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
   type DropdownMenuContentProps,
 } from './DropdownMenu';
@@ -253,7 +214,6 @@ export {
 
 // Feedback & misc
 export { Spinner, CheckIcon, CloseIcon, WarningIcon } from './icons';
-export { CenteredLoadingState, ErrorBanner, InlineLoadingStatus } from './LoadingState';
+export { CenteredLoadingState, ErrorBanner } from './LoadingState';
 export { default as BetaBanner } from './BetaBanner';
-export { default as BetaIndicator } from './BetaIndicator';
 export { default as VisuallyHidden, type VisuallyHiddenProps } from './VisuallyHidden';

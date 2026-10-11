@@ -3,7 +3,7 @@
 use serde_json::json;
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 use crate::security::credentials::session_support::{
     parse_fields_value, profile_name_or_default, summarize_auth_profile,
 };
@@ -16,7 +16,7 @@ pub async fn store_provider_credentials(
     token: Option<String>,
     fields: Option<serde_json::Value>,
     set_active: Option<bool>,
-) -> Result<RpcOutcome<super::super::responses::AuthProfileSummary>, String> {
+) -> Result<Outcome<super::super::responses::AuthProfileSummary>, String> {
     let provider = provider.trim().to_string();
     if provider.is_empty() {
         return Err("provider is required".to_string());
@@ -52,7 +52,7 @@ pub async fn store_provider_credentials(
     // notify again). Credentials are keyed `provider:<slug>`; the auth-error
     // registry is keyed by the bare provider slug used by the chat factory.
     clear_provider_auth_error(&provider);
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         summarize_auth_profile(&stored),
         "provider credentials stored",
     ))
@@ -70,7 +70,7 @@ pub async fn remove_provider_credentials(
     config: &Config,
     provider: &str,
     profile: Option<&str>,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let profile_name = profile_name_or_default(profile);
     let auth = AuthService::from_config(config);
     let removed = auth
@@ -79,7 +79,7 @@ pub async fn remove_provider_credentials(
     // Removing the key clears any recorded BYO auth error for this provider —
     // there is no longer a key to be "rejected", so the stale notice must go.
     clear_provider_auth_error(provider);
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({
             "removed": removed,
             "provider": provider,
@@ -92,7 +92,7 @@ pub async fn remove_provider_credentials(
 pub async fn list_provider_credentials(
     config: &Config,
     provider_filter: Option<String>,
-) -> Result<RpcOutcome<Vec<super::super::responses::AuthProfileSummary>>, String> {
+) -> Result<Outcome<Vec<super::super::responses::AuthProfileSummary>>, String> {
     let auth = AuthService::from_config(config);
     let provider_filter = provider_filter
         .map(|provider| normalize_provider(&provider))
@@ -116,7 +116,7 @@ pub async fn list_provider_credentials(
             .then_with(|| a.profile_name.cmp(&b.profile_name))
     });
 
-    Ok(RpcOutcome::single_log(items, "provider credentials listed"))
+    Ok(Outcome::single_log(items, "provider credentials listed"))
 }
 
 /// List credentials whose provider key starts with `prefix`.

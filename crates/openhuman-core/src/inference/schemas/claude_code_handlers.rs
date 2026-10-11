@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use super::{deserialize_params, to_json};
 use crate::config::rpc as config_rpc;
 use crate::core::all::ControllerFuture;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct InferenceClaudeCodeSetFullAccessParams {
@@ -23,7 +23,7 @@ pub(super) fn handle_inference_claude_code_status(_params: Map<String, Value>) -
         )
         .await
         .map_err(|e| format!("claude_code_status join error: {e}"))?;
-        to_json(RpcOutcome::new(status, vec![]))
+        to_json(Outcome::new(status, vec![]))
     })
 }
 
@@ -36,7 +36,7 @@ pub(super) fn handle_inference_claude_code_auth_status(
         )
         .await
         .map_err(|e| format!("claude_code_auth_status join error: {e}"))?;
-        to_json(RpcOutcome::new(auth, vec![]))
+        to_json(Outcome::new(auth, vec![]))
     })
 }
 
@@ -52,7 +52,7 @@ pub(super) fn handle_inference_claude_code_settings(
             "[rpc][inference.claude_code_settings] full_access={}",
             settings.full_access
         );
-        to_json(RpcOutcome::new(settings, vec![]))
+        to_json(Outcome::new(settings, vec![]))
     })
 }
 
@@ -73,6 +73,6 @@ pub(super) fn handle_inference_claude_code_set_full_access(
             "[rpc][inference.claude_code_set_full_access] persisted full_access={}",
             settings.full_access
         );
-        to_json(RpcOutcome::new(settings, vec![]))
+        to_json(Outcome::new(settings, vec![]))
     })
 }

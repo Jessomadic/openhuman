@@ -28,7 +28,7 @@ pub async fn flows_run(
     input: Value,
     inputs: serde_json::Map<String, Value>,
     trigger: FlowRunTrigger,
-) -> Result<RpcOutcome<Value>, String> {
+) -> Result<Outcome<Value>, String> {
     // Prep synchronously (validate + compile-check + resolve inputs + mint the
     // run id), insert the initial `running` row, and announce it, then hand off
     // to the shared run body. Both the synchronous "Run" RPC path (this fn) and
@@ -89,7 +89,7 @@ pub async fn flows_run_detached(
     input: Value,
     inputs: serde_json::Map<String, Value>,
     trigger: FlowRunTrigger,
-) -> Result<RpcOutcome<Value>, String> {
+) -> Result<Outcome<Value>, String> {
     let prepared = prepare_flow_run(config, flow_id, &inputs)?;
     let thread_id = prepared.thread_id.clone();
     let no_actionable_nodes = prepared.no_actionable_nodes;
@@ -147,7 +147,7 @@ pub async fn flows_run_detached(
         "status": "running",
         "detached": true,
     });
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         result,
         format!("flow run started (detached): {thread_id}"),
     ))

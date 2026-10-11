@@ -9,8 +9,8 @@ use serde_json::{Map, Value};
 
 use crate::config::rpc as config_rpc;
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 
 /// Returns a collection of all available controller schemas for the service domain.
 ///
@@ -272,8 +272,8 @@ fn handle_daemon_host_set(params: Map<String, Value>) -> ControllerFuture {
     })
 }
 
-/// Formats the RpcOutcome as an OpenHuman-standard JSON result.
-fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+/// Formats the Outcome as an OpenHuman-standard JSON result.
+fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     outcome.into_cli_compatible_json()
 }
 

@@ -7,6 +7,8 @@ use super::traits;
 use super::{Channel, ChannelSendExt, SendMessage};
 use crate::inference::provider;
 use std::sync::Arc;
+use tinychannels::remote::RemoteCommandContext;
+use tinychannels::remote::{execute_remote_command, parse_remote_command, RemoteCommand};
 use tinychannels::routes::{
     build_models_help_response, build_providers_help_response,
     parse_runtime_command as parse_portable_runtime_command,
@@ -17,11 +19,7 @@ use tinychannels::routes::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ChannelRuntimeCommand {
     Portable(PortableCommand),
-    TelegramRemote(super::providers::telegram::TelegramRemoteCommand),
-}
-
-fn supports_telegram_remote_control(channel_name: &str) -> bool {
-    channel_name == "telegram"
+    Remote(RemoteCommand),
 }
 
 fn parse_runtime_command(channel_name: &str, content: &str) -> Option<ChannelRuntimeCommand> {
@@ -30,11 +28,9 @@ fn parse_runtime_command(channel_name: &str, content: &str) -> Option<ChannelRun
         return None;
     }
 
-    if supports_telegram_remote_control(channel_name) {
-        if let Some(remote) =
-            super::providers::telegram::remote_control::parse_telegram_remote_command(content)
-        {
-            return Some(ChannelRuntimeCommand::TelegramRemote(remote));
+    if tinychannels::capabilities_for(channel_name).remote_control {
+        if let Some(remote) = parse_remote_command(content) {
+            return Some(ChannelRuntimeCommand::Remote(remote));
         }
     }
 
@@ -129,11 +125,15 @@ pub(crate) async fn handle_runtime_command_if_needed(
     let mut current = get_route_selection(ctx, &sender_key);
 
     let response = match command {
-        ChannelRuntimeCommand::TelegramRemote(remote) => {
-            super::providers::telegram::remote_control::build_remote_command_response(
-                ctx, msg, remote,
-            )
-            .await
+        ChannelRuntimeCommand::Remote(remote) => {
+            let host = super::host::remote_control::RuntimeRemoteControl { ctx };
+            let remote_ctx = RemoteCommandContext {
+                channel: msg.channel.clone(),
+                reply_target: msg.reply_target.clone(),
+                sender_key: sender_key.clone(),
+                workspace_dir: ctx.workspace_dir.to_path_buf(),
+            };
+            execute_remote_command(&host, &remote_ctx, remote).await
         }
         ChannelRuntimeCommand::Portable(PortableCommand::ShowProviders) => {
             build_providers_help_response(&current, &provider_descriptors())

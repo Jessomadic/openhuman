@@ -1,5 +1,4 @@
-//! Shared harness for the W4 e2e targets (`billing_cost_e2e`, `team_referral_e2e`,
-//! `secrets_devices_e2e`).
+//! Shared harness for the W4 e2e targets (`billing_cost_e2e`).
 //!
 //! Included with `#[path]` rather than living in `tests/*.rs`, so cargo does not
 //! auto-discover it as a fourth test binary. Every helper mirrors the equivalent
@@ -19,6 +18,7 @@
 //!    initialised first. `rpc_token()` below asks for whatever is actually
 //!    active. See `~/tinyhuman/bugs/e2e-wave-raw-coverage-shared-rpc-token.md`.
 
+use crate::env_guard::EnvVarGuard;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -38,18 +38,28 @@ pub const SESSION_USER_ID: &str = "w4-user";
 
 static AUTH_INIT: OnceLock<String> = OnceLock::new();
 /// The crate-wide env mutex, not a private one — see the module note above.
-static ENV_LOCK: &OnceLock<Mutex<()>> = &crate::SHARED_ENV_LOCK;
+static ENV_LOCK: &OnceLock<tokio::sync::Mutex<()>> = &crate::SHARED_ENV_LOCK;
 static KEYRING_INIT: OnceLock<()> = OnceLock::new();
 
 /// Serializes every case that touches process-global env (`HOME`,
 /// `OPENHUMAN_WORKSPACE`, the backend-URL overrides) against every other
 /// aggregated suite. Poison is recovered so one panicking case cannot wedge the
 /// binary.
-pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+pub fn env_lock() -> tokio::sync::MutexGuard<'static, ()> {
     let guard = ENV_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .blocking_lock();
+    // Under the lock, so this `set_var` cannot race a concurrent env read.
+    KEYRING_INIT.get_or_init(|| {
+        std::env::set_var("OPENHUMAN_KEYRING_BACKEND", "file");
+    });
+    guard
+}
+
+pub async fn env_lock_async() -> tokio::sync::MutexGuard<'static, ()> {
+    let guard = ENV_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock().await;
     // Under the lock, so this `set_var` cannot race a concurrent env read.
     KEYRING_INIT.get_or_init(|| {
         std::env::set_var("OPENHUMAN_KEYRING_BACKEND", "file");
@@ -67,47 +77,14 @@ pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// fresh token into a per-process directory, so we add no env racer of our own.
 fn rpc_token() -> &'static str {
     AUTH_INIT.get_or_init(|| {
-        let token_dir = std::env::temp_dir().join(format!("openhuman-w4-e2e-{}", std::process::id()));
+        let token_dir =
+            std::env::temp_dir().join(format!("openhuman-w4-e2e-{}", std::process::id()));
         std::fs::create_dir_all(&token_dir).expect("create the rpc token dir");
         init_rpc_token(&token_dir).expect("init the core rpc auth token");
         get_rpc_token()
             .expect("init_rpc_token must leave a token in place")
             .to_string()
     })
-}
-
-pub struct EnvVarGuard {
-    key: &'static str,
-    old: Option<String>,
-}
-
-impl EnvVarGuard {
-    pub fn set_to_path(key: &'static str, path: &Path) -> Self {
-        let old = std::env::var(key).ok();
-        std::env::set_var(key, path.as_os_str());
-        Self { key, old }
-    }
-
-    pub fn set(key: &'static str, value: &str) -> Self {
-        let old = std::env::var(key).ok();
-        std::env::set_var(key, value);
-        Self { key, old }
-    }
-
-    pub fn unset(key: &'static str) -> Self {
-        let old = std::env::var(key).ok();
-        std::env::remove_var(key);
-        Self { key, old }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match &self.old {
-            Some(v) => std::env::set_var(self.key, v),
-            None => std::env::remove_var(self.key),
-        }
-    }
 }
 
 pub async fn serve_on_ephemeral(
@@ -225,8 +202,7 @@ encrypt = false
     // itself, instead of surfacing as "the RPC handler ignored my config".
     let declared: toml::Value =
         toml::from_str(extra_toml).expect("the extra TOML fixture must parse on its own");
-    let merged: toml::Value =
-        toml::from_str(&cfg).expect("the assembled config.toml must parse");
+    let merged: toml::Value = toml::from_str(&cfg).expect("the assembled config.toml must parse");
     if let (Some(declared), Some(merged)) = (declared.as_table(), merged.as_table()) {
         for key in declared.keys() {
             assert!(
@@ -311,7 +287,7 @@ impl Harness {
         }
 
         let (rpc_addr, rpc_join) =
-            serve_on_ephemeral(openhuman_core::core::jsonrpc::build_core_http_router(false)).await;
+            serve_on_ephemeral(openhuman_rpc::server::build_core_http_router(false)).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         Self {
@@ -511,7 +487,11 @@ async fn credits_setup_intent(
     headers: HeaderMap,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     require_session(&headers)?;
-    log.record("POST", "/payments/credits/auto-recharge/cards/setup-intent", None);
+    log.record(
+        "POST",
+        "/payments/credits/auto-recharge/cards/setup-intent",
+        None,
+    );
     Ok(Json(json!({
         "success": true,
         "data": { "clientSecret": "seti_w4_secret", "setupIntentId": "seti_w4" }
@@ -600,7 +580,10 @@ async fn referral_claim(
     log.record("POST", "/referral/claim", Some(&body));
     let code = body.get("code").and_then(Value::as_str).unwrap_or_default();
     if code.is_empty() {
-        return Err(err_json(StatusCode::BAD_REQUEST, "referral code is required"));
+        return Err(err_json(
+            StatusCode::BAD_REQUEST,
+            "referral code is required",
+        ));
     }
     Ok(Json(json!({
         "success": true,
@@ -667,7 +650,9 @@ async fn team_delete(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     require_session(&headers)?;
     log.record("DELETE", &format!("/teams/{team_id}"), None);
-    Ok(Json(json!({ "success": true, "data": { "deleted": team_id } })))
+    Ok(Json(
+        json!({ "success": true, "data": { "deleted": team_id } }),
+    ))
 }
 
 async fn team_switch(
@@ -690,7 +675,9 @@ async fn team_leave(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     require_session(&headers)?;
     log.record("POST", &format!("/teams/{team_id}/leave"), None);
-    Ok(Json(json!({ "success": true, "data": { "left": team_id } })))
+    Ok(Json(
+        json!({ "success": true, "data": { "left": team_id } }),
+    ))
 }
 
 async fn team_join(

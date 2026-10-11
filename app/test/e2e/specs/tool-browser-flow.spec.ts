@@ -24,9 +24,10 @@ const USER_ID = 'e2e-tool-browser';
  * `browser_tests.rs`.
  *
  * What this spec proves end-to-end:
- *  - 7.1.1 — the agent runtime is up and the `tools_agent` definition that
- *    inherits the `browser_open` tool is wired into the live registry served
- *    over JSON-RPC. Plus: the mock backend correctly records arbitrary HTTP
+ *  - 7.1.1 — the agent runtime is up and the `orchestrator` definition is
+ *    wired into the live registry served over JSON-RPC with on-demand tool
+ *    discovery (`tool_search`), the route by which it reaches the browser
+ *    tools now that the `tools_agent` specialist is retired. Plus: the mock backend correctly records arbitrary HTTP
  *    requests (proving the side-channel browser-automation flows would emit
  *    against the mocked services is intact).
  *  - 7.1.2 — the live built-in tool catalog contains `browser` and advertises
@@ -56,6 +57,7 @@ interface ServerStatus {
 interface AgentDef {
   id?: string;
   tools?: unknown;
+  direct_tool_names?: string[];
 }
 
 interface ListDefinitionsResult {
@@ -94,10 +96,10 @@ describe('System tools — Browser (open URL + automation registry)', () => {
     await stopMockServer();
   });
 
-  it('7.1.1 sidecar runtime is reachable and `tools_agent` (browser-bearing) is registered', async () => {
-    // The registry path that resolves `browser_open` lives behind
-    // `agent_list_definitions`; failure to find tools_agent means the
-    // browser-tool surface is unreachable from JSON-RPC.
+  it('7.1.1 sidecar runtime is reachable and the orchestrator can discover tools', async () => {
+    // The registry path that resolves the orchestrator's belt lives behind
+    // `agent_list_definitions`; failure to find it means the browser-tool
+    // surface is unreachable from JSON-RPC.
     const status = await callOpenhumanRpc<ServerStatus>('openhuman.agent_server_status', {});
     stepLog('agent_server_status response', status);
     expect(status.ok).toBe(true);
@@ -114,12 +116,12 @@ describe('System tools — Browser (open URL + automation registry)', () => {
     });
     expect(list.ok).toBe(true);
     const defs = list.result?.definitions ?? [];
-    const toolsAgent = defs.find(d => d?.id === 'tools_agent');
-    expect(toolsAgent).toBeDefined();
-    // Wildcard tool scope serialises as an object — same assertion as the
-    // shell-git spec, locked here too because browser_open is part of the
-    // same wildcard surface.
-    expect(toolsAgent?.tools).toBeDefined();
+    const orchestrator = defs.find(d => d?.id === 'orchestrator');
+    expect(orchestrator).toBeDefined();
+    // Browser tools are off the orchestrator's up-front belt and reached
+    // through on-demand discovery; the catalog itself is pinned by 7.1.2.
+    expect(orchestrator?.direct_tool_names ?? []).toContain('tool_search');
+    expect(defs.find(d => d?.id === 'tools_agent')).toBeUndefined();
   });
 
   it('7.1.1b mock backend captures HTTP traffic shape (browser-automation side-channel intact)', async () => {
@@ -169,7 +171,7 @@ describe('System tools — Browser (open URL + automation registry)', () => {
     const browserTool = tools.find(tool => tool?.name === 'browser');
     stepLog('live browser tool metadata', browserTool);
     expect(browserTool).toBeDefined();
-    expect(browserTool?.description).toContain("'snapshot'");
+    expect(browserTool?.description?.toLowerCase()).toContain('snapshot');
     expect(browserTool?.description?.toLowerCase()).not.toContain('screenshot');
   });
 

@@ -5,8 +5,8 @@
 //! `spawn_subagent(agent_id, prompt)` mega-tool, we synthesise one named
 //! tool per [`SubagentEntry::AgentId`] in the orchestrator's
 //! `[subagents] allowlist = [...]` TOML section, so the LLM's function-calling schema
-//! contains discoverable, well-named tools like `research`, `plan`,
-//! `run_code`, etc.
+//! contains discoverable, well-named tools like `manage_tasks`,
+//! `create_image`, `build_workflow`, etc.
 //!
 //! For [`SubagentEntry::Skills`] wildcard expansions we synthesise one
 //! `ToolExposure::Deferred` [`ComposioActionTool`] per action of every

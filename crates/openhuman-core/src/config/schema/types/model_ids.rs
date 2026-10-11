@@ -53,7 +53,7 @@ pub fn legacy_tier_role(model: &str) -> Option<&'static str> {
 
 /// Every workload role the managed backend routes, each with its `hint:*`
 /// alias accepted wherever a model id is taken.
-pub const WORKLOAD_ROLES: [&str; 8] = [
+pub const WORKLOAD_ROLES: [&str; 7] = [
     "chat",
     "reasoning",
     "agentic",
@@ -61,19 +61,41 @@ pub const WORKLOAD_ROLES: [&str; 8] = [
     "burst",
     "summarization",
     "vision",
-    "subconscious",
 ];
 
-/// Effective default global memory-sync cadence (seconds) used when
-/// [`Config::memory_sync_interval_secs`] is `None` — i.e. the user has not
-/// explicitly picked a schedule. 24h, matching the "Sync every 24h" preset
-/// surfaced in the Memory Sources UI. See issue #3302.
+/// `hint:vision` is deprecated: `vision-v1` silently falls back to the chat
+/// default on managed routes, which means every agent still pinned to it
+/// loses image/video understanding without any error surfacing (regression
+/// R4). Image/video UNDERSTANDING and GENERATION are also separate
+/// capabilities that a single `vision` hint cannot distinguish, so each media
+/// agent is pinned to its own exact OpenRouter passthrough model instead.
 ///
-/// Defined in `tinymemory_api::host` and re-exported here: the extracted memory
-/// subsystem applies this fallback too, and two `86_400`s that must agree is a
-/// drift waiting to happen.
-pub use tinymemory_api::host::DEFAULT_MEMORY_SYNC_INTERVAL_SECS;
+/// Qwen3.5 Flash: native tool calling and text+image+video input. Unlike
+/// Qwen3.7 Flash, its OpenRouter pricing has no cache-write component, so it
+/// passes the backend passthrough catalog's billability filter.
+///
+/// Used by `vision_agent` (image/video understanding: describe, OCR, chart
+/// and UI-element reading).
+pub const MODEL_MEDIA_UNDERSTANDING: &str = "openrouter/qwen/qwen3.5-flash-02-23";
 
-/// Preset memory-sync cadences (seconds) offered in the UI: 4h / 12h / 24h.
-/// "Manual only" is represented separately by `Some(0)`. See issue #3302.
-pub const MEMORY_SYNC_INTERVAL_PRESETS_SECS: [u64; 3] = [14_400, 43_200, 86_400];
+/// Same model as [`MODEL_MEDIA_UNDERSTANDING`], pinned separately for
+/// `image_agent` (image GENERATION delegate) so the two roles can be retuned
+/// independently without one edit silently moving the other.
+pub const MODEL_IMAGE_GENERATION_AGENT: &str = "openrouter/qwen/qwen3.5-flash-02-23";
+
+/// Same model as [`MODEL_MEDIA_UNDERSTANDING`], pinned separately for
+/// `video_agent` (video GENERATION delegate) so the two roles can be retuned
+/// independently without one edit silently moving the other.
+pub const MODEL_VIDEO_GENERATION_AGENT: &str = "openrouter/qwen/qwen3.5-flash-02-23";
+
+/// Every managed model id that carries multimodal (image/video) input
+/// capability, whether or not it is also the workload's `vision` hint
+/// target. `oh_tier_supports_vision` treats membership here the same as the
+/// legacy `vision-v1` / `hint:vision` gate, so a media agent pinned to one of
+/// these `exact` ids keeps the image/video forwarding path that used to key
+/// off the retired hint alone.
+pub const MANAGED_MULTIMODAL_MODELS: [&str; 3] = [
+    MODEL_MEDIA_UNDERSTANDING,
+    MODEL_IMAGE_GENERATION_AGENT,
+    MODEL_VIDEO_GENERATION_AGENT,
+];

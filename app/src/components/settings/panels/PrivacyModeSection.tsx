@@ -1,12 +1,14 @@
 import debug from 'debug';
+import { Cloud, Laptop, type LucideIcon, ShieldCheck } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 import { cn } from '../../../lib/cn';
 import { useT } from '../../../lib/i18n/I18nContext';
 import { callCoreRpc } from '../../../services/coreRpcClient';
 import { CORE_RPC_METHODS } from '../../../services/rpcMethods';
+import Card from '../../ui/Card';
 import { RadioGroupItem, RadioGroupRoot } from '../../ui/RadioGroup';
-import { SettingsSection, SettingsStatusLine } from '../controls';
+import { SettingsStatusLine } from '../controls';
 
 const log = debug('privacy-mode');
 
@@ -19,14 +21,25 @@ interface PrivacyModeResult {
 
 type Status = 'loading' | 'idle' | 'saving' | 'saved' | 'error';
 
-const MODES: { value: PrivacyMode; labelKey: string; descKey: string }[] = [
+const MODES: { value: PrivacyMode; labelKey: string; descKey: string; icon: LucideIcon }[] = [
   {
     value: 'local_only',
     labelKey: 'privacy.mode.localOnly',
     descKey: 'privacy.mode.localOnlyDesc',
+    icon: Laptop,
   },
-  { value: 'standard', labelKey: 'privacy.mode.standard', descKey: 'privacy.mode.standardDesc' },
-  { value: 'sensitive', labelKey: 'privacy.mode.sensitive', descKey: 'privacy.mode.sensitiveDesc' },
+  {
+    value: 'standard',
+    labelKey: 'privacy.mode.standard',
+    descKey: 'privacy.mode.standardDesc',
+    icon: Cloud,
+  },
+  {
+    value: 'sensitive',
+    labelKey: 'privacy.mode.sensitive',
+    descKey: 'privacy.mode.sensitiveDesc',
+    icon: ShieldCheck,
+  },
 ];
 
 /**
@@ -89,40 +102,53 @@ const PrivacyModeSection = () => {
   );
 
   return (
-    <SettingsSection title={t('privacy.mode.title')}>
-      <div className="p-4 flex flex-col gap-3">
-        <p className="text-xs text-content-muted leading-relaxed">
-          {t('privacy.mode.description')}
-        </p>
+    <Card title={t('privacy.mode.title')} description={t('privacy.mode.description')}>
+      <div className="p-4">
         <RadioGroupRoot
           value={mode ?? undefined}
           onValueChange={next => void handleSelect(next as PrivacyMode)}
           aria-label={t('privacy.mode.title')}
-          className="flex flex-col gap-2"
+          className="grid gap-2 md:grid-cols-3"
           data-testid="privacy-mode-options">
-          {MODES.map(({ value, labelKey, descKey }) => {
+          {MODES.map(({ value, labelKey, descKey, icon: Icon }) => {
             const isSelected = mode === value;
             const inputId = `privacy-mode-option-${value}-input`;
+            // Icon, text, then a visible radio. The radio used to be an
+            // `sr-only` element inside the label, which still pushed the title
+            // off the description's left edge.
             return (
               <label
                 key={value}
                 htmlFor={inputId}
                 className={cn(
-                  'w-full text-left px-4 py-3 rounded-lg border transition-colors block',
+                  'flex w-full cursor-pointer items-center gap-3 rounded-xl border px-3.5 py-3 transition-colors',
                   isSelected
-                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-500/10'
-                    : 'border-line bg-surface hover:border-line-strong',
+                    ? 'border-primary-500 bg-primary-50 ring-1 ring-primary-500 dark:bg-primary-500/10'
+                    : 'border-line bg-surface hover:border-line-strong hover:bg-surface-hover',
                   status === 'saving' && 'opacity-50'
                 )}>
+                <span
+                  className={cn(
+                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                    isSelected
+                      ? 'bg-primary-500 text-content-inverted'
+                      : 'bg-surface-muted text-content-secondary'
+                  )}>
+                  <Icon className="h-4.5 w-4.5" aria-hidden />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-semibold text-content">{t(labelKey)}</span>
+                  <span className="mt-0.5 block text-xs leading-relaxed text-content-muted">
+                    {t(descKey)}
+                  </span>
+                </span>
                 <RadioGroupItem
                   id={inputId}
                   value={value}
                   data-testid={`privacy-mode-option-${value}`}
                   disabled={status === 'saving' || status === 'loading'}
-                  className="sr-only"
+                  className="shrink-0"
                 />
-                <span className="text-sm font-semibold text-content">{t(labelKey)}</span>
-                <p className="text-xs text-content-muted mt-0.5">{t(descKey)}</p>
               </label>
             );
           })}
@@ -132,9 +158,13 @@ const PrivacyModeSection = () => {
           savedNote={status === 'saved' ? t('privacy.mode.saved') : null}
           error={status === 'error' ? (error ?? t('privacy.mode.saveError')) : null}
           savingLabel={t('autonomy.statusSaving')}
+          // The live region stays mounted for announcements, but takes no
+          // space until it has something to say, so the card's bottom
+          // padding matches its top.
+          className="min-h-0 [&:not(:empty)]:mt-3"
         />
       </div>
-    </SettingsSection>
+    </Card>
   );
 };
 

@@ -4,8 +4,8 @@ use serde_json::{Map, Value};
 
 use crate::config::rpc as config_rpc;
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 
 use tinyagents_session::run_ledger::{AgentRunListRequest, RunEventListRequest};
 
@@ -170,7 +170,7 @@ fn handle_run_ledger_events(params: Map<String, Value>) -> ControllerFuture {
 }
 
 fn to_json<T: serde::Serialize>(value: T) -> Result<Value, String> {
-    RpcOutcome::new(value, vec![]).into_cli_compatible_json()
+    Outcome::new(value, vec![]).into_cli_compatible_json()
 }
 
 fn required_str(name: &'static str, comment: &'static str) -> FieldSchema {

@@ -1,7 +1,7 @@
-import { useDispatch } from 'react-redux';
-
+import { Badge, type BadgeVariant } from '../../../components/ui';
 import { useT } from '../../../lib/i18n/I18nContext';
-import { setActiveThread } from '../../../store/threadSlice';
+import { useAppDispatch } from '../../../store/hooks';
+import { loadThreadMessages, setSelectedThread } from '../../../store/threadSlice';
 import type { WorkerThreadRef } from '../utils/workerThreadRef';
 
 /**
@@ -27,22 +27,23 @@ interface WorkerThreadStatusBadgeProps {
  * scanning the parent transcript know whether the background work has
  * finished or is still in flight without having to open the worker.
  *
- * Tones use the existing tool-timeline status palette
- * (amber=running, sage=success, coral=error) so a worker badge inside a
- * timeline row reads as the same state as its containing `<details>`
- * status pill — no new colour vocabulary for the user to learn.
+ * Tones use the shared `Badge` primitive's semantic variants
+ * (warning=running, success=completed, danger=failed) so a worker badge
+ * inside a timeline row reads as the same state as its containing
+ * `<details>` status pill — no new colour vocabulary for the user to learn.
  */
+const WORKER_THREAD_STATUS_VARIANT: Record<WorkerThreadStatus, BadgeVariant> = {
+  running: 'warning',
+  completed: 'success',
+  failed: 'danger',
+};
+
 function WorkerThreadStatusBadge({ status }: WorkerThreadStatusBadgeProps) {
-  const tone =
-    status === 'running'
-      ? 'bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300'
-      : status === 'completed'
-        ? 'bg-sage-100 dark:bg-sage-500/20 text-sage-700 dark:text-sage-300'
-        : 'bg-coral-100 dark:bg-coral-500/20 text-coral-700 dark:text-coral-300';
   const label = status === 'running' ? 'running' : status === 'completed' ? 'done' : 'failed';
   return (
-    <span
-      className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${tone}`}
+    <Badge
+      variant={WORKER_THREAD_STATUS_VARIANT[status]}
+      dot={status !== 'running'}
       data-testid="worker-thread-status-badge"
       data-status={status}
       role="status"
@@ -53,7 +54,7 @@ function WorkerThreadStatusBadge({ status }: WorkerThreadStatusBadgeProps) {
         <span aria-hidden="true" className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
       ) : null}
       {label}
-    </span>
+    </Badge>
   );
 }
 
@@ -77,7 +78,7 @@ export function WorkerThreadRefCard({
   status?: WorkerThreadStatus;
 }) {
   const { t } = useT();
-  const dispatch = useDispatch();
+  const dispatch = useAppDispatch();
   const meta: string[] = [];
   if (ref.agentId) meta.push(ref.agentId);
   if (typeof ref.iterations === 'number') {
@@ -90,13 +91,20 @@ export function WorkerThreadRefCard({
   return (
     <button
       type="button"
-      onClick={() => dispatch(setActiveThread(ref.threadId))}
+      onClick={() => {
+        // Open (select) the worker thread. This used to dispatch
+        // `setActiveThread`, which marks a thread as having an in-flight turn —
+        // so opening a worker left a phantom "generating" state whose Stop
+        // button had no turn to cancel.
+        dispatch(setSelectedThread(ref.threadId));
+        void dispatch(loadThreadMessages(ref.threadId));
+      }}
       className="mt-1 flex w-full items-center justify-between gap-3 rounded-xl border border-primary-200 dark:border-primary-500/30 bg-primary-50 dark:bg-primary-500/15 px-3 py-2 text-left transition-colors hover:bg-primary-100 dark:hover:bg-primary-500/25">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <span className="rounded-full bg-primary-200 dark:bg-primary-500/30 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-800 dark:text-primary-200">
+          <Badge variant="primary" dot={false}>
             {ref.label}
-          </span>
+          </Badge>
           <span className="truncate text-xs font-medium text-primary-900 dark:text-primary-100">
             {t('chat.openWorkerThread')}
           </span>

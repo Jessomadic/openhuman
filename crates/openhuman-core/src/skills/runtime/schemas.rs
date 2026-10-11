@@ -9,8 +9,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 use crate::skills::run_log;
 use crate::skills::schemas::resolve_workspace_dir;
 
@@ -58,7 +58,7 @@ fn deserialize_params<T: serde::de::DeserializeOwned>(
     serde_json::from_value(Value::Object(params)).map_err(|e| format!("invalid params: {e}"))
 }
 
-fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     outcome.into_cli_compatible_json()
 }
 
@@ -267,8 +267,14 @@ fn handle_run(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<RunParams>(params)?;
         tracing::info!(skill_id = %payload.skill_id, "[skill_runtime][rpc] run");
-        let started = spawn_workflow_run_background(payload.skill_id, payload.inputs).await?;
-        to_json(RpcOutcome::new(
+        let origin = crate::agent::turn_origin::current()
+            .unwrap_or(crate::agent::turn_origin::AgentTurnOrigin::Cli);
+        let started = crate::agent::turn_origin::with_origin(
+            origin,
+            spawn_workflow_run_background(payload.skill_id, payload.inputs),
+        )
+        .await?;
+        to_json(Outcome::new(
             serde_json::json!({
                 "run_id": started.run_id,
                 "status": "started",
@@ -285,7 +291,7 @@ fn handle_cancel(params: Map<String, Value>) -> ControllerFuture {
         let payload = deserialize_params::<CancelParams>(params)?;
         let cancelled = run_log::cancel_run(&payload.run_id);
         tracing::info!(run_id = %payload.run_id, cancelled, "[skill_runtime][rpc] cancel");
-        to_json(RpcOutcome::new(
+        to_json(Outcome::new(
             serde_json::json!({ "run_id": payload.run_id, "cancelled": cancelled }),
             Vec::new(),
         ))
@@ -304,7 +310,7 @@ fn handle_recent_runs(params: Map<String, Value>) -> ControllerFuture {
             limit,
             "[skill_runtime][rpc] recent_runs"
         );
-        to_json(RpcOutcome::new(
+        to_json(Outcome::new(
             serde_json::json!({ "runs": runs }),
             Vec::new(),
         ))
@@ -325,7 +331,7 @@ fn handle_read_run_log(params: Map<String, Value>) -> ControllerFuture {
         let max_bytes = payload.max_bytes.unwrap_or(64 * 1024).min(256 * 1024) as usize;
         let slice = run_log::read_run_log_slice(&path, offset, max_bytes)
             .map_err(|e| format!("skill_runtime_read_run_log: read failed: {e}"))?;
-        to_json(RpcOutcome::new(slice, Vec::new()))
+        to_json(Outcome::new(slice, Vec::new()))
     })
 }
 
@@ -337,14 +343,14 @@ fn handle_resolve_runtimes(params: Map<String, Value>) -> ControllerFuture {
             .await
             .map_err(|error| format!("skill_runtime_resolve_runtimes: load config: {error:#}"))?;
         let outcome = resolve_runtimes(&config, requirement).await;
-        to_json(RpcOutcome::new(outcome, Vec::new()))
+        to_json(Outcome::new(outcome, Vec::new()))
     })
 }
 
 fn handle_schemas(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let _ = params;
-        to_json(RpcOutcome::new(
+        to_json(Outcome::new(
             serde_json::json!({ "schemas": all_skill_runtime_controller_schemas() }),
             Vec::new(),
         ))

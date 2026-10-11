@@ -1,6 +1,8 @@
+import { Check } from 'lucide-react';
+
+import { cn } from '../../../../lib/cn';
 import { useT } from '../../../../lib/i18n/I18nContext';
-import Button from '../../../ui/Button';
-import { applyTemplate, PERSONA_TEMPLATES } from './personaTemplates';
+import { applyTemplate, matchTemplate, PERSONA_TEMPLATES } from './personaTemplates';
 
 interface PersonaTemplatePickerProps {
   /** Current raw SOUL.md text a template is spliced into. */
@@ -25,32 +27,67 @@ const PersonaTemplatePicker = ({
 }: PersonaTemplatePickerProps) => {
   const { t } = useT();
 
+  const active = matchTemplate(value);
+
+  const tileClass = (selected: boolean) =>
+    cn(
+      'relative flex w-full flex-col items-start gap-0.5 rounded-lg border px-3 py-2.5 pr-8 text-left transition-colors',
+      'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary-500/25',
+      'disabled:cursor-not-allowed disabled:opacity-50',
+      selected
+        ? 'border-primary-500 bg-primary-50 ring-1 ring-primary-500 dark:bg-primary-500/10'
+        : 'border-line hover:border-line-strong hover:bg-surface-hover'
+    );
+
+  const check = (
+    <Check className="absolute right-2.5 top-2.5 h-4 w-4 text-primary-500" aria-hidden />
+  );
+
+  // A radio group: exactly one role describes the current character — a
+  // template it still matches, or Custom once the user has edited away.
   return (
-    <div className="space-y-2">
-      <div>
-        <p className="text-sm font-medium text-content">
-          {t('settings.persona.templates.heading')}
-        </p>
-        <p className="text-xs text-content-muted leading-relaxed">
-          {t('settings.persona.templates.desc')}
-        </p>
-      </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {PERSONA_TEMPLATES.map(template => (
-          <Button
+    <div
+      role="radiogroup"
+      aria-label={t('settings.persona.templates.heading')}
+      className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {PERSONA_TEMPLATES.map(template => {
+        const selected = active?.id === template.id;
+        return (
+          <button
             key={template.id}
-            variant="secondary"
+            type="button"
+            role="radio"
+            aria-checked={selected}
             disabled={disabled}
             data-testid={`persona-template-${template.id}`}
             onClick={() => onChange(applyTemplate(value, template))}
-            className="h-auto w-full flex-col items-start justify-start gap-0.5 rounded-lg border-line-strong px-3 py-2 text-left hover:border-primary-400">
+            className={tileClass(selected)}>
+            {selected && check}
             <span className="text-sm font-medium text-content">{t(template.labelKey)}</span>
-            <span className="text-[11px] font-normal text-content-muted leading-snug">
+            <span className="text-xs text-content-muted leading-snug">
               {t(template.descriptionKey)}
             </span>
-          </Button>
-        ))}
-      </div>
+          </button>
+        );
+      })}
+      {/* Custom is a state, not an action: it lights up when the fields no
+          longer match any template, and applies nothing when clicked. */}
+      <button
+        type="button"
+        role="radio"
+        aria-checked={active === null}
+        disabled={disabled}
+        data-testid="persona-template-custom"
+        onClick={() => undefined}
+        className={cn(tileClass(active === null), 'cursor-default')}>
+        {active === null && check}
+        <span className="text-sm font-medium text-content">
+          {t('settings.persona.templates.custom.label')}
+        </span>
+        <span className="text-xs text-content-muted leading-snug">
+          {t('settings.persona.templates.custom.desc')}
+        </span>
+      </button>
     </div>
   );
 };

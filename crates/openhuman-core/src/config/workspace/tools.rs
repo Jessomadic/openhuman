@@ -154,8 +154,8 @@ impl Tool for WorkspaceInitTool {
         "workspace_init"
     }
     fn description(&self) -> &str {
-        "Scaffold the workspace (memory/sessions/state dirs, bundled prompts, \
-         HEARTBEAT.md). `force` re-initializes existing files. Default-OFF \
+        "Scaffold the workspace (memory/sessions/state dirs, bundled prompts). \
+         `force` re-initializes existing files. Default-OFF \
          (opt-in)."
     }
     fn parameters_schema(&self) -> serde_json::Value {

@@ -21,10 +21,12 @@ import {
 
 describe('entryRoute', () => {
   it('returns the explicit route when set', () => {
-    // 'notifications' entry has route: 'notifications' set explicitly.
-    const entry = findEntryById('notifications');
-    expect(entry).toBeDefined();
-    expect(entryRoute(entry!)).toBe('notifications');
+    // No live registry entry currently sets an explicit `route` override (the
+    // 'notifications' entry that used to was removed with the Notifications
+    // settings page), so this exercises the helper directly against a
+    // synthetic entry instead of registry data.
+    const entry = { id: 'foo', route: 'bar', titleKey: 'x', section: 'home' as const };
+    expect(entryRoute(entry)).toBe('bar');
   });
 
   it('falls back to the id when no explicit route is set', () => {
@@ -33,10 +35,11 @@ describe('entryRoute', () => {
     expect(entryRoute(entry!)).toBe('personality');
   });
 
-  it('returns the overridden route for build-info (→ about)', () => {
-    const entry = findEntryById('build-info');
-    expect(entry).toBeDefined();
-    expect(entryRoute(entry!)).toBe('about');
+  it('has exactly one entry resolving to the about route', () => {
+    // A dev-only "build-info" alias used to point here too, which listed two
+    // sidebar entries for the same page.
+    expect(findEntryById('build-info')).toBeUndefined();
+    expect(SETTINGS_ROUTE_REGISTRY.filter(e => entryRoute(e) === 'about')).toHaveLength(1);
   });
 });
 
@@ -88,12 +91,8 @@ describe('findEntryByRoute', () => {
     expect(findEntryByRoute('messaging')).toBeUndefined();
   });
 
-  it('returns the build-info entry when looking up the "about" route alias', () => {
-    // build-info has route: 'about', so findEntryByRoute('about') returns
-    // whichever comes first — likely the canonical 'about' entry itself.
-    // The important assertion: the route is reachable.
-    const entry = findEntryByRoute('about');
-    expect(entry).toBeDefined();
+  it('resolves the about route to the canonical about entry', () => {
+    expect(findEntryByRoute('about')?.id).toBe('about');
   });
 
   it('does not match partial/substring routes — lookup is exact', () => {
@@ -136,9 +135,14 @@ describe('entriesForSection', () => {
     expect(allIds).not.toContain('webhooks-triggers');
   });
 
-  it('returns multiple developer entries', () => {
+  it('returns the surviving developer entries', () => {
+    // Most former Developer & Diagnostics entries (agents, autonomy,
+    // agent-access, sandbox-settings, tools, voice, embeddings,
+    // migration, security, etc.) moved to their canonical section pages in
+    // the redesign; only a handful of dev-only diagnostics stayed here.
     const devEntries = entriesForSection('developer');
-    expect(devEntries.length).toBeGreaterThan(5);
+    const ids = devEntries.map(e => e.id);
+    expect(ids.sort()).toEqual(['event-log', 'search', 'tool-policy-diagnostics']);
     devEntries.forEach(e => {
       expect(e.section).toBe('developer');
       expect(e.hiddenDeepLink).not.toBe(true);
@@ -194,7 +198,6 @@ describe('SETTINGS_ROUTE_REGISTRY integrity', () => {
   it('surfaces the restructured home hub entries', () => {
     const homeIds = entriesForSection('home').map(e => e.id);
     expect(homeIds).toContain('personality');
-    // billing is surfaced in the General group now (no longer a hidden deep-link).
-    expect(homeIds).toContain('billing');
+    expect(homeIds).not.toContain('billing');
   });
 });

@@ -1,6 +1,4 @@
 use super::approval::approval_tool_name;
-use super::artifact_index_toc::NO_WINDOW_ALLOWANCE;
-use super::message_trim::{estimate_message_tokens, estimate_text_tokens, IMAGE_MARKER_TOKEN_COST};
 use super::repeated_failure::{is_body_level_failure, user_actionable_escalation};
 use super::tool_output::{
     is_compaction_exempt, is_truncation_exempt, COMPACTION_EXEMPT_TOOLS, SAMPLING_TOOLS,
@@ -16,20 +14,14 @@ use async_trait::async_trait;
 
 use tinyagents_harness::middleware::{AgentRun, BudgetTracker, Middleware, ToolInvocationIdentity};
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
-use tinyinference_llm::message::{ContentBlock, Message as TaMessage};
-use tinyinference_llm::model::{ModelResponse, SegmentRole};
+use tinyinference_llm::message::Message as TaMessage;
 use tinyinference_llm::tool::{ToolCall as TaToolCall, ToolSchema};
 use tinytools::{ToolPolicy as TaToolPolicy, ToolResult as TaToolResult};
 
 use crate::agent::context::CLEARED_PLACEHOLDER;
-use crate::agent::tinyagents::payload_summarizer::{
-    PayloadSummarizer, SummarizeOutcome, UnavailableReason,
-};
+use crate::agent::tinyagents::payload_summarizer::PayloadSummarizer;
 use crate::inference::tokenjuice::AgentTokenjuiceCompression;
 use tinyagents_harness::context::{RunConfig, RunContext};
-use tinyagents_harness::no_progress::{
-    DEFAULT_REPEAT_CALL_THRESHOLD, DEFAULT_REPEAT_OUTPUT_THRESHOLD,
-};
 use tinyinference_llm::model::ModelRequest;
 use tinytools::Tool;
 
@@ -40,60 +32,92 @@ fn ctx() -> RunContext<crate::agent::tinyagents::host::OpenHumanRunContext> {
     )
 }
 
-// ── payload_summarizer disclosure (#5722) ──────────────────────
+// ── TinyJuice summary disclosure (#5722) ───────────────────────────────
 //
 // The behaviour these pin: when summarization does not happen, the model
 // must be able to see that from the payload. Previously every one of
 // these cases produced byte-identical content to a successful
 // pass-through, so the model could not tell a raw dump from a normal
-// result and re-called the same tool.
+// result and re-called the same tool. The module itself is stood in for by
+// `tokenjuice::module_stub`, which calls back through `MlHost.Generate`
+// the way TinyJuice does.
 
-struct StubSummarizer(std::sync::Mutex<Option<anyhow::Result<SummarizeOutcome>>>);
+/// A summary model that answers every call with one fixed reply.
+struct StubSummarizer {
+    reply: std::sync::Mutex<Option<anyhow::Result<String>>>,
+    prepared: std::sync::atomic::AtomicBool,
+}
 
 impl StubSummarizer {
-    fn ok(outcome: SummarizeOutcome) -> Arc<Self> {
-        Arc::new(Self(std::sync::Mutex::new(Some(Ok(outcome)))))
+    fn replying(reply: anyhow::Result<String>) -> Arc<Self> {
+        Arc::new(Self {
+            reply: std::sync::Mutex::new(Some(reply)),
+            prepared: Default::default(),
+        })
     }
 
-    /// Whether the middleware actually dispatched to the summarizer. The
-    /// outcome is consumed on first call, so an untouched slot means the
-    /// stage was skipped — which is the whole point for a self-bounding tool.
-    fn was_called(&self) -> bool {
-        self.0.lock().expect("stub outcome lock").is_none()
+    /// Whether the middleware bound a summary call for this result at all.
+    fn was_prepared(&self) -> bool {
+        self.prepared.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
-#[async_trait]
 impl PayloadSummarizer for StubSummarizer {
-    async fn maybe_summarize_in_parent(
+    fn prepare(
         &self,
         _parent_ctx: &RunContext<crate::agent::tinyagents::host::OpenHumanRunContext>,
-        _tool_name: &str,
-        _parent_task_hint: Option<&str>,
-        _raw: &str,
-    ) -> anyhow::Result<SummarizeOutcome> {
-        self.0
+    ) -> anyhow::Result<crate::inference::tokenjuice::generate::PreparedGenerate> {
+        self.prepared
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let reply = self
+            .reply
             .lock()
-            .expect("stub outcome lock")
+            .expect("stub reply lock")
             .take()
-            .expect("stub summarizer called more than once")
+            .expect("stub summarizer prepared more than once");
+        Ok(Box::new(move |_request| Box::pin(async move { reply })))
     }
+}
+
+/// A config whose summary threshold every test payload clears.
+fn summarizing_config() -> Arc<crate::config::Config> {
+    let mut config = crate::config::Config::default();
+    config.context.summarizer_payload_threshold_tokens = 1;
+    Arc::new(config)
 }
 
 fn summarizer_mw(ps: Arc<dyn PayloadSummarizer>) -> ToolOutputMiddleware {
     ToolOutputMiddleware {
         // Large enough that the byte-budget backstop never fires, so these
-        // tests observe the summarizer stage alone.
+        // tests observe the summary stage alone.
         budget_bytes: 10_000_000,
         payload_summarizer: Some(ps),
-        task_hint: None,
         artifact_store: None,
         tokenjuice_compaction_enabled: false,
-        tokenjuice_compression: crate::inference::tokenjuice::AgentTokenjuiceCompression::Off,
-        runtime_config: None,
+        tokenjuice_compression: crate::inference::tokenjuice::AgentTokenjuiceCompression::Full,
+        runtime_config: Some(summarizing_config()),
         tool_policies: HashMap::new(),
         artifact_reads: Default::default(),
+        focus_by_call: Default::default(),
+        // `web_fetch` declares `summary_focus` in production.
+        summary_focus_tools: ["web_fetch".to_string()].into(),
+        raw_fetches: Default::default(),
+        file_reads: Default::default(),
     }
+}
+
+/// Run `fut` against a stubbed TinyJuice module, returning what it was sent.
+async fn with_module<F: std::future::Future>(
+    fut: F,
+) -> (
+    F::Output,
+    Vec<crate::inference::tokenjuice::types::CompactRequest>,
+) {
+    use crate::inference::tokenjuice::module_stub;
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let output = module_stub::with_stub(module_stub::summarizing(recorded.clone()), fut).await;
+    let requests = recorded.lock().unwrap().clone();
+    (output, requests)
 }
 
 /// A minimal openhuman [`Tool`] for the tool-set–backed middlewares. Its
@@ -184,13 +208,16 @@ fn compaction_enabled_mw() -> ToolOutputMiddleware {
     ToolOutputMiddleware {
         budget_bytes: 1_000_000,
         payload_summarizer: None,
-        task_hint: None,
         artifact_store: None,
         tokenjuice_compaction_enabled: true,
         tokenjuice_compression: AgentTokenjuiceCompression::Full,
         runtime_config: None,
         tool_policies: HashMap::new(),
         artifact_reads: Default::default(),
+        focus_by_call: Default::default(),
+        summary_focus_tools: Default::default(),
+        raw_fetches: Default::default(),
+        file_reads: Default::default(),
     }
 }
 
@@ -233,13 +260,16 @@ fn truncation_probe_mw() -> ToolOutputMiddleware {
     ToolOutputMiddleware {
         budget_bytes: DEFAULT_TOOL_RESULT_BUDGET_BYTES,
         payload_summarizer: None,
-        task_hint: None,
         artifact_store: None,
         tokenjuice_compaction_enabled: false,
         tokenjuice_compression: AgentTokenjuiceCompression::Off,
         runtime_config: None,
         tool_policies: HashMap::new(),
         artifact_reads: Default::default(),
+        focus_by_call: Default::default(),
+        summary_focus_tools: Default::default(),
+        raw_fetches: Default::default(),
+        file_reads: Default::default(),
     }
 }
 
@@ -283,18 +313,10 @@ fn drain_pause_count(handle: &SteeringHandle) -> usize {
         .count()
 }
 
-/// Collect the nudge system-message texts drained from `handle`. The nudge
-/// rides the `InjectMessage` lane (not `Redirect`) so it is permitted on the
-/// user's interactive turn — see the test below.
-fn drain_nudge_messages(handle: &SteeringHandle) -> Vec<String> {
-    handle
-        .drain()
-        .into_iter()
-        .filter_map(|c| match c {
-            SteeringCommand::InjectMessage(message) => Some(message.text()),
-            _ => None,
-        })
-        .collect()
+/// Collect the nudge texts queued for the next model request. Nudges are
+/// request-scoped (#6725): they never ride a steering command.
+fn drain_nudge_messages(mw: &RepeatedToolFailureMiddleware) -> Vec<String> {
+    mw.take_pending_nudges()
 }
 
 // ── RepeatedToolFailureMiddleware body-level ok:false (flows breaker) ────
@@ -310,91 +332,17 @@ fn body_failure_result(name: &str, extra: serde_json::Value) -> TaToolResult {
     tool_result(name, &serde_json::to_string_pretty(&body).unwrap())
 }
 
-// ── RepeatProgressMiddleware / crate SuccessfulRepeatTracker ───────────
-
-fn repeated_success_response(tool: &str, args: serde_json::Value) -> ModelResponse {
-    ModelResponse {
-        message: tinyinference_llm::message::AssistantMessage {
-            id: None,
-            content: vec![ContentBlock::Text("working".to_string())],
-            tool_calls: vec![TaToolCall::new("repeat-1", tool, args)],
-            usage: None,
-            origin: None,
-        },
-        usage: None,
-        finish_reason: Some("tool_calls".to_string()),
-        raw: None,
-        resolved_model: None,
-        continue_turn: None,
-        served_from_cache: false,
-        correlation: None,
-        resolved_route: None,
-    }
-}
-
-async fn run_successful_repeat_cycle(
-    mw: &RepeatProgressMiddleware,
-    tool: &str,
-    args: serde_json::Value,
-    output: &str,
-    error: Option<&str>,
-) {
-    let mut response = repeated_success_response(tool, args);
-    mw.after_model(&mut ctx(), &(), &mut response)
-        .await
-        .unwrap();
-    let mut result = match error {
-        Some(error) => TaToolResult::error(error),
-        None => tool_result(tool, output),
-    };
-    let invocation = ToolInvocationIdentity::new("repeat-1", tool);
-    mw.after_tool(&mut ctx(), &(), &invocation, &mut result)
-        .await
-        .unwrap();
-}
-
-// ── MemoryProtocolMiddleware (issue #4116) ──────────────────────────────
-
-use crate::agent::harness::memory_protocol::MEMORY_PROTOCOL_MARKER;
-
-/// Drive one full tool cycle through the middleware: `before_tool` (captures
-/// the arguments the result won't carry) then `after_tool`, correlated by a
-/// shared call id. Returns the (possibly annotated) result.
-async fn run_cycle(
-    mw: &MemoryProtocolMiddleware,
-    name: &str,
-    args: serde_json::Value,
-    content: &str,
-    error: Option<&str>,
-) -> TaToolResult {
-    let mut call = TaToolCall {
-        id: "c1".into(),
-        name: name.into(),
-        arguments: args,
-        invalid: None,
-    };
-    mw.before_tool(&mut ctx(), &(), &mut call).await.unwrap();
-    let mut result = match error {
-        Some(error) => TaToolResult::error(error),
-        None => tool_result(name, content),
-    };
-    let invocation = ToolInvocationIdentity::new("c1", name);
-    mw.after_tool(&mut ctx(), &(), &invocation, &mut result)
-        .await
-        .unwrap();
-    result
-}
-
 // ── EmbedderToolHooksMiddleware ──────────────────────────────────────────
+
+/// One recorded post-tool notification: tool name, args, success flag, duration.
+type PostToolRecord = (String, serde_json::Value, Option<bool>, Option<u64>);
 
 /// Records lifecycle notifications for a test hook, optionally vetoing every
 /// pre-tool call so the veto path can be exercised.
 struct RecordingToolHook {
     name: &'static str,
     pre: std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>,
-    post: std::sync::Arc<
-        std::sync::Mutex<Vec<(String, serde_json::Value, Option<bool>, Option<u64>)>>,
-    >,
+    post: std::sync::Arc<std::sync::Mutex<Vec<PostToolRecord>>>,
     veto: bool,
 }
 
@@ -432,9 +380,7 @@ impl crate::agent::hooks::ToolHook for RecordingToolHook {
 
 fn embedder_hook_mw(
     pre: std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>,
-    post: std::sync::Arc<
-        std::sync::Mutex<Vec<(String, serde_json::Value, Option<bool>, Option<u64>)>>,
-    >,
+    post: std::sync::Arc<std::sync::Mutex<Vec<PostToolRecord>>>,
     veto: bool,
 ) -> EmbedderToolHooksMiddleware {
     EmbedderToolHooksMiddleware::new(vec![std::sync::Arc::new(RecordingToolHook {
@@ -445,15 +391,31 @@ fn embedder_hook_mw(
     })])
 }
 
+#[path = "middleware_approval_guard_tests.rs"]
+mod approval_guard_tests;
+#[path = "middleware_classified_failure_fetch_tests.rs"]
+mod classified_failure_fetch_tests;
+#[path = "middleware_classified_failure_tests.rs"]
+mod classified_failure_tests;
+#[path = "middleware_command_exit_failure_tests.rs"]
+mod command_exit_failure_tests;
+#[path = "middleware_failure_effect_tests.rs"]
+mod failure_effect_tests;
+#[path = "middleware_failure_policy_class_tests.rs"]
+mod failure_policy_class_tests;
 #[path = "middleware_loop_guard_tests.rs"]
 mod loop_guard_tests;
-#[path = "middleware_repeat_progress_tests.rs"]
-mod repeat_progress_tests;
+
+#[path = "middleware_research_budget_tests.rs"]
+mod research_budget_tests;
+
+#[path = "middleware_memory_and_hooks_tests.rs"]
+mod memory_and_hooks_tests;
 #[path = "middleware_tool_output_artifact_tests.rs"]
 mod tool_output_artifact_tests;
+#[path = "middleware_tool_output_file_read_tests.rs"]
+mod tool_output_file_read_tests;
 #[path = "middleware_tool_output_tests.rs"]
 mod tool_output_tests;
 #[path = "middleware_tool_policy_tests.rs"]
 mod tool_policy_tests;
-#[path = "middleware_wrap_up_toc_tests.rs"]
-mod wrap_up_toc_tests;

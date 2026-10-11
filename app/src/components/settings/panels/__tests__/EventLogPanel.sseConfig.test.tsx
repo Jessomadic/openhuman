@@ -60,9 +60,15 @@ const evt = (event: string, domain = 'tool') =>
 const config = (payload: Record<string, unknown>) =>
   `event: config\ndata:${JSON.stringify(payload)}\n\n`;
 
-/** Every rendered event label, in DOM order — nothing filtered out. */
+/**
+ * Every rendered event label, in DOM order — nothing filtered out.
+ *
+ * The event-name cell was a `<span>` before the redesign; DataTable's event
+ * column now renders it as a `<p>` (EventLogPanel.tsx's `columns` definition,
+ * the `event` column's `cell`), so the selector follows the tag rename.
+ */
 function allRenderedRows(): string[] {
-  return Array.from(document.querySelectorAll('span.text-xs.text-content.truncate')).map(
+  return Array.from(document.querySelectorAll('p.text-xs.text-content.truncate')).map(
     el => el.textContent ?? ''
   );
 }
@@ -91,16 +97,20 @@ describe('EventLogPanel SSE config frame', () => {
     expect(renderedEvents(['AlphaEvent', 'BetaEvent'])).toEqual(['BetaEvent', 'AlphaEvent']);
   });
 
-  it("appends newest-last when the config frame asks for new_entries 'bottom'", async () => {
-    // The whole point of the frame: the server decides the direction. With
-    // 'bottom' the order must invert relative to the case above.
+  it("still renders newest-first when the config frame asks for new_entries 'bottom'", async () => {
+    // `new_entries: 'bottom'` still governs which end of the in-memory buffer
+    // new rows join (and so which end gets trimmed at `max_entries` — see the
+    // cap tests below), but display order no longer follows it: EventLogPanel
+    // now always shows page 1 as "latest first" regardless of the stream's
+    // append direction (EventLogPanel.tsx's `orderedEntries`, which reverses
+    // the buffer for 'bottom' precisely so paging stays "page 1 = newest").
     mockFetchRaw(
       config({ max_entries: 100, new_entries: 'bottom' }) + evt('AlphaEvent') + evt('BetaEvent')
     );
     renderWithProviders(<EventLogPanel />);
 
     await waitFor(() => expect(screen.getByText('BetaEvent')).toBeTruthy());
-    expect(renderedEvents(['AlphaEvent', 'BetaEvent'])).toEqual(['AlphaEvent', 'BetaEvent']);
+    expect(renderedEvents(['AlphaEvent', 'BetaEvent'])).toEqual(['BetaEvent', 'AlphaEvent']);
   });
 
   it('caps the buffer at max_entries, dropping the oldest when newest-first', async () => {
@@ -123,9 +133,11 @@ describe('EventLogPanel SSE config frame', () => {
   });
 
   it('caps the buffer from the other end when newest-last', async () => {
-    // Same cap, opposite direction: the list is [A, B, C] and must keep the
-    // LAST two. Trimming the wrong end here would silently discard the newest
-    // events instead of the oldest — which is why both directions are pinned.
+    // Same cap, opposite direction: the buffer is [A, B, C] appended and must
+    // keep the LAST two (B, C) — trimming the wrong end here would silently
+    // discard the newest events instead of the oldest, which is why both
+    // directions are pinned. Display still normalizes to newest-first (see
+    // the 'bottom' test above), so the surviving pair renders as [C, B].
     mockFetchRaw(
       config({ max_entries: 2, new_entries: 'bottom' }) +
         evt('AlphaEvent') +
@@ -136,8 +148,8 @@ describe('EventLogPanel SSE config frame', () => {
 
     await waitFor(() => expect(screen.getByText('GammaEvent')).toBeTruthy());
     expect(renderedEvents(['AlphaEvent', 'BetaEvent', 'GammaEvent'])).toEqual([
-      'BetaEvent',
       'GammaEvent',
+      'BetaEvent',
     ]);
     expect(screen.queryByText('AlphaEvent')).toBeNull();
   });

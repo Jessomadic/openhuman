@@ -276,7 +276,7 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
     const enableTriggerMethod = 'openhuman.composio_enable_trigger';
     const before = await callOpenhumanRpc(listTriggersMethod, {});
     expectRpcOk(listTriggersMethod, before);
-    // list_triggers always emits a log line → RpcOutcome wraps in {result, logs}.
+    // list_triggers always emits a log line → Outcome wraps in {result, logs}.
     // JSON-RPC result shape: { result: { triggers: [...] }, logs: [...] }
     // callResult.result = { result: { triggers: [...] }, logs: [...] }
     const beforeList = (before.result?.result?.triggers ??
@@ -444,7 +444,7 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
     // CreateConversationThreadRequest only accepts `labels` (deny_unknown_fields).
     const createA = await callOpenhumanRpc('openhuman.threads_create_new', {});
     expect(createA.ok).toBe(true);
-    // threads_create_new returns RpcOutcome<ApiEnvelope<ConversationThreadSummary>> with
+    // threads_create_new returns Outcome<ApiEnvelope<ConversationThreadSummary>> with
     // empty logs → bare ApiEnvelope: { data: { id, ... }, meta: {...} }
     // callResult.result = { data: { id, ... }, meta: {...} }
     const threadId: string = createA.result?.data?.id ?? '';
@@ -453,7 +453,7 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
     // List threads — must have at least 1.
     const listA = await callOpenhumanRpc('openhuman.threads_list', {});
     expect(listA.ok).toBe(true);
-    // threads_list returns RpcOutcome<ApiEnvelope<{threads, count}>> with empty logs
+    // threads_list returns Outcome<ApiEnvelope<{threads, count}>> with empty logs
     // callResult.result = { data: { threads: [...], count: N }, meta: {...} }
     const threadsA: unknown[] = listA.result?.data?.threads ?? [];
     expect(threadsA.length).toBeGreaterThan(0);
@@ -619,7 +619,7 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
     const result = await callOpenhumanRpc('openhuman.update_version', {});
     expect(result.ok).toBe(true);
 
-    // update_version always emits a log → RpcOutcome wraps in {result, logs}.
+    // update_version always emits a log → Outcome wraps in {result, logs}.
     // JSON-RPC result shape: { result: { version, target_triple, asset_prefix }, logs: [...] }
     // callResult.result = { result: { version, ... }, logs: [...] }
     // callResult.result.result = { version, target_triple, asset_prefix }
@@ -747,7 +747,7 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
     clearRequestLog();
 
     // Step 1 — create a fresh thread.
-    // threads_create_new returns RpcOutcome<ApiEnvelope<ConversationThreadSummary>> with
+    // threads_create_new returns Outcome<ApiEnvelope<ConversationThreadSummary>> with
     // empty logs → bare ApiEnvelope: { data: { id, title, ... }, meta: {...} }
     // callResult.result = { data: { id, ... }, meta: {...} }
     const create = await callOpenhumanRpc('openhuman.threads_create_new', {});
@@ -783,7 +783,7 @@ describe('Mega flow — login + Gmail OAuth + Composio in one session', () => {
     });
     expect(msgList.ok).toBe(true);
 
-    // threads_messages_list returns RpcOutcome<ApiEnvelope<ConversationMessagesResponse>>
+    // threads_messages_list returns Outcome<ApiEnvelope<ConversationMessagesResponse>>
     // with empty logs → bare ApiEnvelope: { data: { messages: [...], count: N }, meta: {...} }
     // callResult.result = { data: { messages: [...] }, meta: {...} }
     const messages: unknown[] = msgList.result?.data?.messages ?? [];

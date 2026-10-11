@@ -5,7 +5,7 @@
 //! `core/all.rs` registers the latter under `DomainGroup::Config` (the schema-only
 //! list is consumed by tests). Handlers here are thin: they deserialize params,
 //! delegate to `config::ops` (re-exported as `config::rpc`) for the actual
-//! mutation/read, and shape the `RpcOutcome` response.
+//! mutation/read, and shape the `Outcome` response.
 //!
 //! - `controllers.rs` — declares submodules `controllers/{agent,inference,
 //!   integrations,registry,voice,workspace}.rs` (split for file-size only;
@@ -24,7 +24,8 @@
 //! `update_browser_settings`, `update_local_ai_settings`, `resolve_api_url`,
 //! `get_runtime_flags`, `set_browser_allow_all`, `workspace_onboarding_flag_exists`,
 //! `workspace_onboarding_flag_set`, `update_analytics_settings`,
-//! `get_analytics_settings`, `get_dashboard_settings`, `agent_server_status`,
+//! `get_analytics_settings`, `update_user_timezone`, `get_user_timezone`,
+//! `get_dashboard_settings`, `agent_server_status`,
 //! `reset_local_data`, `get_data_paths`, `get_agent_paths`, `update_agent_paths`,
 //! `get_onboarding_completed`, `set_onboarding_completed`, `get_dictation_settings`,
 //! `update_dictation_settings`, `get_voice_server_settings`,
@@ -32,9 +33,7 @@
 //! `get_composio_trigger_settings`, `get_autonomy_settings`,
 //! `update_autonomy_settings`, `get_privacy_mode`, `set_privacy_mode`,
 //! `get_agent_settings`, `update_agent_settings`, `update_search_settings`,
-//! `get_search_settings`, `get_activity_level_settings`,
-//! `update_activity_level_settings`, `get_memory_sync_settings`,
-//! `update_memory_sync_settings`, `get_sandbox_settings`,
+//! `get_search_settings`, `get_sandbox_settings`,
 //! `update_sandbox_settings`.
 
 mod controllers;
@@ -46,9 +45,9 @@ pub use controllers::{all_controller_schemas, all_registered_controllers};
 // Re-export items that schemas_tests.rs accesses via `use super::*`.
 // The test module is `schemas::tests` so `super::` resolves to `schemas`.
 #[cfg(test)]
-use crate::core::TypeSchema;
+use crate::core::Outcome;
 #[cfg(test)]
-use crate::rpc::RpcOutcome;
+use crate::core::TypeSchema;
 #[cfg(test)]
 use controllers::{
     handle_get_agent_paths, handle_get_autonomy_settings, handle_update_autonomy_settings,

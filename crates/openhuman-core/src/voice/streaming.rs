@@ -29,7 +29,7 @@
 //! ## Authentication
 //! `GET /ws/dictation` is authenticated at the upgrade boundary (C4 / issue #1924).
 //! The browser WebSocket API cannot set arbitrary request headers on upgrade, so the
-//! check lives in `dictation_ws_handler` (`crates/openhuman-core/src/core/jsonrpc.rs`), not here: it requires
+//! check lives in `dictation_ws_handler` (`crates/openhuman-rpc/src/server/http/dictation.rs`), not here: it requires
 //! the per-process core bearer via `Authorization: Bearer <token>` (native callers) or
 //! `?token=<token>` (browser clients), plus the same origin allowlist Socket.IO enforces,
 //! and rejects the upgrade with 401/403 before this function runs. Do NOT add a
@@ -54,8 +54,6 @@ use crate::config::Config;
 use crate::voice::{create_stt_provider, effective_stt_provider};
 
 const LOG_PREFIX: &str = "[voice-stream]";
-#[cfg(test)]
-use tinyinference_voice::streaming::MAX_STREAM_BUFFER_SAMPLES;
 use tinyinference_voice::streaming::{
     append_stream_samples, decode_pcm16le_frame, is_stop_command, AUDIO_SAMPLE_RATE,
     MAX_FULL_AUDIO_SAMPLES,
@@ -230,7 +228,3 @@ pub async fn handle_dictation_ws(mut socket: WebSocket, config: Arc<Config>) {
     log::info!("{LOG_PREFIX} streaming session complete");
     // Socket is dropped here, which sends a close frame automatically
 }
-
-#[cfg(test)]
-#[path = "streaming_tests.rs"]
-mod tests;

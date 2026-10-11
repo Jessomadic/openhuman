@@ -5,14 +5,17 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::config::rpc as config_rpc;
+use super::live_config::live_composio_config;
+use super::redact::redact_composio_outcome;
 use crate::config::Config;
 use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult};
 
-use super::super::client::{create_composio_client, ComposioClientKind};
+use super::super::client::{resolve_composio_route, ComposioRoute};
+use super::super::module_client::{self as connectors, methods};
+use super::super::types::{ComposioAuthorizeRequest, ComposioAuthorizeResponse};
 
 pub struct ComposioAuthorizeTool {
-    /// Held instead of a pre-baked `ComposioClient` so the
+    /// Held instead of a pre-resolved route so the
     /// [`crate::config::ComposioConfig::mode`] toggle is
     /// honoured on every call (#1710).
     config: Arc<Config>,
@@ -54,6 +57,13 @@ impl Tool for ComposioAuthorizeTool {
         ToolCategory::Workflow
     }
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+        let outcome = Box::pin(self.execute_unredacted(args)).await;
+        redact_composio_outcome(&self.config, outcome)
+    }
+}
+
+impl ComposioAuthorizeTool {
+    async fn execute_unredacted(&self, args: Value) -> anyhow::Result<ToolResult> {
         let toolkit = args
             .get("toolkit")
             .and_then(|v| v.as_str())
@@ -72,27 +82,20 @@ impl Tool for ComposioAuthorizeTool {
         // the backend's `/agent-integrations/composio/authorize`
         // route, so we refuse this verb explicitly instead of
         // silently routing through the wrong tenant.
-        // [#1710 Wave 4] Reload config fresh per execute so a mid-session
-        // `composio.mode` toggle takes effect at the very next tool call.
-        // Anchor the reload to this tool's original config path rather
-        // than re-resolving process-global `OPENHUMAN_WORKSPACE`; the
-        // tool is scoped to the user/workspace it was created for.
-        let live_config =
-            match config_rpc::reload_config_snapshot_with_timeout(self.config.as_ref()).await {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(error = %e, "[composio] tool: load_config failed");
-                    return Ok(ToolResult::error(format!(
-                        "composio: failed to load live config: {e}"
-                    )));
-                }
-            };
-        let client = match create_composio_client(&live_config) {
-            Ok(ComposioClientKind::Backend(client)) => {
-                tracing::debug!("[composio] authorize.execute: backend variant");
-                client
+        let live_config = match live_composio_config(self.config.as_ref()).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "[composio] tool: load_config failed");
+                return Ok(ToolResult::error(format!(
+                    "composio: failed to load live config: {e}"
+                )));
             }
-            Ok(ComposioClientKind::Direct(_)) => {
+        };
+        match resolve_composio_route(&live_config) {
+            Ok(ComposioRoute::Backend) => {
+                tracing::debug!("[composio] authorize.execute: backend variant");
+            }
+            Ok(ComposioRoute::Direct(_)) => {
                 tracing::info!(
                     toolkit = %toolkit,
                     "[composio-direct] authorize.execute: direct mode active — \
@@ -109,7 +112,17 @@ impl Tool for ComposioAuthorizeTool {
                 return Ok(ToolResult::error(format!("composio_authorize failed: {e}")));
             }
         };
-        match client.authorize(&toolkit, None).await {
+        let request = ComposioAuthorizeRequest {
+            toolkit: toolkit.clone(),
+            extra_params: None,
+        };
+        match connectors::call::<_, ComposioAuthorizeResponse>(
+            &live_config,
+            methods::AUTHORIZE,
+            request,
+        )
+        .await
+        {
             Ok(resp) => {
                 crate::core::bus::BUS.publish(
                     crate::core::events::DomainEvent::ComposioConnectionCreated {

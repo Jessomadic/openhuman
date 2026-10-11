@@ -15,10 +15,8 @@
 # whenever scripts/kernel-floor.limits does and belongs in the same PR.
 # 264 -> 265 on 2026-08-21: the tinymemory #76/#77 bump adds exactly one
 # name, `tinymemory-bus`. 265 -> 267 on 2026-08-22: the MCP extraction
-# adds `tinymcp` and `tinymcp-bus`. 267 -> 268 on 2026-08-22: language
-# runtimes moved behind the `tinyruntime` TinyBus module, adding
-# `tinyruntime-bus`. 268 -> 269 on 2026-08-23: the TinyJuice wire
-# contract moved into `tinyjuice-bus`, which cannot be gated because
+# adds `tinymcp` and `tinymcp-bus`. 267 -> 268 on 2026-08-23: the
+# TinyJuice wire contract moved into `tinyjuice-bus`, which cannot be gated because
 # `inference::tokenjuice` compiles in every build. 269 -> 270 on
 # 2026-08-29: `tinytools` becomes the dependency behind the `Tool`
 # trait/types, which cannot be gated because `tools/` is kernel
@@ -36,10 +34,12 @@
 # 270 -> 271 on 2026-09-18: `tinytools-agent` becomes the shared
 # provider-neutral tool-call protocol crate; it adds one Rust crate
 # and no native build dependency.
-# See the kernel-floor history for why
-# these raises are temporary/justified. macOS resolves one higher per
-# the host skew recorded in the limits history — this expects the CI
-# host.
+# 286 -> 283 on 2026-09-29: the merged dependency graph now resolves three
+# fewer unique crate names in the flows profile; keep calibration aligned
+# with the lowered kernel floor.
+# See the kernel-floor history for prior raises. The current
+# macOS graph resolves three more names than CI Linux; this calibrates against
+# the Linux target used by CI.
 #
 # This number MUST move in lockstep with scripts/kernel-floor.limits —
 # it is a second source of truth for the same Linux name count and is
@@ -55,6 +55,37 @@
 # 277 -> 280 on 2026-09-22: TinyAgents 2.1.2 moves its required
 # runtime/session/graph split into the harness path; it adds three
 # crate names and no native build dependency.
+# 280 -> 282 on 2026-09-25: TinyChannels 0.1.3 resolves HMAC 0.13 and
+# activates digest 0.11's ctutils/cmov tail, adding two names but no native
+# build dependency. See the matching kernel-floor history entry.
+# 286 -> 283 on 2026-09-29: the updated locked dependency graph resolves
+# three fewer unique names in the Linux flows profile; no native build
+# dependencies changed. See kernel-floor.limits.
+# 285 -> 286 on 2026-09-27: multi-provider search uses the required
+# tinysearch-bus contract in always-on config and policy code; one name,
+# no native dependency. See kernel-floor.limits.
+# 286 -> 283 on 2026-09-29: current vendored dependency resolution sheds
+# three package names without changing the native build dependency count.
+# 282 -> 285 on 2026-09-26: the required TinyBrowser integration adds
+# tinybrowser-bus, tinybrowser-control, and tinyjevclient. Native count stays 2.
+# 286 -> 283 on 2026-09-29: the current flows graph sheds three resolved
+# packages and crate names without changing native builds. See kernel-floor.limits.
+# 283 -> 282 on 2026-09-29: the JSON-RPC split removes openhuman-rpc from the
+# core graph after the TinyMCP v0.3.5 update; native count remains 2.
+# 282 -> 283 on 2026-09-30: TinyChannels supplies the always-on CLI channel
+# and shared runtime helpers through `tinychannels-runtime`; the required
+# workspace package adds one name, no dependency tail or native build. See PR #6782.
+# 299 -> 304 on 2026-10-01: the current merged upstream module pins resolve
+# five additional crate names in the flows profile. The measured graph has 321
+# packages / 304 names and still 2 native builds; the kernel-floor history
+# records the upstream update and its measured increase.
+# 304 -> 307 on 2026-10-04: TinyBox v0.1.15 adds the required TinyBus runtime
+# integration to the always-on flows graph; native builds remain unchanged.
+#
+# 304 -> 318 on 2026-10-04: lossless PNG optimization adds an 11-name
+# oxipng closure and the merged TinyBox default Landlock backend adds three
+# names. A global-cut simulation of oxipng,landlock recovers 325/304 exactly;
+# native accounting now includes libdeflate-sys (three native builds).
 #
 # Called by ci-lite.yml's feature-gate smoke lane and by the lane runner, so the
 # expected count lives here once (plus scripts/kernel-floor.limits).
@@ -62,6 +93,28 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-EXPECTED_NAMES=280
+# 316 -> 311 on 2026-10-05: the upstream Memory lifecycle refresh removed
+# five names from the Linux flows graph; native builds remain at three.
+# 311 -> 320 on 2026-10-07: tinyskills v0.2.8 (#7054) brings cap-std and its
+# dependencies into the flows graph.
+# 320 -> 313 on 2026-10-09: the tinyagents and tinyflows mains shed seven
+# names from the flows graph.
+# 313 -> 314 on 2026-10-09: the config loader names the failing field path
+# through `serde_path_to_error` (pure Rust, no dependencies; already in the
+# product graph through axum).
+# 314 -> 315 on 2026-10-09: secrets on the storage backend add the
+# first-party tinystoragedrivers-secrets crate (its crypto deps were already
+# in the graph).
+# 315 -> 316 on 2026-10-09: cron and flows on the storage ports add the
+# first-party tinyflows-drivers crate (one package, one name; no new
+# external crate).
+# 316 -> 317 on 2026-10-10: storage-file is always on, adding the
+# first-party tinystoragedrivers-file crate (one package, one name; no new
+# external crate).
+# 339 -> 337 packages / 317 -> 315 names on 2026-10-10: removing the
+# managed-runtime dependency surface sheds two names; native builds stay at 2.
+# This matches the current `flows:337:315:2` entry in
+# scripts/kernel-floor.limits; its preceding entries are historical.
+EXPECTED_NAMES=315
 
 exec python3 scripts/dep-sim.py --cut-nothing --expect-names "${EXPECTED_NAMES}"

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 
+import { useT } from '../lib/i18n/I18nContext';
 import { handleDeepLinkUrls } from '../utils/desktopDeepLinkListener';
 
 interface WebCallbackPageProps {
@@ -28,6 +29,7 @@ export default function WebCallbackPage({
   callbackKind,
   callbackStatus,
 }: WebCallbackPageProps = {}) {
+  const { t } = useT();
   const { kind: routeKind, status: routeStatus } = useParams();
   const location = useLocation();
   const kind = callbackKind ?? routeKind;
@@ -49,9 +51,14 @@ export default function WebCallbackPage({
   return (
     <div className="flex min-h-[60vh] items-center justify-center px-6 text-center">
       <div className="max-w-md space-y-3">
-        <h1 className="text-2xl font-semibold text-content">Completing sign-in</h1>
+        <h1 className="text-2xl font-semibold text-content">
+          {t('webCallback.title', 'Completing sign-in')}
+        </h1>
         <p className="text-sm text-content-secondary">
-          OpenHuman is processing your callback and will continue automatically.
+          {t(
+            'webCallback.description',
+            'OpenHuman is processing your callback and will continue automatically.'
+          )}
         </p>
       </div>
     </div>

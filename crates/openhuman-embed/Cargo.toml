@@ -9,45 +9,86 @@ readme = "README.md"
 publish = false
 
 [features]
-default = ["openhuman-core/default"]
+langfuse = ["openhuman-core/langfuse"]
+# `channels` is in core's default set already; enabling it here too compiles
+# the `Runtime::channels` facade in a default build.
+default = ["openhuman-core/default", "channels"]
 http-server = ["openhuman-core/http-server"]
 inference = ["openhuman-core/inference"]
 documents = ["openhuman-core/documents"]
 hosting = ["openhuman-core/hosting"]
+tinymemes = ["openhuman-core/tinymemes"]
 modules = ["openhuman-core/modules"]
 voice = ["openhuman-core/voice"]
 web3 = ["openhuman-core/web3"]
-runtime-node = ["openhuman-core/runtime-node"]
-contacts = ["openhuman-core/contacts"]
+# Storage drivers for `[storage] url` (see the core `storage` domain).
+storage-sqlite = ["openhuman-core/storage-sqlite"]
+storage-mongodb = ["openhuman-core/storage-mongodb"]
+storage-file = ["openhuman-core/storage-file"]
 media = ["openhuman-core/media"]
 flows = ["openhuman-core/flows"]
 skills = ["openhuman-core/skills"]
 mcp = ["openhuman-core/mcp"]
-crash-reporting = ["openhuman-core/crash-reporting"]
-medulla = ["openhuman-core/medulla"]
+# Also carries `process::sentry`, the shared Sentry options + before_send chain.
+crash-reporting = ["dep:sentry", "openhuman-core/crash-reporting"]
 channels = ["openhuman-core/channels"]
-sandbox-landlock = ["openhuman-core/sandbox-landlock"]
-sandbox-bubblewrap = ["openhuman-core/sandbox-bubblewrap"]
-browser-native = ["openhuman-core/browser-native"]
 whatsapp-web = ["openhuman-core/whatsapp-web"]
 file-logging = ["openhuman-core/file-logging"]
 scheduler-gate = ["openhuman-core/scheduler-gate"]
+# Exposes the destructive `openhuman.test_reset` RPC for E2E builds only.
+# Default-OFF everywhere; forwarded so the desktop E2E build can reach it
+# through the chain instead of naming the core directly.
+e2e-test-support = ["openhuman-core/e2e-test-support"]
 
 [dependencies]
+futures-core = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }
+async-trait = "0.1"
 openhuman-core = { path = "../openhuman-core", package = "openhuman", default-features = false }
 anyhow = "1"
+# `JobSchedule::At` converts to and from the core's `chrono` instants.
+chrono = "0.4"
 log = "0.4"
+jsonschema = { version = "0.58", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `process::sentry` (crash-reporting): the client options and before_send
+# chain hosts share. Same version and minimal features as the core's, which
+# carries the transport/backtrace features through `openhuman-core/crash-reporting`.
+sentry = { version = "0.47.0", default-features = false, optional = true }
 tempfile = "3"
 thiserror = "2"
+# The memory facade (`memory`) speaks TinyMemory's contract types; same path as
+# the core's so one copy resolves.
+tinymemory-api = { path = "../../vendor/tinymemory/crates/tinymemory-api" }
+tinymemory-tools = { path = "../../vendor/tinymemory/crates/tinymemory-tools" }
+# Construct the owned wire config directly; core adds host disclosure policy.
+tinymcp-bus = { path = "../../vendor/tinymcp/crates/tinymcp-bus" }
+# The session store port (`SessionStoreProvider`) a host implements to keep
+# conversations in its own database, and the in-memory provider; same path as
+# the core's so one copy resolves.
+tinyagents-session = { path = "../../vendor/tinyagents/crates/tinyagents-session" }
+# The wire request/response types `complete` converts to; same path as the
+# core's so one copy resolves.
+tinyinference-llm = { path = "../../vendor/tinyagents/vendor/tinyinference/crates/tinyinference-llm" }
+tinyinference-embeddings = { path = "../../vendor/tinyagents/vendor/tinyinference/crates/tinyinference-embeddings" }
+# `RuntimeBuilder::tool_ranker` takes `tinytools::ToolRanker`; same vendored
+# path as the core's so the trait unifies.
+# `AgentDefinitionSpec::tool_rules` takes the shared tool-rule vocabulary too.
+tinytools = { path = "../../vendor/tinyagents/vendor/tinytools/crates/tinytools" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+async-trait = "0.1"
+tinymemory-api = { path = "../../vendor/tinymemory/crates/tinymemory-api", features = ["conformance"] }
 dirs = "6"
 env_logger = "0.11"
+# The profile tests and example implement a stub `BackendTransport`, whose
+# `http_client` hands out a `reqwest::Client`. Same features as the core's, so
+# the dev graph adds no reqwest feature (see the unification note below).
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls", "stream", "http2", "multipart", "socks"] }
 wiremock = "0.6"
 # Feature unification with openhuman-cli's dev-dependencies. Cargo builds the
 # core once per distinct feature set of its dependencies, and the tests of
@@ -58,3 +99,32 @@ wiremock = "0.6"
 sentry = { version = "0.47.0", default-features = false, features = ["test"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "mcp"
+required-features = ["mcp"]
+
+[[example]]
+name = "skills"
+required-features = ["skills"]
+
+[[example]]
+name = "telegram"
+required-features = ["channels"]
+
+[[example]]
+name = "storage"
+required-features = ["storage-sqlite"]
+
+# SaaS profiles are exposed only when the channel facade is compiled.
+[[test]]
+name = "saas_profiles"
+required-features = ["channels"]
+
+[[example]]
+name = "profiles"
+required-features = ["channels"]

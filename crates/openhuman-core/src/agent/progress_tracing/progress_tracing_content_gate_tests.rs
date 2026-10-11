@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent::progress_tracing::serialize::{capture_model_content, MAX_MODEL_CONTENT_CHARS};
 
 #[test]
 fn subagent_content_is_withheld_when_capture_off() {
@@ -13,11 +12,12 @@ fn subagent_content_is_withheld_when_capture_off() {
                 elapsed_ms: 100,
                 iterations: 2,
                 output_chars: 12,
+                usage: None,
                 output: "final answer".to_string(),
                 worktree_path: None,
                 changed_files: vec![],
                 dirty_status: None,
-                usage: None,
+                stop: None,
             },
             105,
         ),
@@ -26,18 +26,6 @@ fn subagent_content_is_withheld_when_capture_off() {
     let sub = find(c.spans(), "subagent.Researcher");
     assert!(sub.input.is_none());
     assert!(sub.output.is_none());
-}
-
-#[test]
-fn oversized_model_content_degrades_to_truncated_string() {
-    let big = "x".repeat(MAX_MODEL_CONTENT_CHARS + 100);
-    let captured = capture_model_content(&serde_json::json!({ "content": big }));
-    let rendered = match &captured {
-        serde_json::Value::String(s) => s.clone(),
-        other => other.to_string(),
-    };
-    assert!(rendered.chars().count() <= MAX_MODEL_CONTENT_CHARS + 64);
-    assert!(rendered.contains("truncated"));
 }
 
 #[test]

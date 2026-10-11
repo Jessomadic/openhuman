@@ -3,45 +3,6 @@ use crate::agent::harness::spawn_depth_context::current_spawn_depth;
 use crate::agent::subagent_host::run_subagent;
 
 #[test]
-fn lazy_resolver_tolerates_near_miss_slugs() {
-    use crate::agent::prompts::ConnectedIntegrationTool;
-    let mk = |name: &str| ConnectedIntegrationTool {
-        name: name.into(),
-        description: "d".into(),
-        parameters: None,
-    };
-    let resolver = LazyToolkitResolver {
-        config: std::sync::Arc::new(crate::config::Config::default()),
-        actions: vec![mk("GOOGLESLIDES_BATCH_UPDATE"), mk("GMAIL_LIST_MESSAGES")],
-        resolved: std::sync::Mutex::default(),
-    };
-    // Exact, case-insensitive, and separator/prefix drift all resolve
-    // (bug-report-2026-05-26 A2).
-    assert!(resolver.resolve("GMAIL_LIST_MESSAGES").is_some());
-    assert!(resolver.resolve("gmail_list_messages").is_some());
-    assert!(resolver.resolve("googleslides_batch_update").is_some());
-    // A fabricated slug stays unresolved → routed to the "available tools"
-    // error so the model self-corrects, not silently mis-dispatched.
-    assert!(resolver.resolve("GMAIL_GET_LAST_3_MESSAGES").is_none());
-}
-
-#[test]
-fn normalize_slug_collapses_separators_and_case() {
-    assert_eq!(
-        normalize_slug("GOOGLESLIDES_BATCH_UPDATE"),
-        "googleslidesbatchupdate"
-    );
-    assert_eq!(
-        normalize_slug("googleslides_batch_update"),
-        "googleslidesbatchupdate"
-    );
-    assert_ne!(
-        normalize_slug("GMAIL_GET_LAST_3_MESSAGES"),
-        normalize_slug("GMAIL_LIST_MESSAGES")
-    );
-}
-
-#[test]
 fn filter_named_scope_keeps_only_named() {
     let parent: Vec<Box<dyn Tool>> = vec![stub("alpha"), stub("beta"), stub("gamma")];
     let def = make_def_named_tools(&["alpha", "gamma"]);
@@ -206,7 +167,6 @@ async fn typed_mode_returns_text_through_runner() {
             SubagentRunOptions {
                 workspace_descriptor: None,
                 skill_filter_override: None,
-                toolkit_override: None,
                 context: None,
                 model_override: None,
                 task_id: Some("t1".into()),
@@ -289,6 +249,7 @@ async fn run_queue_steer_lands_in_subagent_history() {
         .push(
             QueueLane::Steer,
             crate::agent::queued_turn::QueuedTurn {
+                id: "queued-test".into(),
                 text: "switch focus to memory safety".into(),
                 client_id: "steer_subagent".into(),
                 thread_id: "t-steer".into(),
@@ -425,7 +386,6 @@ async fn typed_mode_filters_tools_by_skill_filter() {
             SubagentRunOptions {
                 workspace_descriptor: None,
                 skill_filter_override: Some("notion".into()),
-                toolkit_override: None,
                 context: None,
                 model_override: None,
                 task_id: None,
@@ -518,7 +478,11 @@ async fn typed_mode_blocks_unallowed_tool_calls() {
     .await
     .expect("runner should succeed");
 
-    assert!(outcome.output.contains("oops"));
+    assert!(
+        outcome.output.contains("oops"),
+        "the recovered iteration's reply must be the output, got: {:?}",
+        outcome.output
+    );
     let captured = provider.captured.lock();
     let second_call_messages = &captured[1].messages;
     let tool_msg = second_call_messages

@@ -44,7 +44,7 @@ fn the_withheld_block_renders_for_a_renamed_session_with_a_filter() {
 
     // A visible set shaped like the live one: the advertised delegates are in,
     // the packed ones are not.
-    let visible: HashSet<String> = ["research", "plan", "ask_docs", "file_read", "goal_complete"]
+    let visible: HashSet<String> = ["file_read", "goal_complete"]
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -58,27 +58,23 @@ fn the_withheld_block_renders_for_a_renamed_session_with_a_filter() {
         "expected the generated heading, got: {:?}",
         block.chars().take(120).collect::<String>()
     );
-    // The row this pins is a `documents`-gated skill, so the assertion depends
-    // on a Cargo feature the test does not declare. Under `default` the skill
-    // is not compiled, the row cannot render, and the failure reads as a broken
-    // block — which is how openhuman#6507 came to be filed and retracted.
-    //
-    // Unlike the tool-universe guard in `fleet_prompt_tests`, this test depends
-    // on exactly ONE feature and can ask about it directly, so there is no
-    // tool-to-feature mapping here to drift out of date.
+    // A packed delegate no Cargo feature gates must always render with its
+    // route; this is the row that pins the block in every build profile.
     assert!(
-        block.contains("- skill `documents`: `make_presentation`"),
-        "a packed delegate must render with its route:{}\n{block}",
-        if cfg!(feature = "documents") {
-            String::new()
-        } else {
-            "\n\nNOTE — this may be a feature-profile artefact, not a rendering defect: \
-             the `documents` feature is NOT enabled in this build, so `make_presentation` \
-             does not exist and the row cannot render. Settle it by reproducing CI exactly:\
-             \n\n    cargo test -p openhuman --lib --features \"$(bash scripts/ci/product-features.sh)\"\
-             \n\nIf it passes there, this profile simply lacks the skill. See openhuman#6512."
-                .to_string()
-        }
+        block.contains("`tasks` (manage_tasks"),
+        "a packed delegate must render with its route:\n{block}"
+    );
+    // `make_presentation` is a `documents`-gated skill: under `default` it is
+    // not compiled and its row cannot render, so expecting it unconditionally
+    // reads as a broken block (which is how openhuman#6507 came to be filed
+    // and retracted). Assert it exactly when the feature is on, and assert its
+    // absence when it is off, so the expectation tracks the build profile.
+    let presentation_row = block.contains("`documents` (make_presentation");
+    assert_eq!(
+        presentation_row,
+        cfg!(feature = "documents"),
+        "the `documents` row must render exactly when the `documents` feature is enabled \
+         (see openhuman#6512):\n{block}"
     );
 }
 
@@ -87,7 +83,7 @@ fn the_withheld_block_renders_for_a_renamed_session_with_a_filter() {
 fn the_generated_block_has_no_stray_whitespace_runs() {
     crate::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins()
         .expect("builtin agent definitions must load");
-    let visible: HashSet<String> = ["research".to_string()].into_iter().collect();
+    let visible: HashSet<String> = ["file_read".to_string()].into_iter().collect();
     let mut ctx = ctx_with(&[]);
     ctx.agent_id = "orchestrator";
     ctx.visible_tool_names = &visible;
@@ -109,14 +105,10 @@ fn prompt_routes_workflow_authoring_to_the_builder_not_use_skill() {
     // The gate is the fix; this pins the prompt so the model is told the route
     // before it discovers the wall.
     assert!(
-        ARCHETYPE.contains("## Scheduling and workflows"),
-        "orchestrator prompt must carry the workflow routing rule"
-    );
-    assert!(
         ARCHETYPE.contains(
-            "skill `workflows` (`build_workflow` to author, `discover_workflows` to find)"
+            "Build or edit a workflow: spawn `workflow_builder` with `spawn_async_subagent`"
         ),
-        "the rule must name the delegate to call"
+        "orchestrator prompt must carry the workflow routing rule and name the spawn to make"
     );
 
     // The rule is only true because these are the real names. Asserting the
@@ -144,26 +136,33 @@ fn prompt_routes_workflow_authoring_to_the_builder_not_use_skill() {
         "the prompt tells the model to call `build_workflow`; that must still be \
          workflow_builder's delegate_name, or the rule names a tool nobody has"
     );
+    match &builder.tools {
+        crate::agent::harness::definition::ToolScope::Named(tools) => {
+            for tool in ["list_flows", "get_flow"] {
+                assert!(
+                    tools.contains(&tool.to_string()),
+                    "the saved-flow lookup route needs `{tool}` on workflow_builder's belt"
+                );
+            }
+        }
+        crate::agent::harness::definition::ToolScope::Wildcard => {
+            panic!("workflow_builder must retain its explicit, narrow tool belt")
+        }
+    }
 }
 
-/// #6302: the hand-off the skills and MCP sections name is the call this
+/// #6302: the hand-off the skills sections name is the call this
 /// session can make right now: direct when it is on the belt, the `use_skill`
 /// form when a pack holds it, and nothing when the agent has no route.
 #[cfg(all(feature = "mcp", feature = "skills"))]
 #[test]
-fn skill_and_mcp_sections_name_the_hand_off_this_session_can_call() {
+fn skill_sections_name_the_hand_off_this_session_can_call() {
     crate::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins()
         .expect("builtin agent definitions must load");
-    let belt: HashSet<String> = [
-        "setup_skills",
-        "run_skill",
-        "use_mcp_server",
-        "research",
-        "use_skill",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
+    let belt: HashSet<String> = ["setup_skills", "run_workflow", "file_read", "use_skill"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let mut ctx = ctx_with(&[]);
     ctx.agent_id = "orchestrator";
     ctx.visible_tool_names = &belt;
@@ -172,25 +171,21 @@ fn skill_and_mcp_sections_name_the_hand_off_this_session_can_call() {
         hand_off_route(&ctx, "skill_setup").as_deref(),
         Some("`setup_skills`")
     );
-    assert_eq!(
-        hand_off_route(&ctx, "skill_executor").as_deref(),
-        Some("`run_skill`")
-    );
-    assert_eq!(
-        hand_off_route(&ctx, "mcp_agent").as_deref(),
-        Some("`use_mcp_server`")
-    );
+    // Running a skill is the orchestrator's own `run_workflow`, not a hand-off.
+    assert_eq!(run_workflow_route(&ctx).as_deref(), Some("`run_workflow`"));
     // Listed but held by a pack: name the call that actually reaches it.
     assert_eq!(
-        hand_off_route(&ctx, "crypto_agent").as_deref(),
-        Some("`use_skill { \"skill\": \"crypto\", \"tool\": \"do_crypto\" }`")
+        hand_off_route(&ctx, "image_agent").as_deref(),
+        Some("`create_image` (`use_skill` skill `media`)")
     );
-    // Not in the orchestrator's allowlist: no route, so name nothing.
-    assert_eq!(hand_off_route(&ctx, "context_scout"), None);
+    // Not in the orchestrator's allowlist: no route, so name nothing. `planner`
+    // is registered for workflow runs but is not a chat delegate.
+    assert_eq!(hand_off_route(&ctx, "summarizer"), None);
+    assert_eq!(hand_off_route(&ctx, "planner"), None);
 
     // The generated withheld block no longer lists the unpacked hand-offs.
     let block = render_withheld_specialists(&ctx);
-    for handoff in ["setup_skills", "run_skill", "use_mcp_server"] {
+    for handoff in ["setup_skills", "run_workflow"] {
         assert!(
             !block.contains(handoff),
             "`{handoff}` is a direct tool and must not be listed as withheld:\n{block}"
@@ -200,15 +195,20 @@ fn skill_and_mcp_sections_name_the_hand_off_this_session_can_call() {
     // A packed route needs `use_skill` on the belt. A session filtered down to
     // neither the delegate nor `use_skill` cannot reach the specialist at all,
     // and naming a call it cannot make is the bug, not the fix.
-    let no_use_skill: HashSet<String> = ["setup_skills", "research"]
+    let no_use_skill: HashSet<String> = ["setup_skills", "file_read"]
         .iter()
         .map(|s| s.to_string())
         .collect();
     ctx.visible_tool_names = &no_use_skill;
     assert_eq!(
-        hand_off_route(&ctx, "crypto_agent"),
+        hand_off_route(&ctx, "image_agent"),
         None,
         "without `use_skill` there is no packed route to name"
+    );
+    assert_eq!(
+        run_workflow_route(&ctx),
+        None,
+        "without `run_workflow` on the belt there is no way to run a skill"
     );
     assert_eq!(
         hand_off_route(&ctx, "skill_setup").as_deref(),
@@ -223,7 +223,7 @@ fn skill_and_mcp_sections_name_the_hand_off_this_session_can_call() {
 fn a_route_tagged_prompt_row_is_dropped_when_its_family_is_absent() {
     let md = "keep me\n   - Skills row<!--route:skills-->\n   - MCP row<!--route:mcp-->\ntail";
 
-    let both = strip_route_lines(md, true, true);
+    let both = strip_route_lines(md, true, true, true);
     assert!(
         both.contains("Skills row") && both.contains("MCP row"),
         "both rows survive when both families are present: {both}"
@@ -233,7 +233,7 @@ fn a_route_tagged_prompt_row_is_dropped_when_its_family_is_absent() {
         "the tag is an authoring marker and must never reach the model: {both}"
     );
 
-    let neither = strip_route_lines(md, false, false);
+    let neither = strip_route_lines(md, false, false, true);
     assert!(
         !neither.contains("Skills row") && !neither.contains("MCP row"),
         "a row whose family is compiled out must be dropped: {neither}"
@@ -243,9 +243,19 @@ fn a_route_tagged_prompt_row_is_dropped_when_its_family_is_absent() {
         "untagged prose is untouched: {neither}"
     );
 
-    let skills_only = strip_route_lines(md, true, false);
+    let skills_only = strip_route_lines(md, true, false, true);
     assert!(
         skills_only.contains("Skills row") && !skills_only.contains("MCP row"),
         "each tag is decided on its own: {skills_only}"
     );
+}
+
+#[test]
+fn the_composio_connect_row_is_dropped_when_composio_is_off() {
+    let md = "keep\n- connect: `composio_connect`<!--route:composio-->\ntail";
+    let on = strip_route_lines(md, true, true, true);
+    assert!(on.contains("composio_connect") && !on.contains("<!--route:"));
+    let off = strip_route_lines(md, true, true, false);
+    assert!(!off.contains("composio_connect"), "{off}");
+    assert!(off.contains("keep") && off.contains("tail"));
 }

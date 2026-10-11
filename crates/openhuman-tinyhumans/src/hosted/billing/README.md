@@ -1,6 +1,6 @@
 # billing
 
-Thin RPC adapter domain over the hosted backend's payment API. It exposes plan lookup, Stripe/Coinbase purchase and top-up flows, credit balance/transactions, auto-recharge + saved-card management, and coupon redemption through the standard controller registry (`openhuman.billing_*`). It holds **no payment logic or state of its own** — every operation forwards an authenticated HTTPS request to the backend (`/payments/*`, `/coupons/*`) and surfaces the JSON response verbatim. Authorization, plan ownership, tenant isolation, and payment policy are enforced backend-side.
+Thin RPC adapter domain over the hosted backend's payment API. It exposes plan lookup, Stripe/Coinbase purchase and top-up flows, credit balance/transactions, auto-recharge + saved-card management, and coupon redemption through the standard controller registry (`openhuman.billing_*`). It holds **no payment logic or state of its own**: every operation forwards an authenticated HTTPS request to the backend (`/payments/*`, `/coupons/*`) and surfaces the JSON response verbatim. Authorization, plan ownership, tenant isolation, and payment policy are enforced backend-side.
 
 ## Responsibilities
 
@@ -16,17 +16,17 @@ Thin RPC adapter domain over the hosted backend's payment API. It exposes plan l
 
 | File | Role |
 | --- | --- |
-| `crates/openhuman-tinyhumans/src/hosted/billing/mod.rs` | Export-focused module root; re-exports `ops::*` and the schemas/controllers pair. |
-| `crates/openhuman-tinyhumans/src/hosted/billing/ops.rs` | Business logic: one async fn per backend endpoint; auth helper (`require_token`, `get_authed_value`); input validation + gateway normalization. Returns `RpcOutcome<Value>`. |
-| `crates/openhuman-tinyhumans/src/hosted/billing/schemas.rs` | Controller schemas, `all_billing_controller_schemas` / `all_billing_registered_controllers`, param structs, and `handle_billing_*` handlers delegating to `ops`. |
-| `crates/openhuman-tinyhumans/src/hosted/billing/schemas_tests.rs` | Sibling test suite for `schemas.rs` (wired via `#[path]` mod). |
+| [`crates/openhuman-tinyhumans/src/hosted/billing/mod.rs`](mod.rs) | Export-focused module root; re-exports `ops::*` and the schemas/controllers pair. |
+| [`crates/openhuman-tinyhumans/src/hosted/billing/ops.rs`](ops.rs) | Business logic: one async fn per backend endpoint; each through `HostedClient` and the SDK's typed `payments()` / `coupons()` clients (`update_auto_recharge` forwards its payload on the SDK's raw primitive because the SDK's `AutoRechargeRequest` lacks `weeklyLimitUsd`); input validation + gateway/plan normalization into the SDK's request enums. Returns `RpcOutcome<Value>`. |
+| [`crates/openhuman-tinyhumans/src/hosted/billing/schemas.rs`](schemas.rs) | Controller schemas, `all_billing_controller_schemas` / `all_billing_registered_controllers`, param structs, and `handle_billing_*` handlers delegating to `ops`. |
+| [`crates/openhuman-tinyhumans/src/hosted/billing/schemas_tests.rs`](schemas_tests.rs) | Sibling test suite for `schemas.rs` (wired via `#[path]` mod). |
 
 ## Public surface
 
-From `mod.rs`:
+From [`mod.rs`](mod.rs):
 
-- `ops::*` — async handlers: `get_summary`, `get_current_plan`, `get_balance`, `get_transactions`, `get_auto_recharge`, `update_auto_recharge`, `get_cards`, `create_setup_intent`, `update_card`, `delete_card`, `purchase_plan`, `create_portal_session`, `top_up_credits`, `create_coinbase_charge`, `redeem_coupon`, `get_user_coupons`. Each takes `&Config` (plus typed params) and returns `Result<RpcOutcome<Value>, String>`.
-- `all_billing_controller_schemas()`, `all_billing_registered_controllers()`, `billing_schemas(function: &str)` — registry wiring.
+- `ops::*`: async handlers: `get_summary`, `get_current_plan`, `get_balance`, `get_transactions`, `get_auto_recharge`, `update_auto_recharge`, `get_cards`, `create_setup_intent`, `update_card`, `delete_card`, `purchase_plan`, `create_portal_session`, `top_up_credits`, `create_coinbase_charge`, `redeem_coupon`, `get_user_coupons`. Each takes `&Config` (plus typed params) and returns `Result<Outcome<Value>, String>`.
+- `all_billing_controller_schemas()`, `all_billing_registered_controllers()`, `billing_schemas(function: &str)`: registry wiring.
 
 ## RPC / controllers
 
@@ -51,7 +51,7 @@ Namespace `billing` (16 methods, exposed as `openhuman.billing_*`):
 | `billing_redeem_coupon` | `POST /coupons/redeem` |
 | `billing_get_coupons` | `GET /coupons/me` |
 
-Handlers load `Config` via `config::rpc::load_config_with_timeout()`, deserialize camelCase params, call the matching `ops` fn, and emit CLI-compatible JSON via `RpcOutcome::into_cli_compatible_json()`.
+Handlers load `Config` via `config::rpc::load_config_with_timeout()`, deserialize camelCase params, call the matching `ops` fn, and emit CLI-compatible JSON via `Outcome::into_cli_compatible_json()`.
 
 ## Agent tools
 
@@ -63,27 +63,32 @@ None. No `bus.rs`; the domain neither publishes nor subscribes to `DomainEvent`s
 
 ## Persistence
 
-None of its own; stateless adapter. The only state it reads is the backend session JWT, which lives in the `api` layer (see `auth_store_session` / `get_session_token`), not in this module.
+None of its own; stateless adapter. The only state it reads is the backend credential, resolved through `HostedClient`.
 
 ## Dependencies
 
-- `crate::api::config::effective_backend_api_url` — resolves the backend base URL from `config.api_url`.
-- `crate::api::jwt::get_session_token` — reads the stored app-session JWT.
-- `crate::api::BackendOAuthClient` — performs the authenticated JSON HTTP request (`authed_json`).
-- `crate::config::Config` — config struct (`api_url`); `config::rpc::load_config_with_timeout` in handlers.
-- `crate::rpc::RpcOutcome` — standard RPC return/logging wrapper.
-- `crate::core::all::{ControllerFuture, RegisteredController}` and `crate::core::{ControllerSchema, FieldSchema, TypeSchema}` — controller registry types.
-- External crates: `reqwest` (`Method`), `serde`/`serde_json`, `urlencoding` (path-segment encoding for `paymentMethodId`).
+- `crate::backend::url::effective_backend_api_url`: resolves the backend base URL from `config.api_url`.
+- `crate::hosted::client::HostedClient`: resolves the core's backend credential first (no request without one), builds the SDK's `TinyHumansClient`, and maps SDK errors onto the core's RPC sentinels.
+- `crate::config::Config`: config struct (`api_url`); `config::rpc::load_config_with_timeout` in handlers.
+- `crate::rpc::RpcOutcome`: standard RPC return/logging wrapper.
+- `crate::core::all::{ControllerFuture, RegisteredController}` and `crate::core::{ControllerSchema, FieldSchema, TypeSchema}`: controller registry types.
+- External crates: `tinyhumans-sdk` (typed payments/coupons clients), `serde_json`.
 
 ## Used by
 
-- `crates/openhuman-core/src/core/all.rs` — registers `all_billing_registered_controllers()` (controllers, ~L215) and `all_billing_controller_schemas()` (schemas, ~L346) into the global registry. This is the sole in-tree consumer.
+- [`crates/openhuman-core/src/core/all.rs`](../../../../openhuman-core/src/core/all.rs): registers `all_billing_registered_controllers()` (controllers, ~L215) and `all_billing_controller_schemas()` (schemas, ~L346) into the global registry. This is the sole in-tree consumer.
 
 ## Notes / gotchas
 
-- **No local authorization** — security is delegated entirely to the backend; a missing/invalid session yields the backend 401/403 surfaced verbatim as an RPC error string. JWTs/API keys are never logged.
+- **No local authorization**: security is delegated entirely to the backend; a missing/invalid session yields the backend 401/403 surfaced verbatim as an RPC error string. JWTs/API keys are never logged.
 - `top_up_credits` and `create_coinbase_charge` default gateway/interval (`stripe`, `annual`); `normalize_gateway` lowercases and whitelists `stripe`/`coinbase`, treating empty/whitespace as default-to-stripe.
 - `amountUsd` must be finite and `> 0` (NaN/±Inf/≤0 rejected pre-HTTP).
 - `paymentMethodId` is `urlencoding::encode`'d into the path; empty/whitespace ids are rejected.
 - `get_transactions` defaults to `limit=20`, `offset=0`; the handler tolerates an empty params map.
-- Input-validation unit tests live inline in `ops.rs` and run without network/session/filesystem state.
+- Input-validation unit tests live inline in [`ops.rs`](ops.rs) and run without network/session/filesystem state.
+
+## Further reading
+
+- [`gitbooks/developing/tinyhumans-api-key.md`](../../../../../gitbooks/developing/tinyhumans-api-key.md): running on a TinyHumans API key.
+- [`crates/openhuman-tinyhumans/src/hosted/README.md`](../README.md): hosted proxies.
+- [`vendor/tinyhumans-sdk/README.md`](../../../../../vendor/tinyhumans-sdk/README.md): tinyhumans-sdk.

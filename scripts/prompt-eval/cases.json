@@ -13,14 +13,13 @@
     {
       "id": "web-search-fact",
       "surface": "web search",
-      "_why": "Direct-first: a single current fact is one built-in web_search_tool call, not a research spawn.",
+      "_why": "Direct-first: a single current fact is one built-in web_search_tool call, not a sub-agent spawn.",
       "entry": "agent_chat",
       "message": "What is the latest stable release of the Rust programming language? Cite where you found it.",
       "expect_calls": [
         "web_search_tool"
       ],
       "forbid_calls": [
-        "research",
         "spawn_async_subagent"
       ],
       "max_consecutive": {
@@ -60,9 +59,9 @@
       "message": "What is 17 times 23?",
       "expect_calls": [],
       "forbid_calls": [
-        "research",
         "spawn_async_subagent",
-        "schedule_task"
+        "use_skill",
+        "cron"
       ],
       "max_consecutive": {},
       "max_input_tokens": 60000,
@@ -95,11 +94,11 @@
     {
       "id": "skill-notion-read",
       "surface": "skills",
-      "_why": "Run an installed skill through its hand-off, read-only. The account's only installed skill on 2026-09-18 was `notion` (it was `github` two days earlier — re-check).",
+      "_why": "Run an installed skill with the orchestrator's own run_workflow (there is no skill-executor hand-off), read-only. The account's only installed skill on 2026-09-18 was `notion` (it was `github` two days earlier — re-check).",
       "entry": "agent_chat",
       "message": "Using my installed Notion skill, list the titles of my five most recently edited Notion pages. Do not create or edit anything.",
       "expect_calls": [
-        "run_skill"
+        "run_workflow"
       ],
       "forbid_calls": [
         "setup_skills",
@@ -174,11 +173,11 @@
     },
     {
       "id": "orchestrator-reminder",
-      "_why": "A scheduling request must reach scheduler_agent through schedule_task, not be answered in prose.",
+      "_why": "A scheduling request must reach the `cron` tool (the `scheduling` skill, via use_skill or a bare call), not be answered in prose. A use_skill call counts as the packed tool it reaches.",
       "entry": "agent_chat",
       "message": "Remind me to stretch every weekday at 3pm.",
       "expect_calls": [
-        "schedule_task"
+        "cron"
       ],
       "forbid_calls": [
         "shell"
@@ -187,9 +186,9 @@
       "max_input_tokens": 100000,
       "judge": true,
       "writes": [
-        "a recurring cron job ('stretch', weekdays 15:00) — remove it with cron_remove / the Routines UI after the run"
+        "a recurring cron job ('stretch', weekdays 15:00) — remove it with `cron` action:\"remove\" / the Routines UI after the run"
       ],
-      "surface": "orchestration/scheduler"
+      "surface": "orchestration/scheduling"
     }
   ],
   "_precondition_note": "precondition: a read-only RPC run just before each run. expect_regex must match / expect_not_regex must not match its JSON output. The regexes are UNVERIFIED against real output: inspect `precondition.evidence` in the first rows. A failed precondition skips the run and records why.",

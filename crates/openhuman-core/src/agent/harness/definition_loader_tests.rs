@@ -93,7 +93,7 @@ fn registry_load_merges_builtins_and_custom() {
         "expected at least one built-in plus the custom definition"
     );
     assert!(reg.get("notion_specialist").is_some());
-    assert!(reg.get("code_executor").is_some());
+    assert!(reg.get("critic").is_some());
 }
 
 #[test]
@@ -122,11 +122,11 @@ fn custom_definition_overrides_same_id_builtin() {
     let ws = fresh_workspace();
     let agents_dir = ws.path().join("agents");
     fs::create_dir_all(&agents_dir).unwrap();
-    // Override the built-in `code_executor` with a custom one.
+    // Override the built-in `critic` with a custom one.
     write_toml(
-        &agents_dir.join("code_executor.toml"),
+        &agents_dir.join("critic.toml"),
         r#"
-id = "code_executor"
+id = "critic"
 when_to_use = "CUSTOM OVERRIDE"
 
 [system_prompt]
@@ -146,10 +146,10 @@ wildcard = {}
     let expected_count = baseline.len();
 
     let reg = super::super::definition::AgentDefinitionRegistry::load(ws.path()).unwrap();
-    // Same id replaced the built-in `code_executor` in place, so the
+    // Same id replaced the built-in `critic` in place, so the
     // registry size doesn't grow when the custom TOML collides.
     assert_eq!(reg.len(), expected_count);
-    let def = reg.get("code_executor").unwrap();
+    let def = reg.get("critic").unwrap();
     assert_eq!(def.when_to_use, "CUSTOM OVERRIDE");
     assert!(matches!(def.source, DefinitionSource::File(_)));
 }

@@ -62,41 +62,18 @@ fn parameters_schema_requires_prompt_only() {
     assert_eq!(schema["type"], "object");
     assert_eq!(schema["required"], json!(["prompt"]));
     assert_eq!(schema["properties"]["prompt"]["type"], "string");
-    assert_eq!(schema["properties"]["objective"]["type"], "string");
-    assert_eq!(schema["properties"]["evidence"]["type"], "array");
-    assert_eq!(
-        schema["properties"]["citation_requirement"]["enum"],
-        json!([
-            "none",
-            "file_paths",
-            "urls",
-            "retrieval_hits",
-            "tool_outputs"
-        ])
-    );
 
-    // Stripping descriptions must not become stripping FIELDS: every one
-    // is read back by `render_structured_handoff`, so a "trim" that drops
-    // one silently removes a section of the child prompt.
+    // Only `prompt`, `blocking`, and explicit `image_paths` are advertised: the structured hand-off
+    // fields cost ~150 tokens per delegate on every request, and a
+    // self-contained `prompt` carries the same content. They are still
+    // parsed (see `structured_handoff_renders_compact_child_prompt`), so a
+    // caller that sends them keeps working; they are just not offered.
     let props = schema["properties"]
         .as_object()
         .expect("properties is an object");
     let mut present: Vec<&str> = props.keys().map(String::as_str).collect();
     present.sort_unstable();
-    assert_eq!(
-        present,
-        vec![
-            "blocking",
-            "citation_requirement",
-            "constraints",
-            "evidence",
-            "expected_output",
-            "model",
-            "must_not_assume",
-            "objective",
-            "prompt",
-        ]
-    );
+    assert_eq!(present, vec!["blocking", "image_paths", "prompt"]);
 }
 
 /// Every `description` in the envelope, as `(json-pointer-ish path, text)`.
@@ -124,16 +101,11 @@ fn collect_descriptions(node: &Value, path: &str, out: &mut Vec<(String, String)
 
 #[test]
 fn envelope_descriptions_stay_within_budget() {
-    // This schema is emitted once per synthesised `delegate_*` tool — 19
-    // times on the Master Agent — so prose here is billed 19x per turn.
-    // Fully described it was 356 tokens each, 6,764 in total and 39% of
-    // the agent's whole tool-schema budget; it is now 193.
-    //
-    // Two rules hold that: only the four fields whose NAME does not carry
-    // their meaning may carry a description, and none may exceed the
-    // ~50-token cap. Anything else belongs in prompt.md, where it is
-    // charged once. See `parameters_schema`'s doc comment for why each
-    // survivor survives.
+    // This schema is emitted once per synthesised `delegate_*` tool, so prose
+    // here is billed per delegate per turn. Fully described it was 356 tokens
+    // each; the envelope keeps three short fields. `prompt` (which says the worker has
+    // no memory of this chat) and `blocking` (whose default is not in its
+    // name), and explicit image forwarding stay under the ~50-token cap.
     let schema = sample_tool().parameters_schema();
     let mut found = Vec::new();
     collect_descriptions(&schema, "", &mut found);
@@ -144,17 +116,14 @@ fn envelope_descriptions_stay_within_budget() {
         fields,
         vec![
             "/properties/blocking",
-            "/properties/citation_requirement",
-            "/properties/evidence",
-            "/properties/model",
+            "/properties/image_paths",
+            "/properties/prompt"
         ],
-        "a description came back into the delegation envelope; put it in \
-         orchestrator/prompt.md instead — every word here costs 19x"
+        "a field or description came back into the delegation envelope; \
+         every word here is paid per delegate on every request"
     );
 
-    // ~4 chars per token on this vocabulary, so 220 chars ~= the 50-token
-    // cap. A byte budget alone gets nibbled away, which is why the field
-    // set above is the load-bearing half of this test.
+    // ~4 chars per token on this vocabulary, so 220 chars ~= the 50-token cap.
     for (field, text) in &found {
         assert!(
             text.len() <= 220,
@@ -162,31 +131,35 @@ fn envelope_descriptions_stay_within_budget() {
             text.len()
         );
     }
+    let prompt_desc = schema["properties"]["prompt"]["description"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        prompt_desc.contains("no memory of this chat"),
+        "the prompt field must say the worker starts cold: {prompt_desc}"
+    );
 }
 
 #[test]
 fn prompt_documents_the_stripped_envelope_fields() {
-    // The contract MOVED, it did not vanish. Stripping the per-field
-    // descriptions is only safe while the parent prompt still teaches
-    // them, so couple the two directly: this fails the moment someone
-    // rewrites prompt.md without the "Structured handoffs" block.
+    // The advertised envelope is `prompt` + `blocking`; what the model must
+    // still be taught once, in the parent prompt, is when to block and how to
+    // resume a paused worker. The unadvertised hand-off fields must NOT be
+    // taught there any more: a prompt naming fields the schema does not offer
+    // sends the model arguments it cannot see.
     const ORCHESTRATOR_PROMPT: &str = include_str!("../../registry/agents/orchestrator/prompt.md");
 
-    for needle in [
-        "objective",
-        "evidence",
-        "constraints",
-        "must_not_assume",
-        "expected_output",
-        "citation_requirement",
-        "blocking",
-        "subagent_session_id",
-        "continue_subagent",
-    ] {
+    for needle in ["blocking: true", "continue_subagent"] {
         assert!(
             ORCHESTRATOR_PROMPT.contains(needle),
-            "orchestrator/prompt.md no longer documents `{needle}`, which \
-             the delegation envelope stopped describing to save 19x the tokens"
+            "orchestrator/prompt.md no longer teaches `{needle}`"
+        );
+    }
+    for stale in ["must_not_assume", "expected_output", "citation_requirement"] {
+        assert!(
+            !ORCHESTRATOR_PROMPT.contains(stale),
+            "orchestrator/prompt.md still names `{stale}`, which the delegation \
+             schema no longer advertises"
         );
     }
 }

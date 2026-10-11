@@ -12,11 +12,11 @@ pub async fn flows_search_tool_catalog(
     query: &str,
     toolkit: Option<&str>,
     limit: usize,
-) -> Result<RpcOutcome<Value>, String> {
+) -> Result<Outcome<Value>, String> {
     tracing::debug!(target: "flows", %query, toolkit = toolkit.unwrap_or("<all>"), "[flows] flows_search_tool_catalog: searching live catalog");
     let tools =
         crate::flows::builder_tools::search_live_catalog(config, query, toolkit, limit).await;
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({ "tools": tools }),
         "tool catalog searched",
     ))
@@ -25,7 +25,7 @@ pub async fn flows_search_tool_catalog(
 /// Resolves the toolkit for a *single action* slug, rejecting anything that is
 /// not shaped `<TOOLKIT>_<ACTION>`.
 ///
-/// [`tinymemory_api::composio::toolkit_from_slug`] falls back to the whole
+/// [`crate::integrations::composio::contract::toolkit_from_slug`] falls back to the whole
 /// string when there is no `_`, so it answers `Some` for every non-empty input
 /// — `toolkit_from_slug("nodashhere") == Some("nodashhere")`. That permissive
 /// fall-back is load-bearing for `compute_required_connections`, which maps
@@ -46,7 +46,7 @@ pub(crate) fn toolkit_for_contract_slug(slug: &str) -> Option<String> {
     if toolkit_segment.is_empty() || action_segment.is_empty() {
         return None;
     }
-    tinymemory_api::composio::toolkit_from_slug(trimmed)
+    crate::integrations::composio::contract::toolkit_from_slug(trimmed)
 }
 
 /// Fetches one Composio action's full contract (secret-free) — the RPC the
@@ -55,7 +55,7 @@ pub(crate) fn toolkit_for_contract_slug(slug: &str) -> Option<String> {
 pub async fn flows_get_tool_contract(
     config: &Config,
     slug: &str,
-) -> Result<RpcOutcome<Value>, String> {
+) -> Result<Outcome<Value>, String> {
     let trimmed = slug.trim();
     // Shape-check before `toolkit_from_slug`, and before any I/O: the shared
     // helper is deliberately permissive, so an unshaped slug would otherwise
@@ -78,12 +78,12 @@ pub async fn flows_get_tool_contract(
     };
     match catalog
         .iter()
-        .find(|c| c.slug.eq_ignore_ascii_case(trimmed))
+        .find(|c| crate::integrations::composio::contract::action_slug_matches(&c.slug, trimmed))
     {
         Some(contract) => {
             let contract = crate::flows::tinyflows::caps::apply_probe_override(contract.clone());
             let value = serde_json::to_value(&contract).map_err(|e| e.to_string())?;
-            Ok(RpcOutcome::single_log(
+            Ok(Outcome::single_log(
                 json!({ "contract": value }),
                 "tool contract fetched",
             ))

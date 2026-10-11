@@ -2,8 +2,7 @@
  * Vitest for the task-sources tauriCommands surface.
  *
  * Covers each `openhuman.task_sources_*` RPC wrapper plus the
- * `isTauri()` guard. Mirrors the mocking pattern in
- * `subconscious.test.ts` — validates the wrappers against the
+ * `isTauri()` guard. Validates the wrappers against the
  * `callCoreRpc` contract without a real Tauri runtime.
  */
 import { afterEach, beforeEach, describe, expect, type Mock, test, vi } from 'vitest';
@@ -136,22 +135,19 @@ describe('tauriCommands/taskSources', () => {
     expect(mockCallCoreRpc).toHaveBeenCalledWith({ method: 'openhuman.task_sources_status' });
   });
 
-  test('every wrapper throws and skips RPC when not in Tauri', async () => {
+  test('every wrapper calls core RPC when not in Tauri', async () => {
     mockIsTauri.mockReturnValue(false);
-    await expect(openhumanTaskSourcesList()).rejects.toThrow('Not running in Tauri');
-    await expect(openhumanTaskSourcesGet('x')).rejects.toThrow('Not running in Tauri');
-    await expect(
-      openhumanTaskSourcesAdd({ provider: 'github', filter: { provider: 'github' } })
-    ).rejects.toThrow('Not running in Tauri');
-    await expect(openhumanTaskSourcesUpdate('x', {})).rejects.toThrow('Not running in Tauri');
-    await expect(openhumanTaskSourcesRemove('x')).rejects.toThrow('Not running in Tauri');
-    await expect(openhumanTaskSourcesFetch('x')).rejects.toThrow('Not running in Tauri');
-    await expect(openhumanTaskSourcesSync()).rejects.toThrow('Not running in Tauri');
-    await expect(openhumanTaskSourcesListTasks('x')).rejects.toThrow('Not running in Tauri');
-    await expect(
-      openhumanTaskSourcesPreviewFilter('github', { provider: 'github' })
-    ).rejects.toThrow('Not running in Tauri');
-    await expect(openhumanTaskSourcesStatus()).rejects.toThrow('Not running in Tauri');
-    expect(mockCallCoreRpc).not.toHaveBeenCalled();
+    mockCallCoreRpc.mockResolvedValue({});
+    await openhumanTaskSourcesList();
+    await openhumanTaskSourcesGet('x');
+    await openhumanTaskSourcesAdd({ provider: 'github', filter: { provider: 'github' } });
+    await openhumanTaskSourcesUpdate('x', {});
+    await openhumanTaskSourcesRemove('x');
+    await openhumanTaskSourcesFetch('x');
+    await openhumanTaskSourcesSync();
+    await openhumanTaskSourcesListTasks('x');
+    await openhumanTaskSourcesPreviewFilter('github', { provider: 'github' });
+    await openhumanTaskSourcesStatus();
+    expect(mockCallCoreRpc).toHaveBeenCalled();
   });
 });

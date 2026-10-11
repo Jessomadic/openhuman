@@ -3,8 +3,9 @@
 //! The registry itself moved to `tinymcp`: the Smithery and official catalogs,
 //! the SQLite store, the live connection map, the subprocess supervisor and the
 //! browser sign-in flow all live there now. What is left here is what belongs
-//! to *this* application. The catalogs are browse-only: a server is declared
-//! in the user's `mcp.json` ([`config_doc`]), never installed from a listing.
+//! to *this* application. A server is declared in the user's `mcp.json`
+//! (`tinymcp::registry::config_doc`); there is no install-from-catalog RPC. The
+//! app's Registry tab declares a hosted server there in one step.
 //!
 //! # Modules
 //!
@@ -13,10 +14,9 @@
 //!   the extraction: an end-to-end test seeding the upstream response cache.
 //! - [`ops`] — the `mcp_clients` RPC handlers, delegating to the service
 //!   [`super::host`] holds and publishing this application's own events.
-//! - [`config_doc`] — the `mcp.json` document: how the store renders as one
-//!   and what a written one may say.
-//! - [`config_ops`] — the `config_get` / `config_set` handlers that reconcile
-//!   the store against that document.
+//! - [`config_ops`] — the `config_get` / `config_set` handlers over the
+//!   `mcp.json` document; the document contract and the reconciliation are
+//!   `tinymcp::registry::config_doc`.
 //! - `schemas` — the controller schemas and dispatch.
 //! - [`supervisor_events`] — what the reconnect supervisor observed each
 //!   tick, as this domain's events; the Event Log and the notification bridge
@@ -37,9 +37,9 @@
 //! call site that nothing checks.
 
 #[cfg(feature = "mcp")]
-pub mod bus;
+pub mod action_tool;
 #[cfg(feature = "mcp")]
-pub mod config_doc;
+pub mod bus;
 #[cfg(feature = "mcp")]
 pub mod config_ops;
 #[cfg(feature = "mcp")]
@@ -108,7 +108,7 @@ pub mod connections {
     /// [`disconnect_for_config`] exist: the ambient form resolves through the
     /// process default, which stops answering once a second workspace is open.
     pub async fn connected_overview_for_config(config: &Config) -> Vec<ConnectedServerOverview> {
-        match host::for_config(config) {
+        match host::lookup(config) {
             Ok(service) => service.dynamic().connected_overview().await,
             Err(error) => {
                 tracing::debug!(
@@ -116,6 +116,31 @@ pub mod connections {
                     "[mcp] no host for workspace; reporting no connections"
                 );
                 Vec::new()
+            }
+        }
+    }
+
+    /// Every enabled installed server's identity and tools in `config`'s
+    /// workspace, without dialling: live tools for a connected server, the
+    /// persistent tool cache for one that is not (yet).
+    ///
+    /// What the agent's MCP tool surface is built from, so a server's tools
+    /// are offered from the first turn after a restart rather than only once
+    /// its connect finishes. Listing is not authorization — a call still
+    /// needs a live connection.
+    pub async fn cached_overview_for_config(config: &Config) -> Vec<ConnectedServerOverview> {
+        let service = match host::lookup(config) {
+            Ok(service) => service,
+            Err(error) => {
+                tracing::debug!(?error, "[mcp] no host for workspace; no cached tools");
+                return Vec::new();
+            }
+        };
+        match service.dynamic().cached_overview().await {
+            Ok(overview) => overview,
+            Err(error) => {
+                tracing::debug!(%error, "[mcp] falling back to live servers only");
+                service.dynamic().connected_overview().await
             }
         }
     }
@@ -140,7 +165,7 @@ pub mod connections {
     pub async fn all_connected_tools_for_config(
         config: &Config,
     ) -> Vec<(String, String, tinymcp_bus::McpTool)> {
-        match host::for_config(config) {
+        match host::lookup(config) {
             Ok(service) => service.dynamic().connections().all_connected_tools().await,
             Err(error) => {
                 tracing::debug!(?error, "[mcp] no host for workspace; reporting no tools");
@@ -181,7 +206,7 @@ pub mod connections {
         config: &Config,
         server_id: &str,
     ) -> Option<Vec<tinymcp_bus::McpTool>> {
-        match host::for_config(config) {
+        match host::lookup(config) {
             Ok(service) => service.dynamic().connections().tools_for(server_id).await,
             Err(error) => {
                 tracing::debug!(?error, server_id, "[mcp] no host for workspace; no tools");
@@ -206,7 +231,7 @@ pub mod connections {
 
     /// Whether a server has a live entry in `config`'s workspace.
     pub async fn is_connected_for_config(config: &Config, server_id: &str) -> bool {
-        match host::for_config(config) {
+        match host::lookup(config) {
             Ok(service) => {
                 service
                     .dynamic()
@@ -225,21 +250,9 @@ pub mod connections {
         }
     }
 
-    /// Why a server's most recent attempt hit a 401, as a stable code.
-    pub async fn auth_hint_for(server_id: &str) -> Option<&'static str> {
-        Some(
-            host::try_service()?
-                .dynamic()
-                .connections()
-                .auth_hint(server_id)
-                .await?
-                .as_code(),
-        )
-    }
-
     /// Why a server's most recent attempt in `config`'s workspace hit a 401.
     pub async fn auth_hint_for_config(config: &Config, server_id: &str) -> Option<&'static str> {
-        match host::for_config(config) {
+        match host::lookup(config) {
             Ok(service) => Some(
                 service
                     .dynamic()
@@ -307,7 +320,7 @@ pub mod connections {
     /// through [`connect`] already named a workspace and should close over the
     /// same one.
     pub async fn disconnect_for_config(config: &Config, server_id: &str) -> bool {
-        match host::for_config(config) {
+        match host::lookup(config) {
             Ok(service) => service.dynamic().connections().disconnect(server_id).await,
             Err(error) => {
                 tracing::debug!(?error, "[mcp] no host for workspace; nothing to disconnect");
@@ -316,18 +329,9 @@ pub mod connections {
         }
     }
 
-    /// The most recent failure message for a server.
-    pub async fn last_error_for(server_id: &str) -> Option<String> {
-        host::try_service()?
-            .dynamic()
-            .connections()
-            .last_error(server_id)
-            .await
-    }
-
     /// The most recent failure message for a server in `config`'s workspace.
     pub async fn last_error_for_config(config: &Config, server_id: &str) -> Option<String> {
-        match host::for_config(config) {
+        match host::lookup(config) {
             Ok(service) => service.dynamic().connections().last_error(server_id).await,
             Err(error) => {
                 tracing::debug!(
@@ -338,33 +342,6 @@ pub mod connections {
                 None
             }
         }
-    }
-}
-
-/// The registry's own store, for the callers that reach it directly.
-///
-/// The store itself moved to `tinymcp`. What is left here is the one entry
-/// point outside this module that named it: an end-to-end test seeds the
-/// upstream response cache so it can exercise an install without reaching a
-/// real catalog. Keeping the spelling means that test needs no edit, and the
-/// signature is the one it already calls.
-#[cfg(feature = "mcp")]
-pub mod store {
-    use crate::config::Config;
-    use crate::mcp::host;
-
-    /// Writes one upstream response into the cache for `config`'s workspace.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the service cannot be opened or the row cannot be
-    /// written.
-    pub fn set_cached(config: &Config, cache_key: &str, body_json: &str) -> anyhow::Result<()> {
-        host::for_config(config)?
-            .dynamic()
-            .store()
-            .cache(cache_key, body_json)
-            .map_err(|error| anyhow::anyhow!("failed to seed the registry cache: {error}"))
     }
 }
 
@@ -379,7 +356,7 @@ pub mod boot {
     /// Never fails: a server that cannot connect is logged and skipped, because
     /// one broken third-party integration must not stop the core coming up.
     pub async fn spawn_installed_servers(config: &Config) {
-        let service = match host::for_config(config) {
+        let service = match host::lookup(config) {
             Ok(service) => service,
             Err(error) => {
                 tracing::warn!("[mcp] the service could not be opened: {error}");
@@ -409,80 +386,45 @@ pub mod boot {
 /// Keeping installed servers connected.
 #[cfg(feature = "mcp")]
 pub mod supervisor {
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-
     use crate::mcp::host;
 
     /// Runs the reconnect supervisor until the process ends.
     ///
-    /// One task for every host the process has opened. The connection map is
-    /// per-workspace, and a host opened after boot — a workspace switch — is
-    /// supervised from the tick after it appears, so no workspace's installed
-    /// servers go unsupervised. Each host's backoff state is held here, keyed
-    /// by workspace, and the first tick is delayed a whole interval so it does
-    /// not race the startup connect pass.
+    /// One task for every host the process has opened, driven by
+    /// `tinymcp::Supervisor::run_many`: the connection map is per-workspace,
+    /// and a host opened after boot — a workspace switch — is supervised from
+    /// the tick after it appears, with its backoff state kept per workspace.
+    /// The first tick is delayed a whole interval so it does not race the
+    /// startup connect pass.
     pub async fn run() {
-        let config = tinymcp::SupervisorConfig::default();
-        let mut supervisors: HashMap<PathBuf, tinymcp::Supervisor> = HashMap::new();
-
-        let start = tokio::time::Instant::now() + config.tick_interval;
-        let mut interval = tokio::time::interval_at(start, config.tick_interval);
-        // A tick walks every open workspace's installs in sequence and each
-        // probe can take the whole probe window, so a tick can outlast its
-        // own interval. The default behaviour would then fire the missed
-        // ticks back to back, re-probing servers that were just probed.
-        //
-        // `Delay` stops that burst but does not on its own leave a gap: it
-        // schedules the next deadline one interval after the overdue tick
-        // *returns*, which is when the cycle starts, not when it ends. A
-        // cycle that consistently outlasts its interval would therefore find
-        // the next tick already due and run back to back anyway. The
-        // `interval.reset()` at the end of the loop body is what actually
-        // paces from when the cycle finished — which is what
-        // `tinymcp::Supervisor::run` does, and this loop stands in for it.
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-        tracing::info!(
-            tick_seconds = config.tick_interval.as_secs(),
-            probe_seconds = config.probe_timeout.as_secs(),
-            "[mcp] the reconnect supervisor started"
-        );
-
-        loop {
-            interval.tick().await;
-            let now = std::time::Instant::now();
-
-            // Adopt every host currently open. A host opened since the last
-            // tick gets a supervisor on this one, built from the identity and
-            // proxy it was opened with.
-            for (workspace, service, identity, proxy) in host::all_hosts() {
-                let supervisor = supervisors
-                    .entry(workspace.clone())
-                    .or_insert_with(|| tinymcp::Supervisor::new(config.clone(), identity, proxy));
-
-                let report = supervisor
-                    .tick(
-                        service.dynamic().store(),
-                        service.dynamic().connections(),
-                        service.dynamic().oauth(),
-                        now,
+        tinymcp::Supervisor::run_many(
+            tinymcp::SupervisorConfig::default(),
+            // Every host currently open. The identity and proxy each was
+            // opened with ride along, so a reconnect dials the way the host's
+            // own connections do.
+            || {
+                host::all_hosts()
+                    .into_iter()
+                    .map(
+                        |(workspace, registry, identity, proxy)| tinymcp::SupervisedHost {
+                            key: workspace,
+                            registry,
+                            identity,
+                            proxy,
+                        },
                     )
-                    .await;
-                // What the tick observed becomes this domain's events, so a
-                // probe outcome reaches the Event Log and a server that stays
-                // down reaches the user (#5931). The workspace goes with them:
-                // this loop covers every host the process has opened, and a
-                // subscriber that persists or announces one must not take a
-                // switched-away workspace's outage for its own.
-                super::supervisor_events::publish(&workspace, &report);
-            }
-
-            // Pace from the end of the cycle, not its start: a cycle slower
-            // than the interval leaves the next tick already due, and without
-            // this the supervisor would probe continuously.
-            interval.reset();
-        }
+                    .collect()
+            },
+            // What the tick observed becomes this domain's events, so a probe
+            // outcome reaches the Event Log and a server that stays down
+            // reaches the user (#5931). The workspace goes with them: a
+            // subscriber that persists or announces one must not take a
+            // switched-away workspace's outage for its own.
+            |workspace, report| {
+                super::supervisor_events::publish(workspace, report);
+            },
+        )
+        .await;
     }
 }
 

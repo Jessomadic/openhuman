@@ -1,13 +1,6 @@
 use super::*;
-use std::sync::Mutex;
+use crate::config::test_env::EnvVarGuard;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-/// Serialize env-var mutation across the three `resolve_listen_port_*`
-/// tests so they don't race each other under Rust's default parallel
-/// runner. Process-global env state means one test's restore can land
-/// in another test's read window without this. Same pattern used in
-/// `tools/impl/system/lsp.rs`.
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn reserve_port() -> std::net::TcpListener {
     std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral test port")
@@ -64,6 +57,7 @@ async fn pick_listen_port_preferred_free() {
             attempts: 0,
             backoff: Duration::from_millis(1),
         },
+        OccupiedByCore::Takeover,
     )
     .await
     .expect("preferred bind should succeed");
@@ -88,6 +82,7 @@ async fn pick_listen_port_openhuman_listener_requests_takeover() {
             attempts: 1,
             backoff: Duration::from_millis(10),
         },
+        OccupiedByCore::Takeover,
     )
     .await;
 
@@ -96,6 +91,39 @@ async fn pick_listen_port_openhuman_listener_requests_takeover() {
         matches!(err, PickListenPortError::WouldTakeOver { preferred: p, .. } if p == preferred),
         "expected WouldTakeOver for preferred port, got: {err:?}"
     );
+
+    let _ = shutdown_tx.send(());
+    let _ = server_task.await;
+}
+
+#[tokio::test]
+async fn pick_listen_port_openhuman_listener_falls_back_when_asked() {
+    let holder = reserve_port();
+    let preferred = holder.local_addr().expect("preferred local addr").port();
+    drop(holder);
+    // Use the same neighbouring-port candidates as production instead of
+    // sampling and releasing one ephemeral port. Other parallel tests can
+    // claim a released ephemeral port before this listener binds it.
+    let fallbacks: Vec<u16> = (1..=10)
+        .filter_map(|delta| preferred.checked_add(delta))
+        .collect();
+
+    let (server_task, shutdown_tx) = spawn_openhuman_probe_listener(preferred).await;
+
+    let picked = pick_listen_port_with_policy(
+        "127.0.0.1",
+        preferred,
+        &fallbacks,
+        RetryPolicy {
+            attempts: 1,
+            backoff: Duration::from_millis(10),
+        },
+        OccupiedByCore::Fallback,
+    )
+    .await
+    .expect("a live neighbouring core should not block a headless core");
+    assert!(fallbacks.contains(&picked.port));
+    assert_eq!(picked.fallback_from, Some(preferred));
 
     let _ = shutdown_tx.send(());
     let _ = server_task.await;
@@ -128,6 +156,7 @@ async fn pick_listen_port_other_listener_falls_back() {
             attempts: 1,
             backoff: Duration::from_millis(10),
         },
+        OccupiedByCore::Takeover,
     )
     .await
     .expect("fallback bind should succeed");
@@ -162,6 +191,7 @@ async fn pick_listen_port_all_candidates_busy_errors() {
             attempts: 1,
             backoff: Duration::from_millis(10),
         },
+        OccupiedByCore::Takeover,
     )
     .await;
 
@@ -192,6 +222,7 @@ async fn pick_listen_port_retries_transient_addr_in_use() {
             attempts: 6,
             backoff: Duration::from_millis(10),
         },
+        OccupiedByCore::Takeover,
     )
     .await
     .expect("transient in-use should recover to preferred port");
@@ -333,97 +364,35 @@ fn snapshot_socket_state_is_uninitialized_without_manager() {
     );
 }
 
+// `resolve_listen_port()` reads OPENHUMAN_CORE_RPC_URL ahead of
+// OPENHUMAN_CORE_PORT, so every test pins both under the crate-wide env lock.
+
 #[test]
 fn resolve_listen_port_defaults_to_7788_when_env_unset() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    // Use a UUID-ish guard so we don't clobber an env the test runner
-    // genuinely needs. SAFETY: env mutation is process-global; we
-    // restore at the end. See SAFETY note in `cargo test --doc`.
-    let prev_port = std::env::var("OPENHUMAN_CORE_PORT").ok();
-    // resolve_listen_port() also reads OPENHUMAN_CORE_RPC_URL ahead of
-    // OPENHUMAN_CORE_PORT, so an inherited URL from the runner would
-    // make this assertion nondeterministic. Save + clear both.
-    let prev_url = std::env::var("OPENHUMAN_CORE_RPC_URL").ok();
-    // SAFETY: standard Rust test pattern — env access is unsafe in 2024
-    // edition because it isn't thread-safe. Tests are single-threaded
-    // for this scope and we restore in the same body.
-    unsafe {
-        std::env::remove_var("OPENHUMAN_CORE_PORT");
-        std::env::remove_var("OPENHUMAN_CORE_RPC_URL");
-    }
+    let _env = EnvVarGuard::locked_unset_many(&["OPENHUMAN_CORE_PORT", "OPENHUMAN_CORE_RPC_URL"]);
     assert_eq!(resolve_listen_port(), DEFAULT_CORE_PORT);
-    if let Some(value) = prev_port {
-        unsafe {
-            std::env::set_var("OPENHUMAN_CORE_PORT", value);
-        }
-    }
-    if let Some(value) = prev_url {
-        unsafe {
-            std::env::set_var("OPENHUMAN_CORE_RPC_URL", value);
-        }
-    }
 }
 
 #[test]
 fn resolve_listen_port_honours_env_override() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let prev_port = std::env::var("OPENHUMAN_CORE_PORT").ok();
-    let prev_url = std::env::var("OPENHUMAN_CORE_RPC_URL").ok();
-    unsafe {
-        // Clear OPENHUMAN_CORE_RPC_URL so OPENHUMAN_CORE_PORT is the
-        // resolved value (URL has higher priority in resolve_listen_port).
-        std::env::remove_var("OPENHUMAN_CORE_RPC_URL");
-        std::env::set_var("OPENHUMAN_CORE_PORT", "65000");
-    }
+    // The URL has higher priority, so clear it for the port to resolve.
+    let _env =
+        EnvVarGuard::locked_unset("OPENHUMAN_CORE_RPC_URL").with("OPENHUMAN_CORE_PORT", "65000");
     assert_eq!(resolve_listen_port(), 65000);
-    match prev_port {
-        Some(value) => unsafe { std::env::set_var("OPENHUMAN_CORE_PORT", value) },
-        None => unsafe { std::env::remove_var("OPENHUMAN_CORE_PORT") },
-    }
-    match prev_url {
-        Some(value) => unsafe { std::env::set_var("OPENHUMAN_CORE_RPC_URL", value) },
-        None => unsafe { std::env::remove_var("OPENHUMAN_CORE_RPC_URL") },
-    }
 }
 
 #[test]
 fn resolve_listen_port_falls_back_on_invalid_env() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let prev_port = std::env::var("OPENHUMAN_CORE_PORT").ok();
-    let prev_url = std::env::var("OPENHUMAN_CORE_RPC_URL").ok();
-    unsafe {
-        std::env::remove_var("OPENHUMAN_CORE_RPC_URL");
-        std::env::set_var("OPENHUMAN_CORE_PORT", "not-a-number");
-    }
+    let _env = EnvVarGuard::locked_unset("OPENHUMAN_CORE_RPC_URL")
+        .with("OPENHUMAN_CORE_PORT", "not-a-number");
     assert_eq!(resolve_listen_port(), DEFAULT_CORE_PORT);
-    match prev_port {
-        Some(value) => unsafe { std::env::set_var("OPENHUMAN_CORE_PORT", value) },
-        None => unsafe { std::env::remove_var("OPENHUMAN_CORE_PORT") },
-    }
-    match prev_url {
-        Some(value) => unsafe { std::env::set_var("OPENHUMAN_CORE_RPC_URL", value) },
-        None => unsafe { std::env::remove_var("OPENHUMAN_CORE_RPC_URL") },
-    }
 }
 
 #[test]
 fn resolve_listen_port_prefers_openhuman_core_rpc_url() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let prev_rpc = std::env::var("OPENHUMAN_CORE_RPC_URL").ok();
-    let prev_port = std::env::var("OPENHUMAN_CORE_PORT").ok();
-    unsafe {
-        std::env::set_var("OPENHUMAN_CORE_RPC_URL", "http://127.0.0.1:7794/rpc");
-        std::env::set_var("OPENHUMAN_CORE_PORT", "7788");
-    }
+    let _env = EnvVarGuard::locked_set("OPENHUMAN_CORE_RPC_URL", "http://127.0.0.1:7794/rpc")
+        .with("OPENHUMAN_CORE_PORT", "7788");
     assert_eq!(resolve_listen_port(), 7794);
-    match prev_rpc {
-        Some(value) => unsafe { std::env::set_var("OPENHUMAN_CORE_RPC_URL", value) },
-        None => unsafe { std::env::remove_var("OPENHUMAN_CORE_RPC_URL") },
-    }
-    match prev_port {
-        Some(value) => unsafe { std::env::set_var("OPENHUMAN_CORE_PORT", value) },
-        None => unsafe { std::env::remove_var("OPENHUMAN_CORE_PORT") },
-    }
 }
 
 #[test]

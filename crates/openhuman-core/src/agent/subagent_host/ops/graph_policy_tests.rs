@@ -1,4 +1,5 @@
 use super::*;
+use tinytools_agent::dialect::TranscriptEntry;
 #[derive(Clone, Default)]
 struct WarnSink(Arc<std::sync::Mutex<Vec<String>>>);
 
@@ -116,7 +117,7 @@ async fn run_with_spawn_tool_in_parent_surface(allowed: HashSet<String>) -> (boo
         Box::new(EchoTool),
         Box::new(SpawnProbeTool(executed.clone())),
     ]);
-    let mut history = vec![ChatMessage::user("spawn a helper")];
+    let mut history = vec![TranscriptMessage::user("spawn a helper")];
 
     run_subagent_via_graph(
         crate::agent::tinyagents::TurnModelSource::from_model(provider),
@@ -142,7 +143,6 @@ async fn run_with_spawn_tool_in_parent_surface(allowed: HashSet<String>) -> (boo
         false,
         "root-session__spawn_refusal",
         "mock-channel",
-        None,
         AgentTokenjuiceCompression::Off,
         None,
     )
@@ -206,7 +206,7 @@ async fn an_allowlist_that_readmits_a_spawn_tool_is_refused_loudly() {
 /// record stays in the log for the process rail; it just stops being chat.
 #[test]
 fn mirrored_tool_results_are_hidden_from_the_worker_thread_chat() {
-    use crate::memory::conversations::{self as store, CreateConversationThread};
+    use crate::threads::store::{self as store, CreateConversationThread};
 
     let dir = std::env::temp_dir().join(format!("wt-5934-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -221,6 +221,7 @@ fn mirrored_tool_results_are_hidden_from_the_worker_thread_chat() {
                 parent_thread_id: Some("parent-1".to_string()),
                 labels: Some(vec!["tasks".to_string()]),
                 personality_id: None,
+                working_dir: None,
             },
         )
         .unwrap();
@@ -228,16 +229,16 @@ fn mirrored_tool_results_are_hidden_from_the_worker_thread_chat() {
 
     const RAW: &str = "{\"events\":[{\"title\":\"raw tool output the human never typed\"}]}";
 
-    // The typed path (`ConversationMessage::ToolResults`), used on a normal run.
+    // The typed path (`TranscriptEntry::ToolResults`), used on a normal run.
     mirror_worker_thread(
         &dir,
         "worker-typed",
         "researcher",
         "task-1",
         &[
-            ConversationMessage::AssistantToolCalls {
+            TranscriptEntry::AssistantToolCalls {
                 text: Some("checking the calendar".to_string()),
-                tool_calls: vec![crate::inference::provider::ToolCall {
+                tool_calls: vec![tinytools_agent::dialect::NativeToolCall {
                     id: "call-1".to_string(),
                     name: "list_events".to_string(),
                     arguments: "{}".to_string(),
@@ -246,9 +247,10 @@ fn mirrored_tool_results_are_hidden_from_the_worker_thread_chat() {
                 reasoning_content: None,
                 extra_metadata: None,
             },
-            ConversationMessage::ToolResults(vec![crate::agent::messages::ToolResultMessage {
+            TranscriptEntry::ToolResults(vec![tinytools_agent::dialect::ToolResultEntry {
                 tool_call_id: "call-1".to_string(),
                 content: RAW.to_string(),
+                trusted_verbatim: false,
             }]),
         ],
         Some("Here is your week."),
@@ -261,8 +263,8 @@ fn mirrored_tool_results_are_hidden_from_the_worker_thread_chat() {
         "researcher",
         "task-1",
         &[
-            ChatMessage::assistant("checking the calendar"),
-            ChatMessage::tool(RAW),
+            TranscriptMessage::assistant("checking the calendar"),
+            TranscriptMessage::tool(RAW),
         ],
         Some("[subagent run failed before completion]"),
     );

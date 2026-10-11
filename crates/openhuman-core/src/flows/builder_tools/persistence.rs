@@ -1,6 +1,7 @@
 //! Persistence tools: `create_workflow`, `duplicate_flow`, and `save_workflow`.
 //! Created/duplicated flows are always born DISABLED; save never touches enablement.
 
+use crate::tools::schema_cache::static_schema;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -9,7 +10,6 @@ use serde_json::{json, Value};
 use crate::config::Config;
 use crate::flows::ops;
 use crate::flows::ops::validate_and_migrate_graph;
-use crate::flows::tools;
 use tinytools::{PermissionLevel, Tool, ToolResult};
 
 /// `create_workflow`: the gated create tool (audit F4/F12). Persists a NEW
@@ -288,34 +288,7 @@ impl Tool for SaveWorkflowTool {
     }
 
     fn parameters_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "flow_id": {
-                    "type": "string",
-                    "description": "Id of the EXISTING saved flow to write the graph to (the persistence target — always required)."
-                },
-                "draft_id": {
-                    "type": "string",
-                    "description": "A working draft whose graph to persist onto the flow. Provide this OR inline `graph`; if both are given, draft_id wins."
-                },
-                "graph": {
-                    "type": "object",
-                    "description": "The full tinyflows WorkflowGraph to persist: { name?, nodes: [...], edges: [...] }. Provide this OR `draft_id`. Same shape as propose_workflow.",
-                    "properties": {
-                        "nodes": { "type": "array" },
-                        "edges": { "type": "array" }
-                    },
-                    "required": ["nodes", "edges"]
-                },
-                "name": {
-                    "type": "string",
-                    "description": "Optional new human-readable name for the flow."
-                }
-            },
-            "required": ["flow_id"],
-            "additionalProperties": false
-        })
+        static_schema!(include_str!("parameters/save_workflow.json"))
     }
 
     fn permission_level(&self) -> PermissionLevel {
@@ -463,7 +436,7 @@ impl Tool for SaveWorkflowTool {
                     let trigger_desc = flow
                         .graph
                         .trigger()
-                        .map(tools::describe_trigger)
+                        .map(tinyflows::summary::describe_trigger)
                         .unwrap_or_else(|| "automatic".to_string());
                     let warning = format!(
                         "WARNING: this flow is ENABLED with an automatic trigger \
@@ -501,3 +474,7 @@ impl Tool for SaveWorkflowTool {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "persistence_schema_tests.rs"]
+mod schema_tests;

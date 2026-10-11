@@ -204,7 +204,7 @@ pub fn wallet_schemas(function: &str) -> ControllerSchema {
             outputs: vec![FieldSchema {
                 name: "result",
                 ty: TypeSchema::Json,
-                comment: "Array of {chain, network, chainId?, rpcUrl, rpcSource, explorerTxUrlBase, supportsBroadcast, supportsTokenTransfers, supportsContractCalls, assets[]}.",
+                comment: "Array of {chain, network, chainId?, rpcUrl, rpcSource, explorerTxUrlBase, explorerTxUrlSuffix?, supportsBroadcast, supportsTokenTransfers, supportsContractCalls, assets[]}.",
                 required: true,
             }],
         },
@@ -242,12 +242,12 @@ pub fn wallet_schemas(function: &str) -> ControllerSchema {
             namespace: "wallet",
             function: "chain_status",
             description:
-                "Per-chain readiness: whether a wallet account is derived plus the active RPC URL (default or env override).",
+                "Per-chain readiness: whether a wallet account is derived, the active RPC URL (default or env override), and whether that endpoint answered a chain-tip probe.",
             inputs: vec![],
             outputs: vec![FieldSchema {
                 name: "result",
                 ty: TypeSchema::Json,
-                comment: "Array of {chain, configured, providerStatus, rpcUrl}.",
+                comment: "Array of {chain, evmNetwork?, configured, providerStatus, rpcUrl, error?}. providerStatus is ready only when the endpoint answered the probe; otherwise missing, with the failure in error (absent when no account exists).",
                 required: true,
             }],
         },

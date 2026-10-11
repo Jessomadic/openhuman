@@ -27,7 +27,7 @@ vi.mock('../../lib/workflows/workflowProposal', async importOriginal => {
   return { ...actual, coerceWorkflowProposal: vi.fn(actual.coerceWorkflowProposal) };
 });
 
-/** Every `flows_*` handler wraps its payload via `RpcOutcome::single_log`. */
+/** Every `flows_*` handler wraps its payload via `Outcome::single_log`. */
 function cliEnvelope<T>(
   result: T,
   logs: string[] = ['did something']

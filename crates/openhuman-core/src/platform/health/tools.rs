@@ -12,6 +12,10 @@ pub struct HealthSnapshotTool;
 
 #[async_trait]
 impl Tool for HealthSnapshotTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         "health_snapshot"
     }
@@ -41,6 +45,10 @@ pub struct HealthSystemInfoTool;
 
 #[async_trait]
 impl Tool for HealthSystemInfoTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         "health_system_info"
     }

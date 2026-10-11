@@ -2,8 +2,8 @@
  * Vitest coverage for the two new cron tauriCommand wrappers added by the
  * skills runner PR: openhumanCronRun and openhumanCronRuns.
  *
- * Follows the same mocking pattern as subconscious.test.ts — isTauri()
- * guard + callCoreRpc mock, no real Tauri runtime.
+ * callCoreRpc mock, no real Tauri runtime. The wrappers are plain core RPC,
+ * so they run outside the Tauri shell too.
  */
 import { isTauri } from '@tauri-apps/api/core';
 import { afterEach, beforeEach, describe, expect, type Mock, test, vi } from 'vitest';
@@ -34,9 +34,11 @@ describe('tauriCommands/cron — openhumanCronRun / openhumanCronRuns', () => {
   describe('openhumanCronAdd', () => {
     const params = { schedule: { kind: 'cron' as const, expr: '*/5 * * * *' }, name: 'test' };
 
-    test('throws when not in Tauri', async () => {
+    test('calls core RPC outside Tauri', async () => {
       mockIsTauri.mockReturnValue(false);
-      await expect(openhumanCronAdd(params)).rejects.toThrow('Not running in Tauri');
+      mockCallCoreRpc.mockResolvedValue({});
+      await openhumanCronAdd(params);
+      expect(mockCallCoreRpc).toHaveBeenCalledTimes(1);
     });
 
     test('calls cron_add with params', async () => {
@@ -49,9 +51,11 @@ describe('tauriCommands/cron — openhumanCronRun / openhumanCronRuns', () => {
   });
 
   describe('openhumanCronRun', () => {
-    test('throws when not in Tauri', async () => {
+    test('calls core RPC outside Tauri', async () => {
       mockIsTauri.mockReturnValue(false);
-      await expect(openhumanCronRun('job-1')).rejects.toThrow('Not running in Tauri');
+      mockCallCoreRpc.mockResolvedValue({});
+      await openhumanCronRun('job-1');
+      expect(mockCallCoreRpc).toHaveBeenCalledTimes(1);
     });
 
     test('calls cron_run with job_id', async () => {
@@ -69,9 +73,11 @@ describe('tauriCommands/cron — openhumanCronRun / openhumanCronRuns', () => {
   });
 
   describe('openhumanCronRuns', () => {
-    test('throws when not in Tauri', async () => {
+    test('calls core RPC outside Tauri', async () => {
       mockIsTauri.mockReturnValue(false);
-      await expect(openhumanCronRuns('job-1')).rejects.toThrow('Not running in Tauri');
+      mockCallCoreRpc.mockResolvedValue({});
+      await openhumanCronRuns('job-1');
+      expect(mockCallCoreRpc).toHaveBeenCalledTimes(1);
     });
 
     test('calls cron_runs with job_id and default limit', async () => {

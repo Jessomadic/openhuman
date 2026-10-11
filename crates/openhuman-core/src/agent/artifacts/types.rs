@@ -9,6 +9,7 @@ pub enum ArtifactKind {
     Presentation,
     Document,
     Image,
+    Video,
     #[default]
     Other,
 }
@@ -19,6 +20,7 @@ impl ArtifactKind {
             Self::Presentation => "presentation",
             Self::Document => "document",
             Self::Image => "image",
+            Self::Video => "video",
             Self::Other => "other",
         }
     }
@@ -30,6 +32,7 @@ impl ArtifactKind {
             "presentation" => Self::Presentation,
             "document" => Self::Document,
             "image" => Self::Image,
+            "video" => Self::Video,
             _ => Self::Other,
         }
     }
@@ -77,8 +80,21 @@ pub struct ArtifactMeta {
     pub kind: ArtifactKind,
     /// Human-readable title.
     pub title: String,
-    /// Relative path from the artifacts root, e.g. `"<uuid>/deck.pptx"`.
+    /// The file's name relative to its root. For a record with [`Self::file`]
+    /// set it is relative to [`Self::file_root`] (e.g. `"deck.pptx"`); for a
+    /// legacy record it is relative to `<workspace>/artifacts/`
+    /// (e.g. `"<uuid>/deck.pptx"`).
     pub path: String,
+    /// Absolute path of the deliverable in the visible files folder (#5505).
+    /// `None` for records written before that folder existed; those resolve
+    /// under `<workspace>/artifacts/` until the boot migration moves them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// The files folder [`Self::file`] was placed in. Recorded per artifact so
+    /// changing the folder later does not strand existing files, and so the
+    /// escape guard has a root to check `file` against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_root: Option<String>,
     /// Artifact file size in bytes.
     pub size_bytes: u64,
     /// Current lifecycle status.
@@ -101,6 +117,15 @@ pub struct ArtifactMeta {
     /// disk after a redux-persist purge / fresh-device boot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
+    /// Provider-assigned tool-call id of the producing tool invocation,
+    /// captured at [`super::store::create_artifact`] time and carried on
+    /// every lifecycle event (`ArtifactPending`/`Ready`/`Failed`) so the UI
+    /// can correlate the card with the tool-call bubble that produced it.
+    /// `None` for producers that ran outside a harness tool-call context
+    /// (CLI, cron) and for `meta.json` files written before this field
+    /// existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 #[cfg(test)]

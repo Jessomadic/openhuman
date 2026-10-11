@@ -5,14 +5,17 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::config::rpc as config_rpc;
+use super::live_config::live_composio_config;
+use super::redact::redact_composio_outcome;
 use crate::config::Config;
 use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult};
 
-use super::super::client::{create_composio_client, ComposioClientKind};
+use super::super::client::{resolve_composio_route, ComposioRoute};
+use super::super::module_client::{self as connectors, methods};
+use super::super::types::ComposioToolkitsResponse;
 
 pub struct ComposioListToolkitsTool {
-    /// Held instead of a pre-baked `ComposioClient` so the
+    /// Held instead of a pre-resolved route so the
     /// [`crate::config::ComposioConfig::mode`] toggle is
     /// honoured on every call (see [`ComposioExecuteTool`] doc for the
     /// bug this guards against — #1710).
@@ -47,7 +50,18 @@ impl Tool for ComposioListToolkitsTool {
         // with `category_filter = "skill"`.
         ToolCategory::Workflow
     }
-    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+        let (config, outcome) = Box::pin(self.execute_unredacted(args)).await;
+        redact_composio_outcome(&config, outcome)
+    }
+}
+
+impl ComposioListToolkitsTool {
+    /// Returns the config actually used for dispatch alongside the outcome,
+    /// so [`Tool::execute`] redacts against the same credential that ran —
+    /// not the possibly-stale snapshot captured when this tool was
+    /// registered.
+    async fn execute_unredacted(&self, _args: Value) -> (Box<Config>, anyhow::Result<ToolResult>) {
         tracing::debug!("[composio] tool list_toolkits.execute");
         // Mirror the mode-aware pattern in
         // `ops::composio_list_toolkits`. In direct mode there is no
@@ -55,51 +69,64 @@ impl Tool for ComposioListToolkitsTool {
         // governs availability, so we return an empty toolkits list
         // with an explanatory log instead of silently routing through
         // the backend tinyhumans tenant (#1710).
-        // [#1710 Wave 4] Reload config fresh per execute so a mid-session
-        // `composio.mode` toggle takes effect at the very next tool call.
-        // Anchor the reload to this tool's original config path rather
-        // than re-resolving process-global `OPENHUMAN_WORKSPACE`; the
-        // tool is scoped to the user/workspace it was created for.
-        let live_config =
-            match config_rpc::reload_config_snapshot_with_timeout(self.config.as_ref()).await {
-                Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(error = %e, "[composio] tool: load_config failed");
-                    return Ok(ToolResult::error(format!(
+        //
+        // Boxed from the moment it exists (not just at the return): held
+        // across every await point below, and `Config` is large enough that
+        // inlining it by value in the generated async state machine blows a
+        // 2 MiB worker-thread stack (the default for `cargo test` and tokio).
+        let live_config = match live_composio_config(self.config.as_ref()).await {
+            Ok(c) => Box::new(c),
+            Err(e) => {
+                tracing::warn!(error = %e, "[composio] tool: load_config failed");
+                return (
+                    Box::new(self.config.as_ref().clone()),
+                    Ok(ToolResult::error(format!(
                         "composio: failed to load live config: {e}"
-                    )));
-                }
-            };
-        let client = match create_composio_client(&live_config) {
-            Ok(ComposioClientKind::Backend(client)) => {
-                tracing::debug!("[composio] list_toolkits.execute: backend variant");
-                client
+                    ))),
+                );
             }
-            Ok(ComposioClientKind::Direct(_)) => {
+        };
+        match resolve_composio_route(&live_config) {
+            Ok(ComposioRoute::Backend) => {
+                tracing::debug!("[composio] list_toolkits.execute: backend variant");
+            }
+            Ok(ComposioRoute::Direct(_)) => {
                 tracing::info!(
                     "[composio-direct] list_toolkits.execute: direct mode active — \
                      returning empty toolkits list. Users manage available toolkits \
                      via app.composio.dev."
                 );
-                let resp = super::super::types::ComposioToolkitsResponse::default();
-                return Ok(ToolResult::success(
-                    serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into()),
-                ));
+                let resp = ComposioToolkitsResponse::default();
+                return (
+                    live_config,
+                    Ok(ToolResult::success(
+                        serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into()),
+                    )),
+                );
             }
             Err(e) => {
-                return Ok(ToolResult::error(format!(
-                    "composio_list_toolkits failed: {e}"
-                )));
+                return (
+                    live_config,
+                    Ok(ToolResult::error(format!(
+                        "composio_list_toolkits failed: {e}"
+                    ))),
+                );
             }
         };
-        match client.list_toolkits().await {
+        let outcome = match connectors::call_bare::<ComposioToolkitsResponse>(
+            &live_config,
+            methods::LIST_TOOLKITS,
+        )
+        .await
+        {
             Ok(resp) => Ok(ToolResult::success(
                 serde_json::to_string(&resp).unwrap_or_else(|_| "{}".into()),
             )),
             Err(e) => Ok(ToolResult::error(format!(
                 "composio_list_toolkits failed: {e}"
             ))),
-        }
+        };
+        (live_config, outcome)
     }
 }
 

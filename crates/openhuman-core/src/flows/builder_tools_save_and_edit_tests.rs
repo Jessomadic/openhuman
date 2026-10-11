@@ -286,7 +286,7 @@ async fn save_workflow_surfaces_auto_disarm_warning_on_manual_to_automatic_trans
     // Regression for #4889 + the stale-docs issue that motivated this test:
     // `flows_update` auto-disables a flow whenever its trigger transitions
     // from manual to automatic on an already-enabled flow, but `save_workflow`
-    // used to drop `flows_update`'s explanatory `RpcOutcome.logs` entirely —
+    // used to drop `flows_update`'s explanatory `Outcome.logs` entirely —
     // the agent had no way to relay the disarm to the user. Assert both the
     // disarm itself and that its log now surfaces in `save_workflow`'s
     // `warnings`.
@@ -377,7 +377,7 @@ async fn save_workflow_accepts_correctly_schemad_graph() {
         "nodes": [
             { "id": "t", "kind": "trigger", "name": "Manual" },
             { "id": "summarize", "kind": "agent", "name": "Summarize",
-              "config": { "agent_ref": "researcher", "prompt": "summarize",
+              "config": { "agent_ref": "planner", "prompt": "summarize",
                 "output_parser": { "schema": { "type": "object",
                     "required": ["channel"],
                     "properties": { "channel": { "type": "string" } } } } } },

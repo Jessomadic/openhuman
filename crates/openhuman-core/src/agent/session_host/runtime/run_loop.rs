@@ -22,6 +22,16 @@ impl OpenHumanSessionHost {
     /// It wraps the core `turn` logic with telemetry events (`AgentTurnStarted`,
     /// `AgentTurnCompleted`) and error sanitization.
     pub async fn run_single(&mut self, message: &str) -> Result<String> {
+        self.run_single_with_origin(message, None).await
+    }
+
+    /// Runs a single turn with authority supplied explicitly by its entry point.
+    pub async fn run_single_with_origin(
+        &mut self,
+        message: &str,
+        origin: Option<crate::agent::turn_origin::AgentTurnOrigin>,
+    ) -> Result<String> {
+        let origin = origin.or_else(crate::core::runtime::CoreContext::current_turn_origin);
         let guard = enforce_prompt_input(
             message,
             PromptEnforcementContext {
@@ -31,7 +41,9 @@ impl OpenHumanSessionHost {
                 session_id: Some(self.event_session_id()),
             },
         );
-        if !matches!(guard.action, PromptEnforcementAction::Allow) {
+        // A host-only session reading untrusted data has opted out; see
+        // `set_untrusted_input`, which refuses any other session.
+        if !self.untrusted_input && !matches!(guard.action, PromptEnforcementAction::Allow) {
             let user_message = match guard.action {
                 PromptEnforcementAction::Allow => "Message accepted.",
                 PromptEnforcementAction::Blocked => "Prompt blocked by security policy.",
@@ -63,12 +75,17 @@ impl OpenHumanSessionHost {
         }
 
         let history_snapshot = self.history();
+        // Busy state for background-result delivery is marked here, in the
+        // turn's own (profile) scope; the bus subscriber runs off-task.
+        // A guard, so a turn dropped mid-flight does not leave it busy.
+        let busy =
+            crate::agent::orchestration::busy_guard::TurnBusy::start(self.event_session_id());
         BUS.publish(DomainEvent::AgentTurnStarted {
             session_id: self.event_session_id().to_string(),
             channel: self.event_channel().to_string(),
         });
 
-        match self.turn(message).await {
+        match self.turn_with_origin(message, origin.as_ref()).await {
             Ok(response) => {
                 let history = self.history();
                 let new_entries = Self::new_entries_for_turn(&history_snapshot, &history);
@@ -77,6 +94,7 @@ impl OpenHumanSessionHost {
                     text_chars: response.chars().count(),
                     iterations: Self::count_iterations(new_entries),
                 });
+                drop(busy);
                 Ok(response)
             }
             Err(err) => {
@@ -130,41 +148,9 @@ impl OpenHumanSessionHost {
                     message: sanitized_message,
                     recoverable: false,
                 });
+                drop(busy);
                 Err(err)
             }
         }
-    }
-
-    /// Runs an interactive CLI loop, reading from standard input and printing to standard output.
-    ///
-    /// This method starts a persistent session where the user can chat with the agent
-    /// directly from the console. It handles input until a termination command
-    /// (e.g., `/quit`) is received.
-    pub async fn run_interactive(&mut self) -> Result<()> {
-        println!("🦀 OpenHuman Interactive Mode");
-        println!("Type /quit to exit.\n");
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
-        let cli = crate::channels::CliChannel::new();
-
-        let listen_handle = tokio::spawn(async move {
-            let _ = crate::channels::Channel::listen(&cli, tx).await;
-        });
-
-        while let Some(msg) = rx.recv().await {
-            match self.run_single(&msg.content).await {
-                Ok(response) => println!("\n{response}\n"),
-                Err(e) => {
-                    // `run_single` already publishes `AgentError` and
-                    // sanitises the payload; surface a concise line here
-                    // for the CLI user and continue the loop.
-                    eprintln!("\nError: {e}\n");
-                    continue;
-                }
-            }
-        }
-
-        listen_handle.abort();
-        Ok(())
     }
 }

@@ -54,10 +54,8 @@ pub struct AutonomyConfig {
     pub auto_approve: Vec<String>,
     /// When true, the approval gate auto-approves ALL tool calls without
     /// prompting the user — a blanket bypass of the interactive approval
-    /// flow, not just the per-tool `auto_approve` allowlist above. A
-    /// subconscious tick whose memory context is tainted by external-sync
-    /// content, and any unlabelled call site, are still hard-denied
-    /// regardless of this flag (see `ApprovalGate::intercept_audited_inner`).
+    /// flow, not just the per-tool `auto_approve` allowlist above. An
+    /// unlabelled call site is still hard-denied regardless of this flag (see `ApprovalGate::intercept_audited_inner`).
     /// Hard security blocks (`is_always_forbidden`, `is_workspace_internal_path`,
     /// `ToolPolicyMiddleware`) live on independent code paths inside the tool
     /// implementations themselves and are unaffected by this setting.

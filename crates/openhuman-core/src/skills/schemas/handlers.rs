@@ -10,12 +10,13 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 use crate::core::all::ControllerFuture;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 use crate::skills::ops::{
     create_workflow, discover_automations, discover_workflows, install_workflow_from_url,
     is_workspace_trusted, read_workflow_resource, uninstall_workflow, CreateWorkflowParams,
     UninstallWorkflowParams,
 };
+use crate::skills::ops_install::ScanAcknowledgement;
 use crate::skills::runtime::spawn_workflow_run_background;
 use crate::skills::{registry, run_log};
 
@@ -56,7 +57,7 @@ pub(super) fn handle_skills_list(params: Map<String, Value>) -> ControllerFuture
             "[skills][rpc] list result"
         );
         let summaries = listed.into_iter().map(WorkflowSummary::from).collect();
-        to_json(RpcOutcome::new(
+        to_json(Outcome::new(
             WorkflowsListResult {
                 workflows: summaries,
             },
@@ -93,7 +94,7 @@ pub(super) fn handle_skills_describe(params: Map<String, Value>) -> ControllerFu
             .display_name
             .clone()
             .unwrap_or_else(|| skill.definition.id.clone());
-        to_json(RpcOutcome::new(
+        to_json(Outcome::new(
             WorkflowsDescribeResult {
                 id: skill.definition.id.clone(),
                 display_name,
@@ -122,7 +123,7 @@ pub(super) fn handle_skills_read_run_log(params: Map<String, Value>) -> Controll
         // to page through larger logs.
         let max_bytes = payload.max_bytes.unwrap_or(64 * 1024).min(256 * 1024) as usize;
         match run_log::read_run_log_slice(&path, offset, max_bytes) {
-            Ok(slice) => to_json(RpcOutcome::new(slice, Vec::new())),
+            Ok(slice) => to_json(Outcome::new(slice, Vec::new())),
             Err(e) => Err(format!("skills_read_run_log: read failed: {e}")),
         }
     })
@@ -144,22 +145,25 @@ pub(super) fn handle_skills_recent_runs(params: Map<String, Value>) -> Controlle
             limit,
             "[skills][rpc] recent_runs"
         );
-        to_json(RpcOutcome::new(
-            WorkflowsRecentRunsResult { runs },
-            Vec::new(),
-        ))
+        to_json(Outcome::new(WorkflowsRecentRunsResult { runs }, Vec::new()))
     })
 }
 
 pub(super) fn handle_skills_run(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let payload = deserialize_params::<WorkflowsRunParams>(params)?;
-        let started = match spawn_workflow_run_background(payload.workflow_id, payload.inputs).await
+        let origin = crate::agent::turn_origin::current()
+            .unwrap_or(crate::agent::turn_origin::AgentTurnOrigin::Cli);
+        let started = match crate::agent::turn_origin::with_origin(
+            origin,
+            spawn_workflow_run_background(payload.workflow_id, payload.inputs),
+        )
+        .await
         {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
-        to_json(RpcOutcome::new(
+        to_json(Outcome::new(
             serde_json::json!({
                 "run_id": started.run_id,
                 "status": "started",
@@ -180,7 +184,7 @@ pub(super) fn handle_skills_cancel(params: Map<String, Value>) -> ControllerFutu
         let payload = deserialize_params::<WorkflowsCancelParams>(params)?;
         let cancelled = run_log::cancel_run(&payload.run_id);
         tracing::info!(run_id = %payload.run_id, cancelled, "[skills][rpc] cancel");
-        to_json(RpcOutcome::new(
+        to_json(Outcome::new(
             serde_json::json!({ "run_id": payload.run_id, "cancelled": cancelled }),
             Vec::new(),
         ))
@@ -200,7 +204,7 @@ pub(super) fn handle_skills_read_resource(params: Map<String, Value>) -> Control
         match read_workflow_resource(workspace.as_path(), &payload.workflow_id, relative) {
             Ok(content) => {
                 let bytes = content.len();
-                to_json(RpcOutcome::new(
+                to_json(Outcome::new(
                     WorkflowsReadResourceResult {
                         workflow_id: payload.workflow_id,
                         relative_path: payload.relative_path,
@@ -237,7 +241,7 @@ pub(super) fn handle_skills_create(params: Map<String, Value>) -> ControllerFutu
                     location = ?skill.location,
                     "[skills][rpc] create: ok"
                 );
-                to_json(RpcOutcome::new(
+                to_json(Outcome::new(
                     WorkflowsCreateResult {
                         workflow: WorkflowSummary::from(skill),
                     },
@@ -267,7 +271,7 @@ pub(super) fn handle_skills_update(params: Map<String, Value>) -> ControllerFutu
         let mut create_params: CreateWorkflowParams = payload.into();
         create_params.overwrite = true;
         match create_workflow(workspace.as_path(), create_params) {
-            Ok(skill) => to_json(RpcOutcome::new(
+            Ok(skill) => to_json(Outcome::new(
                 WorkflowsCreateResult {
                     workflow: WorkflowSummary::from(skill),
                 },
@@ -287,25 +291,22 @@ pub(super) fn handle_skills_install_from_url(params: Map<String, Value>) -> Cont
         tracing::debug!(
             url = %wire.url,
             timeout_secs = ?wire.timeout_secs,
+            acknowledged = wire.acknowledged_digest.is_some(),
             "[skills][rpc] install_from_url"
         );
         let config = resolve_config().await;
         let workspace = config.workspace_dir.clone();
+        let acknowledgement =
+            ScanAcknowledgement::from_user_digest(wire.acknowledged_digest.clone());
         let payload = wire.into();
-        match install_workflow_from_url(workspace.as_path(), payload).await {
+        match install_workflow_from_url(workspace.as_path(), payload, acknowledgement).await {
             Ok(outcome) => {
                 tracing::debug!(
-                    url = %outcome.url,
-                    new_count = outcome.new_skills.len(),
+                    status = outcome.status(),
                     "[skills][rpc] install_from_url: ok"
                 );
-                to_json(RpcOutcome::new(
-                    WorkflowsInstallFromUrlResult {
-                        url: outcome.url,
-                        stdout: outcome.stdout,
-                        stderr: outcome.stderr,
-                        new_workflows: outcome.new_skills,
-                    },
+                to_json(Outcome::new(
+                    WorkflowsInstallFromUrlResult::from(outcome),
                     Vec::new(),
                 ))
             }
@@ -328,7 +329,7 @@ pub(super) fn handle_skills_uninstall(params: Map<String, Value>) -> ControllerF
                     removed_path = %outcome.removed_path,
                     "[skills][rpc] uninstall: ok"
                 );
-                to_json(RpcOutcome::new(
+                to_json(Outcome::new(
                     WorkflowsUninstallResult {
                         name: outcome.name,
                         removed_path: outcome.removed_path,

@@ -59,6 +59,9 @@ vi.mock('../../components/skills/SkillsExplorerTab', () => ({
 vi.mock('../../components/channels/mcp/McpServersPage', () => ({
   default: () => <div data-testid="tab-body-mcp-servers" />,
 }));
+vi.mock('../../components/settings/panels/ComputerPanel', () => ({
+  default: () => <div data-testid="tab-body-computer" />,
+}));
 
 vi.mock('../../lib/skills/skillsApi', () => ({
   installSkill: vi.fn().mockResolvedValue(undefined),
@@ -122,7 +125,7 @@ async function selectedTab(): Promise<string> {
 }
 
 describe('Connections ?tab= resolution — legacy aliases', () => {
-  // Each of these four has a canonical successor. `Skills.tsx:537-540` maps
+  // Each of these aliases has a canonical successor. `Skills.tsx` maps
   // them, per its own comment, "so that e.g. `/skills?tab=composio` still works
   // after the redirect". None had a test.
   it.each([
@@ -130,6 +133,8 @@ describe('Connections ?tab= resolution — legacy aliases', () => {
     ['messaging', 'channels'],
     ['tools', 'mcp'],
     ['explorer', 'skills'],
+    ['browser', 'computer'],
+    ['desktop', 'computer'],
   ])('?tab=%s resolves to the %s tab', async (alias, canonical) => {
     renderAt(`?tab=${alias}`);
     expect(await selectedTab()).toBe(canonical);
@@ -152,13 +157,19 @@ describe('Connections ?tab= resolution — legacy aliases', () => {
 });
 
 describe('Connections ?tab= resolution — canonical values', () => {
-  it.each([['composio'], ['channels'], ['mcp'], ['skills'], ['wallet']])(
+  it.each([['composio'], ['channels'], ['mcp'], ['skills'], ['wallet'], ['computer']])(
     '?tab=%s passes through unchanged',
     async tab => {
       renderAt(`?tab=${tab}`);
       expect(await selectedTab()).toBe(tab);
     }
   );
+
+  it('?tab=desktop resolves to the Computer tab', async () => {
+    renderAt('?tab=desktop');
+    expect(await selectedTab()).toBe('computer');
+    expect(screen.getByTestId('tab-body-computer')).toBeInTheDocument();
+  });
 
   it('?tab=welcome renders the landing overview', async () => {
     // `welcome` is the one value with no nav row of its own -- it is the

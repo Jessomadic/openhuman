@@ -1,11 +1,11 @@
 //! Workspace-wide conversation purge.
 
 use super::support::{envelope, run_to_completion, workspace_dir};
-use crate::memory::conversations;
-use crate::memory::{ApiEnvelope, EmptyRequest, PurgeConversationThreadsResponse};
-use crate::rpc::RpcOutcome;
-use crate::threads::turn_state;
+use crate::core::Outcome;
+use crate::threads::store as conversations;
+use crate::threads::{ApiEnvelope, EmptyRequest, PurgeConversationThreadsResponse};
 use std::path::PathBuf;
+use tinyagents_session::turn_state;
 
 /// Purges all conversation threads and messages.
 ///
@@ -14,14 +14,14 @@ use std::path::PathBuf;
 /// caller cannot leave every thread wiped while their sub-agents keep running.
 pub async fn threads_purge(
     _request: EmptyRequest,
-) -> Result<RpcOutcome<ApiEnvelope<PurgeConversationThreadsResponse>>, String> {
+) -> Result<Outcome<ApiEnvelope<PurgeConversationThreadsResponse>>, String> {
     let dir = workspace_dir().await?;
     run_to_completion("threads_purge", threads_purge_inner(dir)).await
 }
 
 async fn threads_purge_inner(
     dir: PathBuf,
-) -> Result<RpcOutcome<ApiEnvelope<PurgeConversationThreadsResponse>>, String> {
+) -> Result<Outcome<ApiEnvelope<PurgeConversationThreadsResponse>>, String> {
     let stats = conversations::blocking::purge_threads(dir.clone()).await?;
     // No parent thread survives a purge, so cancel every detached sub-agent and
     // wipe every queued result. Same ordering as `thread_delete`: abort the
@@ -33,9 +33,9 @@ async fn threads_purge_inner(
     let cancelled_threads = running_subagents::cancel_all();
     let mut discarded = 0;
     for thread_id in &cancelled_threads {
-        discarded += background_completions::discard_for_thread(thread_id);
+        discarded += background_completions::discard_for_thread(&dir, thread_id);
     }
-    discarded += background_completions::clear_all();
+    discarded += background_completions::clear_all(&dir);
     log::debug!(
         "[threads] threads_purge cancelled_threads={} discarded_completions={}",
         cancelled_threads.len(),

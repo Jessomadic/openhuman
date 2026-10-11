@@ -28,7 +28,7 @@ impl TieredPrompt {
     /// `Stable` and `Context` are merged into the first message: both are
     /// fixed for the whole session, and one fewer message is one fewer thing a
     /// provider can reject. `Volatile` (when present) is the second message,
-    /// so a rewritten memory file or a newly connected service changes the
+    /// so a newly connected service changes the
     /// second segment and leaves the first byte-identical.
     #[must_use]
     pub fn system_messages(&self) -> Vec<String> {
@@ -101,6 +101,9 @@ fn global_style_block(workspace_dir: &Path) -> String {
 #[derive(Default)]
 pub struct SystemPromptBuilder {
     pub(super) sections: Vec<Box<dyn PromptSection>>,
+    /// Render the sections alone: no grounding contract or writing-style
+    /// block is appended. See [`Self::verbatim`].
+    pub(super) verbatim: bool,
 }
 
 impl SystemPromptBuilder {
@@ -108,39 +111,19 @@ impl SystemPromptBuilder {
         Self {
             sections: vec![
                 Box::new(IdentitySection),
-                // User files (PROFILE.md, MEMORY.md) ride right after the
-                // identity bootstrap so they land in the cache-friendly
-                // prefix alongside SOUL/IDENTITY. Gated per-agent — see
-                // `UserFilesSection`. Intentionally separate from
-                // `IdentitySection` so agents that strip the identity
-                // preamble via `for_subagent(omit_identity=true)` still
-                // get their user files (welcome / orchestrator / the
-                // trigger pair).
-                Box::new(UserFilesSection),
-                // Project instructions (AGENTS.md) sit right after the user
-                // context and before the tool catalogue — standing, per-project
-                // guidance the model should read alongside identity/memory. Both
+                // Project instructions (AGENTS.md) sit right after the identity
+                // bootstrap and before the tool catalogue — standing, per-project
+                // guidance the model should read alongside identity. Both
                 // layers are pre-loaded into `PromptContext` and this section is
                 // empty (skipped) when neither exists or the gate is off.
                 Box::new(AgentsInstructionsSection),
-                // User memory sits right after the identity bootstrap so the
-                // model has rich, persistent context about the user before it
-                // sees the tool catalogue. Section is empty (and skipped) when
-                // the tree summarizer has nothing on disk yet.
-                //
-                // The privileged `UserReflectionsSection` is appended
-                // dynamically by `session::builder` when the
-                // learning subsystem is enabled, alongside
-                // `LearnedContextSection` / `UserProfileSection` — those
-                // three are config-gated and intentionally not part of
-                // the static default chain.
-                Box::new(UserMemorySection),
                 Box::new(ToolsSection),
                 Box::new(SafetySection),
                 Box::new(WorkspaceSection),
                 Box::new(DateTimeSection),
                 Box::new(RuntimeSection),
             ],
+            verbatim: false,
         }
     }
 
@@ -177,14 +160,8 @@ impl SystemPromptBuilder {
         if !omit_identity {
             sections.push(Box::new(IdentitySection));
         }
-        // User files (PROFILE.md / MEMORY.md) are gated independently of
-        // `omit_identity` so agents that drop the identity preamble (e.g.
-        // welcome's `omit_identity = true`) still surface the user's
-        // onboarding + archivist context when `omit_profile` /
-        // `omit_memory_md` are opted in.
-        sections.push(Box::new(UserFilesSection));
         // Project instructions (AGENTS.md) — same placement as the default
-        // chain (after user files, before tools). Empty (skipped) unless the
+        // chain (after identity, before tools). Empty (skipped) unless the
         // caller pre-loaded content onto `PromptContext`.
         sections.push(Box::new(AgentsInstructionsSection));
         // Tools section is always included — the sub-agent needs to see
@@ -195,13 +172,15 @@ impl SystemPromptBuilder {
         }
         // Skills catalogue and connected integrations are rendered by
         // the individual agent's `prompt.rs` when that agent needs
-        // them (integrations_agent for the skill-executor voice,
-        // orchestrator/welcome for the delegator voice). The shared
+        // them (orchestrator/welcome for the delegator voice). The shared
         // builder intentionally does not emit them — keeping
         // agent-specific prose scoped to the agent that owns it.
         sections.push(Box::new(WorkspaceSection));
 
-        Self { sections }
+        Self {
+            sections,
+            verbatim: false,
+        }
     }
 
     /// Build from a fully-assembled prompt string — no section wrapping.
@@ -213,6 +192,17 @@ impl SystemPromptBuilder {
     pub fn from_final_body(body: String) -> Self {
         Self {
             sections: vec![Box::new(ArchetypePromptSection::new(body))],
+            verbatim: false,
+        }
+    }
+
+    /// Exactly `body`: no section, grounding contract or writing-style block
+    /// is composed around it. For a host that owns its whole prompt
+    /// ([`PromptSource::Verbatim`](crate::agent::harness::definition::PromptSource::Verbatim)).
+    pub fn verbatim(body: String) -> Self {
+        Self {
+            sections: vec![Box::new(ArchetypePromptSection::new(body))],
+            verbatim: true,
         }
     }
 
@@ -235,7 +225,7 @@ impl SystemPromptBuilder {
                 Box::new(DynamicPromptSection::new(builder)),
                 // Project instructions (AGENTS.md). The ~26 dynamic
                 // `agents/<id>/prompt.rs` builders (orchestrator / main chat,
-                // welcome, integrations_agent, …) hand-assemble their own body
+                // welcome, …) hand-assemble their own body
                 // via the `render_*` helpers and none of them individually call
                 // `render_agents_md`, so the pre-loaded AGENTS.md layers on
                 // `PromptContext` would otherwise be silently dropped for the
@@ -249,69 +239,12 @@ impl SystemPromptBuilder {
                 // `agents_md_enabled` gate is off.
                 Box::new(AgentsInstructionsSection),
             ],
+            verbatim: false,
         }
     }
 
     pub fn add_section(mut self, section: Box<dyn PromptSection>) -> Self {
         self.sections.push(section);
-        self
-    }
-
-    /// Insert `section` immediately before the first existing section
-    /// whose [`PromptSection::name`] matches `target_name`. When no
-    /// matching section is present (most dynamic / sub-agent builders
-    /// do not include `user_memory`, for example), the new section is
-    /// appended at the end instead.
-    ///
-    /// Used by the session builder to guarantee that the privileged
-    /// reflection block ranks ahead of broader memory sections like
-    /// `user_memory`, even when the surrounding builder was assembled
-    /// via [`Self::with_defaults`] which already contains them.
-    pub fn insert_section_before(
-        mut self,
-        target_name: &str,
-        section: Box<dyn PromptSection>,
-    ) -> Self {
-        let position = self.sections.iter().position(|s| s.name() == target_name);
-        match position {
-            Some(idx) => self.sections.insert(idx, section),
-            None => self.sections.push(section),
-        }
-        self
-    }
-
-    /// Append a [`ToolMemoryRulesSection`] carrying a pre-fetched
-    /// snapshot of Critical / High priority tool-scoped rules (#1400).
-    ///
-    /// Snapshot semantics — the rules are baked into the section at
-    /// construction so the rendered system prompt stays byte-identical
-    /// for the lifetime of the session. The session builder is
-    /// responsible for pre-fetching via
-    /// [`crate::memory::tool_memory::ToolMemoryStore::rules_for_prompt`]
-    /// (or the `memory_tool_rules_for_prompt` RPC) before invoking
-    /// this method.
-    ///
-    /// No-op when `rules` is empty.
-    pub fn with_tool_memory_rules(
-        mut self,
-        rules: Vec<crate::memory::tool_memory::ToolMemoryRule>,
-    ) -> Self {
-        if rules.is_empty() {
-            return self;
-        }
-        // Insert before the tool-catalogue section so these rules appear
-        // adjacent to the tool listings and survive tail-biased trimming.
-        // Falls back to push when no tools section is present.
-        let section: Box<dyn PromptSection> =
-            Box::new(crate::memory::tool_memory::prompt::ToolMemoryRulesSection::new(rules));
-        let tools_idx = self
-            .sections
-            .iter()
-            .position(|s| s.name() == "tools" || s.name() == "tool_catalogue");
-        match tools_idx {
-            Some(idx) => self.sections.insert(idx, section),
-            None => self.sections.push(section),
-        }
         self
     }
 
@@ -337,15 +270,13 @@ impl SystemPromptBuilder {
     ///
     /// The grouping is the whole point. A prefix is reusable only up to the
     /// first byte that differs, so a volatile section emitted early throws away
-    /// every stable byte behind it. `with_defaults` used to place
-    /// `UserFilesSection` second and `UserMemorySection` fourth, ahead of the
-    /// tool catalogue, the safety contract and the writing-style rules — so a
-    /// single `MEMORY.md` write invalidated all of them.
+    /// every stable byte behind it, so volatile sections (connected services, the
+    /// signed-in user) always render after the tool catalogue, the safety
+    /// contract and the writing-style rules regardless of declaration order.
     ///
     /// It does not change the prompt's **size**: the same sections render the
-    /// same bytes, in a different order. `scripts/prompt-budget.limits` should
-    /// therefore not move when this lands, and if it does, something else
-    /// changed too.
+    /// same bytes, in a different order (`scripts/prompt-report.sh` shows the
+    /// per-agent totals).
     pub fn build_tiered(&self, ctx: &PromptContext<'_>) -> Result<TieredPrompt> {
         // Render each section once and bucket its parts by tier. A section
         // usually yields one part in its own tier; a dynamic builder that
@@ -369,11 +300,13 @@ impl SystemPromptBuilder {
         // Grounding is skipped when the agent's own prompt already carries
         // the contract under the shared heading (the orchestrator does), so
         // it never ships twice.
-        if !has_grounding {
-            buckets[tier_index(PromptTier::Stable)].push(GROUNDING_BODY.trim_end().to_string());
+        if !self.verbatim {
+            if !has_grounding {
+                buckets[tier_index(PromptTier::Stable)].push(GROUNDING_BODY.trim_end().to_string());
+            }
+            buckets[tier_index(PromptTier::Stable)]
+                .push(global_style_block(ctx.workspace_dir).trim_end().to_string());
         }
-        buckets[tier_index(PromptTier::Stable)]
-            .push(global_style_block(ctx.workspace_dir).trim_end().to_string());
 
         let mut text = String::new();
         let mut breakpoints: Vec<usize> = Vec::new();

@@ -1,5 +1,93 @@
 use super::{find, ALL};
-use crate::modules::platform::candidates_for;
+use tinybus::module::platform::candidates_for;
+
+#[test]
+fn tinycomputer_registry_matches_bus_contract_and_published_release() {
+    let desktop = find("tinycomputer").expect("compiled computer module");
+    assert_eq!(desktop.bus_name, tinycomputer_bus::names::INTERFACE);
+    assert_eq!(desktop.object_path, tinycomputer_bus::names::OBJECT_PATH);
+    assert_eq!(desktop.version, "0.10.1");
+    assert_eq!(desktop.assets.len(), 7);
+    assert_eq!(
+        desktop.asset_for("macos-26-arm64").unwrap().sha256,
+        "39d1ca3db737c26b4d39d9a22c16da7845735c6349dd012c59533499498af874"
+    );
+}
+
+#[test]
+fn tinybox_registry_matches_the_published_v0116_release_manifest() {
+    let record = find("tinybox").expect("compiled TinyBox module");
+    assert_eq!(record.version, "0.1.16");
+    assert_eq!(
+        record.release_url,
+        "https://github.com/tinyhumansai/tinybox/releases/tag/v0.1.16"
+    );
+
+    let actual = record
+        .assets
+        .iter()
+        .map(|asset| (asset.host_key, asset.archive, asset.sha256))
+        .collect::<Vec<_>>();
+    let published = [
+        (
+            "ubuntu-24.04-x86_64",
+            "tinybox-0.1.16-ubuntu-24.04-x86_64.tar.gz",
+            "3163f7cf621beaf71d99b978555085e6bb933a0810153970dd16b2c531e1a030",
+        ),
+        (
+            "ubuntu-24.04-arm64",
+            "tinybox-0.1.16-ubuntu-24.04-arm64.tar.gz",
+            "fad323bf74ce075f758a31c7cb93f393d84ac4c9a6a22f31fb7fc7e2ec4743c4",
+        ),
+        (
+            "ubuntu-22.04-x86_64",
+            "tinybox-0.1.16-ubuntu-22.04-x86_64.tar.gz",
+            "9abddc0e8ad14ac9f34e479714baa7f1720ed029d199272214450f356b7d51da",
+        ),
+        (
+            "ubuntu-22.04-arm64",
+            "tinybox-0.1.16-ubuntu-22.04-arm64.tar.gz",
+            "fb164eeec76789035de8c621176630b6ea6aea0a5021778fbd97fafe163b6dac",
+        ),
+        (
+            "macos-26-arm64",
+            "tinybox-0.1.16-macos-26-arm64.tar.gz",
+            "34cb87457a3b21ec5ee8b8b6817f6a78a854b12e4d40fa43221aeed508d7c40a",
+        ),
+        (
+            "macos-26-x86_64",
+            "tinybox-0.1.16-macos-26-x86_64.tar.gz",
+            "5f7a4886fb191a58dc33bb5f43a7034c0f6b31c1e85161e13228aa0deb6ae5b9",
+        ),
+        (
+            "macos-15-arm64",
+            "tinybox-0.1.16-macos-15-arm64.tar.gz",
+            "ae427b7962b0607051595c9c12f9cb630c87672bc3c92c7becdac87283aaefd4",
+        ),
+        (
+            "macos-15-x86_64",
+            "tinybox-0.1.16-macos-15-x86_64.tar.gz",
+            "417d4c182c3882cd90b5ff323dc81c62c2d98b3e0bb8ac0a237cac51c34828fe",
+        ),
+        (
+            "windows-2025-x86_64",
+            "tinybox-0.1.16-windows-2025-x86_64.zip",
+            "ada7ddb1edf16887ef20d84241f0453b2ce8ee29aa670c1505758c1f7913b4fc",
+        ),
+        (
+            "windows-2022-x86_64",
+            "tinybox-0.1.16-windows-2022-x86_64.zip",
+            "044666f53b10c8db6626262de45806d1a2a34147ce2de196e8549987f32c1cd8",
+        ),
+        (
+            "windows-11-arm64",
+            "tinybox-0.1.16-windows-11-arm64.zip",
+            "bc3da524fc3e702e77cc1e85c064dccaece633f896503737c71ce7127ba26440",
+        ),
+    ];
+
+    assert_eq!(actual, published);
+}
 
 #[test]
 fn ids_and_bus_names_are_unique() {
@@ -105,7 +193,7 @@ fn every_asset_name_carries_the_pinned_version() {
 fn the_release_url_is_a_tag_on_github() {
     // tinybus refuses a URL that is not a tag, because a branch URL names
     // bytes that can change under a digest that was checked once.
-    for record in ALL {
+    for record in ALL.iter().filter(|record| !record.assets.is_empty()) {
         assert!(
             record
                 .release_url
@@ -148,6 +236,13 @@ fn every_host_key() -> Vec<String> {
     keys
 }
 
+fn supported_host_keys(record: &super::ModuleRecord) -> Vec<String> {
+    every_host_key()
+        .into_iter()
+        .filter(|key| record.id != "tinycomputer" || !key.starts_with("ubuntu-"))
+        .collect()
+}
+
 #[test]
 fn a_record_that_pins_a_release_covers_every_host_the_platform_table_offers() {
     // The two tables are written independently and would drift silently:
@@ -161,7 +256,7 @@ fn a_record_that_pins_a_release_covers_every_host_the_platform_table_offers() {
     // that it does not exist. The partial-coverage case — the one that is
     // actually a bug — is caught below.
     for record in ALL.iter().filter(|record| !record.assets.is_empty()) {
-        for key in every_host_key() {
+        for key in supported_host_keys(record) {
             assert!(
                 record.asset_for(&key).is_some(),
                 "{} publishes no asset for {key}, which the platform table would ask for",
@@ -177,15 +272,16 @@ fn a_record_publishes_for_every_host_or_for_none() {
     // user on the missing platform reaches the feature. All-or-nothing keeps
     // "not published yet" distinguishable from "published and incomplete".
     for record in ALL {
-        let covered = every_host_key()
+        let host_keys = supported_host_keys(record);
+        let covered = host_keys
             .into_iter()
             .filter(|key| record.asset_for(key).is_some())
             .count();
         assert!(
-            covered == 0 || covered == every_host_key().len(),
+            covered == 0 || covered == supported_host_keys(record).len(),
             "{} publishes assets for {covered} of {} host keys",
             record.id,
-            every_host_key().len()
+            supported_host_keys(record).len()
         );
     }
 }

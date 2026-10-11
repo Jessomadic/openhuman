@@ -3,7 +3,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 pub(super) use crate::util::{read_optional, read_required};
 
 // ── Param helpers ─────────────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ pub(super) fn read_optional_u32(
     }
 }
 
-pub(super) fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+pub(super) fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     serde_json::to_value(outcome.value).map_err(|e| e.to_string())
 }
 

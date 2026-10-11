@@ -2,8 +2,8 @@ use serde::de::{DeserializeOwned, Deserializer};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use crate::core::Outcome;
 use crate::core::{FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 
 pub(super) const DEFAULT_ONBOARDING_FLAG_NAME: &str = ".skip_onboarding";
 
@@ -26,6 +26,9 @@ pub(super) struct CloudProviderUpdate {
     /// Auth style: "bearer" | "anthropic" | "openhuman_jwt" | "none".
     #[serde(default)]
     pub(super) auth_style: Option<String>,
+    /// Optional PEM CA bundle for this provider. Empty string removes it.
+    #[serde(default)]
+    pub(super) ca_cert_pem: Option<String>,
     /// Legacy field — tolerated on read for back-compat but not required.
     #[serde(rename = "type", default)]
     pub(super) legacy_type: Option<String>,
@@ -69,32 +72,47 @@ pub(super) struct ModelSettingsUpdate {
     pub(super) vision_provider: Option<String>,
     pub(super) memory_provider: Option<String>,
     pub(super) embeddings_provider: Option<String>,
-    pub(super) heartbeat_provider: Option<String>,
-    pub(super) learning_provider: Option<String>,
-    pub(super) subconscious_provider: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct MemorySettingsUpdate {
-    pub(super) backend: Option<String>,
-    pub(super) auto_save: Option<bool>,
     pub(super) embedding_provider: Option<String>,
     pub(super) embedding_model: Option<String>,
     pub(super) embedding_dimensions: Option<usize>,
-    /// One of `"minimal" | "balanced" | "extended" | "maximum"`.
-    pub(super) memory_window: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RuntimeSettingsUpdate {
     pub(super) kind: Option<String>,
     pub(super) reasoning_enabled: Option<bool>,
+    pub(super) reasoning_effort: Option<String>,
+    pub(super) reasoning_effort_model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct BrowserSettingsUpdate {
     pub(super) enabled: Option<bool>,
     pub(super) backend: Option<String>,
+    pub(super) headless: Option<bool>,
+    pub(super) viewport_width: Option<u32>,
+    pub(super) viewport_height: Option<u32>,
+    pub(super) chrome_path: Option<String>,
+    pub(super) profile_mode: Option<String>,
+    pub(super) profile_path: Option<String>,
+    pub(super) download_dir: Option<String>,
+    pub(super) max_task_steps: Option<usize>,
+    pub(super) task_timeout_secs: Option<u64>,
+    pub(super) learn_from_tasks: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ComputerSettingsUpdate {
+    pub(super) decision_model: Option<String>,
+    pub(super) sage_fast: Option<bool>,
+    pub(super) planner_model: Option<String>,
+    pub(super) rescue_model: Option<String>,
+    pub(super) max_rescues: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,17 +121,9 @@ pub(super) struct AnalyticsSettingsUpdate {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct SearchSettingsUpdate {
-    pub(super) engine: Option<String>,
-    pub(super) max_results: Option<usize>,
-    pub(super) timeout_secs: Option<u64>,
-    pub(super) parallel_api_key: Option<String>,
-    pub(super) brave_api_key: Option<String>,
-    pub(super) querit_api_key: Option<String>,
-    pub(super) exa_api_key: Option<String>,
-    pub(super) tavily_api_key: Option<String>,
-    pub(super) allowed_domains: Option<Vec<String>>,
-    pub(super) allow_all: Option<bool>,
+pub(super) struct UserTimezoneUpdate {
+    #[serde(default)]
+    pub(super) timezone: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,9 +140,6 @@ pub(super) struct LocalAiSettingsUpdate {
     pub(super) model_id: Option<String>,
     pub(super) chat_model_id: Option<String>,
     pub(super) usage_embeddings: Option<bool>,
-    pub(super) usage_heartbeat: Option<bool>,
-    pub(super) usage_learning_reflection: Option<bool>,
-    pub(super) usage_subconscious: Option<bool>,
     pub(super) api_key: Option<String>,
 }
 
@@ -206,15 +213,12 @@ pub(super) struct AutonomySettingsUpdate {
     /// `{ "path": "/abs/dir", "access": "read" | "readwrite" }`.
     pub(super) trusted_roots: Option<Vec<crate::security::TrustedRoot>>,
     pub(super) allow_tool_install: Option<bool>,
-    // Accept u64 to match the published schema (`TypeSchema::U64`); clamped to the
-    // internal u32 at apply time. u32::MAX/hr is already effectively unlimited.
-    pub(super) max_actions_per_hour: Option<u64>,
+    pub(super) max_actions_per_hour: Option<u32>,
     /// Replaces the "Always allow" allowlist wholesale — tool names the agent
     /// may run without an approval prompt. Empty list clears it.
     pub(super) auto_approve: Option<Vec<String>>,
-    /// Blanket "auto-approve everything" bypass. `SubconsciousTainted` and
-    /// `Unknown` origins are still denied by the gate regardless of this
-    /// setting.
+    /// Blanket "auto-approve everything" bypass. `Unknown` origins are still
+    /// denied by the gate regardless of this setting.
     pub(super) auto_approve_all: Option<bool>,
 }
 
@@ -228,6 +232,14 @@ pub(super) struct PrivacyModeUpdate {
 pub(super) struct AgentSettingsUpdate {
     /// Tool/action wall-clock timeout in seconds (1–3600). Validated server-side.
     pub(super) agent_timeout_secs: Option<u64>,
+    /// Agent id the web-chat path routes turns to. Empty string clears the
+    /// override (back to the orchestrator); omitted leaves it unchanged.
+    #[serde(default)]
+    pub(super) chat_agent_id: Option<String>,
+    /// `auto | native | xml | pformat | python | typescript`. Validated
+    /// server-side; omitted leaves it unchanged.
+    #[serde(default)]
+    pub(super) tool_dispatcher: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -235,17 +247,10 @@ pub(super) struct AgentPathsUpdate {
     /// New absolute action sandbox path. Empty string clears the override;
     /// omitted leaves it unchanged. Validated server-side.
     pub(super) action_dir: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct ActivityLevelSettingsUpdate {
-    /// "off" | "minimal" | "moderate" | "active" | "always_on" (or "0"-"4").
-    pub(super) level: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct MemorySyncSettingsUpdate {
-    pub(super) sync_interval_secs: Option<u64>,
+    /// New absolute folder for agent deliverables (#5505). Empty string
+    /// clears the override; omitted leaves it unchanged.
+    #[serde(default)]
+    pub(super) files_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,7 +294,6 @@ pub fn optional_json(name: &'static str, comment: &'static str) -> FieldSchema {
     }
 }
 
-#[allow(dead_code)]
 pub fn required_string(name: &'static str, comment: &'static str) -> FieldSchema {
     FieldSchema {
         name,
@@ -308,6 +312,15 @@ pub fn optional_bool(name: &'static str, comment: &'static str) -> FieldSchema {
     }
 }
 
+pub fn optional_number(name: &'static str, comment: &'static str) -> FieldSchema {
+    FieldSchema {
+        name,
+        ty: TypeSchema::Option(Box::new(TypeSchema::U64)),
+        comment,
+        required: false,
+    }
+}
+
 pub fn json_output(name: &'static str, comment: &'static str) -> FieldSchema {
     FieldSchema {
         name,
@@ -317,6 +330,6 @@ pub fn json_output(name: &'static str, comment: &'static str) -> FieldSchema {
     }
 }
 
-pub(super) fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+pub(super) fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     outcome.into_cli_compatible_json()
 }

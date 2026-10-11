@@ -13,7 +13,7 @@
 //! mirror below until that build is green again.
 //!
 //! Consumers covered here (all outside `wallet`, so all must keep compiling):
-//! - `core/jsonrpc.rs` — `WALLET_NOT_CONFIGURED_MESSAGE`
+//! - `openhuman-rpc/src/server/classify.rs` — `WALLET_NOT_CONFIGURED_MESSAGE`
 //! - `test_support/introspect.rs` — `prepared_quotes_for_test`,
 //!   `PreparedTransaction`
 //! - `core/all.rs` — `all_wallet_registered_controllers`
@@ -22,13 +22,13 @@ use serde::Serialize;
 
 use crate::core::all::RegisteredController;
 use crate::core::ControllerSchema;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 /// Error text returned by every disabled-path operation that must yield a
 /// `Result`. Shared so callers/log-greps see one stable string.
 const DISABLED_MSG: &str = "web3/wallet feature disabled at compile time";
 
-/// Mirrors the real `ops::WALLET_NOT_CONFIGURED_MESSAGE` verbatim. `jsonrpc.rs`
+/// Mirrors the real `ops::WALLET_NOT_CONFIGURED_MESSAGE` verbatim. `openhuman-rpc/src/server/classify.rs`
 /// compares Sentry-noise errors against this exact string, so it must not drift.
 pub const WALLET_NOT_CONFIGURED_MESSAGE: &str = "wallet is not configured; run wallet setup first";
 
@@ -74,9 +74,9 @@ pub(crate) struct WalletSecretMaterial {
 /// Disabled: no wallet is configured, so the status carries no accounts. Kept
 /// `Ok` (not `Err`) so wallet-signed callers degrade to the clean "run wallet setup"
 /// message instead of a decrypt-context error.
-pub async fn status() -> Result<RpcOutcome<WalletStatus>, String> {
+pub async fn status() -> Result<Outcome<WalletStatus>, String> {
     log::debug!("[wallet-stub] status requested (web3 disabled) — no accounts");
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         WalletStatus::default(),
         vec!["wallet disabled at compile time".to_string()],
     ))
@@ -133,7 +133,7 @@ pub struct ExecutionResult {
 /// Disabled: no transfer can be prepared with the wallet compiled out.
 pub async fn prepare_transfer(
     _params: PrepareTransferParams,
-) -> Result<RpcOutcome<PreparedTransaction>, String> {
+) -> Result<Outcome<PreparedTransaction>, String> {
     log::debug!(
         "[wallet-stub] prepare_transfer requested (web3 disabled) — returning disabled error"
     );
@@ -143,7 +143,7 @@ pub async fn prepare_transfer(
 /// Disabled: no prepared transfer can be executed with the wallet compiled out.
 pub async fn execute_prepared(
     _params: ExecutePreparedParams,
-) -> Result<RpcOutcome<ExecutionResult>, String> {
+) -> Result<Outcome<ExecutionResult>, String> {
     log::debug!(
         "[wallet-stub] execute_prepared requested (web3 disabled) — returning disabled error"
     );

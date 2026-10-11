@@ -32,6 +32,8 @@ const TokenUsageChart = ({ days }: TokenUsageChartProps) => {
     total: d.total_tokens,
   }));
 
+  const hasTokens = data.some(point => point.total > 0);
+
   return (
     <div data-testid="token-usage-chart" className="w-full h-56">
       <ResponsiveContainer width="100%" height="100%">
@@ -52,7 +54,7 @@ const TokenUsageChart = ({ days }: TokenUsageChartProps) => {
             tickLine={false}
             axisLine={false}
             tick={{ fill: 'currentColor', opacity: 0.45 }}
-            height={14}
+            height={24}
           />
           <YAxis
             stroke="currentColor"
@@ -61,6 +63,8 @@ const TokenUsageChart = ({ days }: TokenUsageChartProps) => {
             axisLine={false}
             width={52}
             tick={{ fill: 'currentColor', opacity: 0.7 }}
+            allowDecimals={false}
+            domain={[0, hasTokens ? 'auto' : 1000]}
             tickFormatter={(v: number) => formatTokens(v)}
           />
           <Tooltip
@@ -94,7 +98,7 @@ const TokenUsageChart = ({ days }: TokenUsageChartProps) => {
                 ? t('settings.costDashboard.inputTokens')
                 : t('settings.costDashboard.outputTokens')
             }
-            wrapperStyle={{ fontSize: '11px' }}
+            wrapperStyle={{ fontSize: '11px', paddingTop: 4 }}
             iconType="circle"
           />
           <Bar

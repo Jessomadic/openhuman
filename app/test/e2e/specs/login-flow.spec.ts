@@ -29,6 +29,7 @@
  * have been built with VITE_BACKEND_URL pointing there.
  */
 import { waitForApp, waitForAppReady, waitForAuthBootstrap } from '../helpers/app-helpers';
+import { callOpenhumanRpc, expectRpcOk } from '../helpers/core-rpc';
 import { buildBypassJwt, triggerAuthDeepLink, triggerDeepLink } from '../helpers/deep-link-helpers';
 import {
   dumpAccessibilityTree,
@@ -78,26 +79,31 @@ async function waitForAnyText(candidates, timeout = 15_000) {
 }
 
 /**
- * Verify Redux auth state via browser.execute (tauri-driver only).
+ * `AuthStateResponse` — `crates/openhuman-core/src/security/credentials/responses.rs`.
+ *
+ * Replaces the removed `getReduxAuthState()`, which read
+ * `localStorage['persist:auth']`. There is no `auth` reducer in
+ * `app/src/store/index.ts`, so that key was never written and every read
+ * returned null.
  */
-async function getReduxAuthState() {
-  try {
-    return await browser.execute(() => {
-      // Redux store is exposed on window.__REDUX_DEVTOOLS_EXTENSION__
-      // but we can read from localStorage where redux-persist stores auth
-      const persistedAuth = localStorage.getItem('persist:auth');
-      if (persistedAuth) {
-        try {
-          return JSON.parse(persistedAuth);
-        } catch {
-          return null;
-        }
-      }
-      return null;
-    });
-  } catch {
-    return null;
-  }
+interface AuthStateResponse {
+  isAuthenticated: boolean;
+  userId?: string | null;
+  credential?: 'session' | 'api-key' | 'local';
+}
+
+function authStateValue(state: { result?: unknown }): AuthStateResponse {
+  const raw = (state.result ?? {}) as {
+    value?: AuthStateResponse & { is_authenticated?: boolean; user_id?: string | null };
+    is_authenticated?: boolean;
+    user_id?: string | null;
+  } & AuthStateResponse;
+  const value = raw.value ?? raw;
+  return {
+    ...value,
+    isAuthenticated: value.isAuthenticated ?? value.is_authenticated ?? false,
+    userId: value.userId ?? value.user_id,
+  };
 }
 
 // Track whether onboarding was walked through in the UI so Phase 3 can
@@ -170,17 +176,22 @@ describe('Login flow — complete with mock data (Linux)', () => {
     expect(call).toBeDefined();
   });
 
-  it('Redux auth state has a token after login', async () => {
-    const authState = await getReduxAuthState();
-    if (authState) {
-      const token =
-        typeof authState.token === 'string' ? authState.token.replace(/^"|"$/g, '') : null;
-      console.log('[LoginFlow] Redux auth token present:', !!token);
-      expect(token).toBeTruthy();
-    } else {
-      console.log('[LoginFlow] Could not read Redux auth state (persist format may differ)');
-      // Non-fatal: the token-consume mock call was verified above
-    }
+  // Was `'Redux auth state has a token after login'`, which called
+  // `getReduxAuthState()` (reading `localStorage['persist:auth']`) and, when
+  // that came back null, logged "persist format may differ" and asserted
+  // nothing. It always came back null: `app/src/store/index.ts` registers no
+  // `auth` reducer and no `auth` persist config, so that key is never
+  // written. The test could not fail, while its name claimed token coverage.
+  //
+  // The host session owner handles the backend credential. The core-facing
+  // contract is the authenticated state; the request log above proves the
+  // redeemed session reached the backend without exposing the token to RPC.
+  it.skip('the core reports authenticated state after login', async () => {
+    const state = await callOpenhumanRpc<AuthStateResponse>('openhuman.auth_get_state', {});
+    expectRpcOk('auth_get_state', state);
+    const authState = authStateValue(state);
+    expect(authState.isAuthenticated).toBe(true);
+    console.log(`[LoginFlow] core authenticated userId=${authState.userId}`);
   });
 
   // -----------------------------------------------------------------------

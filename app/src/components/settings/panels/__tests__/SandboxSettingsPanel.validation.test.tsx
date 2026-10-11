@@ -73,9 +73,10 @@ async function renderLoaded(overrides: Partial<SandboxSettings> = {}) {
   // getBy* accessors below then query a DOM that has no fields in it yet. The
   // same trap is described under flushPersist; it applies to readiness too.
   //
-  // The backend select is rendered only by the loaded branch and by every
-  // override these tests pass, so awaiting it is the signal that was meant.
-  await screen.findByRole('combobox', { name: /backend/i });
+  // The backend radio group is rendered only by the loaded branch and by
+  // every override these tests pass, so awaiting it is the signal that was
+  // meant.
+  await screen.findByRole('radiogroup', { name: /backend/i });
 }
 
 /**
@@ -193,12 +194,12 @@ describe('SandboxSettingsPanel — load shape', () => {
     expect(screen.queryByDisplayValue('1')).not.toBeInTheDocument();
   });
 
-  it('does not call the core at all off-Tauri', async () => {
+  it('loads over core RPC off-Tauri (browser attached to a core)', async () => {
     mockIsTauri.mockReturnValue(false);
-    renderWithProviders(<SandboxSettingsPanel />);
+    await renderLoaded({ docker_image: 'alpine:3.20' });
 
-    await waitFor(() => expect(screen.getByText(/desktop app/i)).toBeInTheDocument());
-    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockGet).toHaveBeenCalled();
+    expect(screen.queryByText(/desktop app/i)).not.toBeInTheDocument();
   });
 });
 

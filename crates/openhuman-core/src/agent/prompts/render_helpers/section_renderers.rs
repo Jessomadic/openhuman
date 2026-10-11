@@ -5,7 +5,6 @@
 use super::super::sections::*;
 use super::super::types::*;
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 use std::sync::OnceLock;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -16,32 +15,6 @@ use std::sync::OnceLock;
 /// (`SOUL.md` / `IDENTITY.md` / `ROLE.md` for the user-facing agent).
 pub fn render_identity(ctx: &PromptContext<'_>) -> Result<String> {
     IdentitySection.build(ctx)
-}
-
-/// Render the `PROFILE.md` + `MEMORY.md` user-file injection.
-/// Empty when neither `ctx.include_profile` nor `ctx.include_memory_md`
-/// is set.
-pub fn render_user_files(ctx: &PromptContext<'_>) -> Result<String> {
-    UserFilesSection.build(ctx)
-}
-
-/// Render the tree-summariser user-memory block.
-pub fn render_user_memory(ctx: &PromptContext<'_>) -> Result<String> {
-    UserMemorySection.build(ctx)
-}
-
-/// Render the `## Project instructions (AGENTS.md)` block from the pre-loaded
-/// global + local content on [`PromptContext`]. Empty when neither layer
-/// carries content. Dynamic `agents/<id>/prompt.rs` builders call this so they
-/// inherit the same AGENTS.md injection as the default section chain.
-pub fn render_agents_md(ctx: &PromptContext<'_>) -> Result<String> {
-    AgentsInstructionsSection.build(ctx)
-}
-
-/// Render the privileged `## User Reflections` block. Empty when the
-/// learning subsystem has not captured any reflections yet.
-pub fn render_user_reflections(ctx: &PromptContext<'_>) -> Result<String> {
-    UserReflectionsSection.build(ctx)
 }
 
 /// Render the `## Tools` catalogue in the dispatcher's tool-call format.
@@ -56,17 +29,8 @@ pub fn render_safety() -> String {
         .expect("SafetySection::build is infallible")
 }
 
-/// Render the canonical grounding / anti-hallucination contract
-/// ([`GROUNDING_BODY`]). Dynamic `agents/<id>/prompt.rs` builders call this
-/// so they inherit the exact same anti-fabrication floor as the static
-/// section chain — single source of truth, no drift.
-pub fn render_grounding() -> &'static str {
-    GROUNDING_BODY
-}
-
 // `render_skills` and `render_connected_integrations` helpers are
-// gone — `## Available Skills` lives in `integrations_agent/prompt.rs`, and
-// the connected-integrations / delegation-guide blocks each live in
+// gone — the connected-integrations / delegation-guide blocks each live in
 // their owning agent's `prompt.rs` so no branching-on-agent-id logic
 // needs to exist here.
 
@@ -102,7 +66,10 @@ pub fn render_datetime(ctx: &PromptContext<'_>) -> Result<String> {
 /// the prefix both busts the KV cache and goes stale across a long-lived
 /// session. The static grounding *rule* that tells the model to read this
 /// line lives in [`DateTimeSection`] / [`render_datetime`].
-pub fn current_datetime_line() -> String {
+///
+/// `zone` is the user's IANA zone ([`crate::config::Config::time_zone`]);
+/// `None`, or a name chrono-tz does not know, stamps the device's.
+pub fn current_datetime_line(zone: Option<&str>) -> String {
     // `library-cpu.sh` sets `OPENHUMAN_PROFILE_FORCE_UTC=1` to skip
     // `iana_time_zone`/CoreFoundation timezone resolution, which is itself a
     // measurable cost in a cold CPU profile. Gated on `rss-bench`, so it does
@@ -113,6 +80,18 @@ pub fn current_datetime_line() -> String {
         return format!(
             "Current Date & Time: {} UTC (UTC, UTC+00:00), {}",
             now.format("%Y-%m-%d %H:%M:%S"),
+            now.format("%A"),
+        );
+    }
+
+    if let Some(tz) = zone.and_then(|zone| zone.parse::<chrono_tz::Tz>().ok()) {
+        let now = chrono::Utc::now().with_timezone(&tz);
+        return format!(
+            "Current Date & Time: {} {} ({}, UTC{}), {}",
+            now.format("%Y-%m-%d %H:%M:%S"),
+            tz.name(),
+            now.format("%Z"),
+            now.format("%:z"),
             now.format("%A"),
         );
     }
@@ -141,6 +120,18 @@ pub fn current_datetime_line() -> String {
                 now.format("%A"),
             )
         }
+    }
+}
+
+/// What leads every user message: [`current_datetime_line`], then the
+/// reply-language instruction for the user's interface locale, when there is
+/// one. Per message, never in the cached prompt prefix, so a locale change
+/// applies from the next turn and the prefix stays byte-stable.
+pub fn turn_preamble(reply_language_directive: Option<&str>, zone: Option<&str>) -> String {
+    let now = current_datetime_line(zone);
+    match reply_language_directive {
+        Some(directive) => format!("{now}\n{directive}"),
+        None => now,
     }
 }
 
@@ -181,20 +172,6 @@ pub fn render_ambient_environment(ctx: &PromptContext<'_>) -> Result<String> {
     Ok(out)
 }
 
-/// Format a memory item's `updated_at` as an absolute UTC date label
-/// for prompt injection, e.g. `2026-05-25`.
-///
-/// Absolute (not relative "N days ago") on purpose: memory sections sit
-/// near the front of the KV-cache-stable system prompt, so a label that
-/// changes daily would bust the cached prefix for everything after it.
-/// An absolute date only changes when the underlying memory does. The
-/// model judges staleness by comparing this against the injected current
-/// date. Shared by [`UserMemorySection`] and the working-memory block in
-/// `agent_memory::memory_loader`. (#2944)
-pub fn memory_date_label(updated_at: DateTime<Utc>) -> String {
-    updated_at.format("%Y-%m-%d").to_string()
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -219,14 +196,10 @@ fn empty_prompt_context_for_static_sections() -> PromptContext<'static> {
         tools: EMPTY_TOOLS,
         workflows: EMPTY_WORKFLOWS,
         dispatcher_instructions: "",
-        learned: LearnedContextData::default(),
         visible_tool_names: visible,
         tool_call_format: ToolCallFormat::PFormat,
         connected_integrations: EMPTY_INTEGRATIONS,
         connected_identities_md: String::new(),
-        include_profile: false,
-        include_memory_md: false,
-        curated_snapshot: None,
         user_identity: None,
         personality_roster: vec![],
         agents_md_global: None,

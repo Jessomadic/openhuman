@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatCurrency, formatTokens, relativeTime, shortDayLabel } from './formatCurrency';
+import {
+  formatCurrency,
+  formatPercent,
+  formatTokens,
+  relativeTime,
+  shortDayLabel,
+} from './formatCurrency';
 
 describe('formatCurrency', () => {
   it('formats positive USD amounts with two decimals under 100', () => {
@@ -23,6 +29,37 @@ describe('formatCurrency', () => {
   it('honours empty currency string by falling back to USD', () => {
     expect(formatCurrency(7, '')).toMatch(/\$7\.00/);
   });
+
+  it('shows real spend under one cent as "<$0.01", not "$0.00"', () => {
+    expect(formatCurrency(0.0001, 'USD')).toBe('<$0.01');
+    expect(formatCurrency(0.004, 'USD')).toBe('<$0.01');
+    expect(formatCurrency(0.009999, 'USD')).toBe('<$0.01');
+    expect(formatCurrency(3.6e-7, 'USD')).toBe('<$0.01');
+  });
+
+  it('switches to plain two-decimal output at exactly one cent', () => {
+    expect(formatCurrency(0.01, 'USD')).toBe('$0.01');
+    expect(formatCurrency(0.0149, 'USD')).toBe('$0.01');
+  });
+
+  it('renders zero and negative zero as plain zero', () => {
+    expect(formatCurrency(0, 'USD')).toBe('$0.00');
+    expect(formatCurrency(-0, 'USD')).toBe('$0.00');
+  });
+
+  it('keeps the sign on a tiny negative amount', () => {
+    expect(formatCurrency(-0.001, 'USD')).toBe('-<$0.01');
+  });
+
+  it('applies the sub-cent rule in other currencies', () => {
+    expect(formatCurrency(0.0001, 'EUR')).toMatch(/^<.*0\.01/);
+  });
+
+  it('can show sub-cent amounts to four decimals for chart axes', () => {
+    expect(formatCurrency(0.0004, 'USD', { precise: true })).toBe('$0.0004');
+    expect(formatCurrency(0.0025, 'USD', { precise: true })).toBe('$0.0025');
+    expect(formatCurrency(0.5, 'USD', { precise: true })).toBe('$0.50');
+  });
 });
 
 describe('formatTokens', () => {
@@ -38,6 +75,30 @@ describe('formatTokens', () => {
   it('uses K and M suffixes', () => {
     expect(formatTokens(1_500)).toBe('1.5K');
     expect(formatTokens(2_500_000)).toBe('2.5M');
+  });
+
+  it('rolls over to M instead of showing "1000.0K"', () => {
+    expect(formatTokens(999_949)).toBe('999.9K');
+    expect(formatTokens(999_960)).toBe('1.0M');
+    expect(formatTokens(1_000_000)).toBe('1.0M');
+  });
+});
+
+describe('formatPercent', () => {
+  it('rounds to one decimal', () => {
+    expect(formatPercent(12.34)).toBe('12.3%');
+    expect(formatPercent(100)).toBe('100.0%');
+  });
+
+  it('shows a non-zero share under 0.1% as "<0.1%", not "0.0%"', () => {
+    expect(formatPercent(0.04)).toBe('<0.1%');
+    expect(formatPercent(0.1)).toBe('0.1%');
+  });
+
+  it('treats zero, negative and non-finite input as 0.0%', () => {
+    expect(formatPercent(0)).toBe('0.0%');
+    expect(formatPercent(-3)).toBe('0.0%');
+    expect(formatPercent(Number.NaN)).toBe('0.0%');
   });
 });
 

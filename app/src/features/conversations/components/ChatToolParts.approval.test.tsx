@@ -27,7 +27,9 @@ import chatRuntimeReducer, {
   type PendingApproval,
   setPendingApprovalForThread,
 } from '../../../store/chatRuntimeSlice';
+import threadGoalReducer from '../../../store/threadGoalSlice';
 import threadReducer from '../../../store/threadSlice';
+import threadTodosReducer from '../../../store/threadTodosSlice';
 import { ChatToolFallback } from './ChatToolParts';
 
 vi.mock('../../../services/api/threadApi', () => ({
@@ -81,14 +83,19 @@ function gatedPart(over: Record<string, unknown> = {}) {
     approval: { id: REQUEST_ID, options: OPTIONS },
     addResult: () => {},
     resume: () => {},
-    respondToApproval: () => {},
+    respondToApproval: async () => {},
     ...over,
   };
 }
 
 function buildStore(approval?: PendingApproval) {
   const store = configureStore({
-    reducer: combineReducers({ thread: threadReducer, chatRuntime: chatRuntimeReducer }),
+    reducer: combineReducers({
+      thread: threadReducer,
+      threadGoal: threadGoalReducer,
+      threadTodos: threadTodosReducer,
+      chatRuntime: chatRuntimeReducer,
+    }),
     preloadedState: {
       thread: {
         threads: [],

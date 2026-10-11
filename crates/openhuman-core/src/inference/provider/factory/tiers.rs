@@ -9,7 +9,7 @@
 //! as aliases of their role so un-migrated callers keep routing.
 
 use super::*;
-use crate::config::{legacy_tier_role, MODEL_MANAGED_DEFAULT};
+use crate::config::{legacy_tier_role, MANAGED_MULTIMODAL_MODELS, MODEL_MANAGED_DEFAULT};
 
 /// Whether `model` is a managed alias rather than a concrete model id: a
 /// `hint:*` role marker or a retired tier slug.
@@ -28,7 +28,6 @@ fn hint_role(hint: &str) -> Option<&'static str> {
         "coding" => Some("coding"),
         "vision" => Some("vision"),
         "summarization" => Some("summarization"),
-        "subconscious" => Some("subconscious"),
         _ => None,
     }
 }
@@ -84,14 +83,9 @@ pub fn resolve_model_for_hint(hint_or_tier: &str, config: &Config) -> String {
 /// `create_chat_model` with it so the completion follows the role's route.
 pub fn role_for_model_tier(hint_or_tier: &str) -> &'static str {
     let trimmed = hint_or_tier.trim();
-    match hint_role(trimmed).or_else(|| legacy_tier_role(trimmed)) {
-        // The background subconscious *role* keeps its own `subconscious_provider`
-        // (see `resolve_model_for_hint`), but as a model-tier spelling it has
-        // always ridden the chat route.
-        Some("subconscious") => "chat",
-        Some(role) => role,
-        None => "chat",
-    }
+    hint_role(trimmed)
+        .or_else(|| legacy_tier_role(trimmed))
+        .unwrap_or("chat")
 }
 
 /// The user's pinned managed **default model** — `config.default_model` when
@@ -134,12 +128,18 @@ pub(crate) fn is_raw_passthrough_model(model: &str) -> bool {
 /// The managed backend does not advertise per-model capabilities, so the core
 /// owns this. [`MODEL_MANAGED_DEFAULT`] (DeepSeek V4 Flash on the managed
 /// backend) accepts images, as do the `vision` and `reasoning` role aliases
-/// (and their retired tier slugs) that always ran a multimodal model. Any other
-/// pinned catalog id is covered by the user's `model_registry.vision` flag
+/// (and their retired tier slugs) that always ran a multimodal model, and
+/// every exact id in [`MANAGED_MULTIMODAL_MODELS`] — the OpenRouter
+/// passthrough models the media agents (`vision_agent`, `image_agent`,
+/// `video_agent`) are pinned to now that `hint:vision` / `vision-v1` is
+/// deprecated (regression R4: the retired hint silently fell back to the
+/// chat default on managed routes, so an agent still pinned to it lost image
+/// forwarding with no error). Any other pinned catalog id is covered by the
+/// user's `model_registry.vision` flag
 /// ([`crate::inference::model_context::model_vision_enabled`]).
 pub(crate) fn oh_tier_supports_vision(model: &str) -> bool {
     let trimmed = model.trim();
-    if trimmed == MODEL_MANAGED_DEFAULT {
+    if trimmed == MODEL_MANAGED_DEFAULT || MANAGED_MULTIMODAL_MODELS.contains(&trimmed) {
         return true;
     }
     matches!(

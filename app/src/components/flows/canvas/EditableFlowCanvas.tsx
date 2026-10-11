@@ -24,7 +24,6 @@ import {
   Background,
   BackgroundVariant,
   type Connection,
-  Controls,
   ReactFlow,
   type ReactFlowInstance,
   useEdgesState,
@@ -62,8 +61,8 @@ import { PALETTE_ENTRIES, type PaletteEntry } from '../../../lib/flows/nodeKindM
 import type { NodeKind, WorkflowGraph } from '../../../lib/flows/types';
 import { useT } from '../../../lib/i18n/I18nContext';
 import { type FlowConnection, listFlowConnections } from '../../../services/api/flowsApi';
-import { Button } from '../../ui';
 import { type CanvasActions, CanvasActionsContext } from './canvasActions';
+import CanvasToolbar from './CanvasToolbar';
 import { FLOW_FIT_VIEW_OPTIONS } from './fitView';
 import './flowCanvasStyles.css';
 import FlowNodeComponent from './FlowNodeComponent';
@@ -74,44 +73,6 @@ import { StepNumberContext } from './stepNumbers';
 import { useFlowValidation } from './useFlowValidation';
 
 const log = createDebug('app:flows:canvas:edit');
-
-function UndoIcon() {
-  return (
-    <svg
-      className="h-4 w-4"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      aria-hidden="true">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 14L4 9l5-5" />
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth={2}
-        d="M4 9h11a5 5 0 010 10h-1"
-      />
-    </svg>
-  );
-}
-
-function RedoIcon() {
-  return (
-    <svg
-      className="h-4 w-4"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-      aria-hidden="true">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 14l5-5-5-5" />
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth={2}
-        d="M20 9H9a5 5 0 000 10h1"
-      />
-    </svg>
-  );
-}
 
 const NODE_TYPES = { [FLOW_NODE_TYPE]: FlowNodeComponent };
 const DELETE_KEYS = ['Backspace', 'Delete'];
@@ -187,6 +148,11 @@ interface EditableFlowCanvasProps {
   /** Show the drag-and-drop node palette ("Legend"). Defaults to `true`. */
   showPalette?: boolean;
   /**
+   * When set, the canvas toolbar shows a "reopen side panel" button — the host
+   * passes it only while its side panel (copilot / palette) is collapsed.
+   */
+  onOpenPanel?: () => void;
+  /**
    * Reports Save-button state up so the host can render Save/Discard in its own
    * header (the canvas keeps only undo/redo). Fires whenever any field changes.
    */
@@ -232,6 +198,8 @@ export interface EditableFlowCanvasHandle {
    * do that. Call this after such an out-of-band persist succeeds to sync it.
    */
   clearForcedDirty: () => void;
+  /** Add a node from the palette, for a palette the host renders outside the canvas. */
+  addPaletteEntry: (entry: PaletteEntry) => void;
 }
 
 const EMPTY_ID_SET: ReadonlySet<string> = new Set();
@@ -251,6 +219,7 @@ function EditableFlowCanvas(
     saveDisabled = false,
     initialDirty = false,
     showPalette = true,
+    onOpenPanel,
     onSaveMetaChange,
     savedViewport = null,
     onViewportChange,
@@ -658,8 +627,19 @@ function EditableFlowCanvas(
         setBaseline({ nodes, edges });
         setForcedDirty(false);
       },
+      addPaletteEntry: entry => handlePaletteAdd(entry),
     }),
-    [dirty, hasErrors, saving, saveDisabled, handleSave, handleDiscard, nodes, edges]
+    [
+      dirty,
+      hasErrors,
+      saving,
+      saveDisabled,
+      handleSave,
+      handleDiscard,
+      nodes,
+      edges,
+      handlePaletteAdd,
+    ]
   );
 
   // Mirror the Save-button state up so the header can render + gate its buttons.
@@ -786,38 +766,6 @@ function EditableFlowCanvas(
           onKeyDown={handleCanvasKeyDown}>
           {showPalette && <NodePalette onAdd={handlePaletteAdd} />}
 
-          {/* Undo/redo stay on the canvas (top-right). Save/Discard + the unsaved
-        badge now live in the page header (driven via the imperative handle).
-        Per-node Validate/Delete live on the selected node card. */}
-          <div className="pointer-events-none absolute right-3 top-3 z-10 flex items-center gap-2">
-            <div className="pointer-events-auto flex items-center gap-1">
-              <Button
-                type="button"
-                variant="tertiary"
-                size="xs"
-                iconOnly
-                data-testid="flow-editor-undo"
-                aria-label={t('flows.editor.undo')}
-                title={t('flows.editor.undo')}
-                disabled={!canUndo}
-                onClick={undo}>
-                <UndoIcon />
-              </Button>
-              <Button
-                type="button"
-                variant="tertiary"
-                size="xs"
-                iconOnly
-                data-testid="flow-editor-redo"
-                aria-label={t('flows.editor.redo')}
-                title={t('flows.editor.redo')}
-                disabled={!canRedo}
-                onClick={redo}>
-                <RedoIcon />
-              </Button>
-            </div>
-          </div>
-
           {/* First-run hint: a near-empty canvas (a fresh scratch flow opens with
         just its trigger) gets a non-blocking nudge toward the palette. Hides
         itself as soon as a second node lands. */}
@@ -865,8 +813,11 @@ function EditableFlowCanvas(
             onViewportChange={onViewportChange}
             panOnScroll
             zoomOnScroll>
-            <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-            <Controls showInteractive={false} />
+            <Background variant={BackgroundVariant.Dots} gap={20} size={1.25} />
+            <CanvasToolbar
+              history={{ canUndo, canRedo, onUndo: undo, onRedo: redo }}
+              onOpenPanel={onOpenPanel}
+            />
           </ReactFlow>
 
           <NodeConfigDrawer

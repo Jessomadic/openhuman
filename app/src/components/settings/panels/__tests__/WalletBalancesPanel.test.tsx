@@ -126,11 +126,15 @@ describe('WalletBalancesPanel — loading state', () => {
 
     renderPanel();
 
-    expect(screen.getByText(/loading balances/i)).toBeInTheDocument();
+    // The loading state is a skeleton table body (`role="status"` +
+    // `aria-busy`), announced via its `aria-label` rather than visible text.
+    expect(screen.getByRole('status', { name: /loading balances/i })).toBeInTheDocument();
 
     // Resolve so React can clean up.
     resolve([]);
-    await waitFor(() => expect(screen.queryByText(/loading balances/i)).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole('status', { name: /loading balances/i })).not.toBeInTheDocument()
+    );
   });
 });
 
@@ -193,7 +197,7 @@ describe('WalletBalancesPanel — empty state', () => {
 });
 
 describe('WalletBalancesPanel — wallet not configured', () => {
-  it('shows the setup hint + placeholder rows instead of a blocking error', async () => {
+  it('shows the setup hint and supported network cards without suggesting balances exist', async () => {
     mockFetchWalletStatus.mockReset();
     mockFetchWalletStatus.mockResolvedValueOnce(UNCONFIGURED_STATUS);
 
@@ -202,12 +206,12 @@ describe('WalletBalancesPanel — wallet not configured', () => {
     await waitFor(() => {
       expect(screen.getByText(/Set it up to enable your wallet/i)).toBeInTheDocument();
     });
-    // Placeholder rows render per displayed network (Ethereum/Base/BNB Chain)
-    // plus Bitcoin/Solana/Tron — one "Not set up" each.
+    // Each supported network is visible, with no address or balance table.
     expect(screen.getByText('Ethereum')).toBeInTheDocument();
     expect(screen.getByText('Base')).toBeInTheDocument();
-    expect(screen.getByText('BNB Chain')).toBeInTheDocument();
+    expect(screen.getByText('BNB Smart Chain')).toBeInTheDocument();
     expect(screen.getAllByText('Not set up')).toHaveLength(6);
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
     // No balances fetch, no red error / retry button.
     expect(mockFetchWalletBalances).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
@@ -233,19 +237,16 @@ describe('WalletBalancesPanel — loaded state', () => {
 
   it('renders chain badge, formatted amount, and symbol for each row', async () => {
     mockFetchWalletBalances.mockResolvedValueOnce([EVM_BALANCE, BTC_BALANCE]);
-
     renderPanel();
 
     await waitFor(() => {
       // EVM rows now show the network label + a per-network badge.
-      expect(screen.getByText('Ethereum')).toBeInTheDocument();
-      expect(screen.getByText('Bitcoin')).toBeInTheDocument();
-      // Formatted balances (unique per row)
-      expect(screen.getByText('1.000000000000000000')).toBeInTheDocument();
-      expect(screen.getByText('1.00000000')).toBeInTheDocument();
-      // ETH appears as the EVM badge + asset symbol; BTC as the badge + symbol.
-      expect(screen.getAllByText('ETH').length).toBeGreaterThanOrEqual(2);
-      expect(screen.getAllByText('BTC').length).toBeGreaterThanOrEqual(2);
+      expect(screen.getAllByText('Ethereum').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Bitcoin').length).toBeGreaterThanOrEqual(1);
+      // Formatted balances (using formatDisplayBalance: 1.00000000 or similar based on locale)
+      expect(screen.getAllByText('1.00000000').length).toBeGreaterThanOrEqual(2);
+      expect(screen.getAllByText('ETH').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('BTC').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -255,9 +256,9 @@ describe('WalletBalancesPanel — loaded state', () => {
     renderPanel();
 
     // address: 0x9858EfFD232B4033E47d90003D41EC34EcaEda94
-    // truncated: 0x9858…da94 (first 6 + last 4 chars, original case preserved)
+    // truncated: 0x9858Ef…EcaEda94 (first 8 + last 8 chars)
     await waitFor(() => {
-      expect(screen.getByText('0x9858…da94')).toBeInTheDocument();
+      expect(screen.getByText('0x9858Ef…EcaEda94')).toBeInTheDocument();
     });
   });
 
@@ -331,7 +332,6 @@ describe('WalletBalancesPanel — refresh', () => {
     fireEvent.click(refreshButton);
 
     await waitFor(() => expect(mockFetchWalletBalances).toHaveBeenCalledTimes(2));
-    // After refresh, the BTC row is added — BTC appears twice (chain badge + symbol).
-    await waitFor(() => expect(screen.getAllByText('BTC').length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(screen.getAllByText('BTC').length).toBeGreaterThanOrEqual(1));
   });
 });

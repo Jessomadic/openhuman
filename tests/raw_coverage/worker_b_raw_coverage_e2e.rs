@@ -5,6 +5,8 @@
 //! to drive implementation branches that the controller reachability tests only
 //! touch at validation boundaries.
 
+use crate::env_guard::EnvVarGuard;
+use crate::rpc_harness::{error_message, ok, payload};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -19,60 +21,26 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 use tempfile::{tempdir, TempDir};
 
-use openhuman_core::core::auth::{init_rpc_token, CORE_TOKEN_ENV_VAR};
-use openhuman_core::core::jsonrpc::build_core_http_router;
 use openhuman_core::agent::turn_origin::{self, AgentTurnOrigin};
+use openhuman_core::config::Config;
+use openhuman_core::core::auth::{init_rpc_token, CORE_TOKEN_ENV_VAR};
 use openhuman_core::security::approval::gate::{
     ApprovalChatContext, ApprovalGate, APPROVAL_CHAT_CONTEXT,
 };
 use openhuman_core::security::approval::types::{ExecutionOutcome, GateOutcome};
-use openhuman_core::config::Config;
 use openhuman_core::security::credentials::{
     AuthService, APP_SESSION_PROVIDER, DEFAULT_AUTH_PROFILE_NAME,
 };
+use openhuman_rpc::server::build_core_http_router;
 
 const TEST_RPC_TOKEN: &str = "worker-b-raw-coverage-e2e-token";
 
 static AUTH_INIT: OnceLock<()> = OnceLock::new();
-static ENV_LOCK: &OnceLock<Mutex<()>> = &crate::SHARED_ENV_LOCK;
+static ENV_LOCK: &OnceLock<tokio::sync::Mutex<()>> = &crate::SHARED_ENV_LOCK;
 
 #[derive(Clone, Default)]
 struct MockState {
     requests: Arc<Mutex<Vec<Value>>>,
-}
-
-struct EnvVarGuard {
-    key: &'static str,
-    old: Option<String>,
-}
-
-impl EnvVarGuard {
-    fn set_to_path(key: &'static str, path: &Path) -> Self {
-        let old = std::env::var(key).ok();
-        std::env::set_var(key, path.as_os_str());
-        Self { key, old }
-    }
-
-    fn set(key: &'static str, value: &str) -> Self {
-        let old = std::env::var(key).ok();
-        std::env::set_var(key, value);
-        Self { key, old }
-    }
-
-    fn unset(key: &'static str) -> Self {
-        let old = std::env::var(key).ok();
-        std::env::remove_var(key);
-        Self { key, old }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        match &self.old {
-            Some(value) => std::env::set_var(self.key, value),
-            None => std::env::remove_var(self.key),
-        }
-    }
 }
 
 struct TestHarness {
@@ -88,15 +56,27 @@ struct MockHarness {
     join: tokio::task::JoinHandle<Result<(), std::io::Error>>,
 }
 
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    let mutex = ENV_LOCK.get_or_init(|| Mutex::new(()));
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
+fn env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    let mutex = ENV_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+    mutex.blocking_lock()
+}
+
+async fn env_lock_async() -> tokio::sync::MutexGuard<'static, ()> {
+    let mutex = ENV_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+    mutex.lock().await
 }
 
 fn ensure_rpc_auth() {
+    // The core carries no backend client of its own. This suite boots the core
+    // in-process via `build_core_http_router`, so without the SDK-backed
+    // transport every backend-touching call answers `BACKEND_UNAVAILABLE:` —
+    // which is what quarantined the managed web-search case (#6387). The
+    // aggregate target only DECLARES the module (`raw_coverage_all.rs:40-41`);
+    // its doc at `:38` says each suite calls it from its own fixture, and the
+    // siblings that reach the backend do.
+    // Idempotent behind a `Once`, so the other suites in this binary calling it
+    // too costs nothing.
+    crate::tinyhumans_boot::boot();
     AUTH_INIT.get_or_init(|| {
         std::env::set_var(CORE_TOKEN_ENV_VAR, TEST_RPC_TOKEN);
         let token_dir = std::env::temp_dir().join("openhuman-worker-b-raw-coverage-e2e-auth");
@@ -138,9 +118,10 @@ async fn serve_mock() -> MockHarness {
         .route("/v1/models", get(mock_models))
         .route("/v1/missing-models", get(mock_missing_models))
         .route("/v1/chat/completions", post(mock_chat_completions))
+        .route("/agent-integrations/exa/search", post(mock_exa_search))
         .route(
-            "/agent-integrations/parallel/search",
-            post(mock_parallel_search),
+            "/agent-integrations/gemini/models/{model}/generate-content",
+            post(mock_gemini_generate),
         )
         .with_state(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -199,19 +180,42 @@ async fn mock_chat_completions(
     }))
 }
 
-async fn mock_parallel_search(
+async fn mock_gemini_generate(
     State(state): State<MockState>,
+    axum::extract::Path(model): axum::extract::Path<String>,
     Json(body): Json<Value>,
 ) -> Json<Value> {
+    state.requests.lock().expect("requests lock").push(json!({
+        "path": format!("/agent-integrations/gemini/models/{model}/generate-content"),
+        "body": body
+    }));
+    Json(json!({
+        "success": true,
+        "data": {
+            "modelVersion": model,
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "Worker B grounded answer."}]},
+                "groundingMetadata": {
+                    "groundingChunks": [
+                        {"web": {"uri": "https://example.com/grounded", "title": "Grounded source"}}
+                    ]
+                }
+            }],
+            "costUsd": 0.002
+        }
+    }))
+}
+
+async fn mock_exa_search(State(state): State<MockState>, Json(body): Json<Value>) -> Json<Value> {
     state
         .requests
         .lock()
         .expect("requests lock")
-        .push(json!({ "path": "/agent-integrations/parallel/search", "body": body }));
+        .push(json!({ "path": "/agent-integrations/exa/search", "body": body }));
     Json(json!({
         "success": true,
         "data": {
-            "searchId": "parallel-worker-b",
+            "searchId": "exa-worker-b",
             "costUsd": 0.01,
             "results": [
                 {
@@ -262,7 +266,6 @@ async fn setup() -> TestHarness {
         EnvVarGuard::unset("BACKEND_URL"),
         EnvVarGuard::unset("VITE_BACKEND_URL"),
         EnvVarGuard::unset("OPENHUMAN_API_URL"),
-        EnvVarGuard::unset("OPENHUMAN_LOCAL_AI_TIER"),
         EnvVarGuard::unset("OPENHUMAN_LM_STUDIO_BASE_URL"),
         EnvVarGuard::unset("LM_STUDIO_BASE_URL"),
         EnvVarGuard::set("OPENHUMAN_KEYRING_BACKEND", "file"),
@@ -271,8 +274,7 @@ async fn setup() -> TestHarness {
         EnvVarGuard::set("OPENHUMAN_MEMORY_EMBED_MODEL", ""),
     ];
 
-    let _ =
-        openhuman_core::agent::harness::AgentDefinitionRegistry::init_global_builtins();
+    let _ = openhuman_core::agent::harness::AgentDefinitionRegistry::init_global_builtins();
 
     let (addr, rpc_join) = serve_rpc().await;
     TestHarness {
@@ -310,28 +312,6 @@ async fn rpc(rpc_base: &str, id: i64, method: &str, params: Value) -> Value {
         .json::<Value>()
         .await
         .unwrap_or_else(|err| panic!("json for {method}: {err}"))
-}
-
-fn ok<'a>(value: &'a Value, context: &str) -> &'a Value {
-    if let Some(error) = value.get("error") {
-        panic!("{context}: unexpected JSON-RPC error: {error}");
-    }
-    value
-        .get("result")
-        .unwrap_or_else(|| panic!("{context}: missing result: {value}"))
-}
-
-fn payload<'a>(value: &'a Value, context: &str) -> &'a Value {
-    let result = ok(value, context);
-    result.get("result").unwrap_or(result)
-}
-
-fn error_message<'a>(value: &'a Value, context: &str) -> &'a str {
-    value
-        .get("error")
-        .and_then(|error| error.get("message"))
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("{context}: error missing message: {value}"))
 }
 
 async fn configure_mock_provider(rpc_base: &str, mock_base: &str) {
@@ -383,7 +363,7 @@ async fn seed_session_token() {
 
 #[tokio::test]
 async fn inference_provider_success_paths_use_mock_models_and_chat() {
-    let _lock = env_lock();
+    let _lock = env_lock_async().await;
     let mock = serve_mock().await;
     let harness = setup().await;
     configure_mock_provider(&harness.rpc_base, &mock.base).await;
@@ -453,13 +433,118 @@ async fn inference_provider_success_paths_use_mock_models_and_chat() {
 }
 
 #[tokio::test]
-#[ignore = "TODO(#6387): managed backend search is unavailable in this build"]
-async fn tools_web_search_success_path_uses_backend_session_and_shapes_results() {
-    let _lock = env_lock();
+async fn tools_web_answer_uses_managed_gemini_grounding_and_returns_citations() {
+    if std::env::var_os("TINYSEARCH_TEST_MODULE").is_none() {
+        eprintln!(
+            "SKIPPED (not run, not asserted): TINYSEARCH_TEST_MODULE is not set. Build vendor/tinysearch \
+             and export TINYSEARCH_TEST_MODULE=<path to libtinysearch>, or use scripts/test-rust-with-mock.sh"
+        );
+        return;
+    }
+    let _lock = env_lock_async().await;
     let mock = serve_mock().await;
     let harness = setup().await;
     configure_mock_provider(&harness.rpc_base, &mock.base).await;
     seed_session_token().await;
+
+    let settings = rpc(
+        &harness.rpc_base,
+        210,
+        "openhuman.config_update_search_settings",
+        json!({
+            "enabled": true,
+            "providers": {"gemini": {"enabled": true, "route": "managed"}},
+            "roles": {"answer": ["gemini"]}
+        }),
+    )
+    .await;
+    let settings = payload(&settings, "config_update_search_settings");
+    assert_eq!(
+        settings
+            .pointer("/effective_roles/answer/0")
+            .and_then(Value::as_str),
+        Some("gemini"),
+        "managed Gemini should serve the answer role: {settings}"
+    );
+
+    let answer = rpc(
+        &harness.rpc_base,
+        211,
+        "openhuman.tools_web_answer",
+        json!({ "query": "who maintains worker b" }),
+    )
+    .await;
+    let answer = payload(&answer, "tools_web_answer");
+    assert_eq!(
+        answer.get("provider").and_then(Value::as_str),
+        Some("Gemini")
+    );
+    assert_eq!(answer.get("role").and_then(Value::as_str), Some("answer"));
+    assert!(answer
+        .get("answer")
+        .and_then(Value::as_str)
+        .is_some_and(|text| text.contains("Worker B grounded answer")));
+    assert_eq!(
+        answer.pointer("/citations/0/url").and_then(Value::as_str),
+        Some("https://example.com/grounded")
+    );
+
+    let seen = mock.state.requests.lock().expect("requests lock").clone();
+    let body = seen
+        .iter()
+        .find(|entry| {
+            entry
+                .get("path")
+                .and_then(Value::as_str)
+                .is_some_and(|path| path.starts_with("/agent-integrations/gemini/models/"))
+        })
+        .and_then(|entry| entry.get("body"))
+        .expect("managed Gemini request body");
+    assert!(
+        body.pointer("/tools/0/googleSearch").is_some(),
+        "grounded answers must request Google Search grounding: {body}"
+    );
+
+    harness.rpc_join.abort();
+    mock.join.abort();
+}
+
+#[tokio::test]
+async fn tools_web_search_success_path_uses_backend_session_and_shapes_results() {
+    // The search RPC runs through the TinySearch module; CI and
+    // scripts/test-rust-with-mock.sh build it and export its path.
+    if std::env::var_os("TINYSEARCH_TEST_MODULE").is_none() {
+        eprintln!(
+            "SKIPPED (not run, not asserted): TINYSEARCH_TEST_MODULE is not set. Build vendor/tinysearch \
+             and export TINYSEARCH_TEST_MODULE=<path to libtinysearch>, or use scripts/test-rust-with-mock.sh"
+        );
+        return;
+    }
+    let _lock = env_lock_async().await;
+    let mock = serve_mock().await;
+    let harness = setup().await;
+    configure_mock_provider(&harness.rpc_base, &mock.base).await;
+    seed_session_token().await;
+
+    let settings = rpc(
+        &harness.rpc_base,
+        200,
+        "openhuman.config_update_search_settings",
+        json!({
+            "enabled": true,
+            "providers": {"exa": {"enabled": true, "route": "managed"}},
+            "roles": {"search": ["exa"]}
+        }),
+    )
+    .await;
+    let settings = payload(&settings, "config_update_search_settings");
+    assert_eq!(
+        settings
+            .pointer("/effective_roles/search/0")
+            .and_then(Value::as_str),
+        Some("exa"),
+        "managed Exa should serve the search role once signed in: {settings}"
+    );
 
     let search = rpc(
         &harness.rpc_base,
@@ -467,13 +552,13 @@ async fn tools_web_search_success_path_uses_backend_session_and_shapes_results()
         "openhuman.tools_web_search",
         json!({
             "query": "worker b raw coverage",
-            "objective": "prove backend web search success path",
-            "max_results": 99,
-            "timeout_secs": 0
+            "max_results": 99
         }),
     )
     .await;
-    let results = payload(&search, "tools_web_search")
+    let search = payload(&search, "tools_web_search");
+    assert_eq!(search.get("provider").and_then(Value::as_str), Some("Exa"));
+    let results = search
         .get("results")
         .and_then(Value::as_array)
         .expect("results array");
@@ -486,27 +571,26 @@ async fn tools_web_search_success_path_uses_backend_session_and_shapes_results()
     let body = seen
         .iter()
         .find(|entry| {
-            entry.get("path").and_then(Value::as_str) == Some("/agent-integrations/parallel/search")
+            entry.get("path").and_then(Value::as_str) == Some("/agent-integrations/exa/search")
         })
         .and_then(|entry| entry.get("body"))
-        .expect("parallel search request body");
+        .expect("managed Exa search request body");
     assert_eq!(
         body.pointer("/searchQueries/0").and_then(Value::as_str),
         Some("worker b raw coverage")
     );
-    assert_eq!(
-        body.pointer("/excerpts/maxResults").and_then(Value::as_u64),
-        Some(10)
+    assert!(
+        body.get("mode").is_none(),
+        "backend Exa rejects `mode`: {body}"
     );
 
     harness.rpc_join.abort();
     mock.join.abort();
 }
 
-
 #[tokio::test]
 async fn approval_gate_rpc_decision_resumes_parked_tool_and_records_execution() {
-    let _lock = env_lock();
+    let _lock = env_lock_async().await;
     let harness = setup().await;
     let config = Config::load_or_init()
         .await
@@ -527,6 +611,9 @@ async fn approval_gate_rpc_decision_resumes_parked_tool_and_records_execution() 
                 ApprovalChatContext {
                     thread_id: "worker-b-thread".to_string(),
                     client_id: "worker-b-client".to_string(),
+                    // No turn in scope in this fixture; the field is documented as
+                    // carried only when the caller has one (`gate.rs:91-95`).
+                    request_id: None,
                 },
                 async move {
                     gate_for_task

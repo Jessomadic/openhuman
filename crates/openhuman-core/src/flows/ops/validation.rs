@@ -33,37 +33,12 @@ pub(crate) fn engine_compatibility_errors(
         .collect()
 }
 
-/// Same walk, with the inline-nesting budget passed in rather than recomputed.
-///
-/// [`referenced_workflow_compatibility_errors`] needs this: a saved child
-/// reached partway through the root's referenced-workflow chain must still be
-/// checked to the *remaining* depth the root allows. The engine's runtime depth
-/// counter is one budget shared across the whole inline-plus-referenced chain,
-/// so a fan-in the child's own cap would not reach can still be reached from
-/// the root.
-pub(crate) fn engine_compatibility_errors_with_max_depth(
-    graph: &WorkflowGraph,
-    max_depth: u64,
-) -> Vec<crate::flows::FlowValidationError> {
-    tinyflows::compat::errors_with_max_depth(graph, max_depth)
-        .into_iter()
-        .map(to_compat_validation_error)
-        .collect()
-}
-
-/// The nesting cap `graph` declares on its trigger, or the engine default.
-pub(crate) fn max_sub_workflow_depth(graph: &WorkflowGraph) -> u64 {
-    tinyflows::compat::max_sub_workflow_depth(graph)
-}
-
-// The two refusal codes are `tinyflows::compat`'s, re-exported at `ops::` scope
-// because this module's tests assert on them by name — which is the point of a
+// The refusal code is `tinyflows::compat`'s, re-exported at `ops::` scope
+// because this module's tests assert on it by name — which is the point of a
 // stable code, and what keeps a rename upstream a compile error here rather
 // than a silently-passing `contains`.
 #[cfg(test)]
-pub(crate) use tinyflows::compat::{
-    UNSUPPORTED_MAIN_PORT_CONDITIONAL_FAN_IN, UNSUPPORTED_NESTED_CONDITIONAL_FAN_IN,
-};
+pub(crate) use tinyflows::compat::UNSUPPORTED_NESTED_CONDITIONAL_FAN_IN;
 
 fn to_compat_validation_error(
     error: tinyflows::compat::CompatibilityError,
@@ -94,16 +69,11 @@ pub(super) fn ensure_config_aware_engine_compatible(
 }
 
 /// Runs a raw graph JSON value through migration + deserialization **without**
-/// the structural `validate` step. Splits the two so a caller that wants
-/// *every* structural error (via `tinyflows::validate::validate_all`) can run
-/// validation itself — a pre-validation failure here (unparseable JSON, an
-/// unmigrateable schema) is genuinely a single error, whereas structural
-/// validation can surface many at once.
-pub(crate) fn migrate_and_deserialize_graph(graph_json: Value) -> Result<WorkflowGraph, String> {
-    let migrated = tinyflows::migrate::migrate(graph_json).map_err(|e| e.to_string())?;
-    let graph: WorkflowGraph = serde_json::from_value(migrated).map_err(|e| e.to_string())?;
-    Ok(graph)
-}
+/// the structural `validate` step, attributing a deserialization failure to the
+/// member that caused it (`nodes[1]: missing field ...`). The implementation is
+/// `tinyflows::migrate::deserialize_graph`; this alias keeps the host's
+/// call sites (and the authoring tools' error text) unchanged.
+pub(crate) use tinyflows::migrate::deserialize_graph as migrate_and_deserialize_graph;
 
 /// Maps a portable `tinyflows` [`ValidationError`](tinyflows::error::ValidationError)
 /// into the host's structured [`FlowValidationError`], carrying its stable
@@ -132,87 +102,13 @@ pub(super) fn referenced_workflow_compatibility_errors(
     config: &Config,
     graph: &WorkflowGraph,
 ) -> Vec<String> {
-    // Descend as deep as the root graph declared it may nest, for the same
-    // reason as the inline walk above.
-    let max_depth = max_sub_workflow_depth(graph);
-    let mut pending = vec![(graph.clone(), 0_u64, Vec::<String>::new())];
-    // Record the shallowest visit, not just whether an id was seen. The same
-    // child can be referenced by multiple branches; a deep DFS visit must not
-    // suppress a later shallower visit that has more depth budget remaining.
-    let mut visited_depths = std::collections::HashMap::<String, u64>::new();
-
-    while let Some((current, depth, path)) = pending.pop() {
-        if depth >= max_depth {
-            continue;
-        }
-
-        for node in &current.nodes {
-            if node.kind != NodeKind::SubWorkflow {
-                continue;
-            }
-
-            let mut child_path = path.clone();
-            child_path.push(node.id.clone());
-
-            let inline = node.config.get("workflow");
-            let configured_workflow_id = node
-                .config
-                .get("workflow_id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|id| !id.is_empty());
-            // Structural validation requires exactly one source and runs before
-            // this helper. Retain that precedence defensively if a future caller
-            // passes an invalid graph directly: do not inspect either source as
-            // though TinyFlows could choose between them at runtime.
-            if inline.is_some() && configured_workflow_id.is_some() {
-                continue;
-            }
-
-            if let Some(inline) = inline {
-                if let Ok(child) = serde_json::from_value::<WorkflowGraph>(inline.clone()) {
-                    pending.push((child, depth + 1, child_path.clone()));
-                }
-                continue;
-            }
-
-            let Some(workflow_id) = configured_workflow_id.filter(|id| !id.starts_with('=')) else {
-                continue;
-            };
-            let child_depth = depth + 1;
-            if visited_depths
-                .get(workflow_id)
-                .is_some_and(|seen_depth| *seen_depth <= child_depth)
-            {
-                continue;
-            }
-            visited_depths.insert(workflow_id.to_string(), child_depth);
-
-            let Ok(Some(child)) = load_flow_graph(config, workflow_id) else {
-                continue;
-            };
-            // Thread the root's remaining depth budget through, not the
-            // child's own cap — see `engine_compatibility_errors_with_max_depth`'s
-            // doc comment.
-            let remaining_depth = max_depth.saturating_sub(child_depth);
-            if let Some(error) = engine_compatibility_errors_with_max_depth(&child, remaining_depth)
-                .into_iter()
-                .next()
-            {
-                return vec![format!(
-                    "Sub_workflow path '{}' references workflow_id '{}' with an unsupported \
-                     engine topology: {}: {}",
-                    child_path.join(" -> "),
-                    workflow_id,
-                    error.code,
-                    error.message
-                )];
-            }
-            pending.push((child, child_depth, child_path));
-        }
-    }
-
-    Vec::new()
+    // The walk (depth budget, cycle/depth bookkeeping, error text) is
+    // `tinyflows::compat`'s; only the saved-workflow lookup is the host's. A
+    // missing flow or a store failure resolves to `None` and keeps its runtime
+    // diagnostic.
+    tinyflows::compat::referenced_workflow_errors(graph, &|workflow_id| {
+        load_flow_graph(config, workflow_id).ok().flatten()
+    })
 }
 
 /// Returns the complete engine-topology gate for a graph in its host context.
@@ -241,7 +137,7 @@ pub(crate) fn config_aware_engine_compatibility_errors(
 /// save. Pure (no persistence, no config) — `valid == false` is a normal
 /// result, NOT an `Err`; `Err` is reserved for internal serialization faults
 /// (there are none on this path today).
-pub fn flows_validate(graph_json: Value) -> RpcOutcome<crate::flows::FlowValidation> {
+pub fn flows_validate(graph_json: Value) -> Outcome<crate::flows::FlowValidation> {
     use crate::flows::FlowValidation;
     tracing::debug!(target: "flows", "[flows] flows_validate: validating candidate graph");
     // Split migrate/deserialize (a genuinely single failure) from structural
@@ -253,7 +149,7 @@ pub fn flows_validate(graph_json: Value) -> RpcOutcome<crate::flows::FlowValidat
         Ok(graph) => graph,
         Err(error) => {
             tracing::debug!(target: "flows", %error, "[flows] flows_validate: graph could not be migrated/parsed");
-            return RpcOutcome::single_log(
+            return Outcome::single_log(
                 FlowValidation {
                     valid: false,
                     errors: vec![error.clone()],
@@ -279,7 +175,7 @@ pub fn flows_validate(graph_json: Value) -> RpcOutcome<crate::flows::FlowValidat
             error_count = errors.len(),
             "[flows] flows_validate: graph is structurally invalid"
         );
-        return RpcOutcome::single_log(
+        return Outcome::single_log(
             FlowValidation {
                 valid: false,
                 errors,
@@ -301,7 +197,7 @@ pub fn flows_validate(graph_json: Value) -> RpcOutcome<crate::flows::FlowValidat
             error_count = error_details.len(),
             "[flows] flows_validate: graph uses an unsupported engine topology"
         );
-        return RpcOutcome::single_log(
+        return Outcome::single_log(
             FlowValidation {
                 valid: false,
                 errors,
@@ -322,7 +218,7 @@ pub fn flows_validate(graph_json: Value) -> RpcOutcome<crate::flows::FlowValidat
         warning_count = warnings.len(),
         "[flows] flows_validate: graph is structurally valid"
     );
-    RpcOutcome::single_log(
+    Outcome::single_log(
         FlowValidation {
             valid: true,
             errors: Vec::new(),
@@ -358,7 +254,7 @@ pub fn flows_validate(graph_json: Value) -> RpcOutcome<crate::flows::FlowValidat
 pub fn flows_import(
     graph_json: Value,
     format: Option<String>,
-) -> Result<RpcOutcome<crate::flows::FlowImport>, String> {
+) -> Result<Outcome<crate::flows::FlowImport>, String> {
     use crate::flows::{n8n_import, FlowImport};
 
     let requested = format
@@ -404,7 +300,7 @@ pub fn flows_import(
         warning_count = warnings.len(),
         "[flows] flows_import: import normalized and validated"
     );
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         FlowImport { graph, warnings },
         "flow imported",
     ))

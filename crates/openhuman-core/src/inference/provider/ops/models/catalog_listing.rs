@@ -33,6 +33,23 @@ pub(super) fn resolve_local_runtime_key(
     looked_up
 }
 
+/// Whether a provider entry can be probed at `{endpoint}/models`.
+///
+/// Claude Code is a local CLI provider, and a `cli://…` endpoint is a
+/// placeholder rather than an API base. Any other scheme (`ftp://…`) is a
+/// misconfiguration and is left to the request path to surface as an error.
+/// An endpoint that does not parse as `scheme://host` at all is left to the
+/// request path so a genuine misconfiguration still surfaces as an error.
+fn endpoint_hosts_models_listing(slug: &str, endpoint: &str) -> bool {
+    if slug == "claude-code" {
+        return false;
+    }
+    match reqwest::Url::parse(endpoint.trim()) {
+        Ok(url) if url.has_host() => url.scheme() != "cli",
+        _ => true,
+    }
+}
+
 pub fn append_query_param(url: &str, key: &str, value: &str) -> String {
     if let Ok(mut parsed) = reqwest::Url::parse(url) {
         parsed.query_pairs_mut().append_pair(key, value);
@@ -45,7 +62,7 @@ pub fn append_query_param(url: &str, key: &str, value: &str) -> String {
 
 pub async fn list_configured_models(
     provider_id: &str,
-) -> Result<crate::rpc::RpcOutcome<serde_json::Value>, String> {
+) -> Result<crate::core::Outcome<serde_json::Value>, String> {
     let config = crate::config::Config::load_or_init()
         .await
         .map_err(|e| e.to_string())?;
@@ -56,7 +73,7 @@ pub async fn list_configured_models(
 pub async fn list_configured_models_from_config(
     provider_id: &str,
     config: &crate::config::Config,
-) -> Result<crate::rpc::RpcOutcome<serde_json::Value>, String> {
+) -> Result<crate::core::Outcome<serde_json::Value>, String> {
     let provider_id = provider_id.trim().to_string();
     if provider_id.is_empty() {
         return Err("provider_id must not be empty".to_string());
@@ -75,6 +92,25 @@ pub async fn list_configured_models_from_config(
         .or_else(|| synthesize_local_runtime_entry(&provider_id, config))
         .or_else(|| synthesize_managed_entry(&provider_id))
         .ok_or_else(|| format!("no cloud provider with id or slug '{}' found", provider_id))?;
+
+    // Sentry TAURI-RUST-114C/114D: the app stores Claude Code with the cosmetic
+    // endpoint `cli://claude-code`. It runs as a local CLI and has no `/models`
+    // listing, and reqwest cannot build a request for a non-http(s) URL, so the
+    // probe failed with "builder error" on every picker open. Such a provider
+    // has no remote catalog: answer with an empty one.
+    if !endpoint_hosts_models_listing(&entry.slug, &entry.endpoint) {
+        log::debug!(
+            "[providers][list_models] slug={} has no http(s) /models listing; returning an empty list",
+            entry.slug
+        );
+        return Ok(crate::core::Outcome::new(
+            serde_json::json!({ "models": Vec::<ModelInfo>::new() }),
+            vec![format!(
+                "provider '{}' has no remote model catalog",
+                entry.slug
+            )],
+        ));
+    }
 
     let looked_up = crate::inference::provider::factory::lookup_key_for_slug(&entry.slug, config)
         .unwrap_or_default();
@@ -105,10 +141,17 @@ pub async fn list_configured_models_from_config(
         routing.account_id.is_some()
     );
 
-    let client =
-        crate::config::build_runtime_proxy_client_with_timeouts("providers.list_models", 30, 10);
-
     use crate::config::schema::cloud_providers::AuthStyle;
+    let service_key = "providers.list_models";
+    let client = if let Some(pem) = config
+        .cloud_provider_ca_certs
+        .get(entry.slug.trim())
+        .filter(|pem| !pem.is_empty())
+    {
+        crate::util::tls::client_with_ca_bundle_with_timeouts(pem, service_key, 30, 10)?
+    } else {
+        crate::config::build_runtime_proxy_client_with_timeouts(service_key, 30, 10)
+    };
 
     // Managed backend (`openhuman`) needs a different URL *and* a different
     // credential than every BYOK provider above, so neither `entry.endpoint`
@@ -168,7 +211,7 @@ pub async fn list_configured_models_from_config(
                 log::info!(
                     "[providers][list_models] managed catalog unavailable — {reason}; returning an empty list"
                 );
-                return Ok(crate::rpc::RpcOutcome::new(
+                return Ok(crate::core::Outcome::new(
                     serde_json::json!({ "models": Vec::<ModelInfo>::new() }),
                     vec![format!("{reason}; managed catalog is empty")],
                 ));
@@ -182,9 +225,17 @@ pub async fn list_configured_models_from_config(
                 );
             }
         }
-        let base = crate::api::config::effective_backend_api_url(&config.api_url);
+        let Ok(base) = crate::backend::base_url(&config.api_url) else {
+            log::info!(
+                "[providers][list_models] managed catalog unavailable — no backend transport; returning an empty list"
+            );
+            return Ok(crate::core::Outcome::new(
+                serde_json::json!({ "models": Vec::<ModelInfo>::new() }),
+                vec!["no hosted backend; managed catalog is empty".to_string()],
+            ));
+        };
         models_url = append_query_param(
-            &crate::api::config::api_url(&base, "/openai/v1/models"),
+            &crate::util::url::join_url(&base, "/openai/v1/models"),
             "catalog",
             "openrouter",
         );
@@ -247,12 +298,11 @@ pub async fn list_configured_models_from_config(
             // backend (BACKEND_URL=http://127.0.0.1:...) still works in dev.
             if !token.is_empty() && url_is_credential_safe(&models_url) {
                 // Managed traffic is attributed per embedding product
-                // (OpenCompany / Medulla / desktop); the generic provider client
+                // (OpenCompany / desktop); the generic provider client
                 // does not carry it, so attach it explicitly.
-                let (name, value) = crate::api::product::product_identity_header();
                 request
                     .header("Authorization", format!("Bearer {}", token))
-                    .header(name, value)
+                    .headers(crate::backend::attribution_headers())
             } else if !token.is_empty() {
                 log::warn!(
                     "[providers][list_models] refusing to send a bearer token to a non-https, non-loopback URL"
@@ -290,7 +340,7 @@ pub async fn list_configured_models_from_config(
             log::info!(
                 "[providers][list_models] managed catalog unavailable — backend rejected the session token (401); returning an empty list"
             );
-            return Ok(crate::rpc::RpcOutcome::new(
+            return Ok(crate::core::Outcome::new(
                 serde_json::json!({ "models": Vec::<ModelInfo>::new() }),
                 vec!["session not accepted; managed catalog is empty".to_string()],
             ));
@@ -379,7 +429,7 @@ pub async fn list_configured_models_from_config(
         models.len()
     );
 
-    Ok(crate::rpc::RpcOutcome::new(
+    Ok(crate::core::Outcome::new(
         serde_json::json!({ "models": models }),
         vec![format!("fetched {} models", models.len())],
     ))

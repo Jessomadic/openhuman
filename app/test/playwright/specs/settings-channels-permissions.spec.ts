@@ -45,9 +45,8 @@ test.describe('Settings - Channels & Permissions', () => {
       await messagingTab.click();
     }
 
-    await expect(page.getByText('Default Messaging Channel').last()).toBeVisible();
-    await expect(page.getByText('Telegram').last()).toBeVisible();
-    await expect(page.getByText('Web').last()).toBeVisible();
+    await expect(page.getByTestId('channel-select-telegram')).toBeVisible();
+    await expect(page.getByTestId('channel-select-web')).toBeVisible();
 
     // Confirm the panel seeded Telegram as the default before switching.
     await expect.poll(() => getDefaultMessagingChannel(page)).toBe('telegram');
@@ -62,8 +61,7 @@ test.describe('Settings - Channels & Permissions', () => {
     await dismissWalkthroughIfPresent(page);
 
     await expect(page.getByTestId('settings-privacy-panel')).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Product Analytics' })).toBeVisible();
-    await expect(page.getByText('Share Product Analytics and Diagnostics')).toBeVisible();
-    await expect(page.getByText('What leaves your computer')).toBeVisible();
+    await expect(page.getByTestId('privacy-analytics-toggle')).toBeVisible();
+    await expect(page.getByTestId('privacy-mode-options')).toBeVisible();
   });
 });

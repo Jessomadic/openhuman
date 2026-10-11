@@ -1,9 +1,9 @@
 /**
  * Tests for the Settings → Account landing panel.
  *
- * Verifies that the signed-in summary header renders the user's display name,
- * username and avatar initial when a current user is present, and that the
- * summary block is omitted entirely when there is no name/username.
+ * Verifies that the signed-in summary header renders the user's display name
+ * and a "signed in" label when a current user is present, and that the name
+ * is omitted (while the signed-in label still renders) when no name is set.
  */
 import { screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -17,6 +17,10 @@ vi.mock('../../../../providers/CoreStateProvider', () => ({
   useCoreState: () => mockUseCoreState(),
 }));
 
+vi.mock('../../../../hooks/useUsageState', () => ({
+  useUsageState: () => ({ currentPlan: null }),
+}));
+
 // Isolate the panel from the destructive logout/clear actions (which pull in
 // session + clear-data plumbing we don't exercise here).
 vi.mock('../../LogoutAndClearActions', () => ({
@@ -24,7 +28,7 @@ vi.mock('../../LogoutAndClearActions', () => ({
 }));
 
 describe('AccountPanel', () => {
-  it('renders the signed-in summary with name, username and avatar initial', () => {
+  it('renders the signed-in summary with name and signed-in label', () => {
     mockUseCoreState.mockReturnValue({
       snapshot: { currentUser: { firstName: 'Test', lastName: 'Human', username: 'testhuman' } },
     });
@@ -32,21 +36,20 @@ describe('AccountPanel', () => {
     renderWithProviders(<AccountPanel />);
 
     expect(screen.getByText('Test Human')).toBeInTheDocument();
-    expect(screen.getByText('@testhuman')).toBeInTheDocument();
-    // Avatar initial derives from the display name (line ~29).
-    expect(screen.getByText('T')).toBeInTheDocument();
+    expect(screen.getByText('Signed in to OpenHuman')).toBeInTheDocument();
     expect(screen.getByTestId('logout-and-clear-actions')).toBeInTheDocument();
   });
 
-  it('falls back to the username initial when only a username is present', () => {
+  it('renders just the signed-in label when only a username is present (no display name)', () => {
     mockUseCoreState.mockReturnValue({ snapshot: { currentUser: { username: 'solohuman' } } });
 
     renderWithProviders(<AccountPanel />);
 
-    expect(screen.getByText('@solohuman')).toBeInTheDocument();
-    // No display name, so the initial comes from the username (the leading '@'
-    // is stripped before slicing).
-    expect(screen.getByText('S')).toBeInTheDocument();
+    // No display name, so no name text renders, but the signed-in label and
+    // profile card still do.
+    expect(screen.getByTestId('account-profile')).toBeInTheDocument();
+    expect(screen.getByText('Signed in to OpenHuman')).toBeInTheDocument();
+    expect(screen.queryByText('Test Human')).not.toBeInTheDocument();
   });
 
   it('omits the summary block when there is no current user', () => {

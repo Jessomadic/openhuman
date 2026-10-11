@@ -12,7 +12,7 @@ import type { ChannelAuthMode, ChannelConnectionStatus, ChannelType } from '../t
 import type { UserErrorScope } from '../types/userError';
 import { IS_DEV, IS_TEST } from '../utils/config';
 import { createSafeLogData, sanitizeError } from '../utils/sanitize';
-import { getCoreRpcToken, getCoreRpcUrl } from './coreRpcClient';
+import { getCoreRpcToken, getCoreRpcUrl, resolveCoreSocketEndpoint } from './coreRpcClient';
 import { createCoreSocket } from './coreSocket';
 
 // Socket service logger using debug package
@@ -183,10 +183,14 @@ class SocketService {
     const coreToken = await getCoreRpcToken();
     if (this.token !== token || this.socket) return;
 
-    this.socket = createCoreSocket(backendUrl, {
+    const endpoint = await resolveCoreSocketEndpoint(backendUrl);
+    if (this.token !== token || this.socket) return;
+    this.socket = createCoreSocket(endpoint.baseUrl, {
       coreToken,
       authExtras: { session: token },
       overrides: {
+        path: endpoint.path,
+        ...(endpoint.transports ? { transports: endpoint.transports } : {}),
         // A remote / tunnelled core (e.g. ~0.8s RTT) needs the socket.io
         // handshake (~2.4s) to outlast the connect timeout — the prior 2s
         // tripped first, flapping the socket and dropping streamed/approval
@@ -323,21 +327,6 @@ class SocketService {
     this.socket.on('memory:sync_stage', (data: unknown) => {
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('openhuman:memory-sync-stage', { detail: data }));
-      }
-    });
-    this.socket.on('memory:tree_progress', (data: unknown) => {
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('openhuman:memory-tree-progress', { detail: data }));
-      }
-    });
-    this.socket.on('memory:tree_completed', (data: unknown) => {
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('openhuman:memory-tree-completed', { detail: data }));
-      }
-    });
-    this.socket.on('memory:build_progress', (data: unknown) => {
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('openhuman:memory-build-progress', { detail: data }));
       }
     });
 

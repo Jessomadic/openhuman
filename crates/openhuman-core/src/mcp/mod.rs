@@ -73,8 +73,8 @@ pub fn start(_config: &crate::config::Config) {}
 
 /// Boots the domain from the runtime's startup path.
 ///
-/// This is MCP's one entry in `start_boot_once_jobs`, the way `harness_init`
-/// and the skill-catalog refresh each have theirs. The orchestration here —
+/// This is MCP's one entry in `start_boot_once_jobs`, alongside the
+/// skill-catalog refresh. The orchestration here —
 /// that the service must exist before installed servers can dial it, and that
 /// the reconnect supervisor must run until the process ends — is this domain's
 /// own, and the `Once` guard on the supervisor keeps a repeated boot from
@@ -87,7 +87,42 @@ pub fn start_boot_jobs(config: &crate::config::Config) {
     tokio::spawn(async move {
         registry::boot::spawn_installed_servers(&cfg_for_mcp).await;
     });
+    // Installed servers re-cache their tool lists as they connect above; the
+    // configured ones are listed here, so every server's cached tools are
+    // refreshed once per app load. Between loads the cache is only replaced
+    // or dropped by an MCP change (connect, credentials, disable, uninstall,
+    // an edited definition).
+    let cfg_for_cache = config.clone();
+    tokio::spawn(async move {
+        refresh_configured_tool_cache(&cfg_for_cache).await;
+    });
     spawn_reconnect_supervisor();
+}
+
+/// Lists every configured server and rewrites its cached tools.
+#[cfg(feature = "mcp")]
+pub(crate) async fn refresh_configured_tool_cache(config: &crate::config::Config) {
+    let registry = host::static_registry(config);
+    if registry.is_empty() {
+        return;
+    }
+    let service = match host::for_config(config) {
+        Ok(service) => service,
+        Err(error) => {
+            tracing::debug!(?error, "[mcp] no host; configured tool cache not refreshed");
+            return;
+        }
+    };
+    for (server, outcome) in registry.refresh_tool_cache(service.dynamic().store()).await {
+        match outcome {
+            Ok(count) => {
+                tracing::debug!(server = %server, tools = count, "[mcp] refreshed configured tool cache")
+            }
+            Err(error) => {
+                tracing::debug!(server = %server, "[mcp] configured tool cache not refreshed: {error}")
+            }
+        }
+    }
 }
 
 /// Spawns the reconnect supervisor exactly once per process.

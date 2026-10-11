@@ -5,7 +5,7 @@
 
 use anyhow::anyhow;
 
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::gate::{try_boot_state, ApprovalGate, ApprovalGateBootState, DecideMiss};
 use super::types::{
@@ -25,7 +25,7 @@ const MAX_PREAUTHORIZE_TOOLS: usize = 100;
 /// Returns a benign "installed, no banner" default when the boot state was
 /// never recorded — older test paths that bring up the gate directly bypass
 /// `bootstrap_core_runtime` and therefore never call `record_boot_state`.
-pub async fn approval_get_gate_state() -> anyhow::Result<RpcOutcome<ApprovalGateBootState>> {
+pub async fn approval_get_gate_state() -> anyhow::Result<Outcome<ApprovalGateBootState>> {
     tracing::debug!("[rpc:approval_get_gate_state] entry");
     let state = try_boot_state().unwrap_or(ApprovalGateBootState {
         installed: ApprovalGate::try_global().is_some(),
@@ -40,7 +40,7 @@ pub async fn approval_get_gate_state() -> anyhow::Result<RpcOutcome<ApprovalGate
         host = state.host,
         "[rpc:approval_get_gate_state] exit"
     );
-    Ok(RpcOutcome::new(state, vec![]))
+    Ok(Outcome::new(state, vec![]))
 }
 
 /// List rows still awaiting a user decision in the current session.
@@ -48,13 +48,24 @@ pub async fn approval_get_gate_state() -> anyhow::Result<RpcOutcome<ApprovalGate
 /// Returns an empty list (not an error) when the gate is not
 /// installed — supervised mode may be disabled, in which case there
 /// is nothing pending by definition.
-pub async fn approval_list_pending() -> anyhow::Result<RpcOutcome<Vec<PendingApproval>>> {
-    tracing::debug!("[rpc:approval_list_pending] entry");
+///
+/// `agent_id` narrows the list to the rows one embedded agent parked.
+pub async fn approval_list_pending(
+    agent_id: Option<&str>,
+) -> anyhow::Result<Outcome<Vec<PendingApproval>>> {
+    tracing::debug!(
+        agent_id = agent_id.unwrap_or("<all>"),
+        "[rpc:approval_list_pending] entry"
+    );
     let Some(gate) = ApprovalGate::try_global() else {
         tracing::debug!("[rpc:approval_list_pending] gate not installed, returning empty");
-        return Ok(RpcOutcome::new(Vec::new(), vec![]));
+        return Ok(Outcome::new(Vec::new(), vec![]));
     };
-    let rows = match gate.list_pending() {
+    let listed = match agent_id {
+        Some(agent) => gate.list_pending_for_agent(Some(agent)),
+        None => gate.list_pending(),
+    };
+    let rows = match listed {
         Ok(rows) => rows,
         Err(err) => {
             tracing::error!(error = %err, "[rpc:approval_list_pending] store error");
@@ -63,17 +74,17 @@ pub async fn approval_list_pending() -> anyhow::Result<RpcOutcome<Vec<PendingApp
     };
     tracing::debug!(rows = rows.len(), "[rpc:approval_list_pending] exit");
     let log = format!("[approval] list_pending returned {} row(s)", rows.len());
-    Ok(RpcOutcome::single_log(rows, log))
+    Ok(Outcome::single_log(rows, log))
 }
 
 /// List recently decided approval rows for audit/diagnostic surfaces.
 pub async fn approval_list_recent_decisions(
     limit: Option<usize>,
-) -> anyhow::Result<RpcOutcome<Vec<ApprovalAuditEntry>>> {
+) -> anyhow::Result<Outcome<Vec<ApprovalAuditEntry>>> {
     tracing::debug!("[rpc:approval_list_recent_decisions] entry");
     let Some(gate) = ApprovalGate::try_global() else {
         tracing::debug!("[rpc:approval_list_recent_decisions] gate not installed, returning empty");
-        return Ok(RpcOutcome::new(Vec::new(), vec![]));
+        return Ok(Outcome::new(Vec::new(), vec![]));
     };
     let limit = limit.unwrap_or(50);
     let rows = match gate.list_recent_decisions(limit) {
@@ -92,7 +103,7 @@ pub async fn approval_list_recent_decisions(
         limit = limit,
         "[rpc:approval_list_recent_decisions] exit"
     );
-    Ok(RpcOutcome::single_log(rows, log))
+    Ok(Outcome::single_log(rows, log))
 }
 
 /// Batch-grant "approve always for this flow" trust at save+enable time
@@ -107,7 +118,7 @@ pub async fn approval_list_recent_decisions(
 pub async fn approval_preauthorize_flow(
     flow_id: &str,
     tool_names: Vec<String>,
-) -> anyhow::Result<RpcOutcome<FlowPreauthorizationResult>> {
+) -> anyhow::Result<Outcome<FlowPreauthorizationResult>> {
     tracing::debug!(
         flow_id = flow_id,
         tools = tool_names.len(),
@@ -127,7 +138,7 @@ pub async fn approval_preauthorize_flow(
             flow_id = flow_id,
             "[rpc:approval_preauthorize_flow] gate not installed; nothing to grant"
         );
-        return Ok(RpcOutcome::single_log(
+        return Ok(Outcome::single_log(
             FlowPreauthorizationResult {
                 flow_id: flow_id.to_string(),
                 granted: vec![],
@@ -176,7 +187,7 @@ pub async fn approval_preauthorize_flow(
         granted.len(),
         already_trusted.len()
     );
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         FlowPreauthorizationResult {
             flow_id: flow_id.to_string(),
             granted,
@@ -188,14 +199,17 @@ pub async fn approval_preauthorize_flow(
 }
 
 /// Apply a decision to a pending row. Errors when the request id is
-/// unknown / already decided / belongs to a different session.
+/// unknown / already decided / belongs to a different session. With
+/// `agent_id`, also errors when the request belongs to another agent.
 pub async fn approval_decide(
     request_id: &str,
     decision: ApprovalDecision,
-) -> anyhow::Result<RpcOutcome<PendingApproval>> {
+    agent_id: Option<&str>,
+) -> anyhow::Result<Outcome<PendingApproval>> {
     tracing::debug!(
         request_id = request_id,
         decision = decision.as_str(),
+        agent_id = agent_id.unwrap_or("<any>"),
         "[rpc:approval_decide] entry"
     );
     let gate = ApprovalGate::try_global().ok_or_else(|| {
@@ -205,7 +219,11 @@ pub async fn approval_decide(
         );
         anyhow!("approval gate is not installed; supervised mode disabled")
     })?;
-    let decided = match gate.decide(request_id, decision) {
+    let decided = match agent_id {
+        Some(agent) => gate.decide_for_agent(agent, request_id, decision),
+        None => gate.decide(request_id, decision),
+    };
+    let decided = match decided {
         Ok(row) => row,
         Err(err) => {
             tracing::error!(
@@ -263,7 +281,17 @@ pub async fn approval_decide(
     // `gate.decide` already resolved the current call, so a persistence failure
     // must not fail the RPC. It degrades safely — the tool simply prompts again
     // next time rather than being silently auto-approved.
-    if decision == ApprovalDecision::ApproveAlwaysForTool {
+    if decision == ApprovalDecision::ApproveAlwaysForTool && row.agent_id.is_some() {
+        tracing::info!(
+            tool = row.tool_name.as_str(),
+            agent_id = row.agent_id.as_deref().unwrap_or(""),
+            "[rpc:approval_decide] agent request approved once; the process allowlist is not widened"
+        );
+        logs.push(format!(
+            "[approval] '{}' approved; an agent's 'Always allow' comes from its own access",
+            row.tool_name
+        ));
+    } else if decision == ApprovalDecision::ApproveAlwaysForTool {
         match crate::config::ops::add_auto_approve_tool(&row.tool_name).await {
             Ok(()) => {
                 tracing::info!(
@@ -349,5 +377,5 @@ pub async fn approval_decide(
         decision = decision.as_str(),
         "[rpc:approval_decide] exit"
     );
-    Ok(RpcOutcome::new(row, logs))
+    Ok(Outcome::new(row, logs))
 }

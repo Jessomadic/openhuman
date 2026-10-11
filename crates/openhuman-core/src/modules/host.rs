@@ -11,7 +11,7 @@
 //! That is a real limitation and worth naming: a module on this bus cannot
 //! publish a `DomainEvent`, so it can serve requests but cannot participate in
 //! the core's event flow. For a codec that is exactly right — a document writer
-//! has nothing to say to the subconscious. A module that did need to emit events
+//! has no events to publish. A module that did need to emit events
 //! would need `OnceBus` to share its broker first.
 //!
 //! # What loading a module means
@@ -32,7 +32,6 @@
 //! and also prevents an embedding host from accidentally tying module lifetime
 //! to an independently managed application task runtime.
 
-use std::sync::Arc;
 use std::sync::OnceLock;
 
 use tinybus::broker::Broker;
@@ -186,9 +185,6 @@ async fn build_runtime() -> tinybus::Result<ModuleRuntime> {
     let host = ModuleHost::new(broker);
     let connection = Connection::connect(transport.connect().await?).await?;
 
-    if let Some(config) = super::memory::policy().cloned() {
-        super::memory_host::install(&connection, Arc::clone(&config)).await?;
-    }
     super::tokenjuice_host::install(&connection).await?;
 
     Ok(ModuleRuntime {

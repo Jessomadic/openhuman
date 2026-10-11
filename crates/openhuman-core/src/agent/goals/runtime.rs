@@ -56,6 +56,7 @@ pub async fn resume_for_thread(
                     thread_id: goal.thread_id.clone(),
                     goal_id: goal.goal_id.clone(),
                     status: goal.status.as_str().to_string(),
+                    goal: Some(super::goal_to_value(&goal)),
                 });
             }
             Some(Some(goal))
@@ -63,28 +64,6 @@ pub async fn resume_for_thread(
         Err(e) => {
             tracing::debug!(thread_id = %thread_id, error = %e, "[thread_goals] resume_for_thread failed");
             None
-        }
-    }
-}
-
-/// Pause the active goal for an explicit thread (interrupt/abort semantics).
-/// Best-effort; safe to call when there is no goal or thread id.
-pub async fn pause_for_thread(workspace_dir: &Path, thread_id: Option<&str>) {
-    let Some(thread_id) = normalized_thread(thread_id) else {
-        return;
-    };
-    match store::pause(workspace_dir, &thread_id).await {
-        Ok(goal) => {
-            if matches!(goal.status, ThreadGoalStatus::Paused) {
-                BUS.publish(DomainEvent::ThreadGoalUpdated {
-                    thread_id: goal.thread_id.clone(),
-                    goal_id: goal.goal_id.clone(),
-                    status: goal.status.as_str().to_string(),
-                });
-            }
-        }
-        Err(e) => {
-            tracing::debug!(thread_id = %thread_id, error = %e, "[thread_goals] pause_for_thread failed");
         }
     }
 }
@@ -109,6 +88,7 @@ pub async fn complete_for_thread(workspace_dir: &Path, thread_id: Option<&str>) 
                     thread_id: goal.thread_id.clone(),
                     goal_id: goal.goal_id.clone(),
                     status: goal.status.as_str().to_string(),
+                    goal: Some(super::goal_to_value(&goal)),
                 });
             }
         }
@@ -130,7 +110,13 @@ pub async fn clear_for_thread(workspace_dir: &Path, thread_id: Option<&str>) {
         return;
     };
     match store::clear(workspace_dir, &thread_id).await {
-        Ok(_existed) => {}
+        Ok(existed) => {
+            if existed {
+                BUS.publish(DomainEvent::ThreadGoalCleared {
+                    thread_id: thread_id.clone(),
+                });
+            }
+        }
         Err(e) => {
             tracing::debug!(thread_id = %thread_id, error = %e, "[thread_goals] clear_for_thread failed");
         }
@@ -142,32 +128,15 @@ fn turn_tokens(input: u64, output: u64) -> u64 {
     crate_budget::turn_tokens(input, output)
 }
 
-/// Whether the current turn is an autonomous goal-continuation (vs. a
-/// user-initiated turn). Used so a continuation doesn't clear its own one-shot
-/// suppression flag.
-fn is_goal_continuation_turn() -> bool {
-    matches!(
-        crate::agent::turn_origin::current(),
-        Some(
-            crate::agent::turn_origin::AgentTurnOrigin::TrustedAutomation {
-                source: crate::agent::turn_origin::TrustedAutomationSource::GoalContinuation,
-                ..
-            }
-        )
-    )
-}
-
 /// Account a finished turn's usage against an explicit thread's goal.
 ///
 /// The accounting rules are the crate's
 /// ([`crate_budget::account_turn`](tinyagents_graph::goals::account_turn)):
 /// only **active** goals are charged, so a paused/complete/budget-limited goal
-/// doesn't accrue usage from incidental chat, and a user-initiated turn clears
-/// the one-shot continuation suppression (a continuation turn must not clear
-/// its own, see [`super::continuation`]).
+/// doesn't accrue usage from incidental chat. OpenHuman runs no autonomous
+/// goal continuation, so every accounted turn is user-initiated.
 ///
-/// What is OpenHuman's here: receiving the owned thread from the turn,
-/// classifying the turn as user-initiated vs. continuation from its origin, and
+/// What is OpenHuman's here: receiving the owned thread from the turn and
 /// emitting `ThreadGoalUpdated` when the status changes (e.g. →
 /// `budget_limited`) so the UI chip refreshes. Best-effort throughout: a
 /// failure is logged and swallowed so accounting never fails a user turn.
@@ -181,19 +150,19 @@ pub async fn account_turn_against_goal(
     let Some(thread_id) = normalized_thread(thread_id) else {
         return;
     };
-    let prev_status = match store::get(workspace_dir, &thread_id).await {
-        Ok(Some(goal)) => goal.status,
+    let prev = match store::get(workspace_dir, &thread_id).await {
+        Ok(Some(goal)) => goal,
         Ok(None) => return,
         Err(e) => {
             tracing::debug!(thread_id = %thread_id, error = %e, "[thread_goals] account get failed");
             return;
         }
     };
+    let prev_status = prev.status;
+    let prev_tokens_used = prev.tokens_used;
 
     let store = goals_store(workspace_dir);
-    let user_initiated = !is_goal_continuation_turn();
-    match crate_budget::account_turn(&store, &thread_id, input, output, secs, user_initiated).await
-    {
+    match crate_budget::account_turn(&store, &thread_id, input, output, secs, true).await {
         Ok(Some(updated)) => {
             tracing::debug!(
                 thread_id = %thread_id,
@@ -203,11 +172,28 @@ pub async fn account_turn_against_goal(
                 "[thread_goals] accounted turn usage (+{} tok, +{secs}s)",
                 turn_tokens(input, output)
             );
-            if updated.status != prev_status {
+            // Publish on any status transition, or — for a live budget
+            // display — when accumulated usage has moved by at least 5% of
+            // the configured budget since the last publish. Without the
+            // throttle every single turn's accounting would emit a socket
+            // event; the threshold keeps the UI's budget meter live without
+            // flooding the bus on chatty threads.
+            let status_changed = updated.status != prev_status;
+            let budget_moved = updated
+                .token_budget
+                .filter(|b| *b > 0)
+                .is_some_and(|budget| {
+                    let delta = updated.tokens_used.saturating_sub(prev_tokens_used);
+                    // 5% of budget, at least 1 token so a tiny budget still reports.
+                    let threshold = (budget / 20).max(1);
+                    delta >= threshold
+                });
+            if status_changed || budget_moved {
                 BUS.publish(DomainEvent::ThreadGoalUpdated {
                     thread_id: updated.thread_id.clone(),
                     goal_id: updated.goal_id.clone(),
                     status: updated.status.as_str().to_string(),
+                    goal: Some(super::goal_to_value(&updated)),
                 });
             }
         }

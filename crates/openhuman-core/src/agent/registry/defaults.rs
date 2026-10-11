@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::agent::harness::definition::{
     AgentDefinition, AgentTier, DefinitionSource, IterationPolicy, ModelSpec, PromptSource,
-    SandboxMode, SubagentEntry, ToolScope, TriggerMemoryAgent,
+    SandboxMode, SubagentEntry, ToolScope,
 };
 
 use super::types::{AgentRegistryEntry, AgentRegistrySource, AgentSubagentPolicy};
@@ -36,6 +36,7 @@ fn default_entry_from_definition(def: AgentDefinition) -> AgentRegistryEntry {
         system_prompt: None,
         tool_allowlist: tools_to_allowlist(&def.tools, &def.extra_tools),
         tool_denylist: def.disallowed_tools,
+        tool_rules: def.tool_rules,
         subagents: AgentSubagentPolicy::from_allowlist(
             def.subagents
                 .into_iter()
@@ -87,14 +88,14 @@ pub fn definition_from_registry_entry(entry: &AgentRegistryEntry) -> AgentDefini
         omit_identity: true,
         omit_memory_context: true,
         omit_safety_preamble: true,
-        omit_profile: true,
-        omit_memory_md: true,
         model: registry_value_to_model_spec(entry.model.as_deref()),
         temperature: 0.4,
         tools: allowlist_to_tool_scope(&entry.tool_allowlist),
         disallowed_tools: entry.tool_denylist.clone(),
         skill_filter: None,
         extra_tools: Vec::new(),
+        deferred_tools: Vec::new(),
+        tool_rules: entry.tool_rules.clone(),
         max_iterations: 8,
         iteration_policy: IterationPolicy::Strict,
         max_result_chars: None,
@@ -102,7 +103,6 @@ pub fn definition_from_registry_entry(entry: &AgentRegistryEntry) -> AgentDefini
         timeout_secs: None,
         sandbox_mode: SandboxMode::None,
         background: false,
-        trigger_memory_agent: TriggerMemoryAgent::Never,
         tokenjuice_compression: Default::default(),
         subagents: entry
             .subagents
@@ -113,6 +113,7 @@ pub fn definition_from_registry_entry(entry: &AgentRegistryEntry) -> AgentDefini
             .collect(),
         delegate_name: None,
         agent_tier: AgentTier::Worker,
+        searches_connected_mcp: false,
         source: DefinitionSource::CustomRegistry,
         graph: Default::default(),
     }

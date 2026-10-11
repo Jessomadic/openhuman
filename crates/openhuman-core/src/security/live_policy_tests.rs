@@ -4,9 +4,7 @@ use crate::security::AutonomyLevel;
 
 #[test]
 fn scoped_policy_is_thread_local_and_restored() {
-    let _env = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = crate::config::TEST_ENV_LOCK.blocking_lock();
     let workspace = std::env::temp_dir().join("openhuman_scoped_policy_test");
     install(
         Arc::new(SecurityPolicy::default()),
@@ -46,9 +44,7 @@ fn install_then_reload_swaps_policy_and_bumps_generation() {
     // Serialize against other tests that install/reload this process-global
     // (the approval-gate auto_approve test and the autonomy `ops` tests),
     // which all take this same lock — otherwise a parallel install races.
-    let _env = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = crate::config::TEST_ENV_LOCK.blocking_lock();
     let workspace = std::env::temp_dir().join("openhuman_live_policy_test");
     let initial = Arc::new(SecurityPolicy {
         autonomy: AutonomyLevel::Supervised,
@@ -81,9 +77,7 @@ fn install_then_reload_swaps_policy_and_bumps_generation() {
 #[test]
 fn reload_privacy_swaps_mode_and_survives_autonomy_reload() {
     // Same process-global lock as the other live-policy tests.
-    let _env = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = crate::config::TEST_ENV_LOCK.blocking_lock();
     let workspace = std::env::temp_dir().join("openhuman_privacy_live_test");
     let initial = Arc::new(SecurityPolicy {
         autonomy: AutonomyLevel::Supervised,
@@ -135,9 +129,7 @@ fn reload_privacy_swaps_mode_and_survives_autonomy_reload() {
 fn set_action_dir_swaps_root_and_bumps_generation() {
     // Same process-global lock as the reload test — these install/swap the
     // shared live policy and would race each other otherwise.
-    let _env = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = crate::config::TEST_ENV_LOCK.blocking_lock();
     let workspace = std::env::temp_dir().join("openhuman_set_action_dir_test_ws");
     let action = std::env::temp_dir().join("openhuman_set_action_dir_test_action_a");
     let initial = Arc::new(SecurityPolicy {
@@ -185,4 +177,58 @@ fn set_action_dir_swaps_root_and_bumps_generation() {
         new_action,
         "reload after set_action_dir must keep the swapped root"
     );
+}
+
+fn agent_context(policy: Option<Arc<SecurityPolicy>>) -> Arc<crate::core::runtime::CoreContext> {
+    use crate::core::runtime::{ContextOverlay, CoreContext, DomainSet};
+    let parent = CoreContext::for_test(DomainSet::full(), Some(std::env::temp_dir()));
+    let mut config = crate::config::Config::default();
+    config.workspace_dir = std::env::temp_dir().join("openhuman_effective_policy_test");
+    let mut overlay = ContextOverlay::new(
+        config,
+        DomainSet::kernel(),
+        crate::tools::toolpacks::ToolGroups::none(),
+    )
+    .session_agent("effective-agent");
+    overlay.agent_policy = policy;
+    parent.derive_with(overlay)
+}
+
+#[tokio::test]
+async fn effective_prefers_the_agent_policy_over_the_process_policy() {
+    let workspace = std::env::temp_dir().join("openhuman_effective_policy_test");
+    let process = Arc::new(SecurityPolicy {
+        auto_approve_all: true,
+        autonomy: AutonomyLevel::Full,
+        ..SecurityPolicy::default()
+    });
+    let _guard = install_scoped(Arc::clone(&process), workspace.clone(), workspace);
+    let agent = Arc::new(SecurityPolicy {
+        auto_approve_all: false,
+        autonomy: AutonomyLevel::ReadOnly,
+        auto_approve: vec!["agent_only_tool".into()],
+        ..SecurityPolicy::default()
+    });
+
+    let seen =
+        crate::core::runtime::CoreContext::scope(agent_context(Some(Arc::clone(&agent))), async {
+            effective().expect("agent policy")
+        })
+        .await;
+    assert!(Arc::ptr_eq(&seen, &agent));
+    assert!(!seen.auto_approve_all);
+    assert_eq!(seen.autonomy, AutonomyLevel::ReadOnly);
+
+    assert!(Arc::ptr_eq(&effective().expect("process policy"), &process));
+}
+
+#[tokio::test]
+async fn effective_falls_back_to_the_process_policy_for_an_agent_without_one() {
+    let workspace = std::env::temp_dir().join("openhuman_effective_policy_test");
+    let process = Arc::new(SecurityPolicy::default());
+    let _guard = install_scoped(Arc::clone(&process), workspace.clone(), workspace);
+
+    let seen =
+        crate::core::runtime::CoreContext::scope(agent_context(None), async { effective() }).await;
+    assert!(Arc::ptr_eq(&seen.expect("process policy"), &process));
 }

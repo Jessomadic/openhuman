@@ -39,6 +39,7 @@ fn settings_select_the_mode_and_clamp_top_k() {
         apply_tool_search_config(&ToolSearchConfig {
             ranker: setting.into(),
             top_k: 500,
+            ..ToolSearchConfig::default()
         });
         let policy = discovery_policy();
         assert_eq!(policy.rank_mode, mode, "{setting}");
@@ -84,17 +85,17 @@ async fn overlap_ranker_ranks_by_token_overlap_and_names_its_kind() {
 
 /// A text dialect renders the prompt catalogue and the harness clears
 /// `request.tools`, so the bridge only reaches the model through the host's
-/// own catalogue. Without these entries the model reads a search result
-/// telling it to "invoke a match with `tool_call`" and has no signature for
-/// that name — observed live as a turn that narrates the call it is about to
-/// make and then stops.
+/// own catalogue. Without this entry the model has no signature for
+/// `tool_search` — observed live as a turn that narrates the call it is about
+/// to make and then stops. There is no `tool_call` wrapper: a found tool is
+/// called by its own name.
 #[test]
-fn bridge_prompt_tools_advertise_search_and_call_when_something_is_deferred() {
+fn bridge_prompt_tools_advertise_only_search_when_something_is_deferred() {
     let _g = guard();
     apply_tool_search_config(&ToolSearchConfig::default());
     let bridge = bridge_prompt_tools(12);
     let names: Vec<&str> = bridge.iter().map(|t| t.name.as_ref()).collect();
-    assert_eq!(names, vec!["tool_search", "tool_call"]);
+    assert_eq!(names, vec!["tool_search"]);
     for tool in &bridge {
         assert!(
             tool.parameters_schema
@@ -127,4 +128,16 @@ fn bridge_prompt_tools_do_not_enumerate_the_deferred_catalogue() {
 fn bridge_prompt_tools_are_empty_without_a_deferred_catalogue() {
     let _g = guard();
     assert!(bridge_prompt_tools(0).is_empty());
+}
+
+/// The live policy carries no per-tool manifest on any dialect: the harness
+/// default (4,000 tokens) listed every deferred tool in `tool_search`'s
+/// description on every native request, ~3.9k tokens on a workspace with a
+/// few integrations connected.
+#[test]
+fn discovery_policy_renders_no_manifest() {
+    let _g = guard();
+    clear_tool_ranker();
+    apply_tool_search_config(&ToolSearchConfig::default());
+    assert_eq!(discovery_policy().manifest_token_budget, 0);
 }

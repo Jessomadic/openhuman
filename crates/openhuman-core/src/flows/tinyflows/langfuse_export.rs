@@ -13,7 +13,7 @@
 //! injector additionally stamps `flow_id` on every span for filtering.
 //!
 //! Transport mirrors the agent-turn tracing path
-//! (`agent::progress_tracing::langfuse::push_spans`): the endpoint is derived
+//! (`agent::progress_tracing::otlp::push_spans`): the endpoint is derived
 //! from the **current backend hostname** (`effective_backend_api_url`), auth
 //! is the live OpenHuman session bearer (the backend injects the real
 //! Langfuse keys server-side), the send is capped at 10s, `207 Multi-Status`
@@ -28,10 +28,9 @@ use tinyagents_graph::{GraphLangfuseExporter, GraphObservation};
 use tinyagents_harness::{LangfuseAuth, LangfuseClient, LangfuseTraceConfig};
 use tinyflows::engine::GraphObservation as FlowObservation;
 
-use crate::api::config::effective_backend_api_url;
 use crate::config::Config;
 use crate::flows::FlowRunTrigger;
-use crate::security::credentials::session_support::require_live_session_token;
+use crate::security::credentials::session_support::direct_backend_credential;
 
 const LOG_TARGET: &str = "flows::langfuse";
 /// Backend proxy route for Langfuse ingestion (relative to the backend
@@ -47,8 +46,11 @@ const PUSH_TIMEOUT: Duration = Duration::from_secs(10);
 /// always matches wherever the app's domain calls go (staging, prod, or a
 /// custom `api_url` override).
 fn ingestion_url(config: &Config) -> String {
-    let base = effective_backend_api_url(&config.api_url);
-    crate::api::config::api_url(&base, INGESTION_PATH)
+    // Empty without a backend transport; callers treat a non-`http` URL as
+    // "proxy unavailable" and skip the push.
+    crate::backend::base_url(&config.api_url)
+        .map(|base| crate::util::url::join_url(&base, INGESTION_PATH))
+        .unwrap_or_default()
 }
 
 /// The OpenHuman core crate version (e.g. `0.58.0`), stamped onto every flow
@@ -56,8 +58,9 @@ fn ingestion_url(config: &Config) -> String {
 /// traces can be correlated with the app build that produced them.
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Builds the [`LangfuseTraceConfig`] for one flow run: the trace id **and**
-/// session id are the run's `thread_id` (`flow:{flow_id}:{uuid}`), the trace
+/// Builds the [`LangfuseTraceConfig`] for one flow run: the trace id is the
+/// run's `thread_id` (`flow:{flow_id}:{uuid}`), while the session id is the
+/// stable `flow:{flow_id}` so repeated runs group together. The trace
 /// is named `flow.run:{flow_name}`, run-type tags (`run:flow` +
 /// `trigger:<kind>`) mark how the run started, and flow coordinates plus the
 /// app version ride on the trace metadata. No content — ids, name, status,
@@ -72,7 +75,7 @@ fn build_flow_trace_config(
     LangfuseTraceConfig {
         trace_id: Some(thread_id.to_string()),
         name: Some(format!("flow.run:{flow_name}")),
-        session_id: Some(thread_id.to_string()),
+        session_id: Some(format!("flow:{flow_id}")),
         release: Some(APP_VERSION.to_string()),
         tags: vec![
             "run:flow".to_string(),
@@ -178,14 +181,18 @@ pub async fn export_flow_run_trace(
         );
         return;
     }
-    let token = match require_live_session_token(config) {
-        Ok(token) => token,
-        Err(err) => {
-            tracing::warn!(
+    // No TinyHumans connection, or no usable credential (signed out, offline
+    // local session): a configured state — `direct_backend_credential` logs
+    // the reason at debug, and the export is skipped without a request.
+    let token = match direct_backend_credential(config, "flows langfuse export") {
+        Some(crate::security::credentials::session_support::BackendCredential::Session(token)) => {
+            token
+        }
+        _ => {
+            tracing::debug!(
                 target: LOG_TARGET,
                 flow_id = %flow_id,
-                error = %err,
-                "[flows] langfuse export skipped: no live session token"
+                "[flows] langfuse export skipped: hosted backend not available"
             );
             return;
         }

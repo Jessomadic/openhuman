@@ -13,7 +13,7 @@
  * default SOUL.md is English too), not UI chrome. Only the picker's labels and
  * descriptions are localized.
  */
-import { applyPersonaField } from './personaSections';
+import { applyPersonaField, parsePersonaFields } from './personaSections';
 
 interface PersonaTemplate {
   id: string;
@@ -125,4 +125,20 @@ export function applyTemplate(soul: string, template: PersonaTemplate): string {
   let next = applyPersonaField(soul, 'personality', template.fields.personality);
   next = applyPersonaField(next, 'voice', template.fields.voice);
   return next;
+}
+
+/**
+ * The template whose Personality and Communication-style sections the given
+ * SOUL.md currently matches exactly, or `null` once the user has edited away
+ * from every template (the picker then shows "Custom" as selected).
+ */
+export function matchTemplate(soul: string): PersonaTemplate | null {
+  const fields = parsePersonaFields(soul);
+  return (
+    PERSONA_TEMPLATES.find(
+      template =>
+        fields.personality === template.fields.personality.trim() &&
+        fields.voice === template.fields.voice.trim()
+    ) ?? null
+  );
 }

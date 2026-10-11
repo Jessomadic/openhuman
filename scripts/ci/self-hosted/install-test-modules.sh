@@ -50,6 +50,10 @@ while IFS=$'\t' read -r id url archive sha; do
   tar --no-same-owner -xzf "${cached}" -C "${dest}/${id}"
 done < <(node scripts/ci/self-hosted/test-module-assets.mjs "${host_key}")
 
+# The checkout action initializes root submodules, but the module build also
+# needs tinyconnectors' nested tinybus dependency.
+git submodule update --init --recursive vendor/tinyconnectors
+
 conn_rev="$(git -C vendor/tinyconnectors rev-parse HEAD)"
 rustc_rev="$(rustc -V | sha256sum | cut -c1-12)"
 conn_cached="${blobs}/tinyconnectors-${conn_rev}-${rustc_rev}.so"
@@ -69,8 +73,8 @@ mkdir -p "${dest}/tinyconnectors"
 cp "${conn_cached}" "${dest}/tinyconnectors/libtinyconnectors.so"
 
 {
-  echo "TINYMEMORY_TEST_MODULE=${dest}/tinymemory/libtinymemory_module.so"
   echo "TINYJUICE_TEST_MODULE=${dest}/tinyjuice/libtinyjuice_module.so"
+  echo "TINYSEARCH_TEST_MODULE=${dest}/tinysearch/libtinysearch.so"
   echo "TINYCONNECTORS_TEST_MODULE=${dest}/tinyconnectors/libtinyconnectors.so"
 } > "${env_file}"
 log "wrote ${env_file}"

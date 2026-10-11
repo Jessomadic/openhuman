@@ -163,18 +163,22 @@ describe('OpenAiOAuthConnect', () => {
     expect(screen.queryByTestId(`${TID}-connect`)).not.toBeInTheDocument();
   });
 
-  it('blocks sign-in outside the desktop app', async () => {
+  it('starts sign-in over core RPC outside the desktop app', async () => {
     vi.mocked(isTauri).mockReturnValue(false);
+    vi.mocked(callCoreRpc)
+      .mockResolvedValueOnce({ result: { connected: false } }) // status
+      .mockResolvedValueOnce({ result: { authUrl: 'https://auth.openai.com/oauth?x=1' } }); // start
 
     renderWithProviders(<OpenAiOAuthConnect testIdPrefix={TID} />);
 
     fireEvent.click(await screen.findByTestId(`${TID}-connect`));
 
-    expect(await screen.findByTestId(`${TID}-error`)).toHaveTextContent(
-      'ChatGPT sign-in is only available in the desktop app.'
+    await waitFor(() =>
+      expect(callCoreRpc).toHaveBeenCalledWith(
+        expect.objectContaining({ method: 'openhuman.inference_openai_oauth_start' })
+      )
     );
-    // No RPC should have been attempted (status probe also short-circuits off-desktop).
-    expect(callCoreRpc).not.toHaveBeenCalled();
+    expect(screen.queryByTestId(`${TID}-error`)).not.toBeInTheDocument();
   });
 
   it('requires a callback URL before completing', async () => {

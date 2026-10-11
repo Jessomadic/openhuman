@@ -27,13 +27,11 @@
 //! the sole input to the host bundle factory for per-turn handles; no adapter
 //! discovers its state through a task-local.
 
-pub mod agent_memory;
 pub mod budget_gate;
 mod bundle;
 pub mod context_composer;
 pub mod definition_registry;
 pub mod delegation;
-pub mod experience_store;
 pub mod learning_sink;
 pub mod model_resolver;
 pub mod progress_sink;
@@ -42,7 +40,6 @@ pub mod security_gate;
 pub(crate) mod steering;
 pub mod tool_outcome_classifier;
 
-pub use agent_memory::OpenHumanAgentMemory;
 pub use budget_gate::OpenHumanBudgetGate;
 pub use bundle::{
     OpenHumanHostBase, OpenHumanHostBundle, OpenHumanHostBundleFactory, OpenHumanHostBundleInputs,
@@ -50,14 +47,14 @@ pub use bundle::{
 };
 pub use context_composer::OpenHumanContextComposer;
 pub use definition_registry::OpenHumanDefinitionRegistry;
-pub use experience_store::OpenHumanExperienceStore;
 pub use learning_sink::OpenHumanLearningSink;
 pub use model_resolver::OpenHumanModelResolver;
 pub use progress_sink::OpenHumanProgressSink;
-pub(crate) use run_context::direct_subagent_child;
 pub use run_context::{
     decide_dispatch, DispatchDecision, DispatchInputs, LastTurnUsage, OpenHumanRunContext,
     SubagentUsageEntry, TurnDispatchState,
 };
+pub(crate) use run_context::{direct_subagent_child, SessionTurnSidecar};
+pub(crate) use security_gate::with_untrusted_input_turn;
 pub use security_gate::OpenHumanSecurityGate;
 pub use tool_outcome_classifier::OpenHumanToolOutcomeClassifier;

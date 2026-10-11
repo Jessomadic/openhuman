@@ -6,7 +6,7 @@
 //! immediately, without a core restart.
 
 use crate::config::{Config, PrivacyMode};
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::loader::load_config_with_timeout;
 
@@ -41,13 +41,13 @@ fn privacy_mode_value(mode: PrivacyMode) -> serde_json::Value {
 }
 
 /// Returns the current `[privacy]` mode as `{ "mode": "<snake_case>" }`.
-pub async fn get_privacy_mode() -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn get_privacy_mode() -> Result<Outcome<serde_json::Value>, String> {
     let config = load_config_with_timeout().await?;
     log::debug!(
         "[privacy][rpc] get_privacy_mode -> {:?}",
         config.privacy.mode
     );
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         privacy_mode_value(config.privacy.mode),
         "privacy mode read",
     ))
@@ -59,7 +59,7 @@ pub async fn get_privacy_mode() -> Result<RpcOutcome<serde_json::Value>, String>
 pub async fn apply_privacy_settings(
     config: &mut Config,
     update: PrivacySettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     if let Some(raw) = update.mode {
         let mode = parse_privacy_mode(&raw)?;
         log::debug!(
@@ -85,7 +85,7 @@ pub async fn apply_privacy_settings(
         ),
     }
 
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         privacy_mode_value(config.privacy.mode),
         vec![format!(
             "privacy mode saved to {}",
@@ -97,7 +97,7 @@ pub async fn apply_privacy_settings(
 /// Loads the configuration, applies the privacy-mode update, and saves it.
 pub async fn load_and_apply_privacy_settings(
     update: PrivacySettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let mut config = load_config_with_timeout().await?;
     apply_privacy_settings(&mut config, update).await
 }

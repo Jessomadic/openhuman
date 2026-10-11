@@ -55,7 +55,7 @@ describe('Card', () => {
 
     expect(container.innerHTML).toBe(
       '<div data-slot="card" data-testid="card" class="overflow-hidden rounded-xl border border-line bg-surface">' +
-        '<div class="px-4 pb-0 pt-4">' +
+        '<div class="px-4 pt-4 pb-0">' +
         '<h3 class="text-xs font-semibold tracking-wide text-content-muted">Routing</h3>' +
         '<p class="mt-1 text-xs leading-relaxed text-content-muted">Where turns go.</p>' +
         '</div>' +

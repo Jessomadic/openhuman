@@ -1,7 +1,9 @@
-import { fireEvent, within } from '@testing-library/react';
+import { fireEvent, render, within } from '@testing-library/react';
+import { Provider } from 'react-redux';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderWithProviders } from '../../../test/test-utils';
+import { createTestStore, renderWithProviders } from '../../../test/test-utils';
 import AppearancePanel from './AppearancePanel';
 
 // Pass-through translator so assertions can target the i18n keys directly.
@@ -13,20 +15,52 @@ vi.mock('../hooks/useSettingsNavigation', () => ({
 
 function renderPanel(
   fontSize: 'small' | 'medium' | 'large' | 'xlarge' = 'medium',
-  customFontSizePx: number | null = null
+  customFontSizePx: number | null = null,
+  initialEntries?: string[]
 ) {
   return renderWithProviders(<AppearancePanel />, {
     preloadedState: {
-      theme: {
-        mode: 'system',
-        tabBarLabels: 'hover',
-        fontSize,
-        customFontSizePx,
-        agentMessageViewMode: 'bubbles',
-      },
+      theme: { mode: 'system', tabBarLabels: 'hover', fontSize, customFontSizePx },
     },
+    initialEntries,
   });
 }
+
+// Theme Studio (the theme gallery + customizer) now lives on its own route
+// (`/settings/theme`, `ThemeStudioPanel`) rather than as a tab inside
+// AppearancePanel — see ThemeStudioPanel.test.tsx for that coverage.
+describe('<AppearancePanel />', () => {
+  it('renders the font size card and no theme gallery/customizer of its own', () => {
+    const { getByTestId, getByRole, queryByTestId } = renderPanel();
+    expect(getByTestId('font-size-card')).toBeInTheDocument();
+    expect(
+      getByRole('radiogroup', { name: 'settings.appearance.fontSizeAria' })
+    ).toBeInTheDocument();
+    expect(queryByTestId('theme-gallery')).not.toBeInTheDocument();
+    expect(queryByTestId('theme-customize')).not.toBeInTheDocument();
+  });
+
+  it('redirects to /settings/theme for the legacy #studio hash', () => {
+    // A real `<Routes>` switches AppearancePanel out for whatever matches
+    // /settings/theme, so verify the redirect the way the app actually
+    // renders it rather than inspecting the pre-navigation render.
+    const store = createTestStore({
+      theme: { mode: 'system', tabBarLabels: 'hover', fontSize: 'medium', customFontSizePx: null },
+    });
+    const { getByTestId, queryByTestId } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/settings/appearance#studio']}>
+          <Routes>
+            <Route path="/settings/appearance" element={<AppearancePanel />} />
+            <Route path="/settings/theme" element={<div data-testid="theme-route" />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>
+    );
+    expect(getByTestId('theme-route')).toBeInTheDocument();
+    expect(queryByTestId('font-size-card')).not.toBeInTheDocument();
+  });
+});
 
 describe('<AppearancePanel /> font size', () => {
   it('renders the four font-size options as a radio group', () => {

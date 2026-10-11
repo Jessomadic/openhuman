@@ -10,7 +10,8 @@ mod requests;
 pub use construct::IntegrationClient;
 pub use pricing::{build_client, pricing_for_config};
 
-pub(crate) use errors::{extract_error_detail, MAX_ERROR_BODY_LEN};
+#[cfg(test)]
+pub(crate) use errors::extract_error_detail;
 
 // Brought into scope here (rather than only inside each submodule) purely so
 // `#[cfg(test)] mod tests` below — and the `super::*` glob each test file

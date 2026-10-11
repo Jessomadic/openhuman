@@ -42,20 +42,6 @@ export function ErrorBanner({
   );
 }
 
-interface InlineLoadingStatusProps {
-  label: string;
-  className?: string;
-}
-
-export function InlineLoadingStatus({ label, className }: InlineLoadingStatusProps) {
-  return (
-    <div className={`flex items-center gap-2 px-1 py-2 text-xs text-amber-400 ${className ?? ''}`}>
-      <Spinner className="w-3 h-3" />
-      {label}
-    </div>
-  );
-}
-
 interface CenteredLoadingStateProps {
   label?: string;
   className?: string;

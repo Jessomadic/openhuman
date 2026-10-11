@@ -18,6 +18,7 @@ fn controller_schema_inventory_is_stable() {
             "triage_evaluate",
             "graph_topologies",
             "registry_snapshot",
+            "context_breakdown",
         ]
     );
     assert_eq!(schemas.len(), all_registered_controllers().len());
@@ -164,6 +165,6 @@ async fn triage_handler_rejects_unknown_source_and_to_json_maps_outcome() {
     .expect_err("unsupported source should fail before runtime dispatch");
     assert!(err.contains("unsupported trigger source"));
 
-    let value = to_json(RpcOutcome::new(json!({ "ok": true }), Vec::new())).expect("json outcome");
+    let value = to_json(Outcome::new(json!({ "ok": true }), Vec::new())).expect("json outcome");
     assert_eq!(value["ok"], json!(true));
 }

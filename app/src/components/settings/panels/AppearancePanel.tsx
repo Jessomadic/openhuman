@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
 
+import { cn } from '../../../lib/cn';
 import { useT } from '../../../lib/i18n/I18nContext';
 import { useAppDispatch, useAppSelector } from '../../../store/hooks';
 import {
@@ -11,12 +13,10 @@ import {
   setCustomFontSizePx,
   setFontSize,
 } from '../../../store/themeSlice';
-import LanguageSelect from '../../LanguageSelect';
-import { Card } from '../../ui';
-import Slider from '../../ui/Slider';
-import { SettingsNumberField, SettingsRow, SettingsSection } from '../controls';
+import { Card, Slider } from '../../ui';
+import { SettingsNumberField } from '../controls';
 import SettingsPanel from '../layout/SettingsPanel';
-import ThemeStudioPanel from './ThemeStudioPanel';
+import LayoutSettings from './theme/LayoutSettings';
 
 interface FontSizeOption {
   id: FontSize;
@@ -30,6 +30,7 @@ const AppearancePanel = () => {
   const { t } = useT();
   const dispatch = useAppDispatch();
   const effectiveFontSizePx = useAppSelector(selectEffectiveFontSizePx);
+  const location = useLocation();
 
   // Local draft for the numeric px field so partial typing doesn't thrash the
   // store; commits (blur / Enter) clamp and dispatch, while the slider dispatches
@@ -88,77 +89,55 @@ const AppearancePanel = () => {
     },
   ];
 
-  return (
-    <SettingsPanel description={t('settings.appearance.menuDesc')}>
-      {/* Colours, fonts and background — the former "Theme studio" page, now
-          sections of this one. Its gallery header carries the Light / Dark /
-          Auto toggle, which is why this page no longer has a separate theme-mode
-          tile list: `setThemeMode` and `setThemeVariant` write the same two
-          slice fields, so the two controls were one control shown twice. */}
-      <ThemeStudioPanel embedded />
-
-      {/* ── Font size picker — intentional bespoke tile UI ─────────── */}
-      <div>
-        <h3 className="mb-2 px-1 font-title text-sm font-semibold text-content">
-          {t('settings.appearance.fontSizeHeading')}
-        </h3>
+  const body = (
+    <>
+      <Card
+        title={t('settings.appearance.fontSizeHeading')}
+        description={t('settings.appearance.fontSizeHelperText')}
+        data-testid="font-size-card">
         {/* Card forwards no `role`/`aria-label` to its wrapper, so the
-            radiogroup semantics move to an inner div that still encloses
-            every option — `within(group)` in the specs resolves the same. */}
-        <Card divided={false}>
-          <div role="radiogroup" aria-label={t('settings.appearance.fontSizeAria')}>
-            {FONT_SIZE_OPTIONS.map((opt, idx) => {
-              // Highlight the preset whose px matches the effective size, so a
-              // fine-tuned value landing exactly on a preset still lights it up.
-              const selected = Number.parseInt(FONT_SIZE_PX[opt.id], 10) === effectiveFontSizePx;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  onClick={() => dispatch(setFontSize(opt.id))}
-                  className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors focus:outline-hidden focus-visible:bg-primary-50 dark:focus-visible:bg-primary-900/30 ${
-                    idx !== 0 ? 'border-t border-line-subtle' : ''
-                  } ${selected ? 'bg-primary-50 dark:bg-primary-500/10' : 'hover:bg-surface-hover'}`}>
-                  <span
-                    className={`flex items-center justify-center w-9 h-9 rounded-lg ${
-                      selected
-                        ? 'bg-primary-500 text-content-inverted'
-                        : 'bg-surface-subtle text-content-secondary'
-                    }`}>
-                    <span className={`font-semibold leading-none ${opt.glyphClass}`} aria-hidden>
-                      A
-                    </span>
-                  </span>
-                  <span className="flex-1 min-w-0">
-                    <span className="block text-sm font-medium text-content">{opt.label}</span>
-                    <span className="block text-xs text-content-muted">{opt.description}</span>
-                  </span>
-                  {selected && (
-                    <svg
-                      className="w-5 h-5 text-primary-500"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                      aria-hidden>
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
+              radiogroup semantics sit on an inner div that encloses every
+              option — `within(group)` in the specs resolves the same. */}
+        <div
+          role="radiogroup"
+          aria-label={t('settings.appearance.fontSizeAria')}
+          className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-4">
+          {FONT_SIZE_OPTIONS.map(opt => {
+            // Highlight the preset whose px matches the effective size, so a
+            // fine-tuned value landing exactly on a preset still lights it up.
+            const selected = Number.parseInt(FONT_SIZE_PX[opt.id], 10) === effectiveFontSizePx;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                title={opt.description}
+                onClick={() => dispatch(setFontSize(opt.id))}
+                className={cn(
+                  'flex flex-col items-center justify-center gap-2 rounded-xl border px-3 py-4 transition-colors',
+                  'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary-500/25',
+                  selected
+                    ? 'border-primary-500 bg-primary-50 ring-1 ring-primary-500 dark:bg-primary-500/10'
+                    : 'border-line hover:bg-surface-hover'
+                )}>
+                <span
+                  className={cn(
+                    'flex h-8 items-center font-semibold leading-none',
+                    opt.glyphClass,
+                    selected ? 'text-primary-500' : 'text-content-secondary'
                   )}
-                </button>
-              );
-            })}
-          </div>
-        </Card>
+                  aria-hidden>
+                  Aa
+                </span>
+                <span className="text-xs font-medium text-content">{opt.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
         {/* Fine-tune the exact size beyond the presets (issue #4246). */}
-        {/* px-4 py-3, not Card's `padded` p-4, to keep this box's original
-            (denser) vertical padding pixel-identical. */}
-        <Card divided={false} className="px-4 py-3 mt-3">
+        <div className="px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <label htmlFor="font-size-custom-number" className="text-sm font-medium text-content">
               {t('settings.appearance.fontSizeCustomLabel')}
@@ -187,25 +166,23 @@ const AppearancePanel = () => {
             className="mt-3"
             data-testid="font-size-slider"
           />
-          <div className="flex items-center justify-between mt-1 text-[11px] text-content-faint">
+          <div className="mt-1 flex items-center justify-between text-[11px] text-content-faint">
             <span>{`${MIN_FONT_SIZE_PX}${t('settings.appearance.fontSizeUnit')}`}</span>
             <span>{`${MAX_FONT_SIZE_PX}${t('settings.appearance.fontSizeUnit')}`}</span>
           </div>
-        </Card>
+        </div>
+      </Card>
+    </>
+  );
 
-        <p className="text-xs text-content-muted leading-relaxed px-1 mt-2">
-          {t('settings.appearance.fontSizeHelperText')}
-        </p>
-      </div>
+  // Theme Studio and Layout were briefly tabs here (`#studio`, `#layout`).
+  if (location.hash === '#studio') return <Navigate to="/settings/theme" replace />;
 
-      {/* ── Display language (moved from the old settings home list) ── */}
-      <SettingsSection title={t('settings.language')}>
-        <SettingsRow
-          label={t('settings.language')}
-          description={t('settings.languageDesc')}
-          control={<LanguageSelect ariaLabel={t('settings.language')} />}
-        />
-      </SettingsSection>
+  return (
+    <SettingsPanel testId="appearance-panel" description={t('settings.appearance.menuDesc')}>
+      {body}
+      {/* Corner rounding, border contrast, and which areas draw borders. */}
+      <LayoutSettings />
     </SettingsPanel>
   );
 };

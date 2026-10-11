@@ -9,14 +9,14 @@ fn make_def(id: &str) -> AgentDefinition {
         omit_identity: true,
         omit_memory_context: true,
         omit_safety_preamble: true,
-        omit_profile: true,
-        omit_memory_md: true,
         model: ModelSpec::Inherit,
         temperature: 0.4,
         tools: ToolScope::Wildcard,
         disallowed_tools: vec![],
         skill_filter: None,
         extra_tools: vec![],
+        deferred_tools: Vec::new(),
+        tool_rules: None,
         max_iterations: 8,
         iteration_policy: Default::default(),
         max_result_chars: None,
@@ -24,11 +24,11 @@ fn make_def(id: &str) -> AgentDefinition {
         timeout_secs: None,
         sandbox_mode: SandboxMode::None,
         background: false,
-        trigger_memory_agent: Default::default(),
         tokenjuice_compression: crate::inference::tokenjuice::AgentTokenjuiceCompression::Auto,
         subagents: vec![],
         delegate_name: None,
         agent_tier: crate::agent::harness::definition::AgentTier::Worker,
+        searches_connected_mcp: false,
         source: DefinitionSource::Builtin,
         graph: Default::default(),
     }
@@ -174,7 +174,7 @@ named = ["query_memory"]
 
 /// `subagents` is optional — omitting it should yield an empty Vec
 /// rather than a deserialization error. Most non-delegating agents
-/// (archivist, code_executor, etc.) will not list any.
+/// (critic, summarizer, etc.) will not list any.
 #[test]
 fn subagents_defaults_to_empty_when_omitted() {
     let toml_src = r#"
@@ -317,8 +317,8 @@ fn tier_transition_rejects_reasoning_to_reasoning() {
 
 #[test]
 fn tier_transition_allows_upward_reasoning_to_chat() {
-    // Upward delegation is intentionally legal: the `subconscious` reasoner
-    // hands follow-ups back to the `orchestrator` chat agent. Only same-tier
+    // Upward delegation is intentionally legal: a reasoning agent may hand
+    // follow-ups back to the `orchestrator` chat agent. Only same-tier
     // and worker-as-parent hops are forbidden.
     assert!(validate_tier_transition(AgentTier::Reasoning, AgentTier::Chat).is_ok());
 }
@@ -365,47 +365,20 @@ fn all_builtin_agent_definitions_have_expected_effective_max_iterations() {
 
     let expected: &[(&str, usize)] = &[
         // Extended policy (or high `max_iterations`) -> effective cap raised.
-        ("orchestrator", 15),
-        ("code_executor", 50),
-        ("context_scout", 50),
-        // #5204: general-purpose read-only flow context/memory retrieval
-        // agent — `iteration_policy = "extended"` so it can loop across
-        // several retrievals in one turn. `#[cfg(feature = "flows")]`-gated
-        // (like the other flow agents), so this audit entry is too.
-        #[cfg(feature = "flows")]
-        ("flow_memory_agent", 50),
-        ("integrations_agent", 50),
-        // `mcp_agent` is compiled out with the `mcp` feature (#4799).
-        #[cfg(feature = "mcp")]
-        ("mcp_agent", 50),
+        ("orchestrator", 200),
         ("planner", 50),
-        ("researcher", 50),
-        ("skill_creator", 50),
         ("task_manager_agent", 50),
-        ("tools_agent", 50),
         // Gated with `flows` (#4797) — absent from a slim build.
         #[cfg(feature = "flows")]
         ("flow_discovery", 50),
         #[cfg(feature = "flows")]
         ("workflow_builder", 50),
-        // Compiled out with the `skills` gate — see `openhuman::skills::stub`.
-        #[cfg(feature = "skills")]
-        ("skill_executor", 50),
         // Strict policy, declared `max_iterations` below the old global
         // default (10) -> effective cap lowered.
-        ("agent_memory", 6),
-        ("archivist", 3),
         ("critic", 5),
-        ("crypto_agent", 8),
-        ("goals_agent", 5),
-        ("help", 6),
         ("image_agent", 8),
         ("morning_briefing", 8),
-        ("profile_memory_agent", 8),
-        ("scheduler_agent", 8),
-        ("settings_agent", 8),
         ("summarizer", 1),
-        ("tool_maker", 2),
         ("trigger_reactor", 6),
         ("trigger_triage", 2),
         ("video_agent", 8),

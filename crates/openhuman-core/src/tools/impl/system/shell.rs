@@ -1,6 +1,7 @@
+use super::shell_platform::{
+    command_param_description, python_utf8_env, shell_child_env, shell_description,
+};
 use crate::agent::host_runtime::RuntimeAdapter;
-use crate::runtime::javascript::NodeBootstrap;
-use crate::runtime::python::PythonBootstrap;
 use crate::security::{AuditLogger, CommandExecutionLog, GateDecision, SecurityPolicy};
 use async_trait::async_trait;
 use serde_json::json;
@@ -12,51 +13,34 @@ use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolTimeout}
 
 /// Maximum output size in bytes (1MB).
 const MAX_OUTPUT_BYTES: usize = 1_048_576;
-/// Environment variables safe to pass to shell commands.
-/// Only functional variables are included — never API keys or secrets.
-const SAFE_ENV_VARS: &[&str] = &[
-    "PATH",
-    "HOME",
-    "TERM",
-    "LANG",
-    "LC_ALL",
-    "LC_CTYPE",
-    "USER",
-    "SHELL",
-    "TMPDIR",
-    // Windows process creation and child command lookup need these after env_clear().
-    "SystemRoot",
-    "WINDIR",
-    "COMSPEC",
-    "PATHEXT",
-    "TEMP",
-    "TMP",
-    "USERPROFILE",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "ProgramFiles",
-    "ProgramFiles(x86)",
-    "ProgramW6432",
-];
+/// Exit status coreutils `timeout` returns when its own limit expires.
+const COMMAND_TIMEOUT_EXIT_CODE: i32 = 124;
+/// Appended to an exit-124 failure: the command's own `timeout` fired, not the
+/// tool's (#6953). Without it, `exit code 124 [stdout] ok` reads like a bug.
+const COMMAND_TIMEOUT_NOTE: &str = "[exit 124: the command's own `timeout` limit expired; the shell tool's timeout_secs did not fire]";
+
+/// The result when the tool's own `timeout_secs` deadline killed the command.
+fn tool_timeout_message(secs: u64) -> String {
+    format!("Command timed out after {secs}s and was killed: the shell tool's timeout_secs limit fired.")
+}
+
+/// [`tinytools::command_failure`], plus [`COMMAND_TIMEOUT_NOTE`] on exit 124.
+fn command_failure(code: Option<i32>, stdout: &str, stderr: &str) -> ToolResult {
+    let mut failure = tinytools::command_failure(code, stdout, stderr);
+    if code == Some(COMMAND_TIMEOUT_EXIT_CODE) {
+        tracing::debug!("[shell] exit 124: attributing it to the command's own timeout");
+        failure.content.push(tinytools::ToolContent::Text {
+            text: COMMAND_TIMEOUT_NOTE.to_string(),
+        });
+    }
+    failure
+}
 
 /// Shell command execution tool with sandboxing
 pub struct ShellTool {
     security: Arc<SecurityPolicy>,
     runtime: Arc<dyn RuntimeAdapter>,
     audit: Arc<AuditLogger>,
-    /// Optional managed Node.js bootstrap. When provided **and** a prior
-    /// `NodeBootstrap::resolve()` has already succeeded, every shell invocation
-    /// transparently prepends the managed `bin/` dir to `PATH` — so skills
-    /// shelling out to `node`/`npm`/`npx`/`corepack` resolve to the managed
-    /// toolchain. Non-blocking: never triggers a download for unrelated
-    /// commands (we use `try_cached()`).
-    node_bootstrap: Option<Arc<NodeBootstrap>>,
-    /// Optional managed Python bootstrap. Unlike Node PATH injection, Python
-    /// shell support is the primary execution surface for skills, so
-    /// Python-looking commands resolve this lazily before spawn. That keeps
-    /// `pip install foo` and `python3 -m foo` on one interpreter instead of
-    /// mixing arbitrary host `pip` and `python3` binaries.
-    python_bootstrap: Option<Arc<PythonBootstrap>>,
 }
 
 impl ShellTool {
@@ -69,46 +53,6 @@ impl ShellTool {
             security,
             runtime,
             audit,
-            node_bootstrap: None,
-            python_bootstrap: None,
-        }
-    }
-
-    /// Same as `new` but attaches a managed Node.js bootstrap for transparent
-    /// `PATH` injection. The bootstrap is consulted via `try_cached()` on each
-    /// invocation, so calling a non-node shell command never forces a download.
-    pub fn with_node_bootstrap(
-        security: Arc<SecurityPolicy>,
-        runtime: Arc<dyn RuntimeAdapter>,
-        audit: Arc<AuditLogger>,
-        bootstrap: Arc<NodeBootstrap>,
-    ) -> Self {
-        Self {
-            security,
-            runtime,
-            audit,
-            node_bootstrap: Some(bootstrap),
-            python_bootstrap: None,
-        }
-    }
-
-    /// Attach managed language runtimes used by shell-invoked skills. Node is
-    /// injected only after a dedicated node/npm tool resolved it; Python is
-    /// resolved lazily for python/pip commands because shell is currently the
-    /// user-facing Python skill execution path.
-    pub fn with_language_bootstraps(
-        security: Arc<SecurityPolicy>,
-        runtime: Arc<dyn RuntimeAdapter>,
-        audit: Arc<AuditLogger>,
-        node_bootstrap: Option<Arc<NodeBootstrap>>,
-        python_bootstrap: Option<Arc<PythonBootstrap>>,
-    ) -> Self {
-        Self {
-            security,
-            runtime,
-            audit,
-            node_bootstrap,
-            python_bootstrap,
         }
     }
 
@@ -187,7 +131,7 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a shell command: run code, manipulate workspace files, or launch applications (`open -a Music`, `xdg-open music://`). Only stdout/stderr comes back, so a script that computes silently or only writes a file returns nothing — print what you need, or read the file afterwards."
+        shell_description(self.runtime.shell_flavor())
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -196,7 +140,7 @@ impl Tool for ShellTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute"
+                    "description": command_param_description(self.runtime.shell_flavor())
                 },
                 "category": {
                     "type": "string",
@@ -357,20 +301,49 @@ impl ShellTool {
             );
         }
 
-        // When the agent's sandbox mode is `Sandboxed`, route execution
-        // through the sandbox backend (Docker or OS-level jail) instead
-        // of the normal runtime. Security checks above still apply.
-        if matches!(
-            crate::agent::harness::current_sandbox_mode(),
-            Some(crate::agent::harness::definition::SandboxMode::Sandboxed)
-        ) {
+        // SaaS: every command runs in the user's container, whatever the
+        // agent's sandbox mode says, and never on the host.
+        let saas_action_dir = self.effective_action_dir_for_context(context);
+        if let Some(resolved) =
+            super::shell_saas::saas_sandbox_with(crate::core::runtime::is_saas(), || {
+                crate::profiles::tools::sandbox_policy(
+                    &saas_action_dir,
+                    &self.security.workspace_dir,
+                )
+            })
+        {
+            let action_dir = saas_action_dir;
+            return match resolved {
+                Ok(policy) => {
+                    self.run_in_policy(policy, command, requested_timeout, &action_dir)
+                        .await
+                }
+                Err(why) => {
+                    tracing::warn!(reason = %why, "[shell] SaaS sandbox refused the command");
+                    // Nothing ran: report it as not allowed.
+                    super::shell_saas::saas_sandbox_refusal(&why)
+                }
+            };
+        }
+
+        // A sandboxed agent or an explicit operator backend uses the sandbox
+        // execution path. Security checks above still apply.
+        let sandbox_required = match crate::sandbox::command_requires_sandbox().await {
+            Ok(required) => required,
+            Err(err) => {
+                return (
+                    false,
+                    ToolResult::error(format!("Cannot read sandbox configuration: {err}")),
+                )
+            }
+        };
+        if sandbox_required {
             let action_dir = self.effective_action_dir_for_context(context);
             return self
                 .run_sandboxed(command, requested_timeout, &action_dir)
                 .await;
         }
 
-        // Execute with timeout to prevent hanging commands.
         // Clear the environment to prevent leaking API keys and other secrets
         // (CWE-200), then re-add only safe, functional variables.
         let action_dir = self.effective_action_dir_for_context(context);
@@ -379,21 +352,19 @@ impl ShellTool {
             Err(e) => {
                 return (
                     true,
-                    ToolResult::error(format!("Failed to build runtime command: {e}")),
+                    ToolResult::error(format!("Failed to build shell command: {e}")),
                 );
             }
         };
         cmd.env_clear();
 
-        for var in SAFE_ENV_VARS {
-            if let Ok(val) = std::env::var(var) {
-                cmd.env(var, val);
-            }
+        for (var, val) in shell_child_env(crate::tools::timeout::CommandEnvironment::var_os) {
+            cmd.env(var, val);
         }
 
         // Keep command-valued repository Git settings from executing host
         // programs when a shell command happens to invoke git.
-        for (key, value) in crate::tools::implementations::filesystem::shell_git_env() {
+        for (key, value) in tinytools_std::filesystem::shell_git_env() {
             cmd.env(key, value);
         }
 
@@ -417,20 +388,6 @@ impl ShellTool {
             );
         }
 
-        match self.runtime_path_for_command(command).await {
-            Ok(Some(path)) => {
-                tracing::debug!(path = %path, "[shell] applying managed runtime PATH");
-                cmd.env("PATH", path);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                return (
-                    true,
-                    ToolResult::error(format!("Failed to resolve command runtime: {error}")),
-                );
-            }
-        }
-
         // No default deadline — only a caller-supplied `timeout_secs` bounds the
         // run. `None` ⇒ run to completion (issue #4023).
         let explicit_timeout = self.explicit_timeout(requested_timeout);
@@ -441,8 +398,8 @@ impl ShellTool {
             if explicit_timeout.is_some() { "explicit" } else { "no" }
         );
         let result = match explicit_timeout {
-            Some(timeout) => tokio::time::timeout(timeout, cmd.output()).await,
-            None => Ok(cmd.output().await),
+            Some(timeout) => crate::tools::timeout::output_or_kill(&mut cmd, timeout).await,
+            None => Ok(crate::tools::timeout::output_unbounded(&mut cmd).await),
         };
 
         let tool_result = match result {
@@ -471,14 +428,15 @@ impl ShellTool {
                     // Surface the exit code AND both streams so the agent can
                     // diagnose the failure (e.g. 127 missing dependency, 126
                     // sandbox/permission wall) instead of looping on it (#4095).
-                    super::command_output::command_failure(output.status.code(), &stdout, &stderr)
+                    command_failure(output.status.code(), &stdout, &stderr)
                 }
             }
             Ok(Err(e)) => ToolResult::error(format!("Failed to execute command: {e}")),
-            Err(_) => ToolResult::error(format!(
-                "Command timed out after {}s and was killed",
-                explicit_timeout.map(|d| d.as_secs()).unwrap_or(0)
-            )),
+            Err(_) => {
+                let secs = explicit_timeout.map(|d| d.as_secs()).unwrap_or(0);
+                tracing::debug!(timeout_secs = secs, "[shell] tool timeout_secs fired");
+                ToolResult::error(tool_timeout_message(secs))
+            }
         };
         (true, tool_result)
     }
@@ -491,15 +449,27 @@ impl ShellTool {
         requested_timeout: Option<u64>,
         action_dir: &Path,
     ) -> (bool, ToolResult) {
-        use crate::sandbox;
-
         let config = crate::config::RuntimeConfig::default();
-        let policy = sandbox::resolve_sandbox_policy(
+        let policy = crate::sandbox::resolve_sandbox_policy(
             crate::agent::harness::definition::SandboxMode::Sandboxed,
             action_dir,
+            &self.security.workspace_dir,
             &config,
             false,
         );
+        self.run_in_policy(policy, command, requested_timeout, action_dir)
+            .await
+    }
+
+    /// Execute a command under a resolved sandbox `policy`.
+    async fn run_in_policy(
+        &self,
+        policy: crate::sandbox::SandboxPolicy,
+        command: &str,
+        requested_timeout: Option<u64>,
+        action_dir: &Path,
+    ) -> (bool, ToolResult) {
+        use crate::sandbox;
 
         tracing::debug!(
             backend = ?policy.backend,
@@ -508,21 +478,12 @@ impl ShellTool {
         );
 
         let mut extra_env = std::collections::HashMap::new();
-        match self.runtime_path_for_command(command).await {
-            Ok(Some(path)) => {
-                extra_env.insert("PATH".into(), path.into());
-            }
-            Ok(None) => {}
-            Err(error) => {
-                return (
-                    true,
-                    ToolResult::error(format!("Failed to resolve command runtime: {error}")),
-                );
-            }
-        }
-
         // Apply the same Git config hardening to local and sandboxed shells.
-        extra_env.extend(crate::tools::implementations::filesystem::shell_git_env());
+        extra_env.extend(tinytools_std::filesystem::shell_git_env());
+        // And the same Python UTF-8 defaults the native path sets.
+        for (var, val) in python_utf8_env(|name| std::env::var_os(name)) {
+            extra_env.insert(var.into(), val);
+        }
 
         // Sandbox backends require a finite deadline. Without an explicit
         // `timeout_secs`, substitute the generous effective-unbounded cap so a
@@ -542,10 +503,7 @@ impl ShellTool {
         {
             Ok(result) => {
                 let tool_result = if result.timed_out {
-                    ToolResult::error(format!(
-                        "Command timed out after {}s and was killed",
-                        effective.as_secs()
-                    ))
+                    ToolResult::error(tool_timeout_message(effective.as_secs()))
                 } else if result.success() {
                     if result.stderr.is_empty() {
                         ToolResult::success(result.stdout)
@@ -558,8 +516,8 @@ impl ShellTool {
                 } else {
                     // Same exit-code + both-streams surfacing as the native path
                     // (#4095); the sandbox `-1` sentinel renders as a signal.
-                    super::command_output::command_failure(
-                        super::command_output::sandbox_exit_code(result.exit_code),
+                    command_failure(
+                        tinytools::sandbox_exit_code(result.exit_code),
                         &result.stdout,
                         &result.stderr,
                     )
@@ -572,109 +530,6 @@ impl ShellTool {
             ),
         }
     }
-
-    async fn runtime_path_for_command(&self, command: &str) -> anyhow::Result<Option<String>> {
-        let mut prepend_dirs = Vec::new();
-
-        // Node injection preserves the existing contract: shell only sees the
-        // managed Node bin directory after a previous node/npm tool resolved it.
-        if let Some(bootstrap) = self.node_bootstrap.as_ref() {
-            if let Some(resolved) = bootstrap.try_cached() {
-                tracing::debug!(
-                    bin_dir = %resolved.bin_dir.display(),
-                    version = %resolved.version,
-                    "[shell] prepending managed node bin to PATH"
-                );
-                prepend_dirs.push(resolved.bin_dir);
-            }
-        }
-
-        if shell_command_needs_python_runtime(command) {
-            if let Some(bootstrap) = self.python_bootstrap.as_ref() {
-                let resolved = bootstrap.resolve().await?;
-                tracing::debug!(
-                    bin_dir = %resolved.bin_dir.display(),
-                    python_bin = %resolved.python_bin.display(),
-                    version = %resolved.version,
-                    source = ?resolved.source,
-                    "[shell] prepending python runtime bin to PATH"
-                );
-                prepend_dirs.push(resolved.bin_dir);
-            }
-        }
-
-        if prepend_dirs.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(prepend_path_dirs(
-                prepend_dirs.iter().map(|p| p.as_path()),
-                &std::env::var("PATH").unwrap_or_default(),
-            )))
-        }
-    }
-}
-
-fn prepend_path_dirs<'a>(
-    dirs: impl IntoIterator<Item = &'a std::path::Path>,
-    host_path: &str,
-) -> String {
-    let sep = if cfg!(windows) { ";" } else { ":" };
-    let mut parts: Vec<String> = dirs
-        .into_iter()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect();
-    if !host_path.is_empty() {
-        parts.push(host_path.to_string());
-    }
-    parts.join(sep)
-}
-
-fn shell_command_needs_python_runtime(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    lower
-        .split([';', '&', '|', '\n', '\r'])
-        .any(segment_starts_with_python_command)
-}
-
-fn segment_starts_with_python_command(segment: &str) -> bool {
-    let tokens = segment.split_whitespace().peekable();
-    for token in tokens {
-        let token = token.trim_matches(|ch| matches!(ch, '(' | ')' | '<' | '>'));
-        if token.is_empty() {
-            continue;
-        }
-        if token.contains('=') && !token.starts_with('-') {
-            continue;
-        }
-        if matches!(token, "sudo" | "command" | "time" | "env") {
-            continue;
-        }
-        return is_python_executable_token(token);
-    }
-    false
-}
-
-fn is_python_executable_token(token: &str) -> bool {
-    let executable = token.rsplit('/').next().unwrap_or(token);
-    matches!(
-        executable,
-        "python"
-            | "python3"
-            | "py"
-            | "pip"
-            | "pip3"
-            | "python.exe"
-            | "python3.exe"
-            | "pip.exe"
-            | "pip3.exe"
-    ) || versioned_executable(executable, "python3.")
-        || versioned_executable(executable, "pip3.")
-}
-
-fn versioned_executable(executable: &str, prefix: &str) -> bool {
-    executable
-        .strip_prefix(prefix)
-        .is_some_and(|suffix| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
 }
 
 #[cfg(test)]

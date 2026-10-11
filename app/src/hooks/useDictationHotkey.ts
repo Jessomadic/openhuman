@@ -83,7 +83,7 @@ export function useDictationHotkey(): DictationHotkeyState {
           return;
         }
 
-        // Handle RpcOutcome wrapper — the result may be nested in .result
+        // Handle Outcome wrapper — the result may be nested in .result
         const s = (
           'result' in settings ? (settings as Record<string, unknown>).result : settings
         ) as DictationSettings;

@@ -1,7 +1,4 @@
 use super::*;
-use tinyinference_llm::catalog::{
-    merge_openai_codex_model_hints, parse_models_response, ModelInfo,
-};
 
 #[tokio::test]
 async fn list_models_empty_body_returns_diagnostic_error() {
@@ -35,190 +32,24 @@ async fn list_models_valid_json_still_succeeds() {
     assert_eq!(outcome.value["models"][0]["id"], "some-model");
 }
 
-// ── parse_models_response (TAURI-RUST-4Y) ──────────────────────────────
-//
-// Before this fix the `/models` parser collapsed "no `data` field" and
-// "`data` field present but not an array" into a single misleading
-// error string: `"provider response missing `data` array — endpoint is
-// not OpenAI-compatible (got keys: data, object)"` — the keys list
-// included `data`, contradicting the "missing" claim. The split
-// surfaces the actual JSON-type mismatch so future Sentry events on
-// this code path are triageable instead of looking like the parser
-// is hallucinating.
-
-#[test]
-fn parse_models_response_returns_models_for_well_formed_data_array() {
-    // Happy path — exact OpenAI `/models` shape, must yield model ids
-    // and `owned_by` / `context_length` projections from each entry.
-    let body = serde_json::json!({
-        "object": "list",
-        "data": [
-            { "id": "m1", "owned_by": "openai", "context_length": 8192 },
-            { "id": "m2", "owned_by": "openai" },
-            { "id": "m3", "context_window": 4096 },
-        ],
-    });
-    let models = parse_models_response(&body).expect("well-formed body must parse");
-    assert_eq!(models.len(), 3);
-    assert_eq!(models[0].id, "m1");
-    assert_eq!(models[0].owned_by.as_deref(), Some("openai"));
-    assert_eq!(models[0].context_window, Some(8192));
-    assert_eq!(models[2].id, "m3");
-    assert_eq!(models[2].owned_by, None);
-    assert_eq!(models[2].context_window, Some(4096));
-}
-
-#[test]
-fn parse_models_response_returns_models_for_codex_models_array() {
-    let body = serde_json::json!({
-        "models": [
-            { "slug": "gpt-5.5", "owned_by_organization": "openai", "max_context_window": 272000 },
-            "gpt-5.4",
-        ],
-    });
-
-    let models = parse_models_response(&body).expect("Codex models body must parse");
-
-    assert_eq!(models.len(), 2);
-    assert_eq!(models[0].id, "gpt-5.5");
-    assert_eq!(models[0].owned_by.as_deref(), Some("openai"));
-    assert_eq!(models[0].context_window, Some(272000));
-    assert_eq!(models[1].id, "gpt-5.4");
-}
-
-#[test]
-fn parse_models_response_distinguishes_missing_data_field_from_wrong_type() {
-    // (1) `data`/`models` fields completely absent — wrong endpoint
-    // misconfiguration. Codex uses `models`, so it is accepted alongside
-    // OpenAI-compatible `data`.
-    let body = serde_json::json!({ "object": "list", "items": [] });
-    let err = parse_models_response(&body).expect_err("no model catalog field must fail");
-    let err = err.to_string();
-    assert!(
-        err.contains("missing `data` or `models` field"),
-        "no-data error should say `missing`: {err}"
-    );
-    assert!(
-        err.contains("items") && err.contains("object"),
-        "no-data error should list actual keys: {err}"
+#[tokio::test]
+async fn list_models_uses_provider_ca_bundle_client() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let endpoint = spawn_static_models_server(
+        StatusCode::OK,
+        r#"{"data":[{"id":"private-model","owned_by":"team"}]}"#,
+    )
+    .await;
+    let mut config = configure_generic_workspace(&tmp, endpoint).await;
+    config.cloud_provider_ca_certs.insert(
+        "generic-test".into(),
+        include_str!("../../util/tls/test-ca.pem").into(),
     );
 
-    // (2) `data` field present but wrong type — TAURI-RUST-4Y verbatim
-    // shape (`object` + `data` keys both present, but `data` isn't an
-    // array). The error MUST NOT say "missing" — it must surface the
-    // actual JSON type so triage knows what shape the provider sent.
-    // `null` is deliberately excluded here — it is a valid empty catalog,
-    // not a wrong type (see `parse_models_response_treats_null_data_as_empty_list`).
-    for (label, value) in [
-        (
-            "object",
-            serde_json::json!({"object":"error","message":"boom"}),
-        ),
-        ("string", serde_json::json!("models go here")),
-        ("bool", serde_json::json!(true)),
-        ("number", serde_json::json!(42)),
-    ] {
-        let body = serde_json::json!({ "object": "list", "data": value });
-        let err = parse_models_response(&body).expect_err("wrong-type data must fail");
-        let err = err.to_string();
-        assert!(
-            !err.contains("missing"),
-            "wrong-type error must not say `missing` ({label}): {err}"
-        );
-        assert!(
-            err.contains(label),
-            "wrong-type error must name the actual JSON kind ({label}): {err}"
-        );
-    }
-}
-
-#[test]
-fn parse_models_response_treats_null_data_as_empty_list() {
-    // TAURI-RUST-874 / TAURI-RUST-875: Ollama's OpenAI-compatible
-    // `/v1/models` null-encodes the catalog (`{"object":"list","data":null}`)
-    // when no models are pulled. A null `data`/`models` field is a valid empty
-    // model list, not a malformed envelope — it MUST parse to an empty Vec
-    // instead of manufacturing a hard error that floods Sentry.
-    let data_null = serde_json::json!({ "object": "list", "data": serde_json::Value::Null });
-    let models = parse_models_response(&data_null)
-        .expect("null `data` must parse as an empty catalog, not an error");
-    assert!(
-        models.is_empty(),
-        "null `data` must yield an empty model list, got {models:?}"
-    );
-
-    // The sibling `models` key (Codex-shaped envelope) gets the same treatment.
-    let models_null = serde_json::json!({ "object": "list", "models": serde_json::Value::Null });
-    let models = parse_models_response(&models_null)
-        .expect("null `models` must parse as an empty catalog, not an error");
-    assert!(
-        models.is_empty(),
-        "null `models` must yield an empty model list, got {models:?}"
-    );
-
-    // A bare success envelope with no `object` field still null-encodes an
-    // empty catalog (treated as success — `object` absent ⇒ not an error).
-    let object_absent = serde_json::json!({ "data": serde_json::Value::Null });
-    let models = parse_models_response(&object_absent)
-        .expect("null `data` with no `object` field must parse as an empty catalog");
-    assert!(
-        models.is_empty(),
-        "null `data` (object absent) must yield an empty model list, got {models:?}"
-    );
-}
-
-#[test]
-fn parse_models_response_rejects_null_data_on_error_envelope() {
-    // Codex P2 (PR #4157): an HTTP-200 error body such as
-    // `{"object":"error","data":null}` ALSO null-encodes `data`. The
-    // null-as-empty short-circuit MUST NOT swallow it as a successful empty
-    // catalog — that would hide provider/endpoint failures from the UI and
-    // Sentry. A non-"list" `object` with null `data` falls through to the
-    // descriptive malformed/error-envelope error, which surfaces `object`.
-    for field in ["data", "models"] {
-        let body = serde_json::json!({ "object": "error", field: serde_json::Value::Null });
-        let err = match parse_models_response(&body) {
-            Ok(models) => panic!(
-                "null `{field}` on an error envelope must fail, not return empty (got {models:?})"
-            ),
-            Err(err) => err,
-        };
-        let err = err.to_string();
-        assert!(
-            !err.contains("missing"),
-            "error-envelope null `{field}` must not say `missing`: {err}"
-        );
-        // Tighten on the surfaced `object` value, not the literal "error
-        // envelope" prose, so the assertion proves the provider error is
-        // actually carried through to triage.
-        assert!(
-            err.contains(r#""object" = "error""#),
-            "error-envelope null `{field}` must surface `\"object\" = \"error\"`: {err}"
-        );
-    }
-}
-
-#[test]
-fn openai_codex_model_hints_are_merged_without_duplicates() {
-    let mut models = vec![ModelInfo {
-        id: "gpt-5.4".to_string(),
-        owned_by: Some("openai-codex".to_string()),
-        context_window: Some(128000),
-        display_name: None,
-        input_per_1m: None,
-        output_per_1m: None,
-    }];
-
-    merge_openai_codex_model_hints(&mut models);
-
-    let ids = models
-        .iter()
-        .map(|model| model.id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        ids,
-        vec!["gpt-5.4", "gpt-5.5", "gpt-5.3-codex-spark", "gpt-5.3-codex"]
-    );
+    let outcome = list_configured_models_from_config("generic-test", &config)
+        .await
+        .expect("custom CA client should list models");
+    assert_eq!(outcome.value["models"][0]["id"], "private-model");
 }
 
 // ── synthesize_local_runtime_entry (TAURI-RUST-28Z fallback) ────────────
@@ -278,25 +109,6 @@ fn synthesize_local_runtime_entry_returns_none_for_unknown_slug() {
     }
 }
 
-#[test]
-fn parse_models_response_handles_non_object_body() {
-    // Provider returned a bare array / string / number at the
-    // top level — not an object at all. Surface as a parse failure
-    // (not a panic).
-    for body in [
-        serde_json::json!([{"id": "m1"}]),
-        serde_json::json!("hello"),
-        serde_json::Value::Null,
-    ] {
-        let err = parse_models_response(&body)
-            .expect_err("non-object body must fail with a clear message");
-        assert!(
-            !err.to_string().is_empty(),
-            "non-object body error must be non-empty: {err}"
-        );
-    }
-}
-
 /// `is_backend_auth_failure` is the polarity guard that decides whether a
 /// 401/403 is the OpenHuman backend's expired session (silence + drive
 /// reauth) or a third-party BYO-key rejection (actionable, must reach
@@ -340,7 +152,7 @@ fn is_backend_auth_failure_only_matches_openhuman_backend_401_403() {
 /// `is_byo_provider_auth_failure_http` demotes a non-backend provider's
 /// 401/403 from Sentry when the body looks like a missing/invalid BYO API
 /// key (TAURI-RUST-DHM: a `kiro` custom provider with no key flooded Sentry
-/// with 5,636 identical events from one user via the memory-tree retry loop).
+/// with 5,636 identical events from one user via a background retry loop).
 /// The gate is provider-scoped (backend keeps its SessionExpired branch) and
 /// body-shape-anchored (a non-auth 401, e.g. quota / geo-block, still reports).
 #[test]
@@ -495,7 +307,9 @@ async fn api_error_monthly_quota_returns_message_via_demoted_branch() {
     );
     // The body must classify as quota-exhausted so the demote branch — not the
     // 500 status gate — handles it.
-    assert!(is_provider_quota_exhausted(body));
+    assert!(tinyinference_llm::failure::body_indicates_quota_exhausted(
+        body
+    ));
     assert!(should_report_provider_http_failure(
         StatusCode::INTERNAL_SERVER_ERROR
     ));

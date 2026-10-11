@@ -40,20 +40,15 @@ describe('Settings - Advanced Config', function () {
     await waitForText('Restart Tour', 15_000);
   });
 
-  it('toggles the surviving notification preference control', async function () {
+  it('redirects the retired notifications route to account settings', async function () {
     this.timeout(60_000);
     await navigateViaHash('/settings/notifications');
-    const toggle = await browser.$('[aria-label="Toggle Messages notifications"]');
-    await toggle.waitForExist({ timeout: 15_000 });
-    const initiallyEnabled = await toggle.getAttribute('aria-checked');
-    await toggle.click();
-
     await browser.waitUntil(
-      async () => {
-        return (await toggle.getAttribute('aria-checked')) !== initiallyEnabled;
-      },
-      { timeout: 15_000, interval: 250, timeoutMsg: 'notification preference did not toggle' }
+      async () => (await browser.execute(() => window.location.hash)) === '#/settings/account',
+      { timeout: 15_000, timeoutMsg: 'retired notifications route did not redirect to account' }
     );
+    await waitForText('Account', 15_000);
+    await waitForText('Preferences', 15_000);
   });
 
   it('persists composio trigger triage settings', async function () {
@@ -147,7 +142,9 @@ describe('Settings - Advanced Config', function () {
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     }, String(target));
-    await clickText('Save', 10_000);
+    const save = await browser.$('[data-testid="autonomy-max-actions-save"]');
+    await save.waitForClickable({ timeout: 10_000 });
+    await save.click();
     await waitForText('Saved.', 10_000);
 
     await browser.waitUntil(
@@ -207,19 +204,16 @@ describe('Settings - Advanced Config', function () {
   it('redirects retired agent chat debug links to the LLM settings surface', async function () {
     this.timeout(90_000);
     await navigateViaHash('/settings/agent-chat');
-    const providersTab = await browser.$('[data-testid="ai-tab-providers"]');
-    await providersTab.waitForExist({ timeout: 15_000 });
-    expect(await providersTab.isDisplayed()).toBe(true);
+    await waitForText('LLM Providers', 15_000);
   });
 
   it('mounts the remaining advanced settings routes', async function () {
     this.timeout(90_000);
     await navigateViaHash('/settings/local-model-debug');
-    const providersTab = await browser.$('[data-testid="ai-tab-providers"]');
-    await providersTab.waitForExist({ timeout: 15_000 });
+    await waitForText('LLM Providers', 15_000);
 
     await navigateViaHash('/settings/about');
-    await waitForText('Software updates', 15_000);
+    await waitForText('Check for updates', 15_000);
 
     await navigateViaHash('/settings/llm');
     await waitForText('AI', 20_000);

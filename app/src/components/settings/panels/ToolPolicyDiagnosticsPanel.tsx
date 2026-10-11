@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
 import { callCoreRpc } from '../../../services/coreRpcClient';
+import Card from '../../ui/Card';
+import { TileGrid } from '../../ui/TileGrid';
 import { SettingsStatusLine } from '../controls';
 import SettingsPanel from '../layout/SettingsPanel';
 
@@ -95,165 +97,126 @@ const ToolPolicyDiagnosticsPanel = () => {
     const recentRows =
       d.mcp_write_audit.recent_rows === null ? '—' : String(d.mcp_write_audit.recent_rows);
 
+    const T = 'devOptions.toolPolicyDiagnostics';
+    const stats: [string, number][] = [
+      [t(`${T}.inventory.totalTools`), d.total_tools],
+      [t(`${T}.inventory.enabledTools`), d.enabled_tools],
+      [t(`${T}.inventory.mcpStdioTools`), d.mcp_stdio_tools],
+      [t(`${T}.inventory.jsonRpcTools`), d.json_rpc_tools],
+    ];
+    const posture: [string, string, boolean][] = [
+      [t(`${T}.posture.autonomy`), d.posture.autonomy_level, true],
+      [t(`${T}.posture.workspaceOnly`), String(d.posture.workspace_only), false],
+      [t(`${T}.posture.maxActionsPerHour`), String(d.posture.max_actions_per_hour), true],
+      [
+        t(`${T}.posture.approvalMediumRisk`),
+        String(d.posture.require_approval_for_medium_risk),
+        false,
+      ],
+      [t(`${T}.posture.blockHighRisk`), String(d.posture.block_high_risk_commands), false],
+    ];
+
+    // Short status cards: an inventory stat strip, then the detail cards in a
+    // two-column grid, with the (possibly long) blocked-call list full width.
     return (
-      <div className="px-4 pt-3 pb-6 space-y-3">
-        <div className="px-4 py-3 rounded-xl border border-sage-300 dark:border-sage-500/40 bg-sage-50 dark:bg-sage-500/10">
-          <div className="text-sm font-semibold text-sage-900 dark:text-sage-200">
-            {t('devOptions.toolPolicyDiagnostics.posture.title')}
-          </div>
-          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
-            <dt className="text-sage-700 dark:text-sage-300">
-              {t('devOptions.toolPolicyDiagnostics.posture.autonomy')}
-            </dt>
-            <dd className="font-mono text-sage-900 dark:text-sage-200">
-              {d.posture.autonomy_level}
-            </dd>
-            <dt className="text-sage-700 dark:text-sage-300">
-              {t('devOptions.toolPolicyDiagnostics.posture.workspaceOnly')}
-            </dt>
-            <dd className="text-sage-900 dark:text-sage-200">{String(d.posture.workspace_only)}</dd>
-            <dt className="text-sage-700 dark:text-sage-300">
-              {t('devOptions.toolPolicyDiagnostics.posture.maxActionsPerHour')}
-            </dt>
-            <dd className="font-mono text-sage-900 dark:text-sage-200">
-              {d.posture.max_actions_per_hour}
-            </dd>
-            <dt className="text-sage-700 dark:text-sage-300">
-              {t('devOptions.toolPolicyDiagnostics.posture.approvalMediumRisk')}
-            </dt>
-            <dd className="text-sage-900 dark:text-sage-200">
-              {String(d.posture.require_approval_for_medium_risk)}
-            </dd>
-            <dt className="text-sage-700 dark:text-sage-300">
-              {t('devOptions.toolPolicyDiagnostics.posture.blockHighRisk')}
-            </dt>
-            <dd className="text-sage-900 dark:text-sage-200">
-              {String(d.posture.block_high_risk_commands)}
-            </dd>
+      <div className="space-y-4">
+        <Card title={t(`${T}.inventory.title`)} divided={false}>
+          <dl className="grid grid-cols-2 gap-3 p-4 lg:grid-cols-4">
+            {stats.map(([label, value]) => (
+              <div
+                key={label}
+                className="rounded-lg border border-line bg-surface-muted/40 px-3 py-2.5">
+                <dt className="text-xs text-content-muted">{label}</dt>
+                <dd className="mt-0.5 font-mono text-lg font-semibold text-content">{value}</dd>
+              </div>
+            ))}
           </dl>
-        </div>
+        </Card>
 
-        <div className="px-4 py-3 rounded-xl border border-sage-300 dark:border-sage-500/40 bg-surface dark:bg-sage-900/20">
-          <div className="text-sm font-semibold text-sage-900 dark:text-sage-200">
-            {t('devOptions.toolPolicyDiagnostics.inventory.title')}
-          </div>
-          <dl className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-            <div>
-              <dt className="text-sage-700 dark:text-sage-300">
-                {t('devOptions.toolPolicyDiagnostics.inventory.totalTools')}
-              </dt>
-              <dd className="font-mono text-sage-900 dark:text-sage-200">{d.total_tools}</dd>
-            </div>
-            <div>
-              <dt className="text-sage-700 dark:text-sage-300">
-                {t('devOptions.toolPolicyDiagnostics.inventory.enabledTools')}
-              </dt>
-              <dd className="font-mono text-sage-900 dark:text-sage-200">{d.enabled_tools}</dd>
-            </div>
-            <div>
-              <dt className="text-sage-700 dark:text-sage-300">
-                {t('devOptions.toolPolicyDiagnostics.inventory.mcpStdioTools')}
-              </dt>
-              <dd className="font-mono text-sage-900 dark:text-sage-200">{d.mcp_stdio_tools}</dd>
-            </div>
-            <div>
-              <dt className="text-sage-700 dark:text-sage-300">
-                {t('devOptions.toolPolicyDiagnostics.inventory.jsonRpcTools')}
-              </dt>
-              <dd className="font-mono text-sage-900 dark:text-sage-200">{d.json_rpc_tools}</dd>
-            </div>
-          </dl>
-        </div>
-
-        <div className="px-4 py-3 rounded-xl border border-sage-300 dark:border-sage-500/40 bg-surface dark:bg-sage-900/20">
-          <div className="text-sm font-semibold text-sage-900 dark:text-sage-200">
-            {t('devOptions.toolPolicyDiagnostics.mcpAllowlists.title')}
-          </div>
-          <div className="mt-1 text-xs text-sage-700 dark:text-sage-300">
-            {t('devOptions.toolPolicyDiagnostics.mcpAllowlists.summary')
-              .replace('{enabled}', String(d.mcp_allowlists.enabled))
-              .replace('{enabledCount}', String(d.mcp_allowlists.enabled_server_count))
-              .replace('{totalCount}', String(d.mcp_allowlists.server_count))}
-          </div>
-          {d.mcp_allowlists.servers.length > 0 && (
-            <ul className="mt-2 text-xs space-y-1">
-              {d.mcp_allowlists.servers.slice(0, 10).map(s => (
-                <li key={s.name} className="flex items-center justify-between gap-3">
-                  <span
-                    className="font-mono text-sage-900 dark:text-sage-200 truncate"
-                    title={s.name}>
-                    {s.name || t('devOptions.toolPolicyDiagnostics.mcpAllowlists.unnamed')}
-                  </span>
-                  <span className="text-sage-700 dark:text-sage-300 font-mono">
-                    {t('devOptions.toolPolicyDiagnostics.mcpAllowlists.allowDeny')
-                      .replace('{allowCount}', String(s.allowed_tools_count))
-                      .replace('{denyCount}', String(s.disallowed_tools_count))}
-                  </span>
-                </li>
+        <TileGrid columns={2}>
+          <Card title={t(`${T}.posture.title`)} className="h-full" divided={false}>
+            <dl className="divide-y divide-line-subtle pb-1 pt-2 text-xs">
+              {posture.map(([label, value, mono]) => (
+                <div key={label} className="flex items-center justify-between gap-3 px-4 py-2">
+                  <dt className="text-content-muted">{label}</dt>
+                  <dd className={mono ? 'font-mono text-content' : 'text-content'}>{value}</dd>
+                </div>
               ))}
-            </ul>
-          )}
-        </div>
+            </dl>
+          </Card>
 
-        <div className="px-4 py-3 rounded-xl border border-sage-300 dark:border-sage-500/40 bg-surface dark:bg-sage-900/20">
-          <div className="text-sm font-semibold text-sage-900 dark:text-sage-200">
-            {t('devOptions.toolPolicyDiagnostics.mcpWriteAudit.title')}
-          </div>
-          <div className="mt-1 text-xs text-sage-700 dark:text-sage-300">
-            {t('devOptions.toolPolicyDiagnostics.mcpWriteAudit.summary')
-              .replace('{enabled}', String(d.mcp_write_audit.enabled))
-              .replace('{recentRows}', recentRows)}
-          </div>
-          {d.mcp_write_audit.last_error && (
-            <div className="mt-2 text-xs text-coral-700 dark:text-coral-200 font-mono wrap-break-word">
-              {d.mcp_write_audit.last_error}
+          <Card title={t(`${T}.mcpAllowlists.title`)} className="h-full" divided={false}>
+            <div className="space-y-2 p-4 text-xs">
+              <p className="text-content-muted">
+                {t(`${T}.mcpAllowlists.summary`)
+                  .replace('{enabled}', String(d.mcp_allowlists.enabled))
+                  .replace('{enabledCount}', String(d.mcp_allowlists.enabled_server_count))
+                  .replace('{totalCount}', String(d.mcp_allowlists.server_count))}
+              </p>
+              {d.mcp_allowlists.servers.length > 0 && (
+                <ul className="space-y-1">
+                  {d.mcp_allowlists.servers.slice(0, 10).map(s => (
+                    <li key={s.name} className="flex items-center justify-between gap-3">
+                      <span className="truncate font-mono text-content" title={s.name}>
+                        {s.name || t(`${T}.mcpAllowlists.unnamed`)}
+                      </span>
+                      <span className="font-mono text-content-muted">
+                        {t(`${T}.mcpAllowlists.allowDeny`)
+                          .replace('{allowCount}', String(s.allowed_tools_count))
+                          .replace('{denyCount}', String(s.disallowed_tools_count))}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
-          )}
-        </div>
+          </Card>
 
-        <div className="px-4 py-3 rounded-xl border border-sage-300 dark:border-sage-500/40 bg-surface dark:bg-sage-900/20">
-          <div className="text-sm font-semibold text-sage-900 dark:text-sage-200">
-            {t('devOptions.toolPolicyDiagnostics.recentBlocked.title')}
-          </div>
+          <Card title={t(`${T}.mcpWriteAudit.title`)} className="h-full" divided={false}>
+            <div className="space-y-2 p-4 text-xs">
+              <p className="text-content-muted">
+                {t(`${T}.mcpWriteAudit.summary`)
+                  .replace('{enabled}', String(d.mcp_write_audit.enabled))
+                  .replace('{recentRows}', recentRows)}
+              </p>
+              {d.mcp_write_audit.last_error && (
+                <p className="wrap-break-word font-mono text-coral-700 dark:text-coral-200">
+                  {d.mcp_write_audit.last_error}
+                </p>
+              )}
+            </div>
+          </Card>
+
+          <Card title={t(`${T}.redactedSurfaces.title`)} className="h-full" divided={false}>
+            <p className="p-4 text-xs text-content-muted">
+              {t(`${T}.redactedSurfaces.summary`)
+                .replace('{writeCount}', String(d.possible_write_surfaces.length))
+                .replace('{policyCount}', String(d.policy_surfaces.length))}
+            </p>
+          </Card>
+        </TileGrid>
+
+        <Card title={t(`${T}.recentBlocked.title`)}>
           {d.recent_denials.length === 0 ? (
-            <div className="mt-1 text-xs text-sage-700 dark:text-sage-300">
-              {t('devOptions.toolPolicyDiagnostics.recentBlocked.empty')}
-            </div>
+            <p className="p-4 text-xs text-content-muted">{t(`${T}.recentBlocked.empty`)}</p>
           ) : (
-            <ul className="mt-2 text-xs space-y-1">
-              {d.recent_denials.slice(0, 10).map(entry => (
-                <li
-                  key={`${entry.timestamp_ms}:${entry.tool_name}`}
-                  className="flex flex-col gap-0.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <span
-                      className="font-mono text-sage-900 dark:text-sage-200 truncate"
-                      title={entry.tool_name}>
-                      {entry.tool_name}
-                    </span>
-                    <span className="text-sage-700 dark:text-sage-300 font-mono">
-                      {entry.policy}:{entry.action}
-                    </span>
-                  </div>
-                  <div className="text-sage-700 dark:text-sage-300 wrap-break-word">
-                    {entry.reason}
-                  </div>
-                </li>
-              ))}
-            </ul>
+            d.recent_denials.slice(0, 10).map(entry => (
+              <div
+                key={`${entry.timestamp_ms}:${entry.tool_name}`}
+                className="flex flex-col gap-0.5 px-4 py-2.5 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="truncate font-mono text-content" title={entry.tool_name}>
+                    {entry.tool_name}
+                  </span>
+                  <span className="font-mono text-content-muted">
+                    {entry.policy}:{entry.action}
+                  </span>
+                </div>
+                <p className="wrap-break-word text-content-muted">{entry.reason}</p>
+              </div>
+            ))
           )}
-        </div>
-
-        <div className="px-4 py-3 rounded-xl border border-sage-300 dark:border-sage-500/40 bg-surface dark:bg-sage-900/20">
-          <div className="text-sm font-semibold text-sage-900 dark:text-sage-200">
-            {t('devOptions.toolPolicyDiagnostics.redactedSurfaces.title')}
-          </div>
-          <div className="mt-1 text-xs text-sage-700 dark:text-sage-300">
-            {t('devOptions.toolPolicyDiagnostics.redactedSurfaces.summary')
-              .replace('{writeCount}', String(d.possible_write_surfaces.length))
-              .replace('{policyCount}', String(d.policy_surfaces.length))}
-          </div>
-        </div>
+        </Card>
       </div>
     );
   }, [status, t]);

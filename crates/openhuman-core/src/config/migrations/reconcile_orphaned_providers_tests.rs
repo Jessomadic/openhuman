@@ -130,18 +130,15 @@ fn scrubs_every_orphaned_workload() {
         &mut config.coding_provider,
         &mut config.memory_provider,
         &mut config.embeddings_provider,
-        &mut config.heartbeat_provider,
-        &mut config.learning_provider,
-        &mut config.subconscious_provider,
     ] {
         *field = Some("ghost:model-x".to_string());
     }
 
     let stats = run(&mut config).expect("migration should succeed");
 
-    assert_eq!(stats.workload_fields_scrubbed, 9);
+    assert_eq!(stats.workload_fields_scrubbed, 6);
     assert_eq!(config.chat_provider, None);
-    assert_eq!(config.subconscious_provider, None);
+    assert_eq!(config.embeddings_provider, None);
 }
 
 #[test]

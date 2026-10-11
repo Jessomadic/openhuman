@@ -4,8 +4,7 @@
 //! crate's `graph::goals` KV store
 //! (`<workspace>/tinyagents_store/kv/graph.goals/<hex(thread_id)>.json`), not
 //! the legacy `<workspace>/thread_goals/` file-JSON tree. This module is a thin
-//! adapter for the harness turn loop, heartbeat continuation runtime, agent
-//! tools, and post-turn accounting. It forwards each operation to the crate
+//! adapter for the harness turn loop, agent tools, and post-turn accounting. It forwards each operation to the crate
 //! store, converting the crate
 //! [`CrateThreadGoal`](tinyagents_graph::goals::types::ThreadGoal) back to the
 //! local [`ThreadGoal`] and its `TinyAgentsError` to a `String`.
@@ -18,11 +17,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::ThreadGoal;
-use crate::agent::session_import::ops::open_session_stores;
 use tinyagents_graph::goals::store as crate_store;
 use tinyagents_harness::store::Store;
+use tinyagents_session::transcript::import::ops::open_session_stores;
 
+/// The store thread goals live in: the current agent's host session store
+/// when one is installed, else the workspace's `tinyagents_store/kv`.
 pub(crate) fn goals_store(workspace_dir: &Path) -> Arc<dyn Store> {
+    if let Some(stores) = crate::agent::session_store::current() {
+        return stores.kv;
+    }
     Arc::new(open_session_stores(workspace_dir).kv)
 }
 
@@ -73,15 +77,6 @@ pub async fn get(workspace_dir: &Path, thread_id: &str) -> Result<Option<ThreadG
     Ok(goal)
 }
 
-/// Every stored thread goal (used by the heartbeat continuation sweep).
-pub async fn list_all(workspace_dir: &Path) -> Result<Vec<ThreadGoal>, String> {
-    let store = goals_store(workspace_dir);
-    let goals = crate_store::list_all(&store)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(goals)
-}
-
 /// Delete the thread's goal. Returns whether a goal was present.
 pub async fn clear(workspace_dir: &Path, thread_id: &str) -> Result<bool, String> {
     let store = goals_store(workspace_dir);
@@ -117,28 +112,6 @@ pub async fn resume(workspace_dir: &Path, thread_id: &str) -> Result<ThreadGoal,
     let goal = crate_store::resume(&store, thread_id)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(goal)
-}
-
-/// Set `continuation_suppressed` only when the thread's current goal still
-/// matches `expected_goal_id`, is active, and isn't already in the requested
-/// state (compare-and-set). Returns the goal after the (possibly skipped)
-/// write, or `None` when the thread has no goal.
-pub async fn set_continuation_suppressed_if(
-    workspace_dir: &Path,
-    thread_id: &str,
-    expected_goal_id: &str,
-    suppressed: bool,
-) -> Result<Option<ThreadGoal>, String> {
-    let store = goals_store(workspace_dir);
-    let goal = crate_store::set_continuation_suppressed_if(
-        &store,
-        thread_id,
-        expected_goal_id,
-        suppressed,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
     Ok(goal)
 }
 

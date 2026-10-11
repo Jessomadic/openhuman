@@ -20,8 +20,7 @@ pub fn is_custom_openai_upstream_bad_request_http_400(
     if provider != "custom_openai" || status != reqwest::StatusCode::BAD_REQUEST {
         return false;
     }
-    let lower = body.to_ascii_lowercase();
-    lower.contains("bad request to upstream provider") && lower.contains("upstream_error")
+    tinyinference_llm::failure::body_indicates_custom_openai_upstream_bad_request(body)
 }
 
 pub fn log_custom_openai_upstream_bad_request_http_400(
@@ -53,9 +52,7 @@ pub fn is_provider_access_policy_denied_http_403(status: reqwest::StatusCode, bo
     if status != reqwest::StatusCode::FORBIDDEN {
         return false;
     }
-    let lower = body.to_ascii_lowercase();
-    lower.contains("access_terminated_error")
-        || lower.contains("currently only available for coding agents")
+    tinyinference_llm::failure::body_indicates_provider_access_policy_denied(body)
 }
 
 pub fn log_provider_access_policy_denied_http_403(
@@ -145,14 +142,7 @@ pub fn is_provider_moderation_rejection_http_400(status: reqwest::StatusCode, bo
     if status != reqwest::StatusCode::BAD_REQUEST {
         return false;
     }
-    let lower = body.to_ascii_lowercase();
-    lower.contains("message rejected")
-        || lower.contains("ombudsman")
-        // The moderation proxy returns its confidence as a `"score"` JSON field
-        // alongside the verdict; anchor on the quoted key shape (not a bare
-        // `score`) so an unrelated 400 mentioning the word in prose isn't
-        // swallowed.
-        || lower.contains("\"score\"")
+    tinyinference_llm::failure::body_indicates_moderation_rejection(body)
 }
 
 pub fn log_provider_moderation_rejection(

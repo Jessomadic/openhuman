@@ -32,7 +32,7 @@ Options:
   --token <token>           RPC bearer (default: OPENHUMAN_CORE_TOKEN or <workspace>/core.token)
   --workspace <path>        Workspace containing .openhuman/subagent_sessions.json
   --task-key <key>          Durable task key (default: audit-subagent-rpc-<timestamp>)
-  --agent-id <id>           Subagent id to request (default: researcher)
+  --agent-id <id>           Subagent id to request (default: agent_memory)
   --model <model>           Optional model_override for openhuman.agent_chat
   --provider-mode <mode>    Isolated provider config: openhuman-backend or direct-openai (default: openhuman-backend)
   --rpc-timeout-ms <n>      Parent agent_chat timeout (default: 600000)
@@ -60,7 +60,7 @@ function parseArgs(argv) {
     token: process.env.OPENHUMAN_CORE_TOKEN || "",
     workspace: process.env.OPENHUMAN_WORKSPACE || "",
     taskKey: `audit-subagent-rpc-${Date.now().toString(36)}`,
-    agentId: "researcher",
+    agentId: "agent_memory",
     model: "",
     providerMode: "openhuman-backend",
     rpcTimeoutMs: 600_000,
@@ -489,8 +489,8 @@ Do not call wait_subagent.`;
 function parallelPrompt(opts) {
   return `Harness parallel subagent audit.
 Call spawn_parallel_agents exactly once with these two tasks:
-1. agent_id "researcher", ownership "website research", prompt "Research https://example.com and return a concise factual note with the page title or domain purpose. Include one short evidence phrase. Do not browse unrelated sites."
-2. agent_id "code_executor", ownership "code draft", prompt "Write a small Python function normalize_title(title: str) -> str that trims whitespace, collapses internal whitespace, and title-cases the result. Include one tiny assert-style example. Return only the code block; do not modify files."
+1. agent_id "agent_memory", ownership "memory recall", prompt "Recall what memory holds about title normalization or text cleanup helpers and return a concise factual note. Include one short evidence phrase, or say plainly that nothing relevant is stored."
+2. agent_id "task_manager_agent", ownership "task-source inventory", prompt "List the task sources and artifacts currently configured and return a concise factual note, or say plainly that none are configured. Read only; do not add, update, or remove anything."
 After spawn_parallel_agents returns, reply with one concise sentence summarizing that both parallel workers completed.
 Audit marker: ${opts.taskKey}.`;
 }
@@ -554,7 +554,6 @@ agent_tier = "chat"
 omit_identity = true
 omit_memory_context = true
 omit_safety_preamble = true
-omit_profile = true
 omit_memory_md = true
 
 [system_prompt]
@@ -570,7 +569,7 @@ After the requested tool call or calls return, provide one concise sentence. Do 
 named = ["spawn_subagent", "spawn_parallel_agents", "wait_subagent"]
 
 [subagents]
-allowlist = ["async_audit_worker", "researcher", "code_executor"]
+allowlist = ["async_audit_worker", "agent_memory", "task_manager_agent"]
 `,
   );
   await writeFile(
@@ -586,7 +585,6 @@ agent_tier = "worker"
 omit_identity = true
 omit_memory_context = true
 omit_safety_preamble = true
-omit_profile = true
 omit_memory_md = true
 
 [system_prompt]

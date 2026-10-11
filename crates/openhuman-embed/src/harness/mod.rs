@@ -131,17 +131,14 @@ impl<'a> HarnessCore<'a> {
         Self { core }
     }
 
+    /// Read and update the runtime configuration.
     pub fn config(&self) -> crate::Config<'_> {
         self.core.config()
     }
 
+    /// Manage the credential shared by agents on this runtime.
     pub fn auth(&self) -> crate::Auth<'_> {
         self.core.auth()
-    }
-
-    #[cfg(feature = "medulla")]
-    pub fn medulla(&self) -> crate::Medulla<'_> {
-        self.core.medulla()
     }
 }
 

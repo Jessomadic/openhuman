@@ -8,6 +8,12 @@ import {
 import { ComposerTriggerPopover } from '@/components/assistant-ui/composer-trigger-popover';
 import { DirectiveText } from '@/components/assistant-ui/directive-text';
 import { DotMatrix } from '@/components/assistant-ui/dot-matrix';
+import { ToolFallback } from '@/components/assistant-ui/elements/tool-fallback';
+import {
+  ToolGroupContent,
+  ToolGroupRoot,
+  ToolGroupTrigger,
+} from '@/components/assistant-ui/elements/tool-group';
 import { cn } from '@/components/assistant-ui/lib/utils';
 import { MarkdownText } from '@/components/assistant-ui/markdown-text';
 import { MessageTiming } from '@/components/assistant-ui/message-timing';
@@ -17,19 +23,8 @@ import {
   QuoteBlock,
   SelectionToolbar,
 } from '@/components/assistant-ui/quote';
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningRoot,
-  ReasoningText,
-  ReasoningTrigger,
-} from '@/components/assistant-ui/reasoning';
-import { ToolFallback } from '@/components/assistant-ui/tool-fallback';
-import {
-  ToolGroupContent,
-  ToolGroupRoot,
-  ToolGroupTrigger,
-} from '@/components/assistant-ui/tool-group';
+import { Reasoning } from '@/components/assistant-ui/reasoning';
+import { OpenHumanReasoningGroup } from '@/components/assistant-ui/reasoning-group';
 import { TooltipIconButton } from '@/components/assistant-ui/tooltip-icon-button';
 import { Button } from '@/components/assistant-ui/ui/button';
 import { Skeleton } from '@/components/assistant-ui/ui/skeleton';
@@ -634,14 +629,11 @@ const AssistantMessage: FC = () => {
                   </ToolGroupRoot>
                 );
               case 'group-reasoning': {
-                const running = part.status.type === 'running';
                 return (
-                  <ReasoningRoot defaultOpen={running}>
-                    <ReasoningTrigger active={running} />
-                    <ReasoningContent aria-busy={running}>
-                      <ReasoningText>{children}</ReasoningText>
-                    </ReasoningContent>
-                  </ReasoningRoot>
+                  <OpenHumanReasoningGroup
+                    indices={part.indices}
+                    running={part.status.type === 'running'}
+                  />
                 );
               }
               case 'text':

@@ -10,8 +10,6 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use serde_json::{Map, Value};
 
-use tinymemory_api::capabilities::{Capabilities, Capability};
-
 use crate::core::ControllerSchema;
 
 /// A pinned, boxed future returned by a controller handler.
@@ -48,170 +46,7 @@ impl RegisteredController {
     }
 }
 
-/// Coarse-grained domain *family* a controller belongs to, used to gate its live
-/// surface by the ambient [`crate::core::runtime::DomainSet`] (#4796).
-///
-/// Every registered controller is tagged with exactly one group at its single
-/// registration site ([`build_registered_controllers`] /
-/// [`build_internal_only_controllers`]); the live surface (schema dump,
-/// dispatch, agent tools, stores, subscribers) filters by whether the active
-/// [`crate::core::runtime::context::CoreContext`]'s `DomainSet` allows that
-/// group. `full()` allows every group ⇒ registration is byte-identical to
-/// pre-#4796. When no context is active (unit tests before boot) filtering is
-/// disabled (treated as full).
-///
-/// The harness families (`Agent`/`Memory`/`Threads`/`Config`/`Security`) are on
-/// under [`crate::core::runtime::DomainSet::harness`]; the gate families
-/// (`Flows`/`Skills`/`Mcp`/`Channels`/`Web3`/`Voice`/`Media`) are the
-/// per-feature axes the child issues (#4797–#4804) additionally narrow at
-/// compile time. `Platform` is the catch-all for everything not in a named
-/// family — always on in `full()`, off in `harness()`/`none()`.
-///
-/// **Groups track `crates/openhuman-core/src/` family directories 1:1.** Before the domain
-/// reorg (#5328) they could not: a capability lived across up to 13 sibling
-/// top-level dirs, so half the controller surface was tagged `Platform` for want
-/// of a family to name. That made two things wrong which are now fixed:
-///
-/// - `harness()` claimed "agent + memory + threads + config + security" but
-///   silently dropped `agent::{harness_init, artifacts, learning}`,
-///   `security::{credentials, devices}`, `config::{workspace, migration_helpers}`,
-///   `memory::people` and `skills::webhooks`, all of which sat in `Platform`.
-///   An agent harness that does not register `harness_init` is a latent bug.
-/// - `embedded()` had to set `platform: true` purely to reach credentials and
-///   config, which dragged in the desktop and hosted-backend surfaces it has no
-///   use for. Those are now `Desktop` and `Hosted` and stay off.
-///
-/// `Platform` is now what its name says: the kernel surfaces with no family of
-/// their own (`platform/`, `tools/`, `http_host/`, `test_support/`).
-///
-/// When adding a family directory, add the matching variant here, a field on
-/// [`crate::core::runtime::DomainSet`], an arm in `allows()`, and an entry in
-/// each preset — the compiler enforces all four.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DomainGroup {
-    // Harness families — on under `DomainSet::harness()`.
-    Agent,
-    Memory,
-    Threads,
-    Config,
-    Security,
-    // Gate families — off under `harness()`; per-gate Cargo features (#4797–#4804)
-    // narrow these further at compile time.
-    Flows,
-    Skills,
-    Mcp,
-    Channels,
-    Web3,
-    Voice,
-    Media,
-    /// Medulla integration: the cloud client (`medulla`), the folded session
-    /// runtime (`medulla_session`), the chat store (`medulla::chat`), and
-    /// authored harness workflows (`medulla_workflows`).
-    ///
-    /// One coarse family rather than four, because these are never
-    /// independently useful — a host that wants `medulla_session` always wants
-    /// `medulla` (it folds that domain's envelopes). Splitting them would add
-    /// drift surface for no reachable configuration.
-    Medulla,
-    // Families carved out of the `Platform` catch-all once the domain reorg
-    // (#5328) gave each one a directory to be named after. Before that, half the
-    // controller surface was tagged `Platform` purely because there was no
-    // family to point at — which made `DomainSet::embedded()` set
-    // `platform: true` just to reach credentials/config/cron, dragging the
-    // desktop and hosted-backend surfaces along with it.
-    /// Model inference: providers, routing, local engines, embeddings, and the
-    /// token-compression surface (`inference/`).
-    Inference,
-    /// External connectors reached on the user's behalf — Composio, calendar,
-    /// file storage, task sources (`integrations/`).
-    Integrations,
-    /// Background initiative: scheduled jobs and the subconscious tick loop
-    /// (`cron/`, `subconscious/`). Pairs with `ServiceSet::{cron, heartbeat}`.
-    Automation,
-    /// Code-execution substrate: the managed Node/Python runtimes, the worker
-    /// pool, and the sandbox/CWD-jail confinement (`runtime/`, `sandbox/`).
-    Runtimes,
-    /// Desktop-shell-facing surfaces a headless or embedded host has no use for
-    /// (`desktop/`).
-    Desktop,
-    /// Clients of the hosted TinyHumans backend — billing, team, referral, and
-    /// announcements. Not built into the core: `openhuman-tinyhumans::hosted`
-    /// registers them through [`register_controller_extension`], and this
-    /// group is what the ambient `DomainSet` gates them with.
-    Hosted,
-    /// Loadable native modules: the module host, its registry, and the `modules`
-    /// RPC surface (`modules/`).
-    Modules,
-    // Everything not in a named family — always on in `full()`, off otherwise.
-    Platform,
-}
-
-impl DomainGroup {
-    /// Number of variants. Kept in sync by `domain_group_all_lists_every_variant`.
-    pub const COUNT: usize = 21;
-
-    /// Every variant, for exhaustive iteration in drift guards.
-    ///
-    /// Hand-maintained, but not hand-*trusted*: [`DomainGroup::index`] below is
-    /// an exhaustive `match`, so adding a variant is a compile error until it is
-    /// given an index, and `domain_group_all_lists_every_variant` then fails
-    /// until it appears here and [`COUNT`](Self::COUNT) is bumped. That chain is
-    /// what makes the drift guards over `tool_group`, `StoreInitPlan` and
-    /// `DomainSubscriberPlan` trustworthy — those three consume `DomainGroup`
-    /// without the compiler checking coverage.
-    pub const ALL: &'static [DomainGroup] = &[
-        DomainGroup::Agent,
-        DomainGroup::Memory,
-        DomainGroup::Threads,
-        DomainGroup::Config,
-        DomainGroup::Security,
-        DomainGroup::Flows,
-        DomainGroup::Skills,
-        DomainGroup::Mcp,
-        DomainGroup::Channels,
-        DomainGroup::Web3,
-        DomainGroup::Voice,
-        DomainGroup::Media,
-        DomainGroup::Medulla,
-        DomainGroup::Inference,
-        DomainGroup::Integrations,
-        DomainGroup::Automation,
-        DomainGroup::Runtimes,
-        DomainGroup::Desktop,
-        DomainGroup::Hosted,
-        DomainGroup::Modules,
-        DomainGroup::Platform,
-    ];
-
-    /// Dense index of this variant. Exhaustive by construction: the compiler
-    /// rejects a newly added variant here, which is the first link in the chain
-    /// described on [`ALL`](Self::ALL).
-    pub const fn index(self) -> usize {
-        match self {
-            DomainGroup::Agent => 0,
-            DomainGroup::Memory => 1,
-            DomainGroup::Threads => 2,
-            DomainGroup::Config => 3,
-            DomainGroup::Security => 4,
-            DomainGroup::Flows => 5,
-            DomainGroup::Skills => 6,
-            DomainGroup::Mcp => 7,
-            DomainGroup::Channels => 8,
-            DomainGroup::Web3 => 9,
-            DomainGroup::Voice => 10,
-            DomainGroup::Media => 11,
-            DomainGroup::Medulla => 12,
-            DomainGroup::Inference => 13,
-            DomainGroup::Integrations => 14,
-            DomainGroup::Automation => 15,
-            DomainGroup::Runtimes => 16,
-            DomainGroup::Desktop => 17,
-            DomainGroup::Hosted => 18,
-            DomainGroup::Modules => 19,
-            DomainGroup::Platform => 20,
-        }
-    }
-}
+pub use super::domain_group::DomainGroup;
 
 /// A [`RegisteredController`] tagged with the [`DomainGroup`] it belongs to.
 ///
@@ -222,50 +57,18 @@ impl DomainGroup {
 #[derive(Clone)]
 struct GroupedController {
     group: DomainGroup,
-    /// The memory-driver capability family this controller's surface needs, if
-    /// any (M5.2, `docs/specs/kernel.md` §3.3).
-    ///
-    /// `None` — the overwhelming majority — means "not gated on memory
-    /// capabilities at all", either because the controller belongs to another
-    /// domain entirely, or because it is host surface that survives any driver
-    /// (`people`, `memory.list_files`, `memory.provider_status`), or because
-    /// its family is MANDATORY and so a gate could never fire.
-    ///
-    /// `Some(c)` means the surface is ABSENT when the bound driver does not
-    /// advertise `c`: unknown-method over `/rpc`, omitted from `/schema`.
-    /// Absence, not a stub that errors — a registered-but-failing method
-    /// teaches a model that the capability exists and makes it retry. Same
-    /// reasoning as the `flows` compile-time gate (see CLAUDE.md) and as
-    /// `tinymemory_api::capabilities`' module docs.
-    capability: Option<Capability>,
     controller: RegisteredController,
 }
 
-/// Append `items` to `dst`, tagging each with `group` and no capability gate.
+/// Append `items` to `dst`, tagging each with `group`.
 /// This is the single seam that attaches a [`DomainGroup`] to every domain's
 /// controllers without the domain modules knowing about groups.
 fn push(dst: &mut Vec<GroupedController>, group: DomainGroup, items: Vec<RegisteredController>) {
-    push_cap(dst, group, None, items);
-}
-
-/// [`push`] plus a memory-capability gate.
-///
-/// Every [`DomainGroup::Memory`] site calls THIS one with an explicit
-/// `Option<Capability>` — including the explicit `None`s — so "which family
-/// does this surface need" is a decision recorded at the registration site
-/// rather than a default nobody chose. `memory_capability_map_is_exhaustive`
-/// in `all_tests.rs` fails if a Memory push site is added without one.
-fn push_cap(
-    dst: &mut Vec<GroupedController>,
-    group: DomainGroup,
-    capability: Option<Capability>,
-    items: Vec<RegisteredController>,
-) {
-    dst.extend(items.into_iter().map(|controller| GroupedController {
-        group,
-        capability,
-        controller,
-    }));
+    dst.extend(
+        items
+            .into_iter()
+            .map(|controller| GroupedController { group, controller }),
+    );
 }
 
 /// The [`DomainSet`](crate::core::runtime::DomainSet) of the ambient dispatch
@@ -280,40 +83,18 @@ fn active_domain_set() -> Option<crate::core::runtime::DomainSet> {
 /// (full, no filter) so pre-boot unit tests and non-context callers see every
 /// domain, exactly as before #4796.
 fn group_allowed(group: DomainGroup) -> bool {
-    active_domain_set().is_none_or(|s| s.allows(group))
+    active_domain_set().map_or(group != DomainGroup::Operator, |s| s.allows(group))
 }
 
-/// Whether the given memory capability family is advertised by the bound
-/// driver under the ambient context (M5.2).
-///
-/// **Defaults OPEN**, exactly like [`group_allowed`]: `None` is always allowed,
-/// and with no ambient context / no bound driver
-/// `CoreContext::current_memory_capabilities` returns the full set
-/// (`memory::binding::unbound_default_capabilities`). Roughly 4000 unit tests
-/// run pre-boot with no bound driver; a deny-by-default here would turn every
-/// memory test red at once. Denying is only ever correct AFTER a driver has
-/// actually answered `capabilities()`.
-/// (`pub(crate)` so the agent-tool post-filter in
-/// [`crate::tools::ops::all_tools_with_runtime`] gates on the exact
-/// same predicate the RPC registry does — one definition, two surfaces.)
-pub(crate) fn capability_allowed(capability: Option<Capability>) -> bool {
-    match capability {
-        None => true,
-        Some(_) => capability_allowed_in(
-            crate::core::runtime::context::CoreContext::current_memory_capabilities(),
-            capability,
-        ),
-    }
+/// Whether `g` is live in the ambient scope: its family is enabled and, for a
+/// SaaS user, the method is on the user surface (`profiles::surface`).
+fn visible(g: &GroupedController) -> bool {
+    group_allowed(g.group) && on_surface(g)
 }
 
-/// [`capability_allowed`] against an already-resolved set.
-///
-/// The collect-all paths hoist the lookup out of their filter closure:
-/// resolving the set walks `CoreContext -> memory_binding -> RwLock read ->
-/// HashMap<PathBuf, _>`, materially heavier than `group_allowed`'s task-local
-/// read, and would otherwise run once per controller across the whole registry.
-fn capability_allowed_in(caps: Capabilities, capability: Option<Capability>) -> bool {
-    capability.is_none_or(|c| caps.contains(c))
+fn on_surface(g: &GroupedController) -> bool {
+    let operator = g.group == DomainGroup::Operator;
+    crate::profiles::surface::method_visible(&g.controller.rpc_method_name(), operator)
 }
 
 /// The global static registry of all controllers, initialized once on first access.
@@ -422,7 +203,6 @@ pub fn register_controller_extension(ext: ControllerExtension) -> Result<(), Str
     for controller in ext.controllers {
         merged.push(GroupedController {
             group: ext.group,
-            capability: None,
             controller,
         });
     }
@@ -604,12 +384,6 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         DomainGroup::Agent,
         crate::agent::registry::all_agent_registry_registered_controllers(),
     );
-    // Local procedural operating experience for agent self-learning
-    push(
-        &mut controllers,
-        DomainGroup::Agent,
-        crate::agent::experience::all_agent_experience_registered_controllers(),
-    );
     // System and process health monitoring
     push(
         &mut controllers,
@@ -628,12 +402,6 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         &mut controllers,
         DomainGroup::Platform,
         crate::core::subsystem::all_subsystems_registered_controllers(),
-    );
-    // One-time first-run initialization (Python/spaCy/Node provisioning)
-    push(
-        &mut controllers,
-        DomainGroup::Agent,
-        crate::agent::harness_init::all_harness_init_registered_controllers(),
     );
     // Diagnostic tools
     push(
@@ -677,20 +445,27 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         DomainGroup::Agent,
         crate::agent::plan_review::all_plan_review_registered_controllers(),
     );
+    // Per-thread Plan/Build run mode (agent.set_run_mode / agent.get_run_mode)
+    push(
+        &mut controllers,
+        DomainGroup::Agent,
+        crate::agent::tinyagents::run_mode::all_registered_controllers(),
+    );
     // Agent-generated artifact storage, retrieval, and lifecycle management
     push(
         &mut controllers,
         DomainGroup::Agent,
         crate::agent::artifacts::all_artifacts_registered_controllers(),
     );
-    // Ad-hoc static directory HTTP hosting for local file sharing / previews.
-    // Gated with the `http-server` feature (#5048): the domain is an axum server,
-    // so a slim build has no `http_host.*` controllers to register.
-    #[cfg(feature = "http-server")]
+    // Read-only command palette listing: built-ins merged with skills.list /
+    // flows.list (C5). Tagged `Agent` rather than a new `DomainGroup` variant
+    // — it is chat-harness surface, always on, and adding a variant for this
+    // single-RPC domain would touch every exhaustive `DomainGroup` match in
+    // this file.
     push(
         &mut controllers,
-        DomainGroup::Platform,
-        crate::http_host::all_http_host_registered_controllers(),
+        DomainGroup::Agent,
+        crate::commands::all_commands_registered_controllers(),
     );
     // Token usage and billing cost tracking
     push(
@@ -744,12 +519,6 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         DomainGroup::Platform,
         crate::platform::service::all_service_registered_controllers(),
     );
-    // Data migration utilities
-    push(
-        &mut controllers,
-        DomainGroup::Config,
-        crate::config::migration_helpers::all_migration_registered_controllers(),
-    );
     // Unified inference domain: text / vision / local runtime / cloud providers.
     // (Formerly split across inference, local AI, and providers modules.)
     push(
@@ -768,15 +537,6 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         DomainGroup::Inference,
         crate::inference::embedding_host::all_embeddings_registered_controllers(),
     );
-    // People resolution and interaction scoring
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        // Host-owned address book + interaction scoring, not a driver family:
-        // `people` has no `Capability` and survives every bound driver.
-        None,
-        crate::memory::people::all_people_registered_controllers(),
-    );
     // Sandbox execution backends (Docker, local jail, policy, cleanup)
     push(
         &mut controllers,
@@ -788,26 +548,6 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         &mut controllers,
         DomainGroup::Platform,
         crate::platform::socket::all_socket_registered_controllers(),
-    );
-    // Managed Node.js runtime bridge (tool listing + dispatch). Registration-site
-    // gate: with `runtime-node` off the `javascript.*` namespace is absent from
-    // `/schema` and unknown-method over `/rpc`, rather than registered+failing.
-    #[cfg(feature = "runtime-node")]
-    push(
-        &mut controllers,
-        DomainGroup::Runtimes,
-        crate::runtime::javascript::all_javascript_registered_controllers(),
-    );
-    // Medulla integration: readiness, durable sessions, and the connected worker
-    // roster against the Medulla orchestration backend. Registration-site gate
-    // like `flows` — with the `medulla` feature off these methods are absent
-    // (unknown-method), which is what lets a host hide the surface instead of
-    // rendering a failure.
-    #[cfg(feature = "medulla")]
-    push(
-        &mut controllers,
-        DomainGroup::Medulla,
-        crate::medulla::all_medulla_registered_controllers(),
     );
     // Discovered SKILL.md skills and their bundled resources
     push(
@@ -845,133 +585,14 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         DomainGroup::Platform,
         crate::tools::registry::all_tool_registry_registered_controllers(),
     );
-    // Document and knowledge graph storage. The single `memory` RPC namespace
-    // spans four driver capability families plus two host-only surfaces, so it
-    // registers as nine tagged pushes rather than one (M5.2). Order matches
-    // `memory::schemas::all_registered_controllers`, which
-    // `registered_controller_order_is_pinned_to_the_capability_partition_snapshot` pins.
-    push_cap(
+    // Memory v2 (`docs/specs/memory-v2.md`): engines, recall/fetch/learn/
+    // forget, conversations, document sources, context.md and v1 import.
+    // Always registered: with no usable engine the methods answer MEMORY_OFF
+    // (and the settings/import ones still work), so the UI can explain why.
+    push(
         &mut controllers,
         DomainGroup::Memory,
-        // Core + Recall are MANDATORY families — `Capabilities::validate`
-        // refuses to bind a driver missing them — so against a *driver's*
-        // advertised set this gate can never fire. It is tagged anyway,
-        // because one host decision answers below the driver:
-        // `CoreContext::memory_capabilities` returns the EMPTY set for a
-        // deliberate `driver = "null"`, which is how "the operator turned
-        // memory off" removes the mandatory surface too. `Core` alone stands
-        // for the pair — the two are always advertised together, and no
-        // partition here holds only recall methods.
-        Some(Capability::Core),
-        crate::memory::all_memory_core_recall_registered_controllers(),
-    );
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        Some(Capability::Documents),
-        crate::memory::all_memory_documents_registered_controllers(),
-    );
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        Some(Capability::Ingest),
-        crate::memory::all_memory_ingest_registered_controllers(),
-    );
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        // Plain workspace file I/O through the host, not a driver family.
-        None,
-        crate::memory::all_memory_files_registered_controllers(),
-    );
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        Some(Capability::Graph),
-        crate::memory::all_memory_kv_graph_registered_controllers(),
-    );
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        Some(Capability::Sources),
-        crate::memory::all_memory_sync_registered_controllers(),
-    );
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        // `learn_all` runs the TREE SUMMARIZER over namespaces, so it belongs
-        // to Tree, not Ingest — `Capability::Ingest` is `ingest_document` /
-        // `ingest_chat`, whose RPC surface is `memory.doc_ingest` above.
-        Some(Capability::Tree),
-        crate::memory::all_memory_learn_registered_controllers(),
-    );
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        // NEVER gated: `memory.provider_status` is the RPC that REPORTS the
-        // bound driver's capability set. Gating it on a capability would be
-        // self-referential and would hide the explanation for every other
-        // absence in this block.
-        None,
-        crate::memory::all_memory_provider_registered_controllers(),
-    );
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        Some(Capability::ToolMemory),
-        crate::memory::all_memory_tool_memory_registered_controllers(),
-    );
-    // Long-term goals list (editable list + turn-based enrichment agent)
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        Some(Capability::Goals),
-        crate::memory::goals::all_memory_goals_registered_controllers(),
-    );
-    // Memory tree ingestion layer (#707 — canonicalised chunks with provenance)
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        // DELIBERATE, not inherited: `memory/schema/registry.rs`'s ~25 methods
-        // span tree, entities, graph and maintenance, and are tagged as ONE
-        // capability rather than split. Tree and entities are treated here as
-        // parts of a single encapsulated memory surface, not independently
-        // degradable families. The visible consequence: a driver advertising
-        // `entities` but not `tree` still loses `memory_tree.top_entities`.
-        // Split it only when a real driver needs that distinction.
-        Some(Capability::Tree),
-        crate::memory::tree::all_memory_tree_registered_controllers(),
-    );
-    // Memory tree retrieval layer (#710 — LLM-callable read tools over the tree)
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        Some(Capability::Tree),
-        crate::memory::tree::all_retrieval_registered_controllers(),
-    );
-    // Slack → memory-tree ingestion engine (per-message ingest, no bucketing)
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        // Grouped with the other three sync namespaces rather than `Ingest`: a
-        // driver that cannot accept synced source items should lose the whole
-        // source-sync surface coherently, not half of it.
-        Some(Capability::Sources),
-        crate::integrations::composio::providers::slack::all_slack_memory_registered_controllers(),
-    );
-    // Per-connection memory sync status, controls, and progress (#1136)
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        Some(Capability::Sources),
-        crate::memory::sync::sync_status::all_memory_sync_status_registered_controllers(),
-    );
-    // Memory sources — user-configured data connectors registry
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        Some(Capability::Sources),
-        crate::memory::sources::all_memory_sources_registered_controllers(),
+        crate::memory::all_memory_registered_controllers(),
     );
     // The hosted TinyHumans proxies (`billing`, `team`, `referral`,
     // `announcements`, `DomainGroup::Hosted`) are NOT built in: they live in
@@ -1023,19 +644,6 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         &mut controllers,
         DomainGroup::Platform,
         crate::platform::update::all_update_registered_controllers(),
-    );
-    // Hierarchical knowledge summarization
-    push_cap(
-        &mut controllers,
-        DomainGroup::Memory,
-        Some(Capability::Tree),
-        crate::memory::tree::all_tree_summarizer_registered_controllers(),
-    );
-    // Self-learning and user context enrichment
-    push(
-        &mut controllers,
-        DomainGroup::Agent,
-        crate::agent::learning::all_learning_registered_controllers(),
     );
     // Conversation thread and message management
     push(
@@ -1107,6 +715,12 @@ fn build_registered_controllers() -> Vec<GroupedController> {
         DomainGroup::Agent,
         crate::agent::orchestration::all_subagent_control_registered_controllers(),
     );
+    // SaaS operator plane: provision and inspect user profiles.
+    push(
+        &mut controllers,
+        DomainGroup::Operator,
+        crate::profiles::all_profiles_registered_controllers(),
+    );
     controllers
 }
 
@@ -1116,6 +730,12 @@ fn build_registered_controllers() -> Vec<GroupedController> {
 /// (e.g. the desktop shell) that should not appear in agent tool listings.
 fn build_internal_only_controllers() -> Vec<GroupedController> {
     let mut controllers = Vec::new();
+    #[cfg(feature = "modules")]
+    push(
+        &mut controllers,
+        DomainGroup::Desktop,
+        crate::desktop::control::all_registered_controllers(),
+    );
     // MCP write audit list: internal-only so the desktop UI/CLI can inspect
     // local write history without exposing cross-client history as an MCP tool.
     push(
@@ -1136,18 +756,16 @@ fn build_internal_only_controllers() -> Vec<GroupedController> {
     controllers
 }
 
-/// Returns a vector of all currently registered controllers.
-///
-/// Filtered by the ambient [`crate::core::runtime::DomainSet`] (#4796): a
-/// controller whose [`DomainGroup`] is disabled under the active context is
-/// omitted. With no active context, or under `DomainSet::full()`, this returns
-/// the complete set (byte-identical to pre-#4796).
+/// Returns registered controllers filtered by the ambient [`crate::core::runtime::DomainSet`].
 pub fn all_registered_controllers() -> Vec<RegisteredController> {
-    let caps = crate::core::runtime::context::CoreContext::current_memory_capabilities();
     let view = registry_view();
+    registered_controllers(&view)
+}
+
+fn registered_controllers(view: &RegistryView) -> Vec<RegisteredController> {
     let found = view
         .iter()
-        .filter(|g| group_allowed(g.group) && capability_allowed_in(caps, g.capability))
+        .filter(|g| visible(g))
         .map(|g| g.controller.clone())
         .collect();
     found
@@ -1161,14 +779,14 @@ pub fn all_registered_controllers() -> Vec<RegisteredController> {
 /// [`all_registered_controllers`], so `/schema` omits gated namespaces
 /// automatically under `harness()`.
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
-    let caps = crate::core::runtime::context::CoreContext::current_memory_capabilities();
-    let view = registry_view();
-    let found = view
-        .iter()
-        .filter(|g| group_allowed(g.group) && capability_allowed_in(caps, g.capability))
+    controller_schemas(&registry_view())
+}
+
+fn controller_schemas(view: &RegistryView) -> Vec<ControllerSchema> {
+    view.iter()
+        .filter(|g| visible(g))
         .map(|g| g.controller.schema.clone())
-        .collect();
-    found
+        .collect()
 }
 
 /// Generates a standardized RPC method name from a controller schema.
@@ -1182,8 +800,10 @@ pub fn rpc_method_name(schema: &ControllerSchema) -> String {
 pub fn namespace_description(namespace: &str) -> Option<&'static str> {
     match namespace {
         "about_app" => Some("Catalog the app's user-facing capabilities and where to find them."),
+        "agent" => Some("Per-thread agent run-mode control (Plan vs Build)."),
         "ai" => Some("Agent-generated artifact storage, retrieval, and lifecycle management."),
         "app_state" => Some("Expose core-owned app shell state for frontend polling."),
+        "profiles" => Some("SaaS operator plane: provision and inspect the profile serving each user."),
         "auth" => Some("Manage app session and provider credentials."),
         "agent_experience" => Some("Local procedural experience capture and retrieval for agents."),
         "channels" => Some("Channel definitions, connections, and lifecycle management."),
@@ -1210,9 +830,7 @@ pub fn namespace_description(namespace: &str) -> Option<&'static str> {
         "encrypt" => Some("Encrypt secure values managed by secret storage."),
         "health" => Some("Process and component health snapshots."),
         "inference" => Some("Connect to configured text, vision, and embedding inference runtimes."),
-        "migrate" => Some("Data migration utilities."),
         "javascript" => Some("First-class JavaScript runtime bridge for listing and dispatching tools."),
-        "medulla" => Some("Medulla orchestration backend: integration readiness, durable sessions, and the connected worker roster."),
         "security" => Some("Security policy and autonomy guardrail metadata."),
         "service" => Some("Desktop service lifecycle management."),
         "session_import" => {
@@ -1222,18 +840,8 @@ pub fn namespace_description(namespace: &str) -> Option<&'static str> {
         "skill_runtime" => Some("Run installed skills, inspect run logs, and resolve Node/Python skill runtimes."),
         "skills" => Some("Discovered SKILL.md skills (discovery, parse, install, run) and their resources."),
         "socket" => Some("Backend Socket.IO bridge controls."),
-        "memory" => Some("Document storage, vector search, key-value store, and knowledge graph."),
-        "memory_goals" => Some(
-            "The agent's long-term goals list for working with the user — editable items plus turn-based enrichment.",
-        ),
-        "memory_tree" => Some(
-            "Canonical chunk ingestion, provenance capture, and chunk retrieval for source-grounded memory.",
-        ),
-        "memory_sync" => Some(
-            "Per-connection memory sync status, user enable toggle, and live progress for the desktop UI.",
-        ),
-        "memory_sources" => Some(
-            "User-configured data connectors (Composio, folders, GitHub repos, RSS, web pages) that feed memory.",
+        "memory" => Some(
+            "Memory v2: engine selection, recall, fetch, learn, forget, conversations, document sources, context.md and v1 import.",
         ),
         "run_ledger" => Some(
             "Durable agent and workflow run state, child lineage, events, telemetry, and checkpoint references.",
@@ -1267,15 +875,7 @@ pub fn namespace_description(namespace: &str) -> Option<&'static str> {
         "update" => {
             Some("Self-update: check GitHub Releases for newer core binary and stage updates.")
         }
-        "tree_summarizer" => {
-            Some("Hierarchical time-based summarization tree for background knowledge compression.")
-        }
-        "learning" => Some(
-            "User context enrichment — LinkedIn profile scraping and onboarding intelligence.",
-        ),
-        "people" => {
-            Some("Contact resolution and recency × frequency × reciprocity × depth scoring.")
-        },
+
         "notification" => Some(
             "Integration notification ingest, triage scoring, listing, read-state, \
              and per-provider routing settings.",
@@ -1300,103 +900,14 @@ pub fn cli_handler_for_namespace(namespace: &str) -> Option<CliHandler> {
 
 /// Looks up an RPC method name based on namespace and function.
 pub fn rpc_method_from_parts(namespace: &str, function: &str) -> Option<String> {
-    // Searches the FULL (unfiltered) registry: this backs parameter validation
-    // and CLI routing, which are harmless for an about-to-be-rejected gated
-    // method — the DomainSet gate is enforced at dispatch
-    // (`try_invoke_registered_rpc`), not here. See that fn for the rationale.
+    // The full registry (CLI routing, param validation; the DomainSet gate is at
+    // dispatch), minus methods the SaaS user surface hides in this scope.
     let view = registry_view();
-    let found = view
-        .iter()
-        .find(|g| {
-            g.controller.schema.namespace == namespace && g.controller.schema.function == function
-        })
-        .map(|g| g.controller.rpc_method_name());
-    found
-}
-
-/// The memory-driver capability family a controller's surface requires, looked
-/// up in the **UNFILTERED** registry.
-///
-/// Returns `None` when no controller with that `(namespace, function)` is
-/// registered anywhere — a genuine typo. Returns `Some(None)` when the
-/// controller exists and is ungated, and `Some(Some(c))` when it exists and
-/// needs family `c`.
-///
-/// The `Option<Option<_>>` is the whole point: it is what lets the CLI tell
-/// "no such command" apart from "this command exists but the bound driver does
-/// not advertise its family". Every *filtered* lookup ([`schema_for_rpc_method`],
-/// [`all_controller_schemas`]) collapses those two into one absence, which is
-/// correct for `/rpc` and for agent tools (`docs/specs/kernel.md` §3.3) and
-/// wrong for a human at a terminal — the CLI is §3.3's one named exception.
-///
-/// Scoped to the agent-facing [`registry`] exactly like [`rpc_method_from_parts`],
-/// the other lookup that backs CLI routing: an internal-only controller is not
-/// CLI-invokable in any configuration, so reporting a capability fact for one
-/// would name a cause that is not the reason the command is unavailable.
-pub fn capability_for_parts(namespace: &str, function: &str) -> Option<Option<Capability>> {
-    let view = registry_view();
-    let found = view
-        .iter()
-        .find(|g| {
-            g.controller.schema.namespace == namespace && g.controller.schema.function == function
-        })
-        .map(|g| g.capability);
-    found
-}
-
-/// The memory-driver capability family required by an RPC method, looked up in
-/// the **UNFILTERED** registry.
-///
-/// This is the method-name counterpart of [`capability_for_parts`]. The raw
-/// `openhuman call --method …` CLI form has no namespace/function split, but
-/// must still produce the CLI's configuration-fact diagnostic before it
-/// dispatches a capability-gated method.
-pub fn capability_for_rpc_method(method: &str) -> Option<Option<Capability>> {
-    let view = registry_view();
-    let found = view
-        .iter()
-        .find(|g| g.controller.rpc_method_name() == method)
-        .map(|g| g.capability);
-    found
-}
-
-/// The capability a whole namespace's surface requires, when every controller
-/// in it agrees — looked up in the **UNFILTERED** registry.
-///
-/// `None` when the namespace does not exist at all, or when nothing in it is
-/// gated, or when its controllers span more than one family. Used for the
-/// unknown-namespace case: a namespace whose controllers are ALL gated on one
-/// family disappears from the CLI's namespace list entirely, so there is no
-/// function name left to look up.
-///
-/// Deliberately conservative — it reports a family only when that family is the
-/// sole gate across the namespace, so a mixed namespace (like `memory`, which
-/// spans four families plus host surface) yields `None` and falls back to the
-/// ordinary unknown-namespace message rather than naming one family
-/// misleadingly.
-pub fn sole_capability_for_namespace(namespace: &str) -> Option<Capability> {
-    let mut found: Option<Capability> = None;
-    let mut any = false;
-    let view = registry_view();
-    for grouped in view
-        .iter()
-        .filter(|g| g.controller.schema.namespace == namespace)
-    {
-        any = true;
-        match (grouped.capability, found) {
-            // An ungated member means the namespace does not vanish wholesale
-            // because of one family, so naming one would be a lie.
-            (None, _) => return None,
-            (Some(c), None) => found = Some(c),
-            (Some(c), Some(prev)) if c == prev => {}
-            (Some(_), Some(_)) => return None,
-        }
-    }
-    if any {
-        found
-    } else {
-        None
-    }
+    let found = view.iter().find(|g| {
+        let s = &g.controller.schema;
+        s.namespace == namespace && s.function == function && on_surface(g)
+    });
+    found.map(|g| g.controller.rpc_method_name())
 }
 
 /// Retrieves the schema for a specific RPC method.
@@ -1412,19 +923,11 @@ pub fn schema_for_rpc_method(method: &str) -> Option<ControllerSchema> {
     // call with bad params would return the controller's validation error
     // instead of method-not-found, leaking the hidden RPC surface. No ambient
     // context ⇒ `group_allowed` is `true` ⇒ unfiltered, identical to pre-#4796.
-    //
-    // The memory-capability gate (M5.2) rides here for exactly the same reason:
-    // a `memory_tree.*` method hidden because the bound driver never advertised
-    // `tree` must not leak back out through a param-validation error.
     let view = registry_view();
     let found = view
         .iter()
         .chain(internal_registry().iter())
-        .find(|g| {
-            g.controller.rpc_method_name() == method
-                && group_allowed(g.group)
-                && capability_allowed(g.capability)
-        })
+        .find(|g| g.controller.rpc_method_name() == method && visible(g))
         .map(|g| g.controller.schema.clone());
     found
 }
@@ -1436,7 +939,7 @@ pub fn schema_for_rpc_method(method: &str) -> Option<ControllerSchema> {
 ///
 /// | entry point | validates in |
 /// | --- | --- |
-/// | HTTP JSON-RPC | `core::jsonrpc` |
+/// | HTTP JSON-RPC | `openhuman_rpc::server` (through `core::invoke`) |
 /// | dynamic dispatch fallback | `core::dispatch::try_registry_dispatch` |
 /// | CLI | `core::cli` |
 /// | MCP read and write tools | `crate::mcp::server::tools::params` |
@@ -1489,18 +992,19 @@ pub fn validate_params(
 ) -> Result<(), String> {
     for input in &schema.inputs {
         if input.required && !params.contains_key(input.name) {
-            return Err(format!(
-                "missing required param '{}': {}",
-                input.name, input.comment
+            return Err(crate::core::params::missing_required_param_message(
+                input.name,
+                input.comment,
             ));
         }
     }
 
     for key in params.keys() {
         if !schema.inputs.iter().any(|f| f.name == key) {
-            return Err(format!(
-                "unknown param '{}' for {}.{}",
-                key, schema.namespace, schema.function
+            return Err(crate::core::params::unknown_param_message(
+                key,
+                schema.namespace,
+                schema.function,
             ));
         }
     }
@@ -1511,14 +1015,30 @@ pub fn validate_params(
     // already handled by the required-presence check above.
     for input in &schema.inputs {
         if let Some(value) = params.get(input.name) {
-            check_type(value, &input.ty).map_err(|expected| {
+            check_type(value, &input.ty).map_err(|mismatch| {
+                let (expected, got) = match mismatch {
+                    TypeMismatch::Kind(expected) => {
+                        (expected.to_string(), crate::core::params::json_type_name(value).to_string())
+                    }
+                    TypeMismatch::OutOfRange { min, max, got } => {
+                        log::debug!(
+                            "[rpc][validate] param '{}' in {}.{} out of range: {got} not in {min}..={max}",
+                            input.name,
+                            schema.namespace,
+                            schema.function,
+                        );
+                        // Name the limit that was actually crossed.
+                        let bound = if got > max {
+                            format!("unsigned integer <= {max}")
+                        } else {
+                            format!("unsigned integer >= {min}")
+                        };
+                        (bound, got.to_string())
+                    }
+                };
                 format!(
                     "invalid type for param '{}' in {}.{}: expected {}, got {}",
-                    input.name,
-                    schema.namespace,
-                    schema.function,
-                    expected,
-                    json_type_name(value),
+                    input.name, schema.namespace, schema.function, expected, got,
                 )
             })?;
         }
@@ -1527,26 +1047,22 @@ pub fn validate_params(
     Ok(())
 }
 
-/// A short, human-readable name for the JSON kind of `value`, used in
-/// `validate_params` type-mismatch errors.
-fn json_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
+/// Why a value failed [`check_type`].
+enum TypeMismatch {
+    /// The JSON kind is wrong; carries a short description of the required type.
+    Kind(&'static str),
+    /// An unsigned integer outside a [`TypeSchema::BoundedU64`] range.
+    ///
+    /// [`TypeSchema::BoundedU64`]: crate::core::TypeSchema::BoundedU64
+    OutOfRange { min: u64, max: u64, got: u64 },
 }
 
 /// Validate a JSON `value` against a declared [`TypeSchema`].
 ///
-/// Returns `Ok(())` on a match, or `Err(expected)` where `expected` is a short
-/// description of the type that was required. Unknown/opaque shapes
-/// (`Json`, `Bytes`, `Ref`) accept any value — they are validated by the
-/// handler's typed deserialization.
-fn check_type(value: &Value, ty: &crate::core::TypeSchema) -> Result<(), &'static str> {
+/// Returns `Ok(())` on a match, or a [`TypeMismatch`] describing what was
+/// required. Unknown/opaque shapes (`Json`, `Bytes`, `Ref`) accept any value —
+/// they are validated by the handler's typed deserialization.
+fn check_type(value: &Value, ty: &crate::core::TypeSchema) -> Result<(), TypeMismatch> {
     use crate::core::TypeSchema;
 
     // JSON-RPC semantics (preserved from the prior presence-only check):
@@ -1576,13 +1092,22 @@ fn check_type(value: &Value, ty: &crate::core::TypeSchema) -> Result<(), &'stati
         | TypeSchema::Object { .. }
         | TypeSchema::Map(_) => Ok(()),
 
-        TypeSchema::Bool => value.is_boolean().then_some(()).ok_or("bool"),
-        TypeSchema::String => value.is_string().then_some(()).ok_or("string"),
-        TypeSchema::I64 => value.is_i64().then_some(()).ok_or("integer"),
-        TypeSchema::U64 => value.is_u64().then_some(()).ok_or("unsigned integer"),
+        TypeSchema::Bool => kind(value.is_boolean(), "bool"),
+        TypeSchema::String => kind(value.is_string(), "string"),
+        TypeSchema::I64 => kind(value.is_i64(), "integer"),
+        TypeSchema::U64 => kind(value.is_u64(), "unsigned integer"),
+        TypeSchema::BoundedU64 { min, max } => match value.as_u64() {
+            Some(got) if (*min..=*max).contains(&got) => Ok(()),
+            Some(got) => Err(TypeMismatch::OutOfRange {
+                min: *min,
+                max: *max,
+                got,
+            }),
+            None => Err(TypeMismatch::Kind("unsigned integer")),
+        },
         TypeSchema::F64 => {
             // Accept any JSON number (ints are valid floats).
-            value.is_number().then_some(()).ok_or("number")
+            kind(value.is_number(), "number")
         }
 
         // `Option<T>` accepts null or a value matching the inner type.
@@ -1601,15 +1126,20 @@ fn check_type(value: &Value, ty: &crate::core::TypeSchema) -> Result<(), &'stati
                 }
                 Ok(())
             }
-            None => Err("array"),
+            None => Err(TypeMismatch::Kind("array")),
         },
 
         TypeSchema::Enum { variants } => match value.as_str() {
             Some(s) if variants.contains(&s) => Ok(()),
-            Some(_) => Err("one of the allowed enum variants"),
-            None => Err("string"),
+            Some(_) => Err(TypeMismatch::Kind("one of the allowed enum variants")),
+            None => Err(TypeMismatch::Kind("string")),
         },
     }
+}
+
+/// `Ok(())` when `matches`, else a [`TypeMismatch::Kind`] naming `expected`.
+fn kind(matches: bool, expected: &'static str) -> Result<(), TypeMismatch> {
+    matches.then_some(()).ok_or(TypeMismatch::Kind(expected))
 }
 
 /// Attempts to invoke a registered RPC method by name.
@@ -1634,25 +1164,15 @@ pub async fn try_invoke_registered_rpc(
     // gets for a genuinely-unregistered method, so a gated domain's controllers
     // are indistinguishable from absent. Enforced HERE (dispatch), not in
     // schema/validation lookups, to avoid a validate/dispatch split.
-    if !group_allowed(grouped.group) {
+    if !visible(grouped) {
         log::debug!(
-            "[rpc][domain-gate] method '{method}' suppressed — group {:?} disabled under active DomainSet",
+            "[rpc][domain-gate] method '{method}' suppressed — group {:?} disabled or method \
+             outside the user surface in the active scope",
             grouped.group
         );
         return None;
     }
 
-    // Memory-capability gate (M5.2). Deliberately a SECOND block rather than a
-    // clause folded into the check above, so the two gates log distinguishably:
-    // an operator seeing an absent `memory_tree.*` needs to know whether it was
-    // the DomainSet or the bound driver's advertised capability set.
-    if !capability_allowed(grouped.capability) {
-        log::debug!(
-            "[rpc][capability-gate] method '{method}' suppressed — memory capability {:?} not advertised by the bound driver",
-            grouped.capability
-        );
-        return None;
-    }
     let handler = grouped.controller.handler;
 
     // Establish the ambient CoreContext for the duration of the handler so
@@ -1678,10 +1198,8 @@ pub async fn try_invoke_registered_rpc(
 /// Validates the consistency of the controller registry.
 ///
 /// The registry is the single source of truth: each [`RegisteredController`]
-/// carries its own schema, and the public schema list is *derived* from it
-/// (see [`all_controller_schemas`]). There is therefore no separate "declared"
-/// list to drift from — the previous declared-vs-registered cross-check is
-/// impossible by construction and has been removed (Phase 2 registry collapse).
+/// carries its own schema, and [`all_controller_schemas`] derives the public
+/// list. No separate declaration can drift from handlers (Phase 2).
 ///
 /// Ensures that:
 /// - There are no duplicate controllers or RPC methods.

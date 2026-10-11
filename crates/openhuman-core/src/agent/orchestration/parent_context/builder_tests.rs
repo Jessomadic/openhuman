@@ -11,7 +11,7 @@ fn test_config() -> (tempfile::TempDir, Config) {
 }
 
 /// Baseline for the bug: with no enclosing agent turn there is no ambient
-/// parent — exactly the state the subconscious tick spawned `context_scout`
+/// parent — exactly the state a background surface spawned `context_scout`
 /// in (TAURI-RUST-HMW / #4337), which made `run_subagent` return
 /// `NoParentContext`.
 #[tokio::test]
@@ -24,24 +24,20 @@ async fn no_ambient_parent_outside_with_root_parent() {
 
 /// Regression (TAURI-RUST-HMW / #4337): `with_root_parent` must install a
 /// real parent for the wrapped future so a background orchestration surface
-/// (subconscious tick, workflow engine, team runtime) can spawn sub-agents
+/// (cron job, workflow engine, team runtime) can spawn sub-agents
 /// without hitting `NoParentContext`. Proven by observing the installed
 /// parent from inside the future.
 #[tokio::test]
 async fn with_root_parent_installs_parent_for_inner_future() {
     let (_dir, config) = test_config();
-    let observed = with_root_parent(
-        &config,
-        "subconscious",
-        "subconscious",
-        "subconscious",
-        async { current_parent().map(|p| p.agent_definition_id) },
-    )
+    let observed = with_root_parent(&config, "cron", "cron", "cron", async {
+        current_parent().map(|p| p.agent_definition_id)
+    })
     .await
     .expect("root parent builds from config");
     assert_eq!(
         observed.as_deref(),
-        Some("subconscious"),
+        Some("cron"),
         "inner future must observe the installed root parent"
     );
 }

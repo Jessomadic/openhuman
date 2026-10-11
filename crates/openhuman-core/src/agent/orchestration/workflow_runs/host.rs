@@ -68,7 +68,7 @@ impl OpenHumanWorkflowExecutor {
     fn admit_child(&self, agent_id: &str) -> Result<(), OrchestrationError> {
         match self.safety_tier {
             WorkflowSafetyTier::ReadOnly => {
-                let registry = AgentDefinitionRegistry::global().ok_or_else(|| {
+                let registry = AgentDefinitionRegistry::current().ok_or_else(|| {
                     OrchestrationError(
                         "workflow safety admission requires the agent registry".to_owned(),
                     )
@@ -78,8 +78,12 @@ impl OpenHumanWorkflowExecutor {
                         "workflow safety admission rejected unknown agent '{agent_id}'"
                     ))
                 })?;
-                let allowed_named_tool =
-                    |tool: &str| matches!(tool, "web_search_tool" | "web_fetch");
+                let allowed_named_tool = |tool: &str| {
+                    matches!(
+                        tool,
+                        "web_search_tool" | "web_answer_tool" | "web_contents_tool" | "web_fetch"
+                    )
+                };
                 let read_only = matches!(definition.sandbox_mode, SandboxMode::ReadOnly)
                     || matches!(&definition.tools, ToolScope::Named(tools) if tools.iter().all(|tool| allowed_named_tool(tool)));
                 if read_only {

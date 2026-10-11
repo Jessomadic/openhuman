@@ -1,37 +1,6 @@
 use super::*;
+use crate::config::test_env::EnvVarGuard;
 use serde_json::json;
-use std::ffi::OsString;
-
-/// Holds the shared config-env lock while an RPC handler reads the active
-/// workspace. The controller path loads and may initialize config, so it
-/// cannot safely share another test's transient workspace.
-struct WorkspaceEnvGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
-    previous: Option<OsString>,
-}
-
-impl WorkspaceEnvGuard {
-    fn set(path: &std::path::Path) -> Self {
-        let lock = crate::config::TEST_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var_os("OPENHUMAN_WORKSPACE");
-        std::env::set_var("OPENHUMAN_WORKSPACE", path);
-        Self {
-            _lock: lock,
-            previous,
-        }
-    }
-}
-
-impl Drop for WorkspaceEnvGuard {
-    fn drop(&mut self) {
-        match self.previous.take() {
-            Some(value) => std::env::set_var("OPENHUMAN_WORKSPACE", value),
-            None => std::env::remove_var("OPENHUMAN_WORKSPACE"),
-        }
-    }
-}
 
 fn test_state() -> AppState {
     AppState {
@@ -98,7 +67,7 @@ async fn dispatch_delegates_to_tier2_for_domain_method() {
     // Tier 2 dispatcher handles `openhuman.security_policy_info`, so
     // it must succeed and return a policy object.
     let workspace = tempfile::tempdir().expect("temporary workspace");
-    let _workspace_env = WorkspaceEnvGuard::set(workspace.path());
+    let _workspace_env = EnvVarGuard::workspace_async(workspace.path()).await;
     let out = dispatch(test_state(), "openhuman.security_policy_info", json!({}))
         .await
         .expect("security_policy_info should route via tier 2");
@@ -153,7 +122,6 @@ fn is_known_probe_method_matches_allow_list_exactly() {
         "auth.status",
         "config/get",
         "openhuman.memory_tree_create_namespace",
-        "openhuman.harness_init_status",
     ] {
         assert!(
             is_known_probe_method(m),
@@ -168,27 +136,6 @@ fn is_known_probe_method_matches_allow_list_exactly() {
     assert!(!is_known_probe_method("rpc.discover.extra")); // exact match only
     assert!(!is_known_probe_method("memory_tree_create_namespace"));
     assert!(!is_known_probe_method(""));
-}
-
-/// `openhuman.harness_init_status` is allow-listed as a debug-only miss so
-/// client/core surface skew stops paging Sentry (#5157) — but it is a
-/// **live** method, not a retired one. That allow-list entry means a
-/// genuine regression (controller dropped from the registry) would go
-/// completely silent: no error, no warn, no Sentry event. This test is the
-/// replacement signal — if the method stops being served in a full build,
-/// this fails instead of the regression shipping unnoticed.
-#[test]
-fn harness_init_status_is_registered_in_a_full_build() {
-    let served: Vec<String> = crate::core::all::all_controller_schemas()
-        .iter()
-        .map(crate::core::all::rpc_method_name)
-        .collect();
-    assert!(
-        served.iter().any(|m| m == "openhuman.harness_init_status"),
-        "harness_init_status must remain a registered controller — it is \
-         allow-listed in KNOWN_PROBE_METHODS for client/core skew only, so \
-         losing the real handler would be silently swallowed"
-    );
 }
 
 #[tokio::test]

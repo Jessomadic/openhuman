@@ -276,21 +276,26 @@ export async function resetOpenHumanDataAndRestartCore(userId?: string | null): 
   console.debug('[core] resetOpenHumanDataAndRestartCore: done');
 }
 
-/** Read onboarding_completed from core config. */
+/**
+ * Read onboarding_completed from core config. Plain core RPC, so the browser
+ * build (no Tauri) reads the same flag instead of reporting `false`.
+ */
 export async function getOnboardingCompleted(): Promise<boolean> {
-  if (!isTauri()) return false;
   const res = await callCoreRpc<boolean | { result: boolean }>({
     method: 'openhuman.config_get_onboarding_completed',
   });
-  // RpcOutcome may wrap value in { result, logs } when logs are present
+  // Outcome may wrap value in { result, logs } when logs are present
   if (typeof res === 'boolean') return res;
   if (res && typeof res === 'object' && 'result' in res) return res.result;
   return false;
 }
 
-/** Write onboarding_completed to core config. */
+/**
+ * Write onboarding_completed to core config. Not Tauri-gated: in the browser
+ * build a gate here made completion never persist, so onboarding replayed on
+ * every reload.
+ */
 export async function setOnboardingCompleted(value: boolean): Promise<boolean> {
-  if (!isTauri()) return false;
   const res = await callCoreRpc<boolean | { result: boolean }>({
     method: 'openhuman.config_set_onboarding_completed',
     params: { value },
@@ -301,18 +306,12 @@ export async function setOnboardingCompleted(value: boolean): Promise<boolean> {
 }
 
 export async function openhumanDoctorReport(): Promise<CommandResponse<DoctorReport>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<DoctorReport>>({ method: 'openhuman.doctor_report' });
 }
 
 export async function openhumanDoctorModels(
   useCache = true
 ): Promise<CommandResponse<ModelProbeReport>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<ModelProbeReport>>({
     method: 'openhuman.doctor_models',
     params: { use_cache: useCache },
@@ -323,9 +322,6 @@ export async function openhumanMigrateOpenclaw(
   sourceWorkspace?: string,
   dryRun = true
 ): Promise<CommandResponse<MigrationReport>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<MigrationReport>>({
     method: 'openhuman.migrate_openclaw',
     params: { source_workspace: sourceWorkspace, dry_run: dryRun },
@@ -336,9 +332,6 @@ export async function openhumanMigrateHermes(
   sourceWorkspace?: string,
   dryRun = true
 ): Promise<CommandResponse<MigrationReport>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<MigrationReport>>({
     method: 'openhuman.migrate_hermes',
     params: { source_workspace: sourceWorkspace, dry_run: dryRun },

@@ -33,7 +33,7 @@ use crate::inference::provider::{is_raw_passthrough_model, role_for_model_tier};
 ///    complete tool loop. The definition's `ToolScope` / `sandbox_mode` /
 ///    `max_iterations` govern the turn, so an agent node gains its curated
 ///    toolset with no graph change. This is the same harness pattern
-///    `flows_build` / `flows_discover` / cron / subconscious use, so "every node
+///    `flows_build` / `flows_discover` / cron use, so "every node
 ///    is a tinyagents graph" still holds: `run_single` itself routes through the
 ///    default agent graph, i.e. a nested tinyagents graph (the agent turn) inside
 ///    the flow's tinyagents graph.
@@ -116,6 +116,9 @@ fn max_parallel_harness_agents(raw: Option<&str>) -> usize {
 /// Which execution path an `agent_ref` routes to (see [`OpenHumanAgentRunner`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentRoute {
+    /// A host-registered agent (`agent::host_agents`) — run the full agent
+    /// tool loop as that agent, with its host tools, in its context.
+    HostAgent,
     /// A harness `AgentDefinition` exists — run the full agent tool loop.
     Harness,
     /// No definition; fall back to the custom-registry persona completion.
@@ -127,7 +130,10 @@ pub(crate) enum AgentRoute {
 /// custom-registry fallback. Pure over the global registry so the selection is
 /// unit-testable with `init_global_builtins`.
 pub(crate) fn route_for_agent_ref(agent_ref: &str) -> AgentRoute {
-    let has_definition = crate::agent::harness::definition::AgentDefinitionRegistry::global()
+    if crate::agent::host_agents::resolve(agent_ref).is_some() {
+        return AgentRoute::HostAgent;
+    }
+    let has_definition = crate::agent::harness::definition::AgentDefinitionRegistry::current()
         .map(|reg| reg.get(agent_ref).is_some())
         .unwrap_or(false);
     if has_definition {
@@ -135,124 +141,6 @@ pub(crate) fn route_for_agent_ref(agent_ref: &str) -> AgentRoute {
     } else {
         AgentRoute::RegistryFallback
     }
-}
-
-/// The wall-clock timeout for one agent-node harness turn: the node's requested
-/// `timeout_secs` clamped to `10..=600`, defaulting to `240` when unset. A hung
-/// provider/tool call must never wedge the flow run.
-pub(crate) fn clamp_run_timeout_secs(requested: Option<u64>) -> u64 {
-    requested.map(|s| s.clamp(10, 600)).unwrap_or(240)
-}
-
-/// Issue #4868 — scale `base_timeout_secs` up for agents whose effective
-/// iteration cap exceeds the (until now, universal) global default of 10.
-///
-/// A `tools_agent`/`code_executor`/etc. node now legitimately runs up to 50
-/// iterations (`iteration_policy = "extended"`). At a worst case of
-/// ~10s/iteration that's ~500s, comfortably exceeding the 240s
-/// `clamp_run_timeout_secs` default — the node would be killed by timeout
-/// before it could use its own declared budget. Agents whose effective cap is
-/// still at or below the old global default (10) are unaffected and keep the
-/// unscaled `base_timeout_secs`. The scaled floor is capped at the existing
-/// 600s maximum `clamp_run_timeout_secs` already enforces, so this can only
-/// ever raise the effective timeout up to that ceiling, never past it.
-pub(crate) fn scale_timeout_for_iteration_cap(
-    base_timeout_secs: u64,
-    effective_iteration_cap: usize,
-) -> u64 {
-    if effective_iteration_cap > 10 {
-        let scaled = (effective_iteration_cap as u64).saturating_mul(12).min(600);
-        base_timeout_secs.max(scaled)
-    } else {
-        base_timeout_secs
-    }
-}
-
-/// Resolves the actual wall-clock timeout for one agent-node harness turn,
-/// combining [`clamp_run_timeout_secs`] and [`scale_timeout_for_iteration_cap`]
-/// per the post-merge Codex P2 finding on issue #4868's iteration-cap timeout
-/// scaling: **an explicit `timeout_secs` the flow author set on the node must
-/// never be scaled up.**
-///
-/// A node's `timeout_secs` can be an intentional fast-fail/SLA bound (e.g.
-/// `timeout_secs: 120` to bound a health-check-style agent call) — scaling
-/// that up to match a 50-iteration-cap agent would silently defeat the
-/// author's explicit choice. So the iteration-cap scaling only ever widens
-/// the *default* (no `timeout_secs` supplied) 240s bound; an explicit value is
-/// clamped to `10..=600` (as it always was) and returned as-is.
-///
-/// `requested_timeout_secs` is the raw `request["timeout_secs"]` (before
-/// clamping) so this function can distinguish "caller supplied a value" from
-/// "caller supplied nothing" — [`clamp_run_timeout_secs`] alone collapses that
-/// distinction into a plain `u64`.
-pub(crate) fn resolve_run_timeout_secs(
-    requested_timeout_secs: Option<u64>,
-    effective_iteration_cap: usize,
-) -> u64 {
-    let base_timeout_secs = clamp_run_timeout_secs(requested_timeout_secs);
-    if requested_timeout_secs.is_some() {
-        base_timeout_secs
-    } else {
-        scale_timeout_for_iteration_cap(base_timeout_secs, effective_iteration_cap)
-    }
-}
-
-/// Renders an agent-node completion `request` into the single user message
-/// [`OpenHumanSessionHost::run_single`](crate::agent::OpenHumanSessionHost::run_single) takes: the
-/// `prompt` string when present and non-empty, else the `messages` array
-/// flattened to `"<role>: <content>"` lines (blank entries skipped). Empty
-/// string when neither yields content. Mirrors how [`OpenHumanLlm::complete`]
-/// reads `prompt`/`messages`, collapsed to one string because the harness turn
-/// entry point is single-message.
-pub(crate) fn node_request_to_prompt(request: &Value) -> String {
-    if let Some(prompt) = request.get("prompt").and_then(Value::as_str) {
-        let prompt = prompt.trim();
-        if !prompt.is_empty() {
-            return prompt.to_string();
-        }
-    }
-    if let Some(entries) = request.get("messages").and_then(Value::as_array) {
-        let parts: Vec<String> = entries
-            .iter()
-            .filter_map(|entry| {
-                let content = entry.get("content").and_then(Value::as_str)?.trim();
-                if content.is_empty() {
-                    return None;
-                }
-                let role = entry.get("role").and_then(Value::as_str).unwrap_or("user");
-                Some(format!("{role}: {content}"))
-            })
-            .collect();
-        if !parts.is_empty() {
-            return parts.join("\n\n");
-        }
-    }
-    String::new()
-}
-
-/// Model precedence for an agent node, returning the raw model string as
-/// written:
-/// 1. node `config.model` — a managed tier (`hint:reasoning`, `hint:chat`, …) or a
-///    `hint:*` alias;
-/// 2. the registry `entry_model` (custom agents);
-/// 3. `None` — no override, so the harness definition's / role default stands.
-///
-/// Routing translation (tier → workload) happens at application time via
-/// [`harness_model_default_override`]; this function is only the precedence pick,
-/// so it stays config-free and trivially testable.
-pub(crate) fn resolve_node_model(request: &Value, entry_model: Option<&str>) -> Option<String> {
-    if let Some(node_model) = request
-        .get("model")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
-    {
-        return Some(node_model.to_string());
-    }
-    entry_model
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
-        .map(str::to_string)
 }
 
 /// Translates a managed tier / `hint:*` / model string into the `default_model`
@@ -274,77 +162,6 @@ pub(crate) fn harness_model_default_override(node_model: &str) -> String {
         return node_model.to_string();
     }
     format!("hint:{}", role_for_model_tier(node_model))
-}
-
-/// Builds the JSON-steering instruction that a structured-output node needs (an
-/// `output_parser.schema` or `response_format: "json"`), or `None` when the node
-/// didn't request structured output. Shared shape with
-/// [`OpenHumanLlm::complete`]'s inline steering; the harness path appends it to
-/// the run prompt (rather than inserting a system message) because `run_single`
-/// takes a single user message.
-pub(crate) fn structured_output_instruction(request: &Value) -> Option<String> {
-    if !structured_output_requested(request) {
-        return None;
-    }
-    let mut instruction = "Respond with a single JSON object only — no prose, no \
-                           markdown code fences."
-        .to_string();
-    if let Some(schema) = request
-        .get("output_parser")
-        .and_then(|p| p.get("schema"))
-        .filter(|s| !s.is_null())
-    {
-        instruction.push_str(&format!(
-            " The object must match this JSON Schema:\n{schema}"
-        ));
-    }
-    Some(instruction)
-}
-
-/// Builds [`OpenHumanAgentRunner::run_via_harness`]'s single run message: the
-/// node's `input_context` (when present — see [`input_context_block`]'s doc),
-/// then the JSON-steering instruction (when the node requested structured
-/// output), then the node's own prompt (or flattened messages, via
-/// [`node_request_to_prompt`]). Each present part is separated by a blank
-/// line; an absent part contributes nothing (no stray blank lines). Pulled
-/// out as its own pure function — rather than inlined in `run_via_harness` —
-/// so the prepend order is unit-testable without building a real harness
-/// [`Agent`](crate::agent::OpenHumanSessionHost).
-pub(crate) fn build_harness_run_prompt(request: &Value) -> String {
-    let parts = [
-        input_context_block(request),
-        structured_output_instruction(request),
-        Some(node_request_to_prompt(request)).filter(|p| !p.is_empty()),
-    ];
-    parts.into_iter().flatten().collect::<Vec<_>>().join("\n\n")
-}
-
-/// Shapes an agent-node harness turn's final text into the node's output value,
-/// mirroring [`OpenHumanLlm::complete`]: when the node requested structured
-/// output and the text parses as JSON, the parsed object/array is returned so
-/// downstream `=item.<field>` / `=nodes.<id>.item.<field>` bindings work;
-/// otherwise `{ text, agent_ref }`. The vendor `agent` node then folds this into
-/// the stable `{ json, text, raw }` envelope, and the `output_parser` sub-port
-/// still applies.
-pub(crate) fn build_agent_result(agent_ref: &str, final_text: &str, request: &Value) -> Value {
-    if structured_output_requested(request) {
-        if let Some(parsed) = extract_structured_json(final_text) {
-            tracing::debug!(
-                target: "flows",
-                agent_ref,
-                "[flows] agent_runner: structured output extracted from harness turn"
-            );
-            return parsed;
-        }
-        tracing::warn!(
-            target: "flows",
-            agent_ref,
-            "[flows] agent_runner: structured output requested but none of the extraction strategies \
-             produced valid JSON — falling back to the {{text}} shape (the output_parser sub-port may \
-             still coerce it)"
-        );
-    }
-    json!({ "text": final_text, "agent_ref": agent_ref })
 }
 
 #[async_trait]
@@ -372,6 +189,20 @@ impl AgentRunner for OpenHumanAgentRunner {
         }
 
         match route_for_agent_ref(agent_ref) {
+            AgentRoute::HostAgent => {
+                // Resolved again rather than carried by the route so the route
+                // stays a plain value; a host that dropped the agent in between
+                // degrades to the registry build below.
+                let host = crate::agent::host_agents::resolve(agent_ref);
+                tracing::info!(
+                    target: "flows",
+                    agent_ref,
+                    "[flows] agent_runner: HOST AGENT path — running the host-registered agent \
+                     with its own tools in its own context"
+                );
+                self.run_via_harness(agent_ref, request, conn, None, host)
+                    .await
+            }
             AgentRoute::Harness => {
                 tracing::info!(
                     target: "flows",
@@ -381,7 +212,8 @@ impl AgentRunner for OpenHumanAgentRunner {
                 // A shipped/TOML harness definition has no `entry.model` — the
                 // definition's own `ModelSpec` (already applied by the session
                 // builder) is the only model pin in play here.
-                self.run_via_harness(agent_ref, request, conn, None).await
+                self.run_via_harness(agent_ref, request, conn, None, None)
+                    .await
             }
             AgentRoute::RegistryFallback => {
                 // `route_for_agent_ref` only consults the harness
@@ -405,7 +237,7 @@ impl AgentRunner for OpenHumanAgentRunner {
                     crate::agent::registry::find_custom_in_config(&self.config, agent_ref);
                 let entry_model = custom_entry.as_ref().and_then(|e| e.model.clone());
                 match route_custom_entry_lookup(custom_entry.as_ref()) {
-                    AgentRoute::Harness => {
+                    AgentRoute::Harness | AgentRoute::HostAgent => {
                         tracing::info!(
                             target: "flows",
                             agent_ref,
@@ -421,7 +253,7 @@ impl AgentRunner for OpenHumanAgentRunner {
                         // comment on this PR: this previously regressed to the
                         // default chat model for a custom flow agent with no
                         // per-node override).
-                        self.run_via_harness(agent_ref, request, conn, entry_model.as_deref())
+                        self.run_via_harness(agent_ref, request, conn, entry_model.as_deref(), None)
                             .await
                     }
                     AgentRoute::RegistryFallback => {
@@ -475,7 +307,7 @@ impl OpenHumanAgentRunner {
     ///
     /// **Synchronous only (B40 / Gap 4).** A flow `agent` node runs here with
     /// no explicit chat thread on its run context. If the
-    /// agent it runs is a delegating agent (orchestrator/subconscious) and
+    /// agent it runs is a delegating agent (e.g. the orchestrator) and
     /// calls `spawn_async_subagent` directly, the tool now refuses (see the
     /// `parent_thread_id.is_none()` guard in
     /// `agent_orchestration::tools::spawn_async_subagent`) rather than
@@ -491,6 +323,7 @@ impl OpenHumanAgentRunner {
         request: Value,
         conn: Option<&str>,
         entry_model: Option<&str>,
+        host: Option<crate::agent::host_agents::HostAgent>,
     ) -> Result<Value> {
         use crate::agent::OpenHumanSessionHost;
 
@@ -523,21 +356,29 @@ impl OpenHumanAgentRunner {
         // with a new `default_model`, so we never mutate the shared config or
         // invent a new Agent setter API. The tier is normalised to the
         // `hint:<role>` form the session builder routes on.
+        // A host-registered agent starts from its own config (its provider
+        // model and route), not the flow runner's.
+        let base: &Config = host
+            .as_ref()
+            .map_or(self.config.as_ref(), |host| &host.config);
         let effective: Cow<'_, Config> = match node_model.as_deref() {
             Some(model) => {
-                let mut config = (*self.config).clone();
+                let mut config = base.clone();
                 config.default_model = Some(harness_model_default_override(model));
                 Cow::Owned(config)
             }
-            None => Cow::Borrowed(self.config.as_ref()),
+            None => Cow::Borrowed(base),
         };
 
-        let mut agent = OpenHumanSessionHost::from_config_for_agent(effective.as_ref(), agent_ref)
-            .map_err(|e| {
-                EngineError::Capability(format!(
-                    "agent node: failed to build harness agent '{agent_ref}': {e:#}"
-                ))
-            })?;
+        let built = match &host {
+            Some(host) => host.session_host(effective.as_ref(), None),
+            None => OpenHumanSessionHost::from_config_for_agent(effective.as_ref(), agent_ref),
+        };
+        let mut agent = built.map_err(|e| {
+            EngineError::Capability(format!(
+                "agent node: failed to build harness agent '{agent_ref}': {e:#}"
+            ))
+        })?;
         agent.set_agent_definition_name(agent_ref.to_string());
 
         let prompt = build_harness_run_prompt(&request);
@@ -612,6 +453,17 @@ impl OpenHumanAgentRunner {
             ))
         } else {
             Box::pin(agent.run_single(&prompt))
+        };
+        // A host agent's turn reads its own context (config, domains, tool
+        // groups, session store); the origin task-local is untouched.
+        let run: std::pin::Pin<
+            Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send>,
+        > = match host
+            .as_ref()
+            .map(|host| std::sync::Arc::clone(&host.context))
+        {
+            Some(context) => Box::pin(crate::core::runtime::CoreContext::scope(context, run)),
+            None => run,
         };
         let final_text =
             match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), run).await {
@@ -699,28 +551,6 @@ impl OpenHumanAgentRunner {
         }
         .complete(request, conn)
         .await
-    }
-}
-
-/// Inserts `system_prompt` as the first `system` message of a completion
-/// `request`, creating the `messages` array (seeded from any `prompt` string)
-/// when the request doesn't already carry one. Mirrors how
-/// [`OpenHumanLlm::complete`] reads `messages`/`prompt`.
-pub(crate) fn prepend_system_message(request: &mut Value, system_prompt: &str) {
-    let Value::Object(map) = request else {
-        return;
-    };
-    let system_msg = json!({ "role": "system", "content": system_prompt });
-    match map.get_mut("messages").and_then(Value::as_array_mut) {
-        Some(messages) => messages.insert(0, system_msg),
-        None => {
-            // No `messages`: build one from the `prompt` string (if any).
-            let mut messages = vec![system_msg];
-            if let Some(prompt) = map.get("prompt").and_then(Value::as_str) {
-                messages.push(json!({ "role": "user", "content": prompt }));
-            }
-            map.insert("messages".to_string(), Value::Array(messages));
-        }
     }
 }
 

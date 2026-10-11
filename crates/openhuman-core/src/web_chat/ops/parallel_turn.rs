@@ -8,13 +8,13 @@ use std::time::Duration;
 use tinyagents_harness::run_queue::RunQueue;
 use tokio_util::sync::CancellationToken;
 
-use crate::core::socketio::WebChannelEvent;
+use crate::web_chat::WebChannelEvent;
 
 use super::super::event_bus::publish_web_channel_event;
 use super::super::run_task::run_chat_task;
 use super::super::types::{ChatRequestMetadata, ParallelEntry};
 use super::super::web_errors::classify_inference_error;
-use super::state::PARALLEL_IN_FLIGHT;
+use super::state::{key_for, parallel_in_flight, unscope};
 use super::turn_guards::{
     run_turn_under_cancel_and_deadline, sentry_suppression_reason, timeout_bound_tag,
 };
@@ -22,7 +22,7 @@ use super::turn_guards::{
 /// Spawn an independent, forked (`QueueMode::Parallel`) turn. It snapshots the
 /// thread's history-at-start (inside `run_chat_task` with `fork = true`), runs
 /// concurrently with any other turn on the thread, and on completion delivers
-/// its response (append-only) and removes itself from `PARALLEL_IN_FLIGHT`.
+/// its response (append-only) and removes itself from [`parallel_in_flight`].
 /// Emits the same per-`request_id` stream events as a primary turn, so the UI
 /// can render it as an interleaved branch.
 #[allow(clippy::too_many_arguments)]
@@ -42,6 +42,10 @@ pub(crate) async fn spawn_parallel_turn(
     let client_id_task = client_id.to_string();
     let thread_id_task = thread_id.to_string();
     let request_id_task = request_id.clone();
+    // Request and thread ids are caller-chosen and only unique per agent, so
+    // the table is keyed in the caller's scope (see `key_for`).
+    let map_key = key_for(&request_id);
+    let map_key_task = map_key.clone();
     let user_message = message.to_string();
     // Forked turns don't participate in the steer/followup/collect queue, but
     // `run_chat_task` requires a queue handle — give each its own.
@@ -52,6 +56,7 @@ pub(crate) async fn spawn_parallel_turn(
             let approval_ctx = crate::security::approval::ApprovalChatContext {
                 thread_id: thread_id_task.clone(),
                 client_id: client_id_task.clone(),
+                request_id: Some(request_id_task.clone()),
             };
             let origin = crate::agent::turn_origin::AgentTurnOrigin::WebChat {
                 thread_id: thread_id_task.clone(),
@@ -60,7 +65,7 @@ pub(crate) async fn spawn_parallel_turn(
             };
             let result = run_turn_under_cancel_and_deadline(
                 task_cancel_token,
-                origin,
+                origin.clone(),
                 approval_ctx,
                 run_chat_task(
                     &client_id_task,
@@ -72,6 +77,7 @@ pub(crate) async fn spawn_parallel_turn(
                     locale,
                     run_queue,
                     metadata,
+                    origin.clone(),
                     /* fork */ true,
                 ),
             )
@@ -90,6 +96,10 @@ pub(crate) async fn spawn_parallel_turn(
                         // The workspace the turn ran in, so the reply is stored
                         // there before it is announced (#6034).
                         Some(chat_result.workspace_dir.as_path()),
+                        chat_result.timing,
+                        // Parallel-fork delivery has no single human waiting
+                        // on a next-message suggestion for this reply (C5).
+                        false,
                     )
                     .await;
                 }
@@ -161,6 +171,8 @@ pub(crate) async fn spawn_parallel_turn(
                         error_retry_after_ms: classified.retry_after_ms,
                         error_provider: classified.provider,
                         error_fallback_available: classified.fallback_available,
+                        copy_key: Some(classified.copy_key.to_string()),
+                        copy_params: classified.copy_params,
                         ..Default::default()
                     });
                 }
@@ -170,17 +182,33 @@ pub(crate) async fn spawn_parallel_turn(
                         thread_id_task,
                         request_id_task
                     );
+                    // Cooperative cancel (deadline/cancel token) publishes no
+                    // `chat_error` on this path today — leaving a client
+                    // waiting on this request_id with no terminal event.
+                    // `chat_cancelled` closes it out.
+                    publish_web_channel_event(WebChannelEvent {
+                        event: "chat_cancelled".to_string(),
+                        client_id: client_id_task.clone(),
+                        thread_id: thread_id_task.clone(),
+                        request_id: request_id_task.clone(),
+                        cancel_reason: Some("user_stop".to_string()),
+                        ..Default::default()
+                    });
                 }
             }
 
-            PARALLEL_IN_FLIGHT.lock().await.remove(&request_id_task);
+            parallel_in_flight()
+                .lock_owned()
+                .await
+                .remove(&map_key_task);
         },
     ));
 
-    PARALLEL_IN_FLIGHT.lock().await.insert(
-        request_id,
+    parallel_in_flight().lock_owned().await.insert(
+        map_key,
         ParallelEntry {
-            thread_id: thread_id.to_string(),
+            thread_id: key_for(thread_id),
+            client_id: client_id.to_string(),
             handle,
             cancel_token,
         },
@@ -188,14 +216,15 @@ pub(crate) async fn spawn_parallel_turn(
 }
 
 /// Cooperatively cancel every parallel turn on a thread. Returns the cancelled
-/// request ids. Used by the thread-level cancel paths so a cancel/stop also
+/// `(request_id, client_id)` pairs. Used by the thread-level cancel paths so a cancel/stop also
 /// tears down any concurrent forked turns, not just the primary turn.
-pub(crate) async fn cancel_parallel_turns_for_thread(thread_id: &str) -> Vec<String> {
+pub(crate) async fn cancel_parallel_turns_for_thread(thread_id: &str) -> Vec<(String, String)> {
     let mut cancelled = Vec::new();
-    let mut parallel = PARALLEL_IN_FLIGHT.lock().await;
+    let scoped_thread = key_for(thread_id);
+    let mut parallel = parallel_in_flight().lock_owned().await;
     let request_ids: Vec<String> = parallel
         .iter()
-        .filter(|(_, entry)| entry.thread_id == thread_id)
+        .filter(|(_, entry)| entry.thread_id == scoped_thread)
         .map(|(request_id, _)| request_id.clone())
         .collect();
     for request_id in request_ids {
@@ -210,7 +239,7 @@ pub(crate) async fn cancel_parallel_turns_for_thread(thread_id: &str) -> Vec<Str
                     }
                 }
             });
-            cancelled.push(request_id);
+            cancelled.push((unscope(&request_id), entry.client_id));
         }
     }
     cancelled
@@ -218,22 +247,25 @@ pub(crate) async fn cancel_parallel_turns_for_thread(thread_id: &str) -> Vec<Str
 
 /// Cancel a single parallel (forked) turn identified by `request_id`, but only
 /// when it belongs to `thread_id`. Returns the cancelled id (as a one-element
-/// vec, mirroring [`cancel_parallel_turns_for_thread`]) or empty when no such
+/// vec of `(request_id, client_id)`, mirroring [`cancel_parallel_turns_for_thread`]) or empty when no such
 /// parallel turn exists. Request-scoped cancel path (#4760).
 pub(crate) async fn cancel_parallel_turn_by_request_id(
     thread_id: &str,
     request_id: &str,
-) -> Vec<String> {
-    let mut parallel = PARALLEL_IN_FLIGHT.lock().await;
+) -> Vec<(String, String)> {
+    let map_key = key_for(request_id);
+    let scoped_thread = key_for(thread_id);
+    let mut parallel = parallel_in_flight().lock_owned().await;
     let matches = parallel
-        .get(request_id)
-        .map(|entry| entry.thread_id == thread_id)
+        .get(&map_key)
+        .map(|entry| entry.thread_id == scoped_thread)
         .unwrap_or(false);
     if !matches {
         return Vec::new();
     }
-    if let Some(entry) = parallel.remove(request_id) {
+    if let Some(entry) = parallel.remove(&map_key) {
         entry.cancel_token.cancel();
+        let client_id = entry.client_id.clone();
         let mut handle = entry.handle;
         tokio::spawn(async move {
             tokio::select! {
@@ -243,7 +275,7 @@ pub(crate) async fn cancel_parallel_turn_by_request_id(
                 }
             }
         });
-        return vec![request_id.to_string()];
+        return vec![(request_id.to_string(), client_id)];
     }
     Vec::new()
 }

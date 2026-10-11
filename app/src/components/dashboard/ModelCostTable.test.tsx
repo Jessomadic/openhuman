@@ -58,4 +58,24 @@ describe('<ModelCostTable />', () => {
     );
     expect(screen.getByText('None')).toBeInTheDocument();
   });
+
+  it('shows a share under 0.1% as "<0.1%" and sub-cent cost as "<$0.01"', () => {
+    render(
+      <ModelCostTable
+        models={[
+          {
+            model: 'tiny-model',
+            cost_usd: 0.0004,
+            total_tokens: 90,
+            request_count: 1,
+            provider: 'openrouter',
+            percent_of_total: 0.03,
+          },
+        ]}
+        currency="USD"
+      />
+    );
+    expect(screen.getByText('<0.1%')).toBeInTheDocument();
+    expect(screen.getByText('<$0.01')).toBeInTheDocument();
+  });
 });

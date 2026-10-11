@@ -1,28 +1,4 @@
 use super::*;
-#[tokio::test]
-#[ignore = "requires a built TinyJuice module"]
-async fn retrieves_offloaded_original() {
-    let original = "ORIGINAL TOKENJUICE PAYLOAD ".repeat(20);
-    let hash = "module-fixture";
-    let tool = TokenjuiceRetrieveTool::new();
-    let res = tool.execute(json!({ "token": hash })).await.unwrap();
-    assert!(!res.is_error);
-    assert_eq!(res.output(), original);
-}
-
-#[tokio::test]
-#[ignore = "requires a built TinyJuice module"]
-async fn retrieves_line_range() {
-    let _original = "r0\nr1\nr2\nr3\nr4";
-    let hash = "module-fixture";
-    let tool = TokenjuiceRetrieveTool::new();
-    let res = tool
-        .execute(json!({ "token": hash, "range": { "start": 1, "end": 3, "unit": "lines" } }))
-        .await
-        .unwrap();
-    assert!(!res.is_error);
-    assert_eq!(res.output(), "r1\nr2");
-}
 
 #[tokio::test]
 async fn missing_token_is_error() {
@@ -62,4 +38,24 @@ fn miss_message_does_not_instruct_a_blind_re_run() {
         msg.contains("compacted summary"),
         "must point at the summary: {msg}"
     );
+}
+
+#[tokio::test]
+async fn retrieve_messages_name_only_the_tool_the_model_can_call() {
+    // `tokenjuice_retrieve` / `tinyjuice_retrieve` are dispatch aliases for old
+    // transcripts, not tools a model is offered. A message naming them sends the
+    // model after a tool it cannot see ("unknown tool").
+    let missing = TokenjuiceRetrieveTool::new()
+        .execute(json!({}))
+        .await
+        .unwrap()
+        .output();
+    for msg in [missing, miss_message("deadbeefcafe")] {
+        assert!(
+            msg.contains(crate::inference::tokenjuice::RETRIEVE_TOOL_NAME),
+            "{msg}"
+        );
+        assert!(!msg.contains("tokenjuice_retrieve"), "{msg}");
+        assert!(!msg.contains("tinyjuice_retrieve"), "{msg}");
+    }
 }

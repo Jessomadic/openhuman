@@ -22,8 +22,8 @@
 use serde_json::{Map, Value};
 
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 
 use super::status::SubsystemStatus;
 
@@ -72,15 +72,20 @@ pub fn schemas(function: &str) -> ControllerSchema {
 /// Memory is the only occupant today. This is also what
 /// [`crate::core::subsystems_cli`] renders as a table.
 pub async fn subsystems_status() -> Vec<SubsystemStatus> {
-    vec![crate::memory::rpc::memory_subsystem_status().await]
+    match crate::config::rpc::load_config_with_timeout().await {
+        Ok(config) => vec![crate::memory::status::subsystem_status(&config).await],
+        Err(error) => {
+            log::warn!("[subsystems] config unavailable for status: {error}");
+            Vec::new()
+        }
+    }
 }
 
 fn handle_status(_params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let rows = subsystems_status().await;
         log::debug!("[subsystem] status requested: {} slot(s)", rows.len());
-        RpcOutcome::new(serde_json::json!({ "subsystems": rows }), vec![])
-            .into_cli_compatible_json()
+        Outcome::new(serde_json::json!({ "subsystems": rows }), vec![]).into_cli_compatible_json()
     })
 }
 

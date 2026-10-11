@@ -12,8 +12,9 @@ fn custom_agent(id: &str, enabled: bool) -> AgentRegistryEntry {
         enabled,
         model: Some("reasoning-v1".to_string()),
         system_prompt: Some("Do custom work.".to_string()),
-        tool_allowlist: vec!["memory.search".to_string()],
+        tool_allowlist: vec!["memory".to_string()],
         tool_denylist: Vec::new(),
+        tool_rules: None,
         subagents: AgentSubagentPolicy::default(),
         tags: vec!["custom".to_string()],
         metadata: Value::Null,
@@ -23,8 +24,8 @@ fn custom_agent(id: &str, enabled: bool) -> AgentRegistryEntry {
 #[test]
 fn merge_entries_applies_default_overrides_and_filters_disabled() {
     let configured = vec![AgentRegistryEntry {
-        id: "researcher".to_string(),
-        name: "Researcher".to_string(),
+        id: "summarizer".to_string(),
+        name: "Summarizer".to_string(),
         description: "Disabled for this workspace.".to_string(),
         source: AgentRegistrySource::Default,
         enabled: false,
@@ -32,17 +33,18 @@ fn merge_entries_applies_default_overrides_and_filters_disabled() {
         system_prompt: None,
         tool_allowlist: vec!["*".to_string()],
         tool_denylist: Vec::new(),
+        tool_rules: None,
         subagents: AgentSubagentPolicy::default(),
         tags: Vec::new(),
         metadata: Value::Null,
     }];
 
     let visible = merge_entries(&configured, false);
-    assert!(!visible.iter().any(|agent| agent.id == "researcher"));
+    assert!(!visible.iter().any(|agent| agent.id == "summarizer"));
 
     let all = merge_entries(&configured, true);
-    let researcher = all.iter().find(|agent| agent.id == "researcher").unwrap();
-    assert!(!researcher.enabled);
+    let summarizer = all.iter().find(|agent| agent.id == "summarizer").unwrap();
+    assert!(!summarizer.enabled);
 }
 
 #[test]
@@ -71,10 +73,10 @@ fn find_custom_in_config_ignores_default_source_entries() {
     let mut config = Config::default();
     config.agent_registry.entries = vec![AgentRegistryEntry {
         source: AgentRegistrySource::Default,
-        ..custom_agent("researcher", true)
+        ..custom_agent("summarizer", true)
     }];
 
-    assert!(find_custom_in_config(&config, "researcher").is_none());
+    assert!(find_custom_in_config(&config, "summarizer").is_none());
 }
 
 #[test]
@@ -111,4 +113,32 @@ fn ensure_orchestrator_enabled_rejects_disabled_orchestrator() {
         ensure_orchestrator_enabled(&entry).unwrap_err(),
         "orchestrator agent cannot be disabled"
     );
+}
+
+#[test]
+fn a_patch_sets_and_clears_tool_rules() {
+    let mut entry = custom_agent("custom", true);
+    let rules = tinytools::ToolRules::from_allow_deny(Vec::<String>::new(), ["shell"]);
+    apply_patch(
+        &mut entry,
+        AgentRegistryPatch {
+            tool_rules: Some(rules.clone()),
+            ..AgentRegistryPatch::default()
+        },
+    );
+    assert_eq!(entry.tool_rules, Some(rules));
+    let definition = crate::agent::registry::defaults::definition_from_registry_entry(&entry);
+    assert!(
+        definition.tool_rules.is_some(),
+        "the entry's rules reach the definition"
+    );
+
+    apply_patch(
+        &mut entry,
+        AgentRegistryPatch {
+            tool_rules: Some(tinytools::ToolRules::default()),
+            ..AgentRegistryPatch::default()
+        },
+    );
+    assert_eq!(entry.tool_rules, None, "an empty rule set clears the field");
 }

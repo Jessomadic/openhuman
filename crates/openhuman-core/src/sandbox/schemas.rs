@@ -4,8 +4,8 @@ use serde_json::{Map, Value};
 
 use crate::config::rpc as config_rpc;
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
     vec![
@@ -192,14 +192,19 @@ fn handle_status(params: Map<String, Value>) -> ControllerFuture {
             }
         };
 
-        let policy = super::ops::resolve_sandbox_policy(
+        let mut policy = super::ops::resolve_sandbox_policy(
             mode,
+            &config.workspace_dir,
             &config.workspace_dir,
             &config.runtime,
             is_remote,
         );
+        if !crate::core::runtime::is_saas() {
+            super::ops::apply_requested_backend(&mut policy, &config.sandbox, &config.runtime)
+                .map_err(|e| e.to_string())?;
+        }
         let handle = super::ops::create_sandbox_backend(&policy).await;
-        to_json(RpcOutcome::new(handle, vec![]))
+        to_json(Outcome::new(handle, vec![]))
     })
 }
 
@@ -240,20 +245,25 @@ fn handle_resolve_policy(params: Map<String, Value>) -> ControllerFuture {
         // embedder-supplied config carries whatever `CoreBuilder::action_dir(..)`
         // set directly. Re-deriving it here from `action_dir_override` alone
         // would silently ignore an embedder's programmatic `action_dir` (#6081).
-        let policy = super::ops::resolve_sandbox_policy(
+        let mut policy = super::ops::resolve_sandbox_policy(
             mode,
             &config.action_dir,
+            &config.workspace_dir,
             &config.runtime,
             is_remote,
         );
-        to_json(RpcOutcome::new(policy, vec![]))
+        if !crate::core::runtime::is_saas() {
+            super::ops::apply_requested_backend(&mut policy, &config.sandbox, &config.runtime)
+                .map_err(|e| e.to_string())?;
+        }
+        to_json(Outcome::new(policy, vec![]))
     })
 }
 
 fn handle_cleanup_orphans(_params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async {
         match super::docker::cleanup_orphaned_containers().await {
-            Ok(count) => to_json(RpcOutcome::new(
+            Ok(count) => to_json(Outcome::new(
                 serde_json::json!({ "cleaned": count }),
                 vec![],
             )),
@@ -273,11 +283,11 @@ fn handle_validate_policy(params: Map<String, Value>) -> ControllerFuture {
             Ok(()) => serde_json::json!({ "valid": true, "issues": [] }),
             Err(issues) => serde_json::json!({ "valid": false, "issues": issues }),
         };
-        to_json(RpcOutcome::new(result, vec![]))
+        to_json(Outcome::new(result, vec![]))
     })
 }
 
-fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     outcome.into_cli_compatible_json()
 }
 

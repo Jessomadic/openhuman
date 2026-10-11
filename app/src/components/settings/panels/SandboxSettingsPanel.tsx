@@ -1,37 +1,56 @@
+import { Box, Container, type LucideIcon, ShieldOff, Sparkles, SquareTerminal } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+import { cn } from '../../../lib/cn';
 import { useT } from '../../../lib/i18n/I18nContext';
 import {
-  isTauri,
   openhumanGetSandboxSettings,
   openhumanUpdateSandboxSettings,
   type SandboxBackendId,
 } from '../../../utils/tauriCommands';
 import {
-  SettingsBadge,
-  SettingsEmptyState,
-  SettingsRow,
-  SettingsSection,
-  SettingsSelect,
-  SettingsStatusLine,
-  SettingsSwitch,
-  SettingsTextField,
-} from '../controls';
+  Badge,
+  Card,
+  CenteredLoadingState,
+  EmptyState,
+  Field,
+  InputGroupAddon,
+  InputGroupInput,
+  InputGroupRoot,
+  RadioGroupItem,
+  RadioGroupRoot,
+  StatusLine,
+  Switch,
+  TextField,
+} from '../../ui';
 import SettingsPanel from '../layout/SettingsPanel';
 
-const BACKEND_OPTIONS: SandboxBackendId[] = [
-  'auto',
-  'docker',
-  'landlock',
-  'firejail',
-  'bubblewrap',
-  'none',
+interface BackendOption {
+  id: SandboxBackendId;
+  icon: LucideIcon;
+  /** Linux-only kernel/userland jails; shown with a "Linux" tag. */
+  linuxOnly?: boolean;
+}
+
+const BACKEND_OPTIONS: BackendOption[] = [
+  { id: 'auto', icon: Sparkles },
+  { id: 'docker', icon: Container },
+  { id: 'landlock', icon: Box, linuxOnly: true },
+  { id: 'firejail', icon: Box, linuxOnly: true },
+  { id: 'bubblewrap', icon: Box, linuxOnly: true },
+  { id: 'none', icon: ShieldOff },
 ];
 
+/**
+ * Settings → Security → Sandbox execution. One master switch in the page
+ * header card, then the isolation backend as picker tiles, Docker limits (only
+ * when Docker can be used), and the read-only env passthrough list. Every
+ * control saves on change / blur; the status line under the cards reports it.
+ */
 const SandboxSettingsPanel = () => {
   const { t } = useT();
 
-  const [isLoading, setIsLoading] = useState(isTauri());
+  const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
@@ -50,7 +69,6 @@ const SandboxSettingsPanel = () => {
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      if (!isTauri()) return;
       try {
         const resp = await openhumanGetSandboxSettings();
         if (cancelled) return;
@@ -78,7 +96,6 @@ const SandboxSettingsPanel = () => {
 
   const persist = async (patch: Parameters<typeof openhumanUpdateSandboxSettings>[0]) => {
     const seq = ++persistSeqRef.current;
-    if (!isTauri()) return;
     setError(null);
     setSavedNote(null);
     setIsSaving(true);
@@ -132,181 +149,213 @@ const SandboxSettingsPanel = () => {
     }
   };
 
-  if (!isTauri()) {
-    return (
-      <SettingsPanel description={t('settings.sandbox.menuDesc')}>
-        <p className="text-sm text-content-muted">{t('settings.sandbox.desktopOnly')}</p>
-      </SettingsPanel>
-    );
-  }
-
   if (isLoading) {
     return (
       <SettingsPanel description={t('settings.sandbox.menuDesc')}>
-        <p className="text-sm text-content-muted">{t('settings.sandbox.loading')}</p>
+        <CenteredLoadingState label={t('settings.sandbox.loading')} />
       </SettingsPanel>
     );
   }
 
+  // Docker limits matter when Docker is (or may be) the backend in use.
+  const showDocker = enabled && (backend === 'docker' || (backend === 'auto' && dockerAvailable));
+
   return (
     <SettingsPanel description={t('settings.sandbox.menuDesc')}>
-      <>
-        {/* Status section */}
-        <SettingsSection title={t('settings.sandbox.status')}>
-          <SettingsRow
-            label={t('settings.sandbox.dockerStatus')}
-            control={
-              <SettingsBadge variant={dockerAvailable ? 'success' : 'neutral'}>
-                {dockerAvailable
-                  ? t('settings.sandbox.available')
-                  : t('settings.sandbox.unavailable')}
-              </SettingsBadge>
-            }
+      {/* ── Master switch + what this machine can do ─────────────────── */}
+      <Card data-testid="sandbox-status">
+        <div className="flex items-center gap-3 p-4">
+          <span
+            className={cn(
+              'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
+              enabled
+                ? 'bg-primary-500 text-content-inverted'
+                : 'bg-surface-muted text-content-secondary'
+            )}>
+            <SquareTerminal className="h-5 w-5" aria-hidden />
+          </span>
+          <div className="min-w-0 flex-1">
+            <label
+              htmlFor="switch-sandbox-enabled"
+              className="block text-sm font-semibold text-content">
+              {t('settings.sandbox.enableLabel')}
+            </label>
+            <p className="mt-0.5 text-xs text-content-muted">{t('settings.sandbox.enableDesc')}</p>
+          </div>
+          <Switch
+            id="switch-sandbox-enabled"
+            checked={enabled}
+            onCheckedChange={handleEnabledChange}
+            aria-label={t('settings.sandbox.enableLabel')}
           />
+        </div>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 text-xs">
+          <span className="flex items-center gap-2 text-content-muted">
+            {t('settings.sandbox.dockerStatus')}
+            <Badge
+              variant={dockerAvailable ? 'success' : 'neutral'}
+              data-testid="sandbox-docker-status">
+              {dockerAvailable
+                ? t('settings.sandbox.available')
+                : t('settings.sandbox.unavailable')}
+            </Badge>
+          </span>
           {detectedBackend && (
-            <SettingsRow
-              label={t('settings.sandbox.detectedBackend')}
-              control={<span className="text-sm font-mono text-content">{detectedBackend}</span>}
-            />
+            <span className="flex items-center gap-2 text-content-muted">
+              {t('settings.sandbox.detectedBackend')}
+              <Badge variant="neutral" className="font-mono">
+                {detectedBackend}
+              </Badge>
+            </span>
           )}
-        </SettingsSection>
+        </div>
+      </Card>
 
-        {/* Enabled toggle */}
-        <SettingsSection>
-          <SettingsRow
-            htmlFor="switch-sandbox-enabled"
-            label={t('settings.sandbox.enableLabel')}
-            description={t('settings.sandbox.enableDesc')}
-            control={
-              <SettingsSwitch
-                id="switch-sandbox-enabled"
-                checked={enabled}
-                onCheckedChange={handleEnabledChange}
-                aria-label={t('settings.sandbox.enableLabel')}
-              />
-            }
-          />
-        </SettingsSection>
+      {/* ── Isolation backend ─────────────────────────────────────────── */}
+      <Card
+        title={t('settings.sandbox.backendLabel')}
+        description={t('settings.sandbox.backendDesc')}>
+        <RadioGroupRoot
+          value={backend}
+          onValueChange={next => handleBackendChange(next as SandboxBackendId)}
+          aria-label={t('settings.sandbox.backendLabel')}
+          disabled={!enabled}
+          className={cn(
+            'grid gap-2 p-4 sm:grid-cols-2 xl:grid-cols-3',
+            !enabled && 'pointer-events-none opacity-50'
+          )}
+          data-testid="sandbox-backend-options">
+          {BACKEND_OPTIONS.map(({ id, icon: Icon, linuxOnly }) => {
+            const selected = backend === id;
+            const inputId = `sandbox-backend-${id}`;
+            return (
+              <label
+                key={id}
+                htmlFor={inputId}
+                className={cn(
+                  'flex cursor-pointer items-center gap-3 rounded-xl border px-3.5 py-3 transition-colors',
+                  selected
+                    ? 'border-primary-500 bg-primary-50 ring-1 ring-primary-500 dark:bg-primary-500/10'
+                    : 'border-line bg-surface hover:border-line-strong hover:bg-surface-hover'
+                )}>
+                <span
+                  className={cn(
+                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                    selected
+                      ? 'bg-primary-500 text-content-inverted'
+                      : 'bg-surface-muted text-content-secondary'
+                  )}>
+                  <Icon className="h-4.5 w-4.5" aria-hidden />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5 text-sm font-semibold text-content">
+                    {t(`settings.sandbox.backendName.${id}`)}
+                    {linuxOnly && <Badge variant="neutral">{t('settings.sandbox.linuxTag')}</Badge>}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-content-muted">
+                    {t(`settings.sandbox.backendHint.${id}`)}
+                  </span>
+                </span>
+                <RadioGroupItem
+                  id={inputId}
+                  value={id}
+                  data-testid={`sandbox-backend-option-${id}`}
+                  className="shrink-0"
+                />
+              </label>
+            );
+          })}
+        </RadioGroupRoot>
+      </Card>
 
-        {/* Backend selection */}
-        <SettingsSection
-          title={t('settings.sandbox.backendLabel')}
-          description={t('settings.sandbox.backendDesc')}>
-          <SettingsRow
-            stacked
-            control={
-              <SettingsSelect
-                value={backend}
-                onChange={e => handleBackendChange(e.target.value as SandboxBackendId)}
-                aria-label={t('settings.sandbox.backendLabel')}>
-                {BACKEND_OPTIONS.map(opt => (
-                  <option key={opt} value={opt}>
-                    {t(`settings.sandbox.backend.${opt}`)}
-                  </option>
-                ))}
-              </SettingsSelect>
-            }
-          />
-        </SettingsSection>
-
-        {/* Docker settings */}
-        <SettingsSection title={t('settings.sandbox.dockerSettings')}>
-          {/* Docker image */}
-          <SettingsRow
+      {/* ── Docker limits ─────────────────────────────────────────────── */}
+      {showDocker && (
+        <Card title={t('settings.sandbox.dockerSettings')} data-testid="sandbox-docker-settings">
+          <Field
             htmlFor="sandbox-docker-image"
             label={t('settings.sandbox.dockerImage')}
-            stacked
+            description={t('settings.sandbox.dockerImageDesc')}
             control={
-              <SettingsTextField
+              <TextField
                 id="sandbox-docker-image"
                 mono
+                inputSize="sm"
+                className="w-56"
                 value={dockerImage}
                 onChange={e => setDockerImage(e.target.value)}
                 onBlur={handleDockerImageBlur}
                 onKeyDown={e => e.key === 'Enter' && handleDockerImageBlur()}
-                aria-label={t('settings.sandbox.dockerImage')}
                 placeholder={t('settings.sandbox.dockerImagePlaceholder')}
               />
             }
           />
-
-          {/* Memory limit */}
-          <SettingsRow
+          <Field
             htmlFor="sandbox-memory-limit"
             label={t('settings.sandbox.memoryLimit')}
-            stacked
+            description={t('settings.sandbox.limitBlankHint')}
             control={
-              <div className="flex items-center gap-2">
-                <SettingsTextField
+              <InputGroupRoot size="sm" className="w-40">
+                <InputGroupInput
                   id="sandbox-memory-limit"
                   type="number"
-                  className="w-32"
-                  inputSize="sm"
                   value={memoryLimitMb}
                   onChange={e => setMemoryLimitMb(e.target.value)}
                   onBlur={handleMemoryBlur}
                   onKeyDown={e => e.key === 'Enter' && handleMemoryBlur()}
-                  aria-label={t('settings.sandbox.memoryLimit')}
                   min={64}
                 />
-                <span className="text-xs text-content-muted">
-                  {t('settings.sandbox.memoryUnit')}
-                </span>
-              </div>
+                <InputGroupAddon>{t('settings.sandbox.memoryUnit')}</InputGroupAddon>
+              </InputGroupRoot>
             }
           />
-
-          {/* CPU limit */}
-          <SettingsRow
+          <Field
             htmlFor="sandbox-cpu-limit"
             label={t('settings.sandbox.cpuLimit')}
-            stacked
+            description={t('settings.sandbox.limitBlankHint')}
             control={
-              <div className="flex items-center gap-2">
-                <SettingsTextField
+              <InputGroupRoot size="sm" className="w-40">
+                <InputGroupInput
                   id="sandbox-cpu-limit"
                   type="number"
-                  className="w-32"
-                  inputSize="sm"
                   value={cpuLimit}
                   onChange={e => setCpuLimit(e.target.value)}
                   onBlur={handleCpuBlur}
                   onKeyDown={e => e.key === 'Enter' && handleCpuBlur()}
-                  aria-label={t('settings.sandbox.cpuLimit')}
                   min={0.1}
                   step={0.1}
                 />
-                <span className="text-xs text-content-muted">{t('settings.sandbox.cpuUnit')}</span>
-              </div>
+                <InputGroupAddon>{t('settings.sandbox.cpuUnit')}</InputGroupAddon>
+              </InputGroupRoot>
             }
           />
-        </SettingsSection>
+        </Card>
+      )}
 
-        {/* Environment passthrough */}
-        <SettingsSection
-          title={t('settings.sandbox.envPassthrough')}
-          description={t('settings.sandbox.envPassthroughDesc')}>
-          {envPassthrough.length > 0 ? (
-            <div className="px-4 py-3 flex flex-wrap gap-2">
-              {envPassthrough.map(v => (
-                <SettingsBadge key={v} variant="neutral">
-                  <span className="font-mono">{v}</span>
-                </SettingsBadge>
-              ))}
-            </div>
-          ) : (
-            <SettingsEmptyState label={t('settings.sandbox.noEnvVars')} />
-          )}
-        </SettingsSection>
+      {/* ── Environment passthrough (read-only) ──────────────────────── */}
+      <Card
+        title={t('settings.sandbox.envPassthrough')}
+        description={t('settings.sandbox.envPassthroughDesc')}>
+        {envPassthrough.length > 0 ? (
+          <div className="flex flex-wrap gap-2 p-4">
+            {envPassthrough.map(v => (
+              <Badge key={v} variant="neutral" className="font-mono">
+                {v}
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <div className="p-4">
+            <EmptyState label={t('settings.sandbox.noEnvVars')} />
+          </div>
+        )}
+      </Card>
 
-        {/* Status line */}
-        <SettingsStatusLine
-          saving={isSaving}
-          savedNote={savedNote}
-          error={error}
-          savingLabel={t('settings.sandbox.saving')}
-        />
-      </>
+      <StatusLine
+        saving={isSaving}
+        savedNote={savedNote}
+        error={error}
+        savingLabel={t('settings.sandbox.saving')}
+      />
     </SettingsPanel>
   );
 };

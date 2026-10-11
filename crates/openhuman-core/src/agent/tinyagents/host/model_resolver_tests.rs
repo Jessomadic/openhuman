@@ -88,11 +88,6 @@ fn tier_and_hint_spellings_normalise_through_the_factory() {
         workload_role_for(&req("a").with_role("vision-v1")),
         "vision"
     );
-    // `subconscious` rides the chat tier for its model, per the factory table.
-    assert_eq!(
-        workload_role_for(&req("a").with_role("hint:subconscious")),
-        "chat"
-    );
 }
 
 #[test]

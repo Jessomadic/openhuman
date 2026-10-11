@@ -314,8 +314,7 @@ async fn run_agent_job_returns_error_without_provider_key() {
     let (success, output, raw_error) = run_agent_job(&config, &job).await;
     assert!(!success, "Agent job without provider key should fail");
     assert!(output.contains("Something went wrong. Please try again."));
-    assert!(output.contains("This error has been reported."));
-    assert!(output.contains("Report on Discord"));
+    assert!(!output.contains("<openhuman-link"));
     assert!(
         raw_error
             .as_deref()
@@ -397,7 +396,11 @@ async fn scheduler_flow_runs_active_hours_job_and_reschedules_inside_window() {
         &config.workspace_dir,
         &config.workspace_dir,
     ));
-    process_due_jobs(&config, &security, vec![job.clone()]).await;
+    let mut dispatcher = JobDispatcher::new(1);
+    dispatcher
+        .dispatch(&config, &security, vec![job.clone()])
+        .await;
+    dispatcher.drain().await;
 
     let stored = cron::get_job(&config, &job.id).unwrap();
     assert_eq!(stored.last_status.as_deref(), Some("ok"));

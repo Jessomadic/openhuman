@@ -1,6 +1,7 @@
 use super::route::route_for_model;
 use super::types::{
-    BudgetStatus, CostDashboard, CostRecord, CostSummary, DailyCostEntry, ModelStats, TokenUsage,
+    BudgetStatus, CostDashboard, CostRecord, CostSource, CostSummary, DailyCostEntry, ModelStats,
+    TokenUsage,
 };
 use crate::config::CostConfig;
 use anyhow::{anyhow, Context, Result};
@@ -15,6 +16,7 @@ use std::sync::Arc;
 /// Cost tracker for API usage monitoring and budget enforcement.
 pub struct CostTracker {
     config: CostConfig,
+    workspace_dir: PathBuf,
     storage: Arc<Mutex<CostStorage>>,
     session_id: String,
     session_costs: Arc<Mutex<Vec<CostRecord>>>,
@@ -31,6 +33,7 @@ impl CostTracker {
 
         Ok(Self {
             config,
+            workspace_dir: workspace_dir.to_path_buf(),
             storage: Arc::new(Mutex::new(storage)),
             session_id: uuid::Uuid::new_v4().to_string(),
             session_costs: Arc::new(Mutex::new(Vec::new())),
@@ -40,6 +43,11 @@ impl CostTracker {
     /// Get the session ID.
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// Workspace this tracker persists into.
+    pub fn workspace_dir(&self) -> &Path {
+        &self.workspace_dir
     }
 
     fn lock_storage(&self) -> MutexGuard<'_, CostStorage> {
@@ -103,10 +111,12 @@ impl CostTracker {
         };
 
         let session_costs = self.lock_session_costs();
-        let session_cost: f64 = session_costs
-            .iter()
-            .map(|record| record.usage.cost_usd)
-            .sum();
+        let session_cost: f64 = non_negative_zero(
+            session_costs
+                .iter()
+                .map(|record| record.usage.cost_usd)
+                .sum(),
+        );
         let total_tokens: u64 = session_costs
             .iter()
             .map(|record| record.usage.total_tokens)
@@ -184,12 +194,16 @@ impl CostTracker {
                     cost_usd: 0.0,
                     total_tokens: 0,
                     request_count: 0,
+                    unpriced_request_count: 0,
                 });
             model_entry.cost_usd += record.usage.cost_usd;
             model_entry.total_tokens = model_entry
                 .total_tokens
                 .saturating_add(record.usage.total_tokens);
             model_entry.request_count += 1;
+            if record.usage.cost_source == CostSource::Unknown {
+                model_entry.unpriced_request_count += 1;
+            }
         })?;
 
         let mut out = Vec::with_capacity(span as usize);
@@ -248,6 +262,29 @@ impl CostTracker {
         Ok(records)
     }
 
+    /// Every record timestamped in `[from, to]`, oldest first — the input to
+    /// [`super::report`]. The window is capped at 366 days, like the other
+    /// reads, so one call never scans more history than the dashboard does.
+    pub fn records_between(
+        &self,
+        from: chrono::DateTime<Utc>,
+        to: chrono::DateTime<Utc>,
+    ) -> Result<Vec<CostRecord>> {
+        let floor = to
+            .checked_sub_signed(Duration::days(366))
+            .ok_or_else(|| anyhow!("Usage report range underflowed"))?;
+        let from = from.max(floor);
+        let mut records: Vec<CostRecord> = Vec::new();
+        let storage = self.lock_storage();
+        storage.for_each_record(|record| {
+            if record.usage.timestamp >= from && record.usage.timestamp <= to {
+                records.push(record);
+            }
+        })?;
+        records.sort_by_key(|record| record.usage.timestamp);
+        Ok(records)
+    }
+
     /// Build the full dashboard payload: 7-day history, period total,
     /// projected monthly pace (daily avg × 30), and budget utilisation
     /// derived from the configured monthly limit and warn/alert thresholds.
@@ -262,7 +299,7 @@ impl CostTracker {
         alert_threshold: f64,
     ) -> Result<CostDashboard> {
         let days = self.get_daily_history(7)?;
-        let period_total_usd: f64 = days.iter().map(|d| d.cost_usd).sum();
+        let period_total_usd: f64 = non_negative_zero(days.iter().map(|d| d.cost_usd).sum());
         let daily_average = period_total_usd / days.len().max(1) as f64;
         let monthly_pace_usd = daily_average * 30.0;
         let budget_limit_monthly_usd = self.config.monthly_limit_usd.max(0.0);
@@ -307,10 +344,12 @@ impl CostTracker {
                         cost_usd: 0.0,
                         total_tokens: 0,
                         request_count: 0,
+                        unpriced_request_count: 0,
                     });
                 entry.cost_usd += stats.cost_usd;
                 entry.total_tokens = entry.total_tokens.saturating_add(stats.total_tokens);
                 entry.request_count += stats.request_count;
+                entry.unpriced_request_count += stats.unpriced_request_count;
             }
         }
         let mut by_model: Vec<ModelStats> = by_model_totals.into_values().collect();
@@ -333,6 +372,24 @@ impl CostTracker {
             by_model,
         })
     }
+}
+
+/// An empty `f64` sum is `-0.0`, which serialises as `-0.0` and renders as
+/// "-$0.00". Every derived total goes through this.
+pub(super) fn non_negative_zero(value: f64) -> f64 {
+    if value == 0.0 {
+        0.0
+    } else {
+        value
+    }
+}
+
+/// Rows the budget gate once wrote as `host:<agent_id>` with an estimated cost
+/// of zero. The event bridge already recorded the same model call under its
+/// real model, so these only double the token and request counts. Ledgers
+/// written before that stopped still hold them; every read skips them.
+fn is_legacy_host_duplicate(record: &CostRecord) -> bool {
+    record.usage.model.starts_with("host:") && record.usage.cost_source == CostSource::Estimated
 }
 
 fn resolve_storage_path(workspace_dir: &Path) -> Result<PathBuf> {
@@ -375,11 +432,15 @@ fn build_session_model_stats(session_costs: &[CostRecord]) -> HashMap<String, Mo
                 cost_usd: 0.0,
                 total_tokens: 0,
                 request_count: 0,
+                unpriced_request_count: 0,
             });
 
         entry.cost_usd += record.usage.cost_usd;
         entry.total_tokens += record.usage.total_tokens;
         entry.request_count += 1;
+        if record.usage.cost_source == CostSource::Unknown {
+            entry.unpriced_request_count += 1;
+        }
     }
 
     by_model
@@ -404,7 +465,11 @@ struct CostStorage {
 impl CostStorage {
     /// Create or open cost storage.
     fn new(path: &Path) -> Result<Self> {
-        if let Some(parent) = path.parent() {
+        // With a storage backend the ledger lives in documents under the
+        // acting agent's scope, which is only known per call: no directory to
+        // make, and no aggregate to prime here.
+        let documents = crate::storage::installed().is_some();
+        if let Some(parent) = path.parent().filter(|_| !documents) {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create directory {}", parent.display()))?;
         }
@@ -421,11 +486,13 @@ impl CostStorage {
             cached_month: now.month(),
         };
 
-        storage.rebuild_aggregates(
-            storage.cached_day,
-            storage.cached_year,
-            storage.cached_month,
-        )?;
+        if !documents {
+            storage.rebuild_aggregates(
+                storage.cached_day,
+                storage.cached_year,
+                storage.cached_month,
+            )?;
+        }
 
         Ok(storage)
     }
@@ -434,6 +501,16 @@ impl CostStorage {
     where
         F: FnMut(CostRecord),
     {
+        if let Some(docs) = super::tracker_documents::current()? {
+            self.import_legacy_once(&docs)?;
+            for record in docs.all()? {
+                if !is_legacy_host_duplicate(&record) {
+                    on_record(record);
+                }
+            }
+            return Ok(());
+        }
+
         if !self.path.exists() {
             return Ok(());
         }
@@ -457,6 +534,7 @@ impl CostStorage {
             }
 
             match serde_json::from_str::<CostRecord>(trimmed) {
+                Ok(record) if is_legacy_host_duplicate(&record) => {}
                 Ok(record) => on_record(record),
                 Err(error) => {
                     tracing::warn!(
@@ -469,6 +547,17 @@ impl CostStorage {
         }
 
         Ok(())
+    }
+
+    /// The workspace's JSONL ledger predates the backend and belongs to the
+    /// single-user (`local`) scope; import it into that scope once.
+    /// Once per process for the backend instance (see
+    /// `CostDocs::import_legacy_once`).
+    fn import_legacy_once(&self, docs: &super::tracker_documents::CostDocs) -> Result<()> {
+        if crate::storage::current_scope().ok() != Some(crate::storage::Scope::local()) {
+            return Ok(());
+        }
+        docs.import_legacy_once(&self.path)
     }
 
     fn rebuild_aggregates(&mut self, day: NaiveDate, year: i32, month: u32) -> Result<()> {
@@ -524,6 +613,16 @@ impl CostStorage {
 
     /// Add a new record.
     fn add_record(&mut self, record: CostRecord) -> Result<()> {
+        // The period aggregates are one cache for the whole process, so they
+        // are not kept for a document ledger, whose scope changes per call;
+        // `get_aggregated_costs` recomputes them from the scope's records.
+        if let Some(docs) = super::tracker_documents::current()? {
+            // The legacy ledger goes in before the first document, so history
+            // is never split across the two.
+            self.import_legacy_once(&docs)?;
+            return docs.add(&record);
+        }
+
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create directory {}", parent.display()))?;
@@ -565,15 +664,13 @@ impl CostStorage {
     /// [`Self::get_aggregated_managed_costs`] for anything that gates a
     /// request.
     fn get_aggregated_costs(&mut self) -> Result<(f64, f64)> {
+        if super::tracker_documents::current()?.is_some() {
+            let now = Utc::now();
+            self.rebuild_aggregates(now.date_naive(), now.year(), now.month())?;
+            return Ok((self.daily_cost_usd, self.monthly_cost_usd));
+        }
         self.ensure_period_cache_current()?;
         Ok((self.daily_cost_usd, self.monthly_cost_usd))
-    }
-
-    /// Get aggregated **managed-route** costs for the current day and month —
-    /// the only spend the local `[cost]` budget may gate (#5016).
-    fn get_aggregated_managed_costs(&mut self) -> Result<(f64, f64)> {
-        self.ensure_period_cache_current()?;
-        Ok((self.daily_managed_cost_usd, self.monthly_managed_cost_usd))
     }
 
     /// Get cost for a specific date.

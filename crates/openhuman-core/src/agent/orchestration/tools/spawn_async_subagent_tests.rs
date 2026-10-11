@@ -3,7 +3,6 @@ use crate::agent::harness::definition::AgentDefinitionRegistry;
 use crate::agent::harness::fork_context::{with_parent_context, ParentExecutionContext};
 use crate::agent::prompts::ToolCallFormat;
 use crate::config::AgentConfig;
-use crate::memory::{Memory, MemoryCategory, MemoryEntry, NamespaceSummary, RecallOpts};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -32,9 +31,13 @@ fn parameters_schema_advertises_fire_and_forget_fields() {
         .get("properties")
         .and_then(|v| v.as_object())
         .expect("properties");
-    for key in ["context", "model", "toolkit", "task_title"] {
+    for key in ["context", "model", "task_title"] {
         assert!(props.contains_key(key), "missing {key}");
     }
+    assert!(
+        !props.contains_key("toolkit"),
+        "the retired toolkit spawn argument must not be advertised"
+    );
 }
 
 #[test]
@@ -78,7 +81,7 @@ fn wait_only_fleet_omits_steering_guidance_and_instruction() {
     let payload = async_subagent_ref_payload(
         "sub-123",
         "subsess-456",
-        "researcher",
+        "task_manager_agent",
         Some("thread-worker"),
         false,
         "created",
@@ -99,7 +102,7 @@ fn wait_only_fleet_omits_steering_guidance_and_instruction() {
         "steer_subagent leaked into the envelope"
     );
 
-    let message = format_async_subagent_accepted("researcher", &serialized, &fleet);
+    let message = format_async_subagent_accepted("task_manager_agent", &serialized, &fleet);
     let prose = message.split("[async_subagent_ref]").next().unwrap();
     assert!(prose.contains("wait for completion"));
     assert!(
@@ -113,7 +116,7 @@ fn async_reference_payload_includes_agent_id_and_control_instructions() {
     let payload = async_subagent_ref_payload(
         "sub-123",
         "subsess-456",
-        "researcher",
+        "task_manager_agent",
         Some("thread-worker"),
         false,
         "created",
@@ -121,8 +124,8 @@ fn async_reference_payload_includes_agent_id_and_control_instructions() {
         &FleetToolSet::all(),
     );
 
-    assert_eq!(payload["agent_id"], "researcher");
-    assert_eq!(payload["agentId"], "researcher");
+    assert_eq!(payload["agent_id"], "task_manager_agent");
+    assert_eq!(payload["agentId"], "task_manager_agent");
     assert_eq!(payload["instructions"]["wait"]["tool"], "wait_subagent");
     assert_eq!(
         payload["instructions"]["timeout_tick"]["arguments"]["timeout_secs"],
@@ -147,7 +150,7 @@ fn async_reference_matches_the_orchestrator_fleet_vocabulary() {
     let payload = async_subagent_ref_payload(
         "sub-123",
         "subsess-456",
-        "integrations_agent",
+        "task_manager_agent",
         None,
         false,
         "created",
@@ -196,7 +199,7 @@ fn async_reference_matches_the_orchestrator_fleet_vocabulary() {
         .iter()
         .any(|a| a.contains("delivered to you automatically")));
 
-    let message = format_async_subagent_accepted("integrations_agent", &serialized, &fleet);
+    let message = format_async_subagent_accepted("task_manager_agent", &serialized, &fleet);
     let prose = message.split("[async_subagent_ref]").next().unwrap();
     assert!(prose.contains("delivered to you automatically"));
     assert!(!prose.contains("wait for completion"));
@@ -259,14 +262,16 @@ fn reusable_follow_up_message_preserves_context() {
 #[test]
 fn extract_workflow_proposal_finds_last_proposal_tool_result() {
     let history = vec![
-        ChatMessage::user("build me a workflow"),
-        ChatMessage::tool(r#"{"type":"something_else","x":1}"#),
-        ChatMessage::tool(r#"{"type":"workflow_proposal","persisted":false,"name":"Old Draft"}"#),
-        ChatMessage::assistant("revising…"),
-        ChatMessage::tool(
+        TranscriptMessage::user("build me a workflow"),
+        TranscriptMessage::tool(r#"{"type":"something_else","x":1}"#),
+        TranscriptMessage::tool(
+            r#"{"type":"workflow_proposal","persisted":false,"name":"Old Draft"}"#,
+        ),
+        TranscriptMessage::assistant("revising…"),
+        TranscriptMessage::tool(
             r#"{"type":"workflow_proposal","persisted":false,"name":"Daily X Trending Email"}"#,
         ),
-        ChatMessage::assistant("Here's the proposed workflow."),
+        TranscriptMessage::assistant("Here's the proposed workflow."),
     ];
     let proposal = extract_workflow_proposal_from_history(&history).expect("proposal extracted");
     // The LAST proposal wins — later revisions supersede earlier drafts.
@@ -276,16 +281,16 @@ fn extract_workflow_proposal_finds_last_proposal_tool_result() {
 #[test]
 fn extract_workflow_proposal_ignores_non_proposal_history() {
     let history = vec![
-        ChatMessage::user("hello"),
-        ChatMessage::tool("plain text tool output, not json"),
-        ChatMessage::assistant("done"),
+        TranscriptMessage::user("hello"),
+        TranscriptMessage::tool("plain text tool output, not json"),
+        TranscriptMessage::assistant("done"),
     ];
     assert!(extract_workflow_proposal_from_history(&history).is_none());
 }
 
 #[test]
 fn attach_workflow_proposal_persists_thread_message_and_extends_summary() {
-    use crate::memory::conversations::CreateConversationThread;
+    use crate::threads::store::CreateConversationThread;
     let temp = tempfile::tempdir().expect("tempdir");
     conversations::ensure_thread(
         temp.path().to_path_buf(),
@@ -296,11 +301,12 @@ fn attach_workflow_proposal_persists_thread_message_and_extends_summary() {
             parent_thread_id: None,
             labels: None,
             personality_id: None,
+            working_dir: None,
         },
     )
     .expect("thread created");
 
-    let history = vec![ChatMessage::tool(
+    let history = vec![TranscriptMessage::tool(
         r#"{"type":"workflow_proposal","persisted":false,"name":"Daily X Trending Email","graph":{"nodes":[],"edges":[]}}"#,
     )];
     let summary = attach_workflow_proposal(
@@ -343,8 +349,8 @@ fn attach_workflow_proposal_without_proposal_returns_summary_unchanged() {
         temp.path(),
         Some("thread-x"),
         "sub-task-2",
-        "researcher",
-        &[ChatMessage::tool("no proposal here")],
+        "task_manager_agent",
+        &[TranscriptMessage::tool("no proposal here")],
         "research done".to_string(),
     );
     assert_eq!(summary, "research done");
@@ -369,7 +375,7 @@ async fn missing_prompt_returns_error() {
     assert!(result.output().contains("prompt"));
 }
 
-/// B40 / Gap 4: a delegating agent (orchestrator/subconscious) calling
+/// B40 / Gap 4: a delegating agent (e.g. the orchestrator) calling
 /// `spawn_async_subagent` directly from a thread-less context (flow
 /// `agent` node, CLI, cron) must get a clear, actionable error instead of
 /// silently accepting the spawn and later dropping its result in
@@ -387,7 +393,7 @@ async fn errors_clearly_when_no_parent_thread_for_delivery() {
     let result = with_parent_context(parent_context(workspace.path()), async {
         SpawnAsyncSubagentTool::new()
             .execute(json!({
-                "agent_id": "researcher",
+                "agent_id": "task_manager_agent",
                 "prompt": "investigate x",
             }))
             .await
@@ -432,7 +438,7 @@ async fn guard_does_not_fire_when_parent_thread_is_bound() {
         SpawnAsyncSubagentTool::new()
             .execute_with_context(
                 json!({
-                    "agent_id": "researcher",
+                    "agent_id": "task_manager_agent",
                     "prompt": "investigate x",
                 }),
                 ToolCallOptions::default(),
@@ -454,7 +460,7 @@ fn parent_context(workspace_dir: &Path) -> ParentExecutionContext {
     ParentExecutionContext {
         workspace_descriptor: None,
         agent_definition_id: "orchestrator".into(),
-        allowed_subagent_ids: HashSet::from(["researcher".to_string()]),
+        allowed_subagent_ids: HashSet::from(["task_manager_agent".to_string()]),
         turn_model_source: crate::agent::tinyagents::TurnModelSource::from_model(Arc::new(
             tinyagents_harness::testkit::ScriptedModel::replies(vec!["done"]),
         )),
@@ -466,7 +472,6 @@ fn parent_context(workspace_dir: &Path) -> ParentExecutionContext {
         model_name: "test-model".into(),
         temperature: 0.0,
         workspace_dir: workspace_dir.to_path_buf(),
-        memory: Arc::new(NoopMemory),
         agent_config: AgentConfig::default(),
         workflows: Arc::new(Vec::new()),
         memory_context: Arc::new(None),
@@ -481,60 +486,23 @@ fn parent_context(workspace_dir: &Path) -> ParentExecutionContext {
     }
 }
 
-struct NoopMemory;
-
-#[async_trait::async_trait]
-impl Memory for NoopMemory {
-    fn name(&self) -> &str {
-        "noop"
-    }
-
-    async fn store(
-        &self,
-        _namespace: &str,
-        _key: &str,
-        _content: &str,
-        _category: MemoryCategory,
-        _session_id: Option<&str>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn recall(
-        &self,
-        _query: &str,
-        _limit: usize,
-        _opts: RecallOpts<'_>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        Ok(Vec::new())
-    }
-
-    async fn get(&self, _namespace: &str, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
-        Ok(None)
-    }
-
-    async fn list(
-        &self,
-        _namespace: Option<&str>,
-        _category: Option<&MemoryCategory>,
-        _session_id: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        Ok(Vec::new())
-    }
-
-    async fn forget(&self, _namespace: &str, _key: &str) -> anyhow::Result<bool> {
-        Ok(false)
-    }
-
-    async fn namespace_summaries(&self) -> anyhow::Result<Vec<NamespaceSummary>> {
-        Ok(Vec::new())
-    }
-
-    async fn count(&self) -> anyhow::Result<usize> {
-        Ok(0)
-    }
-
-    async fn health_check(&self) -> bool {
-        true
-    }
+/// The session builder swaps in a scoped instance so the WIRE schema (read
+/// from the registered tool on native tool calling) carries only the ids the
+/// parent may dispatch, sorted and deduplicated, and says so.
+#[test]
+fn scoped_instance_advertises_exactly_the_allowlist() {
+    let tool = SpawnAsyncSubagentTool::scoped(vec![
+        "workflow_builder".to_string(),
+        "agent_memory".to_string(),
+        "workflow_builder".to_string(),
+    ]);
+    let schema = tool.parameters_schema();
+    assert_eq!(
+        schema["properties"]["agent_id"]["enum"],
+        serde_json::json!(["agent_memory", "workflow_builder"])
+    );
+    assert!(schema["properties"]["agent_id"]["description"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("only these are dispatchable"));
 }

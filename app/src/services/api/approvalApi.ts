@@ -8,7 +8,7 @@ import { callCoreRpc } from '../coreRpcClient';
 // approval gate through the controller registry; this client only READS them —
 // decisions still flow through `openhuman.approval_decide` (ApprovalRequestCard).
 //
-// Wire-shape note: both RPCs return an `RpcOutcome` with a single diagnostic
+// Wire-shape note: both RPCs return an `Outcome` with a single diagnostic
 // log line when the gate is installed, so the JSON-RPC `result` is the
 // CLI-compatible envelope `{ result: [...rows], logs: [...] }`. When the gate
 // is NOT installed the core returns a bare `[]`. `unwrapRows` normalizes both.
@@ -48,7 +48,9 @@ export interface PendingApproval {
   action_summary: string;
   /** Redacted JSON arguments — counts/shape only, no raw message bodies. */
   args_redacted: unknown;
-  session_id: string;
+  /** Not sent by `approval_list_recent_decisions` today; optional so the UI
+   *  cannot crash on its absence. */
+  session_id?: string | null;
   /** RFC3339 timestamp. */
   created_at: string;
   /** RFC3339 timestamp, or null when the request does not expire. */

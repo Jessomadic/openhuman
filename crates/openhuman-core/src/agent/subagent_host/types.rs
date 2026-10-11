@@ -9,7 +9,7 @@ use thiserror::Error;
 use tinytools::WorkspaceDescriptor;
 
 use crate::agent::harness::definition::AgentTier;
-use crate::agent::messages::ChatMessage;
+use tinyagents_session::transcript::TranscriptMessage;
 
 /// Per-spawn options that override or augment what the
 /// [`AgentDefinition`] specifies. Built by `SpawnSubagentTool::execute`
@@ -20,15 +20,6 @@ pub struct SubagentRunOptions {
     /// resolved tool list is further restricted to tools whose name
     /// starts with `{skill}__`. Overrides `definition.skill_filter`.
     pub skill_filter_override: Option<String>,
-
-    /// Optional Composio toolkit scope (e.g. `"gmail"`, `"notion"`).
-    /// When set, skill-category tools are further restricted to those
-    /// whose name starts with the uppercased `{toolkit}_` prefix, and
-    /// the sub-agent's rendered `Connected Integrations` section is
-    /// narrowed to only that toolkit's entry. Used by main/orchestrator
-    /// when spawning `integrations_agent` for a specific platform so the
-    /// sub-agent only sees one integration's tool catalogue.
-    pub toolkit_override: Option<String>,
 
     /// Optional context blob the parent wants to inject before the
     /// task prompt. Rendered as a `[Context]\n…\n` prefix.
@@ -61,7 +52,7 @@ pub struct SubagentRunOptions {
     /// system-prompt + user-message construction and uses this history
     /// directly — it already contains the system prompt and all prior
     /// turns including the clarification tool call/result.
-    pub initial_history: Option<Vec<ChatMessage>>,
+    pub initial_history: Option<Vec<TranscriptMessage>>,
 
     /// Directory for writing/reading checkpoint files when the
     /// sub-agent pauses for user input. Defaults to
@@ -149,7 +140,7 @@ pub enum SubagentRunStatus {
 pub struct SubagentRunOutcome {
     /// Unique identifier for this sub-task run.
     pub task_id: String,
-    /// The ID of the agent archetype used (e.g., `researcher`).
+    /// The ID of the agent archetype used (e.g., `code_executor`).
     pub agent_id: String,
     /// The final text response produced by the sub-agent.
     pub output: String,
@@ -164,7 +155,7 @@ pub struct SubagentRunOutcome {
     /// Final in-memory history after the run loop exits. Durable sub-agent
     /// sessions persist this so an idle worker can resume without rebuilding
     /// its context from only the parent transcript.
-    pub final_history: Vec<ChatMessage>,
+    pub final_history: Vec<TranscriptMessage>,
     /// Token + cost accounting accumulated across every provider call this
     /// sub-agent made. Surfaced so the parent turn can roll child spend into
     /// the session totals (tokens + USD) and the global cost tracker. See
@@ -204,7 +195,33 @@ pub struct SubagentUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
+    /// Sum of the run's known call costs; read with `cost_source`.
     pub charged_amount_usd: f64,
+    /// How certain `charged_amount_usd` is. `Unknown` means some call had no
+    /// charge and no catalogued price, so the sum is incomplete.
+    #[serde(
+        default = "unknown_cost_source",
+        skip_serializing_if = "is_unknown_cost_source"
+    )]
+    pub cost_source: crate::agent::cost::CostSource,
+}
+
+fn unknown_cost_source() -> crate::agent::cost::CostSource {
+    crate::agent::cost::CostSource::Unknown
+}
+
+fn is_unknown_cost_source(source: &crate::agent::cost::CostSource) -> bool {
+    *source == crate::agent::cost::CostSource::Unknown
+}
+
+impl SubagentUsage {
+    /// The run's cost as a tally, for folding into a parent's.
+    pub fn cost(&self) -> crate::agent::cost::CostTally {
+        crate::agent::cost::CostTally {
+            known_usd: self.charged_amount_usd,
+            source: self.cost_source,
+        }
+    }
 }
 
 /// Which prompt-construction path the runner took for a sub-agent.
@@ -238,11 +255,13 @@ pub struct SubagentCheckpointData {
     pub task_id: String,
     pub agent_id: String,
     pub worker_thread_id: Option<String>,
-    pub history: Vec<ChatMessage>,
+    #[serde(with = "crate::agent::messages::history_wire")]
+    pub history: Vec<TranscriptMessage>,
     pub question: String,
     pub options: Option<Vec<String>>,
-    /// Composio toolkit override, if the paused run was scoped to one.
-    pub toolkit_override: Option<String>,
+    // A legacy `toolkit_override` key (written before the toolkit spawn
+    // argument was retired) is ignored on load: this type does not deny
+    // unknown fields, so old checkpoints stay readable.
     /// Workflow filter override, if the paused run was scoped to one.
     pub skill_filter_override: Option<String>,
     /// Model override, if one was set for this run.
@@ -354,3 +373,7 @@ pub enum SubagentRunError {
         observed_samples: u64,
     },
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;

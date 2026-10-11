@@ -520,6 +520,32 @@ fn transient_filter_keeps_aggregate_all_exhausted() {
 
 #[cfg(feature = "crash-reporting")]
 #[test]
+fn all_exhausted_aggregate_is_dropped_only_when_every_attempt_is_transient() {
+    let tags = [
+        ("domain", "llm_provider"),
+        ("failure", "all_exhausted"),
+        ("attempts", "2"),
+    ];
+    let transient = event_with_tags_and_message(
+        &tags,
+        "All providers/models failed. Attempts: openai API error (503 Service Unavailable); custom_openai API error (502 Bad Gateway)",
+    );
+    assert!(
+        is_all_transient_provider_exhaustion_event(&transient),
+        "all-transient aggregate should not recreate per-attempt Sentry noise"
+    );
+    let mixed = event_with_tags_and_message(
+        &tags,
+        "All providers/models failed. Attempts: openai API error (401 Unauthorized); custom_openai API error (503 Service Unavailable)",
+    );
+    assert!(
+        !is_all_transient_provider_exhaustion_event(&mixed),
+        "mixed/permanent aggregate should remain actionable"
+    );
+}
+
+#[cfg(feature = "crash-reporting")]
+#[test]
 fn transient_filter_keeps_events_with_no_status_tag() {
     let event = event_with_tags(&[("domain", "llm_provider"), ("failure", "non_2xx")]);
     assert!(
@@ -685,4 +711,34 @@ fn skills_install_fetch_filter_keeps_server_and_wrong_shape_failures() {
             "only skills.install_fetch non_2xx 4xx events may be filtered: {tags:?}"
         );
     }
+}
+
+#[test]
+fn classifies_api_key_rejected_as_expected_credential_lapse() {
+    // A 401 on a TinyHumans API-key credential flattens to the
+    // `API_KEY_REJECTED:` sentinel (`backend::client::flatten_authed_error`). The
+    // remedy is a new key, so it must not reach Sentry as an RPC error.
+    let msg = format!("{API_KEY_REJECTED_PREFIX} backend rejected api key on GET /teams/me/usage");
+    assert!(is_api_key_rejected_message(&msg));
+    assert!(matches!(
+        expected_error_kind(&msg),
+        Some(ExpectedErrorKind::SessionExpired)
+    ));
+    // …but it is not a session expiry: the JSON-RPC publish boundary keys
+    // off `is_session_expired_message`, which must stay false so a bad key
+    // never clears a signed-in session.
+    assert!(!is_session_expired_message(&msg));
+}
+
+#[test]
+fn classifies_offline_local_session_refusal_as_backend_unavailable() {
+    // Sentry 36649 — 5.5k events: hosted RPCs (`team_get_usage`,
+    // `announcements_get_latest`, `billing_*`) invoked under the offline
+    // local credential. The refusal must classify as expected.
+    let msg = crate::security::credentials::session_support::LOCAL_SESSION_BACKEND_UNAVAILABLE;
+    assert!(matches!(
+        expected_error_kind(msg),
+        Some(ExpectedErrorKind::BackendUnavailable)
+    ));
+    assert!(!is_session_expired_message(msg));
 }

@@ -41,7 +41,7 @@ use params::{
 };
 
 #[cfg(test)]
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 #[cfg(test)]
 use serde_json::Map;
 #[cfg(test)]

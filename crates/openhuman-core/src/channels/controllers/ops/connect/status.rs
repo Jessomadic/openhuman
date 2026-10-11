@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 use crate::security::credentials;
 
 use super::super::super::definitions::{all_channel_definitions, find_channel_definition};
@@ -15,7 +15,7 @@ use super::shared::{channel_config_connected, credential_provider, merge_listene
 pub async fn channel_status(
     config: &Config,
     channel_id: Option<&str>,
-) -> Result<RpcOutcome<Vec<ChannelStatusEntry>>, String> {
+) -> Result<Outcome<Vec<ChannelStatusEntry>>, String> {
     // List all stored credentials with "channel:" prefix. Uses the
     // prefix-match helper because channel credentials are keyed as
     // `channel:<id>:<mode>` and no single literal value matches them
@@ -68,7 +68,7 @@ pub async fn channel_status(
         }
     }
 
-    Ok(RpcOutcome::new(entries, vec![]))
+    Ok(Outcome::new(entries, vec![]))
 }
 
 /// Set the default messaging channel for proactive agent delivery (issue #3712
@@ -79,7 +79,7 @@ pub async fn channel_status(
 pub async fn set_default_channel(
     config: &mut Config,
     channel: &str,
-) -> Result<RpcOutcome<Value>, String> {
+) -> Result<Outcome<Value>, String> {
     let canonical = channel.trim().to_ascii_lowercase();
     if canonical.is_empty() {
         return Err("channel must not be empty".to_string());
@@ -98,7 +98,7 @@ pub async fn set_default_channel(
     // Apply live so proactive routing follows the new default immediately.
     crate::channels::proactive::set_runtime_active_channel(Some(canonical.clone()));
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({ "active_channel": canonical, "restart_required": false }),
         format!("default messaging channel set to {canonical}"),
     ))
@@ -106,13 +106,13 @@ pub async fn set_default_channel(
 
 /// Return the persisted default messaging channel
 /// (`channels_config.active_channel`), defaulting to `"web"` when unset.
-pub fn get_default_channel(config: &Config) -> Result<RpcOutcome<Value>, String> {
+pub fn get_default_channel(config: &Config) -> Result<Outcome<Value>, String> {
     let active = config
         .channels_config
         .active_channel
         .clone()
         .unwrap_or_else(|| "web".to_string());
-    Ok(RpcOutcome::new(json!({ "active_channel": active }), vec![]))
+    Ok(Outcome::new(json!({ "active_channel": active }), vec![]))
 }
 
 /// Return the slugs of all messaging channels currently connected,

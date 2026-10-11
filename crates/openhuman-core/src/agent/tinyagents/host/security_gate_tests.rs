@@ -266,14 +266,6 @@ async fn ordinary_text_passes_screening_unchanged() {
     assert_eq!(outcome.effective_text(text), Some(text));
 }
 
-#[test]
-fn gate_unavailable_is_an_error_not_a_refusal() {
-    // A policy refusal is Deny/Block; Err means no verdict was reachable.
-    let err = gate_unavailable("approval store unreadable");
-    assert!(matches!(err, TinyAgentsError::Capability(_)));
-    assert!(err.to_string().contains("could not reach a verdict"));
-}
-
 /// Builds a session whose channel policy yields `action` for `tool_name`.
 fn policy_session(tool_name: &str, action: ToolPolicyAction) -> Arc<ToolPolicySession> {
     use crate::tools::agent_policy::{TaskProfile, TaskRiskLevel, ToolPolicyDecision};
@@ -336,6 +328,44 @@ async fn require_approval_never_silently_allows_a_plain_tool() {
     );
 }
 
+#[cfg(feature = "modules")]
+#[tokio::test]
+async fn desktop_default_skips_channel_and_external_approval_parks() {
+    let _guard = crate::config::TEST_ENV_LOCK.lock().await;
+    let previous = std::env::var_os("OPENHUMAN_WORKSPACE");
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("config.toml"),
+        "[desktop]\napprovals_enabled = false\n",
+    )
+    .unwrap();
+    unsafe {
+        std::env::set_var("OPENHUMAN_WORKSPACE", temp.path());
+    }
+    let desktop = Box::new(crate::desktop::control::tools::DesktopTool::new(
+        Arc::new(crate::config::Config::default()),
+        crate::desktop::control::tools::DesktopToolKind::Goal,
+    )) as Box<dyn Tool>;
+    let gate =
+        OpenHumanSecurityGate::new(policy(AutonomyLevel::Full), vec![Arc::new(vec![desktop])])
+            .with_tool_policy(policy_session(
+                "desktop_goal",
+                ToolPolicyAction::RequireApproval,
+            ));
+    let decision = gate
+        .authorize_tool(&req(
+            "desktop_goal",
+            json!({"app":"TextEdit","goal":"test"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(decision, GateDecision::Allow);
+    match previous {
+        Some(value) => unsafe { std::env::set_var("OPENHUMAN_WORKSPACE", value) },
+        None => unsafe { std::env::remove_var("OPENHUMAN_WORKSPACE") },
+    }
+}
+
 /// A channel `RequireApproval` must not become an autonomy-tier override.
 ///
 /// With no approval gate installed the park denies, so this asserts the
@@ -390,4 +420,134 @@ async fn allow_and_deny_channel_verdicts_are_unchanged() {
         .await
         .unwrap();
     assert!(matches!(denied, GateDecision::Deny { .. }));
+}
+
+/// Tripwire for #6710. The hosted root marks replayed history with
+/// `with_replayed_prefix`, which is only safe while replayed user rows are what
+/// the gate admitted. The session driver persists the RAW turn input
+/// (`session_host/driver.rs`, `let mut history = request.history`), so the day
+/// this gate starts returning `Redacted` (the phase-4 TODO on `screen_input`), a
+/// redacted secret would reach the model raw on every later turn. Revisit that
+/// opt-in, or persist the redacted form, before changing this assertion.
+#[tokio::test]
+async fn screen_input_never_redacts_while_replayed_history_is_trusted() {
+    let gate = gate(AutonomyLevel::Full);
+    for text in [
+        "my card is 4111 1111 1111 1111 and my email is jane.doe@example.com",
+        "call me on +1 415 555 0132, SSN 123-45-6789",
+        "api key sk-live-0123456789abcdefghijklmnop",
+    ] {
+        for origin in [ContentOrigin::User, ContentOrigin::Tool] {
+            let outcome = gate.screen_input(text, origin).await.unwrap();
+            assert!(
+                !matches!(outcome, ScreenOutcome::Redacted(_)),
+                "gate returned Redacted for {origin:?}; revisit #6710's replayed_prefix opt-in"
+            );
+        }
+    }
+}
+
+/// A refused approval must reach the model as a Deny with a reason. Returned
+/// as `Prompted { approved: false }` it carried none, and the harness fell back
+/// to a bare "tool call was not approved" — after which the model redid the
+/// call through `shell`.
+#[test]
+fn a_refused_approval_is_a_deny_the_model_can_read() {
+    for gate_reason in [
+        "[policy-denied] User denied 'write_file' execution.",
+        "[policy-denied] Approval for 'write_file' timed out after 600s.",
+    ] {
+        let outcome = GateOutcome::Deny {
+            reason: gate_reason.to_string(),
+        };
+        let decision = decision_for_outcome("write_file", outcome);
+        assert!(!decision.is_allowed());
+        let reason = decision
+            .denial_reason()
+            .expect("a refused approval carries a reason for the model");
+        // A policy-class failure pauses the turn before the model can reply.
+        assert_eq!(
+            crate::tools::status::classify(reason, false).class,
+            crate::tools::status::ToolFailureClass::Unknown,
+            "{reason}"
+        );
+        assert!(reason.contains("must not be performed"), "{reason}");
+        assert!(reason.contains("another way"), "{reason}");
+        let lower = reason.to_lowercase();
+        assert!(
+            !lower.contains("user denied")
+                && !lower.contains("timed out")
+                && !lower.contains("human"),
+            "the text must not say who refused or how: {reason}"
+        );
+    }
+}
+
+/// A prompt that expired unanswered is reported as that — not as a refusal,
+/// and not as nothing — so the agent tells the user the action is waiting on
+/// their approval (the 600s `media_generate_image` expiries in sub-agents left
+/// the parent with no usable result). It still carries no policy marker, so
+/// the turn is not paused before the model can reply, and it names no human.
+#[test]
+fn an_unanswered_approval_tells_the_model_it_was_not_answered() {
+    // The exact reason the gate's TTL path produces.
+    let gate_reason = format!(
+        "[policy-denied] Approval for 'media_generate_image' timed out after 180s: {}, so it \
+         was not run.",
+        crate::security::approval::APPROVAL_UNANSWERED_PHRASE
+    );
+    let decision = decision_for_outcome(
+        "media_generate_image",
+        GateOutcome::Deny {
+            reason: gate_reason,
+        },
+    );
+    assert!(!decision.is_allowed());
+    let reason = decision.denial_reason().expect("a reason for the model");
+    assert!(reason.contains("not answered"), "{reason}");
+    assert!(reason.contains("ask again"), "{reason}");
+    assert!(reason.contains("another way"), "{reason}");
+    assert_eq!(
+        crate::tools::status::classify(reason, false).class,
+        crate::tools::status::ToolFailureClass::Unknown,
+        "{reason}"
+    );
+    let lower = reason.to_lowercase();
+    assert!(
+        !lower.contains("user denied") && !lower.contains("declined") && !lower.contains("human"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn an_approved_park_is_still_prompted_and_allowed() {
+    let decision = decision_for_outcome("write_file", GateOutcome::Allow);
+    assert!(matches!(
+        decision,
+        GateDecision::Prompted { approved: true }
+    ));
+    assert!(decision.is_allowed());
+}
+
+#[tokio::test]
+async fn a_nested_call_is_refused_even_for_a_read_only_tool() {
+    let nested = req("read_file", json!({ "path": "notes.md" })).with_parent_call_id("parent-1");
+    let decision = gate(AutonomyLevel::Full)
+        .authorize_tool(&nested)
+        .await
+        .unwrap();
+    assert!(!decision.is_allowed());
+    assert!(decision
+        .denial_reason()
+        .expect("denial reason")
+        .contains("may not call other tools"));
+}
+
+#[tokio::test]
+async fn a_plain_call_is_unaffected_by_the_nested_refusal() {
+    let decision = gate(AutonomyLevel::Full)
+        .authorize_tool(&req("read_file", json!({ "path": "notes.md" })))
+        .await
+        .unwrap();
+    assert_eq!(decision, GateDecision::Allow);
 }

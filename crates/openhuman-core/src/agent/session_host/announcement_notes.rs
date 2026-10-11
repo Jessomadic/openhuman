@@ -22,14 +22,14 @@ pub(super) fn integration_announcement_note(slugs: &[String]) -> Option<String> 
 
 pub(super) fn mcp_announcement_note(servers: &[String]) -> Option<String> {
     (!servers.is_empty()).then(|| format!(
-        "[MCP update] These MCP server(s) connected during this conversation and are available now via the use_mcp_server delegate: {}. {ANNOUNCEMENT_TRAILER}",
+        "[MCP update] These MCP server(s) connected during this conversation and are available now; their tools are reachable through tool_search: {}. {ANNOUNCEMENT_TRAILER}",
         servers.join(", ")
     ))
 }
 
 pub(super) fn skill_announcement_note(skill_ids: &[String]) -> Option<String> {
     (!skill_ids.is_empty()).then(|| format!(
-        "[skills update] These skill(s) were installed during this conversation and are available now in your `## Installed Skills` list via `run_skill`: {}. {ANNOUNCEMENT_TRAILER}",
+        "[skills update] These skill(s) were installed during this conversation and are available now in your `## Installed Skills` list via `run_workflow`: {}. {ANNOUNCEMENT_TRAILER}",
         skill_ids.join(", ")
     ))
 }
@@ -37,7 +37,7 @@ pub(super) fn skill_announcement_note(skill_ids: &[String]) -> Option<String> {
 pub(super) fn skill_retraction_note(skill_ids: &[String]) -> Option<String> {
     (!skill_ids.is_empty()).then(|| format!(
         "[skills retracted] These skill(s) were uninstalled during this conversation and are no longer available: {}. \
-Do not attempt to run them with `run_skill` — they have been removed. Tell the user to reinstall if they want to use them again.",
+Do not attempt to run them with `run_workflow` — they have been removed. Tell the user to reinstall if they want to use them again.",
         skill_ids.join(", ")
     ))
 }

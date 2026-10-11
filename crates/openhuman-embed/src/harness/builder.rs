@@ -31,6 +31,7 @@ pub struct HarnessBuilder {
     skills_dir: Option<PathBuf>,
     #[cfg(feature = "mcp")]
     mcp_servers: Vec<super::mcp::McpServer>,
+    host_tools: Option<openhuman_core::agent::HostTools>,
     services: Option<ServiceSet>,
     domains: Option<DomainSet>,
     tool_groups: Option<openhuman_core::tools::toolpacks::ToolGroups>,
@@ -59,6 +60,7 @@ impl HarnessBuilder {
             skills_dir: None,
             #[cfg(feature = "mcp")]
             mcp_servers: Vec::new(),
+            host_tools: None,
             services: None,
             domains: None,
             tool_groups: None,
@@ -100,7 +102,7 @@ impl HarnessBuilder {
     /// Make the skill bundles in `dir` available to the agent.
     ///
     /// The bundles are **copied** into the workspace's skills root — see the
-    /// [`skills`](super::skills) module docs for why linking cannot work. Not
+    /// internal skill-copy module docs for why linking cannot work. Not
     /// permitted with [`Workspace::Inherit`], which would leave them in the
     /// operator's own install.
     #[cfg(feature = "skills")]
@@ -119,10 +121,29 @@ impl HarnessBuilder {
         self
     }
 
+    /// The harness agent's own in-process tools, built fresh for every turn.
+    ///
+    /// [`AgentSpec::tools`](crate::AgentSpec::tools) for the one-agent
+    /// shorthand, with the same contract — including that `f` runs per turn
+    /// and may return a different belt each time.
+    #[must_use]
+    pub fn tools(
+        mut self,
+        f: impl for<'a> Fn(
+                openhuman_core::agent::TurnContext<'a>,
+            ) -> openhuman_core::agent::HostTurnTools
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        self.host_tools = Some(std::sync::Arc::new(f));
+        self
+    }
+
     /// Override which background services run.
     ///
     /// The default is deliberately minimal — see [`Harness`] — because cron,
-    /// heartbeat and the memory queue are what make a second core in the same
+    /// the login-gated services and the memory queue are what make a second core in the same
     /// process corrupt shared state. Widen it only if you need what they do.
     pub fn services(mut self, services: ServiceSet) -> Self {
         self.services = Some(services);
@@ -150,7 +171,7 @@ impl HarnessBuilder {
     /// Defaults to every group withheld, matching the desktop app. Reach for
     /// [`ToolGroups::advertised`] when the host does its own routing and wants
     /// native function calling instead of the `use_skill` envelope, and for
-    /// [`ToolGroups::none`] plus [`with`](ToolGroups::with) when the embedding
+    /// [`crate::ToolGroups::none`] plus [`with`](crate::ToolGroups::with) when the embedding
     /// product should not carry a family at all.
     ///
     /// ```no_run
@@ -161,7 +182,7 @@ impl HarnessBuilder {
     /// ```
     ///
     /// [`ToolGroups::advertised`]: openhuman_core::tools::toolpacks::ToolGroups::advertised
-    /// [`ToolGroups::none`]: openhuman_core::tools::toolpacks::ToolGroups::none
+    /// [`crate::ToolGroups::none`]: openhuman_core::tools::toolpacks::ToolGroups::none
     /// [`ToolGroups::with`]: openhuman_core::tools::toolpacks::ToolGroups::with
     pub fn tool_groups(
         mut self,
@@ -286,6 +307,9 @@ impl HarnessBuilder {
         let mut spec = AgentSpec::new(HARNESS_AGENT_ID)
             .provider(self.provider)
             .access(self.access);
+        if let Some(host_tools) = self.host_tools {
+            spec = spec.host_tools(host_tools);
+        }
         if let Some(dir) = self.action_dir {
             spec = spec.action_dir(dir);
         } else if !inherit {

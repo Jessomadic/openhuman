@@ -33,7 +33,7 @@ fn execute_tool_resolves_to_direct_kind_when_mode_is_direct() {
     // breakage. We assert by independently calling the same factory the
     // tool calls per-execute.
     let config = direct_mode_config();
-    let kind = crate::integrations::composio::client::create_composio_client(&config)
+    let kind = crate::integrations::composio::client::resolve_composio_route(&config)
         .expect("direct mode with inline api_key must resolve");
     assert_eq!(
         kind.mode(),
@@ -46,7 +46,7 @@ fn execute_tool_resolves_to_direct_kind_when_mode_is_direct() {
 fn execute_tool_resolves_to_backend_kind_when_mode_is_backend() {
     // Reverse of the above — confirms the backend path still wins when
     // the user is on default (mode = "backend") and a session token is
-    // present. Without the token, `create_composio_client` returns
+    // present. Without the token, `resolve_composio_route` returns
     // Err("no backend session"); store one to get past that gate.
     let tmp = tempfile::tempdir().unwrap();
     let mut config = crate::config::Config::default();
@@ -60,7 +60,7 @@ fn execute_tool_resolves_to_backend_kind_when_mode_is_backend() {
             true,
         )
         .expect("store test session token");
-    let kind = crate::integrations::composio::client::create_composio_client(&config)
+    let kind = crate::integrations::composio::client::resolve_composio_route(&config)
         .expect("backend mode with session token must resolve");
     assert_eq!(
         kind.mode(),
@@ -83,11 +83,11 @@ async fn list_tools_in_direct_mode_returns_empty_without_hitting_backend() {
     // call which reads from disk — see the matching note on
     // `execute_tool_per_call_factory_means_no_baked_client`.
     use crate::config::TEST_ENV_LOCK;
-    let _env_guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env_guard = TEST_ENV_LOCK.lock().await;
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    let _workspace_guard = WorkspaceEnvGuard::set(tmp.path());
-    let _home_guard = HomeEnvGuard::set(tmp.path());
+    let _workspace_guard = EnvVarGuard::workspace_unlocked(tmp.path());
+    let _home_guard = EnvVarGuard::set("HOME", tmp.path());
 
     let mut config = crate::config::Config::default();
     config.config_path = tmp.path().join("config.toml");
@@ -140,11 +140,11 @@ async fn execute_tool_per_call_factory_means_no_baked_client() {
     // `OPENHUMAN_WORKSPACE` at a tempdir, and persist the test's
     // `Config` to that tempdir's `config.toml` before invoking the tool.
     use crate::config::TEST_ENV_LOCK;
-    let _env_guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env_guard = TEST_ENV_LOCK.lock().await;
 
     let tmp = tempfile::tempdir().unwrap();
-    let _workspace_guard = WorkspaceEnvGuard::set(tmp.path());
-    let _home_guard = HomeEnvGuard::set(tmp.path());
+    let _workspace_guard = EnvVarGuard::workspace_unlocked(tmp.path());
+    let _home_guard = EnvVarGuard::set("HOME", tmp.path());
 
     let mut config = crate::config::Config::default();
     config.config_path = tmp.path().join("config.toml");
@@ -188,11 +188,11 @@ async fn list_toolkits_in_direct_mode_returns_empty_without_hitting_backend() {
     // call which reads from disk — see the matching note on
     // `execute_tool_per_call_factory_means_no_baked_client`.
     use crate::config::TEST_ENV_LOCK;
-    let _env_guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env_guard = TEST_ENV_LOCK.lock().await;
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    let _workspace_guard = WorkspaceEnvGuard::set(tmp.path());
-    let _home_guard = HomeEnvGuard::set(tmp.path());
+    let _workspace_guard = EnvVarGuard::workspace_unlocked(tmp.path());
+    let _home_guard = EnvVarGuard::set("HOME", tmp.path());
 
     let mut config = crate::config::Config::default();
     config.config_path = tmp.path().join("config.toml");
@@ -229,14 +229,14 @@ async fn list_toolkits_in_direct_mode_returns_empty_without_hitting_backend() {
 #[test]
 fn list_connections_in_direct_mode_resolves_to_direct_client_kind() {
     // Verifies the routing property without making a network call:
-    // when mode=direct with an inline api_key, create_composio_client
+    // when mode=direct with an inline api_key, resolve_composio_route
     // returns a Direct variant. The list_connections tool uses the same
     // factory call, so if the factory picks Direct the tool will route
     // to direct_list_connections (not the backend short-circuit).
     // Previously the tool short-circuited to empty-success in direct mode
     // which caused the agent to incorrectly see no connections (#1710).
     let config = direct_mode_config();
-    let kind = crate::integrations::composio::client::create_composio_client(&config)
+    let kind = crate::integrations::composio::client::resolve_composio_route(&config)
         .expect("direct mode with inline api_key must resolve");
     assert_eq!(
         kind.mode(),
@@ -260,12 +260,13 @@ async fn authorize_in_direct_mode_refuses_with_app_composio_dev_hint() {
     // Also hold the composio cache lock so we don't race against ops_tests
     // that mutate INTEGRATIONS_CACHE at the same time as we reload config.
     let _cache_guard =
-        crate::integrations::composio::connected_integrations::composio_cache_test_lock();
-    let _env_guard = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::integrations::composio::connected_integrations::composio_cache_test_lock_async()
+            .await;
+    let _env_guard = TEST_ENV_LOCK.lock().await;
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    let _workspace_guard = WorkspaceEnvGuard::set(tmp.path());
-    let _home_guard = HomeEnvGuard::set(tmp.path());
+    let _workspace_guard = EnvVarGuard::workspace_unlocked(tmp.path());
+    let _home_guard = EnvVarGuard::set("HOME", tmp.path());
 
     let mut config = crate::config::Config::default();
     config.config_path = tmp.path().join("config.toml");
@@ -314,6 +315,37 @@ fn parse_composio_connect_timeout_defaults_when_absent_or_garbage() {
 }
 
 #[test]
+fn composio_connect_outlives_its_approval_park() {
+    // The per-tool deadline must not race the in-execute approval park: the
+    // tool's budget is the park bound plus slack, and unbounded when the
+    // operator opted out of the bound.
+    let bound = std::time::Duration::from_secs(DEFAULT_COMPOSIO_CONNECT_TIMEOUT_SECS);
+    match composio_connect_tool_timeout(Some(bound)) {
+        tinytools::ToolTimeout::Millis(ms) => {
+            assert!(
+                ms > bound.as_millis() as u64,
+                "budget {ms}ms must exceed the park bound"
+            );
+        }
+        other => panic!("expected an explicit budget, got {other:?}"),
+    }
+    assert_eq!(
+        composio_connect_tool_timeout(None),
+        tinytools::ToolTimeout::Unbounded
+    );
+}
+
+#[test]
+fn composio_connect_timeout_saturates_instead_of_overflowing() {
+    // `u64::MAX` seconds plus the slack must not panic in `Duration` addition.
+    let bound = std::time::Duration::from_secs(u64::MAX);
+    assert_eq!(
+        composio_connect_tool_timeout(Some(bound)),
+        tinytools::ToolTimeout::Millis(u64::MAX)
+    );
+}
+
+#[test]
 fn parse_composio_connect_timeout_honors_override_and_zero_opt_out() {
     // Explicit value → that many seconds.
     assert_eq!(
@@ -327,4 +359,29 @@ fn parse_composio_connect_timeout_honors_override_and_zero_opt_out() {
     );
     // `0` → opt out of the composio-side bound (fall back to the gate TTL).
     assert_eq!(parse_composio_connect_timeout(Some("0")), None);
+}
+
+#[test]
+fn composio_connect_charges_pre_gate_work_to_the_park_bound() {
+    use std::time::Duration;
+    let bound = Duration::from_secs(DEFAULT_COMPOSIO_CONNECT_TIMEOUT_SECS);
+    let tool_budget = match composio_connect_tool_timeout(Some(bound)) {
+        tinytools::ToolTimeout::Millis(ms) => Duration::from_millis(ms),
+        other => panic!("expected an explicit budget, got {other:?}"),
+    };
+    // 50 s of slow config/connection/catalog reads before the card is raised:
+    // pre-gate + park must still end before the tool deadline, with the
+    // remaining slack left for the post-approval liveness check.
+    let pre_gate = Duration::from_secs(50);
+    let park = remaining_park_bound(Some(bound), pre_gate).unwrap();
+    assert_eq!(park, bound - pre_gate);
+    assert!(pre_gate + park < tool_budget);
+
+    // Pre-gate work that used the whole bound still raises a short park.
+    assert_eq!(
+        remaining_park_bound(Some(bound), bound * 2),
+        Some(Duration::from_secs(1))
+    );
+    // Opting out of the bound stays unbounded.
+    assert_eq!(remaining_park_bound(None, pre_gate), None);
 }

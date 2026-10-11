@@ -1,7 +1,7 @@
 //! Model/provider config operations: AI providers, memory, runtime, local AI, Composio.
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::loader::{load_config_with_timeout, snapshot_config_json};
 
@@ -25,6 +25,8 @@ pub struct ModelSettingsPatch {
     /// `auth-profiles.json` via [`crate::security::credentials::AuthService`]).
     /// Pass `Some(vec![])` to clear all third-party cloud providers.
     pub cloud_providers: Option<Vec<crate::config::schema::cloud_providers::CloudProviderCreds>>,
+    /// PEM CA bundle changes keyed by provider slug; empty values remove one.
+    pub cloud_provider_ca_certs: Option<std::collections::HashMap<String, String>>,
     /// When `Some`, REPLACES the entire `config.model_registry` array. Carries
     /// each model's user-set `vision` flag (Settings → Advanced LLM → custom
     /// model → "Supports vision"). Pass `Some(vec![])` to clear; `None` keeps it.
@@ -39,30 +41,41 @@ pub struct ModelSettingsPatch {
     pub vision_provider: Option<String>,
     pub memory_provider: Option<String>,
     pub embeddings_provider: Option<String>,
-    pub heartbeat_provider: Option<String>,
-    pub learning_provider: Option<String>,
-    pub subconscious_provider: Option<String>,
+}
+
+/// Collect and validate provider CA bundles from either settings RPC surface.
+/// Slugs are normalized here so the map keys match normalized provider entries.
+pub fn collect_provider_ca_certs<'a>(
+    providers: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut certs = std::collections::HashMap::new();
+    for (slug, pem) in providers {
+        let Some(pem) = pem else { continue };
+        if !pem.is_empty() {
+            crate::util::tls::parse_ca_bundle(pem)?;
+        }
+        certs.insert(slug.trim().to_string(), pem.to_string());
+    }
+    Ok(certs)
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct MemorySettingsPatch {
-    pub backend: Option<String>,
-    pub auto_save: Option<bool>,
     pub embedding_provider: Option<String>,
     pub embedding_model: Option<String>,
     pub embedding_dimensions: Option<usize>,
-    /// Stepped user-facing memory-context window preset (see
-    /// [`crate::config::schema::agent::MemoryContextWindow`]).
-    /// Accepts `"minimal" | "balanced" | "extended" | "maximum"`.
-    /// Unknown values are silently ignored so old clients can keep
-    /// posting partial patches.
-    pub memory_window: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeSettingsPatch {
     pub kind: Option<String>,
     pub reasoning_enabled: Option<bool>,
+    /// `Some("")` clears the effort back to the provider default.
+    pub reasoning_effort: Option<String>,
+    /// When set, `reasoning_effort` is saved as this model's own level
+    /// (`runtime.reasoning_effort_by_model`) instead of the global one, and
+    /// `Some("")` removes the model's entry.
+    pub reasoning_effort_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -72,16 +85,13 @@ pub struct LocalAiSettingsPatch {
     /// when this is `false`, regardless of `runtime_enabled`. The unified
     /// AI panel ties the two together (both flip on enable, both flip
     /// off on disable) so a single toggle gives the user the obvious
-    /// behaviour without needing to apply a preset first.
+    /// behaviour.
     pub opt_in_confirmed: Option<bool>,
     pub provider: Option<String>,
     pub base_url: Option<Option<String>>,
     pub model_id: Option<String>,
     pub chat_model_id: Option<String>,
     pub usage_embeddings: Option<bool>,
-    pub usage_heartbeat: Option<bool>,
-    pub usage_learning_reflection: Option<bool>,
-    pub usage_subconscious: Option<bool>,
     pub api_key: Option<String>,
 }
 
@@ -252,13 +262,7 @@ fn complete_byok_route(config: &mut Config, explicit: &ExplicitRolePins) {
 pub async fn apply_model_settings(
     config: &mut Config,
     update: ModelSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
-    // #5324: snapshot the embedder selection BEFORE applying the patch so the
-    // failed-job un-park below only fires when the embedder actually changed.
-    // This path also saves chat/reasoning/vision/etc. providers; without this
-    // gate, saving an unrelated model setting would restart every terminally
-    // `unrecoverable` embedding job and re-run the same external failure.
-    let prev_embeddings_provider = config.embeddings_provider.clone();
+) -> Result<Outcome<serde_json::Value>, String> {
     if let Some(api_url) = update.api_url {
         config.api_url = if api_url.trim().is_empty() {
             None
@@ -351,6 +355,27 @@ pub async fn apply_model_settings(
             "[config] apply_model_settings: reinjected {} reserved cloud provider(s)",
             config.cloud_providers.len() - before_reinject
         );
+        // Filter only after restoring built-ins so their configured CA roots
+        // survive a full custom-provider-list replacement.
+        config.cloud_provider_ca_certs.retain(|slug, _| {
+            config
+                .cloud_providers
+                .iter()
+                .any(|entry| entry.slug.trim() == slug)
+        });
+    }
+    if let Some(certs) = update.cloud_provider_ca_certs {
+        for (slug, pem) in certs {
+            if pem.is_empty() {
+                config.cloud_provider_ca_certs.remove(&slug);
+            } else if config
+                .cloud_providers
+                .iter()
+                .any(|entry| entry.slug.trim() == slug)
+            {
+                config.cloud_provider_ca_certs.insert(slug, pem);
+            }
+        }
     }
     if let Some(primary) = update.primary_cloud {
         let trimmed = primary.trim();
@@ -400,49 +425,15 @@ pub async fn apply_model_settings(
     if let Some(s) = update.embeddings_provider {
         config.embeddings_provider = normalise_provider(s);
     }
-    if let Some(s) = update.heartbeat_provider {
-        config.heartbeat_provider = normalise_provider(s);
-    }
-    if let Some(s) = update.learning_provider {
-        config.learning_provider = normalise_provider(s);
-    }
-    if let Some(s) = update.subconscious_provider {
-        config.subconscious_provider = normalise_provider(s);
-    }
 
     complete_byok_route(config, &explicit_role_pins);
 
     config.save().await.map_err(|e| e.to_string())?;
-    // #1574 §4: the AIPanel workload matrix changes the embedder via THIS
-    // (model-settings) path — `embeddings_provider` above — not the
-    // memory-settings path. Trigger the same idempotent re-embed backfill
-    // so a UI embedder switch recovers prior memory under the new
-    // signature. Coverage-gated + non-fatal: if the active signature did
-    // not actually change, this enqueues nothing.
-    crate::memory::ops::maintenance::reembed_best_effort(config, "model settings").await;
-    // #5324: the embedder may have just moved off the exhausted managed
-    // budget onto local Ollama / a BYO provider. Give the jobs that parked as
-    // `unrecoverable` under the old provider a fresh attempt budget — but ONLY
-    // when the embedder selection actually changed, so a chat/vision/etc. model
-    // save leaves terminally-failed jobs parked instead of re-failing them.
-    let embedder_changed = config.embeddings_provider != prev_embeddings_provider;
-    // #5324: the save has already succeeded, so a failed un-park must NOT fail
-    // the RPC — but it must not be reported as `requeued_failed=0` either, which
-    // would read identically to "nothing was parked" and hide that the parked
-    // jobs are still stuck. Surface the error in the outcome line instead.
-    let requeued_note = if embedder_changed {
-        match crate::memory::ops::maintenance::retry_failed(config).await {
-            Ok(n) => n.to_string(),
-            Err(e) => format!("error ({e})"),
-        }
-    } else {
-        "0".to_string()
-    };
     let snapshot = snapshot_config_json(config)?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         snapshot,
         vec![format!(
-            "model settings saved to {} (requeued_failed={requeued_note})",
+            "model settings saved to {}",
             config.config_path.display()
         )],
     ))
@@ -451,29 +442,17 @@ pub async fn apply_model_settings(
 /// Loads the configuration, applies model settings updates, and saves it.
 pub async fn load_and_apply_model_settings(
     update: ModelSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let mut config = load_config_with_timeout().await?;
     apply_model_settings(&mut config, update).await
 }
 
-/// Updates the memory-related settings in the configuration.
+/// Updates the embedding settings kept under `[memory]` and the agent's
+/// memory-context window.
 pub async fn apply_memory_settings(
     config: &mut Config,
     update: MemorySettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
-    // #5324: snapshot the embedding signature BEFORE applying the patch. This
-    // path also saves `backend` / `auto_save` / `memory_window`, none of which
-    // remediate a budget-exhausted embedder — so the failed-job un-park below
-    // must fire only when the provider/model/dimensions actually changed.
-    let prev_embedding_provider = config.memory.embedding_provider.clone();
-    let prev_embedding_model = config.memory.embedding_model.clone();
-    let prev_embedding_dimensions = config.memory.embedding_dimensions;
-    if let Some(backend) = update.backend {
-        config.memory.backend = backend;
-    }
-    if let Some(auto_save) = update.auto_save {
-        config.memory.auto_save = auto_save;
-    }
+) -> Result<Outcome<serde_json::Value>, String> {
     if let Some(provider) = update.embedding_provider {
         config.memory.embedding_provider = provider;
     }
@@ -494,47 +473,12 @@ pub async fn apply_memory_settings(
     if let Some(dimensions) = update.embedding_dimensions {
         config.memory.embedding_dimensions = dimensions;
     }
-    if let Some(window_label) = update.memory_window.as_deref() {
-        if let Some(window) = crate::config::schema::MemoryContextWindow::from_str_opt(window_label)
-        {
-            config.agent.memory_window = Some(window);
-        } else {
-            tracing::warn!(
-                requested = window_label,
-                "[config] unknown memory_window preset — leaving existing setting unchanged"
-            );
-        }
-    }
     config.save().await.map_err(|e| e.to_string())?;
-    // #1574 §4: the embedder may have just changed (provider/model/dims).
-    // Ensure a re-embed backfill chain exists for the new active signature
-    // so prior memory becomes retrievable again instead of silently going
-    // dark. Idempotent + non-fatal (covered space enqueues nothing; errors
-    // are logged, never fail the settings save). §7's migration is
-    // one-shot so it does not cover a later switch — this does.
-    crate::memory::ops::maintenance::reembed_best_effort(config, "memory settings").await;
-    // #5324: same rationale as the model-settings path — a switch away from
-    // the exhausted managed budget must un-park the jobs that failed under it,
-    // but a `memory_window` / `auto_save` / `backend` save must not. Gate on a
-    // real embedder change (provider/model/dimensions).
-    let embedder_changed = config.memory.embedding_provider != prev_embedding_provider
-        || config.memory.embedding_model != prev_embedding_model
-        || config.memory.embedding_dimensions != prev_embedding_dimensions;
-    // #5324: same as the model-settings path — keep the save successful but
-    // report an un-park failure instead of a misleading `requeued_failed=0`.
-    let requeued_note = if embedder_changed {
-        match crate::memory::ops::maintenance::retry_failed(config).await {
-            Ok(n) => n.to_string(),
-            Err(e) => format!("error ({e})"),
-        }
-    } else {
-        "0".to_string()
-    };
     let snapshot = snapshot_config_json(config)?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         snapshot,
         vec![format!(
-            "memory settings saved to {} (requeued_failed={requeued_note})",
+            "memory settings saved to {}",
             config.config_path.display()
         )],
     ))
@@ -543,7 +487,7 @@ pub async fn apply_memory_settings(
 /// Loads the configuration, applies memory settings updates, and saves it.
 pub async fn load_and_apply_memory_settings(
     update: MemorySettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let mut config = load_config_with_timeout().await?;
     apply_memory_settings(&mut config, update).await
 }
@@ -552,16 +496,44 @@ pub async fn load_and_apply_memory_settings(
 pub async fn apply_runtime_settings(
     config: &mut Config,
     update: RuntimeSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     if let Some(kind) = update.kind {
         config.runtime.kind = kind;
     }
     if let Some(reasoning_enabled) = update.reasoning_enabled {
         config.runtime.reasoning_enabled = Some(reasoning_enabled);
     }
+    if let Some(effort) = update.reasoning_effort {
+        let effort = effort.trim();
+        let parsed = if effort.is_empty() {
+            None
+        } else {
+            let parsed = crate::agent::tinyagents::parse_reasoning_effort(effort)
+                .ok_or_else(|| format!("unknown reasoning_effort '{effort}'"))?;
+            Some(parsed.as_str().to_string())
+        };
+        let model = update.reasoning_effort_model.as_deref().map(str::trim);
+        if model == Some("") {
+            return Err("reasoning_effort_model must not be empty".into());
+        }
+        match (model, parsed) {
+            (Some(model), Some(effort)) => {
+                log::debug!("[config][reasoning] model={model} effort={effort}");
+                config
+                    .runtime
+                    .reasoning_effort_by_model
+                    .insert(model.to_string(), effort);
+            }
+            (Some(model), None) => {
+                log::debug!("[config][reasoning] model={model} effort cleared");
+                config.runtime.reasoning_effort_by_model.remove(model);
+            }
+            (None, effort) => config.runtime.reasoning_effort = effort,
+        }
+    }
     config.save().await.map_err(|e| e.to_string())?;
     let snapshot = snapshot_config_json(config)?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         snapshot,
         vec![format!(
             "runtime settings saved to {}",
@@ -573,7 +545,7 @@ pub async fn apply_runtime_settings(
 /// Loads the configuration, applies runtime settings updates, and saves it.
 pub async fn load_and_apply_runtime_settings(
     update: RuntimeSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let mut config = load_config_with_timeout().await?;
     apply_runtime_settings(&mut config, update).await
 }
@@ -582,7 +554,7 @@ pub async fn load_and_apply_runtime_settings(
 pub async fn apply_local_ai_settings(
     config: &mut Config,
     update: LocalAiSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     if let Some(v) = update.runtime_enabled {
         config.local_ai.runtime_enabled = v;
     }
@@ -620,15 +592,6 @@ pub async fn apply_local_ai_settings(
     if let Some(v) = update.usage_embeddings {
         config.local_ai.usage.embeddings = v;
     }
-    if let Some(v) = update.usage_heartbeat {
-        config.local_ai.usage.heartbeat = v;
-    }
-    if let Some(v) = update.usage_learning_reflection {
-        config.local_ai.usage.learning_reflection = v;
-    }
-    if let Some(v) = update.usage_subconscious {
-        config.local_ai.usage.subconscious = v;
-    }
     if let Some(api_key) = update.api_key {
         let trimmed = api_key.trim();
         config.local_ai.api_key = if trimmed.is_empty() {
@@ -647,7 +610,7 @@ pub async fn apply_local_ai_settings(
     }
     config.save().await.map_err(|e| e.to_string())?;
     let snapshot = snapshot_config_json(config)?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         snapshot,
         vec![format!(
             "local AI settings saved to {}",
@@ -659,7 +622,7 @@ pub async fn apply_local_ai_settings(
 /// Loads the configuration, applies local-AI settings updates, and saves it.
 pub async fn load_and_apply_local_ai_settings(
     update: LocalAiSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let mut config = load_config_with_timeout().await?;
     apply_local_ai_settings(&mut config, update).await
 }
@@ -668,7 +631,7 @@ pub async fn load_and_apply_local_ai_settings(
 pub async fn apply_composio_trigger_settings(
     config: &mut Config,
     update: ComposioTriggerSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     if let Some(v) = update.triage_disabled {
         config.composio.triage_disabled = v;
         tracing::debug!(
@@ -685,7 +648,7 @@ pub async fn apply_composio_trigger_settings(
     }
     config.save().await.map_err(|e| e.to_string())?;
     let snapshot = snapshot_config_json(config)?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         snapshot,
         vec![format!(
             "composio trigger settings saved to {}",
@@ -697,35 +660,38 @@ pub async fn apply_composio_trigger_settings(
 /// Loads the configuration, applies composio trigger settings, and saves it.
 pub async fn load_and_apply_composio_trigger_settings(
     update: ComposioTriggerSettingsPatch,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let mut config = load_config_with_timeout().await?;
     apply_composio_trigger_settings(&mut config, update).await
 }
 
 /// Reads the current composio trigger-triage settings.
-pub async fn get_composio_trigger_settings() -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn get_composio_trigger_settings() -> Result<Outcome<serde_json::Value>, String> {
     let config = load_config_with_timeout().await?;
     let result = serde_json::json!({
         "triage_disabled": config.composio.triage_disabled,
         "triage_disabled_toolkits": config.composio.triage_disabled_toolkits,
     });
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         result,
         vec!["composio trigger settings read".to_string()],
     ))
 }
 
-/// Resolve the hosted backend URL, excluding local or third-party inference
-/// overrides that must never receive OpenHuman session credentials.
-pub(crate) fn resolve_backend_api_url(config: &Config) -> String {
-    crate::api::config::effective_backend_api_url(&config.api_url)
+/// Resolve the hosted backend URL through the installed backend transport,
+/// which excludes local or third-party inference overrides that must never
+/// receive OpenHuman session credentials. `None` when no transport is
+/// installed (no hosted backend).
+pub(crate) fn resolve_backend_api_url(config: &Config) -> Option<String> {
+    crate::backend::base_url(&config.api_url).ok()
 }
 
-/// Resolves the effective backend API URL from configuration or defaults.
-pub async fn load_and_resolve_api_url() -> Result<RpcOutcome<serde_json::Value>, String> {
+/// Resolves the effective backend API URL from configuration or defaults;
+/// `api_url` is `null` when the core has no hosted backend.
+pub async fn load_and_resolve_api_url() -> Result<Outcome<serde_json::Value>, String> {
     let config = load_config_with_timeout().await?;
     let resolved = resolve_backend_api_url(&config);
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         serde_json::json!({ "api_url": resolved }),
         Vec::new(),
     ))

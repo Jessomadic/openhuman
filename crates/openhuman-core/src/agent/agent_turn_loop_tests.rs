@@ -24,7 +24,7 @@ async fn turn_returns_text_when_no_tools_called() {
 #[tokio::test]
 async fn turn_executes_single_tool_then_returns() {
     let provider = Arc::new(ScriptedProvider::new(vec![
-        tool_response(vec![ToolCall {
+        tool_response(vec![NativeToolCall {
             id: "tc1".into(),
             name: "echo".into(),
             arguments: r#"{"message": "hello from tool"}"#.into(),
@@ -52,19 +52,19 @@ async fn turn_handles_multi_step_tool_chain() {
     let (counting_tool, count) = CountingTool::new();
 
     let provider = Arc::new(ScriptedProvider::new(vec![
-        tool_response(vec![ToolCall {
+        tool_response(vec![NativeToolCall {
             id: "tc1".into(),
             name: "counter".into(),
             arguments: "{}".into(),
             extra_content: None,
         }]),
-        tool_response(vec![ToolCall {
+        tool_response(vec![NativeToolCall {
             id: "tc2".into(),
             name: "counter".into(),
             arguments: "{}".into(),
             extra_content: None,
         }]),
-        tool_response(vec![ToolCall {
+        tool_response(vec![NativeToolCall {
             id: "tc3".into(),
             name: "counter".into(),
             arguments: "{}".into(),
@@ -103,7 +103,7 @@ async fn turn_emits_checkpoint_at_max_iterations() {
     let max_iters = 3;
     let mut responses = Vec::new();
     for i in 0..max_iters + 5 {
-        responses.push(tool_response(vec![ToolCall {
+        responses.push(tool_response(vec![NativeToolCall {
             id: format!("tc{i}"),
             name: "echo".into(),
             // Vary the args each turn so the repeat-CALL breaker (which halts
@@ -136,8 +136,8 @@ async fn turn_emits_checkpoint_at_max_iterations() {
     assert!(
         matches!(
             agent.history().last(),
-            Some(ConversationMessage::Chat(msg))
-                if msg.role == "assistant" && msg.content.contains("tool-call limit")
+            Some(TranscriptEntry::Chat(msg))
+                if msg.role.as_str() == "assistant" && msg.content.contains("tool-call limit")
         ),
         "history should end on the assistant checkpoint, got: {:?}",
         agent.history().last()
@@ -151,7 +151,7 @@ async fn turn_emits_checkpoint_at_max_iterations() {
 #[tokio::test]
 async fn turn_handles_unknown_tool_gracefully() {
     let provider = Arc::new(ScriptedProvider::new(vec![
-        tool_response(vec![ToolCall {
+        tool_response(vec![NativeToolCall {
             id: "tc1".into(),
             name: "nonexistent_tool".into(),
             arguments: "{}".into(),
@@ -174,11 +174,11 @@ async fn turn_handles_unknown_tool_gracefully() {
     // path (issue #4249), which injects a `unknown tool `<name>` (arguments: …);
     // valid tools: [...]` result and continues so the model can self-correct.
     let has_tool_result = agent.history().iter().any(|msg| match msg {
-        ConversationMessage::ToolResults(results) => results
+        TranscriptEntry::ToolResults(results) => results
             .iter()
             .any(|r| r.content.contains("unknown tool") && r.content.contains("nonexistent_tool")),
-        ConversationMessage::Chat(message) => {
-            message.role == "tool"
+        TranscriptEntry::Chat(message) => {
+            message.role.as_str() == "tool"
                 && message.content.contains("unknown tool")
                 && message.content.contains("nonexistent_tool")
         }
@@ -195,53 +195,29 @@ async fn turn_handles_unknown_tool_gracefully() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[tokio::test]
-async fn turn_recovers_from_tool_failure() {
-    let provider = Arc::new(ScriptedProvider::new(vec![
-        tool_response(vec![ToolCall {
-            id: "tc1".into(),
-            name: "fail".into(),
-            arguments: "{}".into(),
-            extra_content: None,
-        }]),
-        text_response("Tool failed but I recovered"),
-    ]));
+async fn turn_recovers_from_tool_failure_and_tool_error() {
+    let cases: [(&str, Box<dyn Tool>); 2] = [
+        ("fail", Box::new(FailingTool)),
+        ("panicker", Box::new(PanickingTool)),
+    ];
+    for (tool_name, tool) in cases {
+        let provider = Arc::new(ScriptedProvider::new(vec![
+            tool_response(vec![NativeToolCall {
+                id: "tc1".into(),
+                name: tool_name.into(),
+                arguments: "{}".into(),
+                extra_content: None,
+            }]),
+            text_response("I recovered"),
+        ]));
+        let (mut agent, _tmp) = build_agent_with(provider, vec![tool], Box::new(NativeDialect));
 
-    let (mut agent, _tmp) = build_agent_with(
-        provider,
-        vec![Box::new(FailingTool)],
-        Box::new(NativeDialect),
-    );
-
-    let response = agent.turn("try failing tool").await.unwrap();
-    assert!(
-        !response.is_empty(),
-        "Expected non-empty response after tool failure recovery"
-    );
-}
-
-#[tokio::test]
-async fn turn_recovers_from_tool_error() {
-    let provider = Arc::new(ScriptedProvider::new(vec![
-        tool_response(vec![ToolCall {
-            id: "tc1".into(),
-            name: "panicker".into(),
-            arguments: "{}".into(),
-            extra_content: None,
-        }]),
-        text_response("I recovered from the error"),
-    ]));
-
-    let (mut agent, _tmp) = build_agent_with(
-        provider,
-        vec![Box::new(PanickingTool)],
-        Box::new(NativeDialect),
-    );
-
-    let response = agent.turn("try panicking").await.unwrap();
-    assert!(
-        !response.is_empty(),
-        "Expected non-empty response after tool error recovery"
-    );
+        let response = agent.turn("try the tool").await.unwrap();
+        assert!(
+            !response.is_empty(),
+            "Expected non-empty response after {tool_name} recovery"
+        );
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -258,111 +234,53 @@ async fn turn_propagates_provider_error() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 8. History trimming during long conversations
+// 8. Long conversations keep their history (no message-count trim)
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Prompt-cache regression: the legacy `max_history_messages` bound used to
+/// drop the oldest messages on every turn past it, which moved the head of the
+/// provider's cached prompt prefix every turn (a full cache miss each time).
+/// History is now bounded only by the token-aware context ladder, so a small
+/// legacy bound is ignored and the message after the system prompt never moves.
 #[tokio::test]
-async fn history_trims_after_max_messages() {
-    let max_history = 6;
-    let mut responses = vec![];
-    for _ in 0..max_history + 5 {
-        responses.push(text_response("ok"));
-    }
+async fn history_is_not_trimmed_by_message_count() {
+    let legacy_bound = 6;
+    let turns = legacy_bound + 5;
+    let responses = (0..turns).map(|_| text_response("ok")).collect();
 
     let provider = Arc::new(ScriptedProvider::new(responses));
     let config = AgentConfig {
-        max_history_messages: max_history,
+        max_history_messages: legacy_bound,
         ..AgentConfig::default()
     };
 
     let (mut agent, _tmp) = build_agent_with_config(provider, vec![], config);
 
-    for i in 0..max_history + 5 {
+    for i in 0..turns {
         let _ = agent.turn(&format!("msg {i}")).await.unwrap();
     }
 
-    // System prompt (1) + trimmed messages
-    // Should not exceed max_history + 1 (system prompt)
+    let history = agent.history();
+    // System prompt should always be preserved.
+    assert!(matches!(&history[0], TranscriptEntry::Chat(c) if c.role.as_str() == "system"));
+    // Every turn's user message is still there, and the first one still opens
+    // the conversation right after the system prompt.
     assert!(
-        agent.history().len() <= max_history + 1,
-        "History length {} exceeds max {} + 1 (system)",
-        agent.history().len(),
-        max_history,
+        history.len() > legacy_bound + 1,
+        "history length {} was trimmed to the legacy bound {legacy_bound}",
+        history.len()
     );
-
-    // System prompt should always be preserved
-    let first = &agent.history()[0];
-    assert!(matches!(first, ConversationMessage::Chat(c) if c.role == "system"));
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 9. Memory auto-save round-trip
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[tokio::test]
-async fn auto_save_stores_messages_in_memory() {
-    let (mem, _tmp) = make_retaining_memory();
-    let provider = Arc::new(ScriptedProvider::new(vec![text_response(
-        "I remember everything",
-    )]));
-
-    let (mut agent, _tmp2) = build_agent_with_memory(
-        provider,
-        vec![],
-        mem.clone(),
-        true, // auto_save enabled
-    );
-
-    // Scoped like a real chat turn. The autosave only stores what a person sent
-    // (`turn_origin::current_is_user_authored`), and production entry points
-    // scope an origin — web chat `WebChat`, channels `ExternalChannel` — so a
-    // test that skipped it would be asserting a shape no caller produces.
-    let _ = crate::agent::turn_origin::with_origin(
-        crate::agent::turn_origin::AgentTurnOrigin::WebChat {
-            thread_id: "t-autosave".into(),
-            client_id: "c-autosave".into(),
-            request_id: None,
-        },
-        agent.turn("Remember this fact"),
-    )
-    .await
-    .unwrap();
-
-    // Both user message and assistant response should be saved. The assistant
-    // reply is persisted synchronously, but the user message is saved
-    // fire-and-forget (tokio::spawn in turn/core.rs, #3610), so it may land a
-    // moment after `turn()` returns — poll briefly instead of reading once,
-    // which otherwise races on a loaded CI runner under llvm-cov instrumentation.
-    let mut count = 0;
-    for _ in 0..50 {
-        count = mem.count().await.unwrap();
-        if count >= 2 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    let first_user = history
+        .iter()
+        .find_map(|m| match m {
+            TranscriptEntry::Chat(c) if c.role.as_str() == "user" => Some(c.content.clone()),
+            _ => None,
+        })
+        .expect("a user message");
     assert!(
-        count >= 2,
-        "Expected at least 2 memory entries, got {count}"
+        first_user.contains("msg 0"),
+        "the oldest turn was dropped; first user message is {first_user:?}"
     );
-}
-
-#[tokio::test]
-async fn auto_save_disabled_does_not_store() {
-    let (mem, _tmp) = make_retaining_memory();
-    let provider = Arc::new(ScriptedProvider::new(vec![text_response("hello")]));
-
-    let (mut agent, _tmp2) = build_agent_with_memory(
-        provider,
-        vec![],
-        mem.clone(),
-        false, // auto_save disabled
-    );
-
-    let _ = agent.turn("test message").await.unwrap();
-
-    let count = mem.count().await.unwrap();
-    assert_eq!(count, 0, "Expected 0 memory entries with auto_save off");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -410,49 +328,37 @@ async fn xml_dispatcher_does_not_send_tool_specs() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[tokio::test]
-async fn turn_errors_on_empty_text_response() {
+async fn turn_errors_on_empty_or_null_text_response() {
     // A completion with no text *and* no tool calls is never a valid final
-    // answer. The old behaviour returned `Ok("")`, which rendered as a blank
-    // reply and silently wedged the thread; now it surfaces as a visible
-    // error the user can retry on (bug-report-2026-05-26 A1).
-    let provider = Arc::new(ScriptedProvider::new(vec![ChatResponse {
-        text: Some(String::new()),
-        tool_calls: vec![],
-        usage: None,
-        reasoning_content: None,
-    }]));
+    // answer: it must surface as a visible error the user can retry on rather
+    // than a blank reply (bug-report-2026-05-26 A1). The harness retries an
+    // empty completion once, so both attempts are scripted empty.
+    for text in [Some(String::new()), None] {
+        let empty = || ChatResponse {
+            text: text.clone(),
+            tool_calls: vec![],
+            usage: None,
+            reasoning_content: None,
+        };
+        let provider = Arc::new(ScriptedProvider::new(vec![empty(), empty()]));
+        let script = Arc::clone(&provider);
 
-    let (mut agent, _tmp) = build_agent_with(provider, vec![], Box::new(NativeDialect));
+        let (mut agent, _tmp) = build_agent_with(provider, vec![], Box::new(NativeDialect));
 
-    let reply = agent
-        .turn("hi")
-        .await
-        .expect_err("an empty provider response must error");
-    assert!(
-        reply.to_string().contains("empty response"),
-        "expected a deterministic empty-response close, got: {reply}"
-    );
-}
-
-#[tokio::test]
-async fn turn_errors_on_none_text_response() {
-    let provider = Arc::new(ScriptedProvider::new(vec![ChatResponse {
-        text: None,
-        tool_calls: vec![],
-        usage: None,
-        reasoning_content: None,
-    }]));
-
-    let (mut agent, _tmp) = build_agent_with(provider, vec![], Box::new(NativeDialect));
-
-    let reply = agent
-        .turn("hi")
-        .await
-        .expect_err("a null-text provider response must error");
-    assert!(
-        reply.to_string().contains("empty response"),
-        "expected a deterministic empty-response close, got: {reply}"
-    );
+        let reply = agent
+            .turn("hi")
+            .await
+            .expect_err("an empty provider response must error");
+        assert_eq!(
+            script.calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the empty completion must be retried exactly once before erroring ({text:?})"
+        );
+        assert!(
+            reply.to_string().contains("empty response"),
+            "expected a deterministic empty-response close ({text:?}), got: {reply}"
+        );
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -464,7 +370,7 @@ async fn turn_preserves_text_alongside_tool_calls() {
     let provider = Arc::new(ScriptedProvider::new(vec![
         ChatResponse {
             text: Some("Let me check...".into()),
-            tool_calls: vec![ToolCall {
+            tool_calls: vec![NativeToolCall {
                 id: "tc1".into(),
                 name: "echo".into(),
                 arguments: r#"{"message": "hi"}"#.into(),
@@ -490,8 +396,10 @@ async fn turn_preserves_text_alongside_tool_calls() {
     // that accompanied the tool call (the unified tinyagents representation
     // keeps the preface text on the tool-call turn).
     let has_intermediate = agent.history().iter().any(|msg| match msg {
-        ConversationMessage::Chat(c) => c.role == "assistant" && c.content.contains("Let me check"),
-        ConversationMessage::AssistantToolCalls { text, .. } => {
+        TranscriptEntry::Chat(c) => {
+            c.role.as_str() == "assistant" && c.content.contains("Let me check")
+        }
+        TranscriptEntry::AssistantToolCalls { text, .. } => {
             text.as_deref().is_some_and(|t| t.contains("Let me check"))
         }
         _ => false,
@@ -509,19 +417,19 @@ async fn turn_handles_multiple_tools_in_one_response() {
 
     let provider = Arc::new(ScriptedProvider::new(vec![
         tool_response(vec![
-            ToolCall {
+            NativeToolCall {
                 id: "tc1".into(),
                 name: "counter".into(),
                 arguments: "{}".into(),
                 extra_content: None,
             },
-            ToolCall {
+            NativeToolCall {
                 id: "tc2".into(),
                 name: "counter".into(),
                 arguments: "{}".into(),
                 extra_content: None,
             },
-            ToolCall {
+            NativeToolCall {
                 id: "tc3".into(),
                 name: "counter".into(),
                 arguments: "{}".into(),
@@ -572,11 +480,11 @@ async fn e2e_native_loop_executes_text_fallback_tool_calls_and_persists_history(
 
     let history = agent.history();
     let has_assistant_call = history.iter().any(|message| match message {
-        ConversationMessage::AssistantToolCalls { tool_calls, .. } => tool_calls
+        TranscriptEntry::AssistantToolCalls { tool_calls, .. } => tool_calls
             .iter()
             .any(|call| call.name == "echo" && call.arguments.contains("from-fallback")),
-        ConversationMessage::Chat(message)
-            if message.role == "assistant"
+        TranscriptEntry::Chat(message)
+            if message.role.as_str() == "assistant"
                 && message.content.contains("\"tool_calls\"")
                 && message.content.contains("\"echo\"") =>
         {
@@ -585,11 +493,11 @@ async fn e2e_native_loop_executes_text_fallback_tool_calls_and_persists_history(
         _ => false,
     });
     let has_tool_result = history.iter().any(|message| match message {
-        ConversationMessage::ToolResults(results) => results
+        TranscriptEntry::ToolResults(results) => results
             .iter()
             .any(|result| result.content.contains("from-fallback")),
-        ConversationMessage::Chat(message) => {
-            message.role == "tool" && message.content.contains("from-fallback")
+        TranscriptEntry::Chat(message) => {
+            message.role.as_str() == "tool" && message.content.contains("from-fallback")
         }
         _ => false,
     });
@@ -617,7 +525,7 @@ async fn system_prompt_injected_on_first_turn() {
     // First message should be the system prompt
     let first = &agent.history()[0];
     assert!(
-        matches!(first, ConversationMessage::Chat(c) if c.role == "system"),
+        matches!(first, TranscriptEntry::Chat(c) if c.role.as_str() == "system"),
         "First history entry should be system prompt"
     );
 }

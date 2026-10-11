@@ -1,3 +1,4 @@
+import { Save } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
@@ -5,14 +6,16 @@ import {
   openhumanGetComposioTriggerSettings,
   openhumanUpdateComposioTriggerSettings,
 } from '../../../utils/tauriCommands';
-import Button from '../../ui/Button';
 import {
-  SettingsRow,
-  SettingsSection,
-  SettingsStatusLine,
-  SettingsSwitch,
-  SettingsTextField,
-} from '../controls';
+  Button,
+  Card,
+  CenteredLoadingState,
+  Field,
+  Spinner,
+  StatusLine,
+  Switch,
+  TextField,
+} from '../../ui';
 import SettingsPanel from '../layout/SettingsPanel';
 
 interface ComposioTriagePanelProps {
@@ -87,75 +90,71 @@ const ComposioTriagePanel = ({ embedded = false }: ComposioTriagePanelProps = {}
 
   const wrap = (node: ReactNode) =>
     embedded ? (
-      <div className="space-y-5">{node}</div>
+      node
     ) : (
       <SettingsPanel description={t('settings.developerMenu.composio.desc')}>{node}</SettingsPanel>
     );
 
   if (loading) {
-    return wrap(<p className="text-sm text-content-muted">{t('settings.composio.loading')}</p>);
+    return wrap(<CenteredLoadingState label={t('settings.composio.loading')} />);
   }
 
   return wrap(
-    <>
-      <p className="text-sm text-content-muted">
-        {t('composio.triageDesc')}{' '}
-        <span className="font-mono">OPENHUMAN_TRIGGER_TRIAGE_DISABLED</span>{' '}
-        {t('composio.envVarOverrides')}
-      </p>
-
-      <SettingsSection>
-        <SettingsRow
-          htmlFor="switch-triage-disabled"
-          label={t('composio.disableAllTriage')}
-          description={t('composio.triggersStillRecorded')}
-          control={
-            <SettingsSwitch
-              id="switch-triage-disabled"
-              checked={triageDisabled}
-              onCheckedChange={next => setTriageDisabled(next)}
-              aria-label={t('composio.disableAllTriage')}
-            />
-          }
-        />
-      </SettingsSection>
-
-      <SettingsSection
-        title={t('composio.disableSpecificIntegrations')}
-        description={`${t('composio.integrationSlugsHelp')} ${t('composio.integrationSlugsExample')}. ${t('composio.integrationSlugsCaseInsensitive')}`}>
-        <SettingsRow
-          stacked
-          disabled={triageDisabled}
-          control={
-            <SettingsTextField
-              id="disabled-toolkits"
-              value={disabledToolkits}
-              onChange={e => setDisabledToolkits(e.target.value)}
-              placeholder={t('composio.integrationSlugsPlaceholder')}
-              disabled={triageDisabled}
-              aria-label={t('composio.disableSpecificIntegrations')}
-            />
-          }
-        />
-      </SettingsSection>
-
-      <div className="flex items-center gap-3">
-        <Button
-          type="button"
-          variant="primary"
-          size="sm"
-          onClick={() => void handleSave()}
-          disabled={saving}>
-          {saving ? t('common.loading') : t('common.save')}
-        </Button>
-        <SettingsStatusLine
+    <Card
+      title={t('composio.triageTitle')}
+      description={`${t('composio.triageDesc')} OPENHUMAN_TRIGGER_TRIAGE_DISABLED ${t('composio.envVarOverrides')}`}
+      data-testid="composio-triage-card">
+      <Field
+        htmlFor="switch-triage-disabled"
+        label={t('composio.disableAllTriage')}
+        description={t('composio.triggersStillRecorded')}
+        control={
+          <Switch
+            id="switch-triage-disabled"
+            checked={triageDisabled}
+            onCheckedChange={next => setTriageDisabled(next)}
+            aria-label={t('composio.disableAllTriage')}
+          />
+        }
+      />
+      <Field
+        htmlFor="disabled-toolkits"
+        disabled={triageDisabled}
+        label={t('composio.disableSpecificIntegrations')}
+        description={`${t('composio.integrationSlugsHelp')} ${t('composio.integrationSlugsExample')}. ${t('composio.integrationSlugsCaseInsensitive')}`}
+        control={
+          <TextField
+            id="disabled-toolkits"
+            mono
+            inputSize="sm"
+            className="w-72"
+            value={disabledToolkits}
+            onChange={e => setDisabledToolkits(e.target.value)}
+            placeholder={t('composio.integrationSlugsPlaceholder')}
+            disabled={triageDisabled}
+            aria-label={t('composio.disableSpecificIntegrations')}
+          />
+        }
+      />
+      <div className="flex items-center justify-between gap-3 px-4 py-3">
+        <StatusLine
           saving={saving}
           savedNote={saveStatus === 'saved' ? t('composio.settingsSaved') : null}
           error={saveStatus === 'error' ? t('composio.saveFailed') : null}
           savingLabel={t('common.loading')}
+          className="min-h-0"
         />
+        <Button
+          type="button"
+          variant="primary"
+          size="sm"
+          leadingIcon={saving ? <Spinner /> : <Save className="h-3.5 w-3.5" aria-hidden />}
+          onClick={() => void handleSave()}
+          disabled={saving}>
+          {saving ? t('common.loading') : t('common.save')}
+        </Button>
       </div>
-    </>
+    </Card>
   );
 };
 

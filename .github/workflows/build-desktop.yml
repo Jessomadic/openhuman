@@ -218,13 +218,9 @@ jobs:
             libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
             libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
             libgbm1 libpango-1.0-0 libcairo2 libatspi2.0-0 libxshmfence1 libu2f-udev \
-            xvfb dbus dbus-x11
+            xvfb dbus dbus-x11 mold
           command -v xdg-mime >/dev/null 2>&1 \
             || { echo "::error::xdg-mime is still missing after installing xdg-utils"; exit 1; }
-          if [ "$MATRIX_TARGET" = "x86_64-unknown-linux-gnu" ] \
-            && ! command -v apparmor_parser >/dev/null 2>&1; then
-            apt_retry 300 install -y apparmor
-          fi
       # NOTE: The post-build dump lives further down (after `cargo tauri build`)
       # so the binary actually exists when ldd runs. Running it here pre-build
       # silently no-op'd and gave us no signal during the
@@ -371,6 +367,13 @@ jobs:
             "${{ steps.core-paths.outputs.sidecar_base }}"
 
       # ---- Tauri build -------------------------------------------------------
+      # Downloaded and digest-verified here, once, so no installer fetches a
+      # module at runtime. The host key follows the build target, not the
+      # runner (the x86_64 macOS job may run on an arm64 runner).
+      - name: Bundle pinned native modules
+        shell: bash
+        run: node scripts/release/stage-modules.mjs --target "${{ matrix.settings.target }}"
+
       # Vite is invoked via tauri.conf.json's beforeBuildCommand inside
       # `cargo tauri build`, so all VITE_* env must be present here for the
       # bundle to bake them in. macOS signing is intentionally skipped here
@@ -428,6 +431,16 @@ jobs:
           TAURI_CONFIG_OVERRIDE: ${{ steps.config-overrides.outputs.json }}
           MATRIX_ARGS: ${{ matrix.settings.args }}
           PROFILE_FLAG: ${{ inputs.build_profile == 'debug' && '--debug' || '' }}
+          # Linux only: link with mold and fold byte-identical functions. The
+          # release profile's 16 codegen units and cross-crate instantiation
+          # leave many identical copies of the same function; MSVC already
+          # folds them (/OPT:ICF) and Apple's ld deduplicates by default, GNU ld
+          # cannot. `safe` only folds functions whose address is never taken,
+          # so C code comparing function pointers (sqlite) is unaffected.
+          # Measured on openhuman-core: 99.9 -> 97.6 MiB stripped. Per-target
+          # variables only reach the `--target` build, never build scripts.
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--icf=safe
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--icf=safe
         run: |
           # Inline NODE_OPTIONS so it reaches the vite child spawned by
           # beforeBuildCommand. Step-level env was observed not to propagate
@@ -475,7 +488,6 @@ jobs:
           MATRIX_TARGET: ${{ matrix.settings.target }}
           PROFILE: ${{ inputs.build_profile }}
           APPIMAGE_RUNTIME_SMOKE: ${{ matrix.settings.target == 'x86_64-unknown-linux-gnu' && '1' || '0' }}
-          APPIMAGE_RUNTIME_APPARMOR_USERNS: ${{ matrix.settings.target == 'x86_64-unknown-linux-gnu' && '1' || '0' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.UPDATER_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.UPDATER_PRIVATE_KEY_PASSWORD }}
         run: |

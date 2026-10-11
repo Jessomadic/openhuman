@@ -19,7 +19,7 @@ export interface VisuallyHiddenProps extends ComponentPropsWithoutRef<
  * The clipping is Radix's own inline style; the class slot exists only so a
  * caller can layer positioning on it.
  */
-export const VisuallyHidden = forwardRef<
+const VisuallyHidden = forwardRef<
   ElementRef<typeof VisuallyHiddenPrimitive.Root>,
   VisuallyHiddenProps
 >(({ className, ...rest }, ref) => (

@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 /// Error text returned by every disabled-path operation that must yield a
 /// `Result`. Shared so callers/log-greps see one stable string.
@@ -48,7 +48,7 @@ pub trait SttProvider: Send + Sync {
         mime_type: Option<&str>,
         file_name: Option<&str>,
         language: Option<&str>,
-    ) -> Result<RpcOutcome<SttResult>, String>;
+    ) -> Result<Outcome<SttResult>, String>;
 
     #[cfg(test)]
     fn configured_model(&self) -> Option<&str> {
@@ -192,7 +192,7 @@ pub mod always_on {
 // streaming::handle_dictation_ws (provided by the real voice host adapter)
 // ---------------------------------------------------------------------------
 
-// axum-only, and its sole caller (`core::jsonrpc::dictation_ws_handler`) is
+// axum-only, and its sole caller (`openhuman_rpc::server::http::dictation::dictation_ws_handler`) is
 // gated the same way, so the stub's dictation-WS surface is exclusive to the
 // `http-server` feature too (#5048): voice-OFF + http-server-OFF needs no
 // `voice::streaming` at all.
@@ -208,6 +208,22 @@ pub mod streaming {
     pub async fn handle_dictation_ws(_socket: WebSocket, _config: Arc<Config>) {}
 }
 
+// `live::ws::handle_live_voice_ws`: with voice off there are no live
+// providers, so the upgraded socket is dropped immediately.
+#[cfg(feature = "http-server")]
+pub mod live {
+    pub mod ws {
+        use std::sync::Arc;
+
+        use axum::extract::ws::WebSocket;
+
+        use crate::config::Config;
+
+        /// Drop the upgraded socket immediately — live voice is compiled out.
+        pub async fn handle_live_voice_ws(_socket: WebSocket, _config: Arc<Config>) {}
+    }
+}
+
 // ---------------------------------------------------------------------------
 // reply_speech::{synthesize_reply, ReplySpeechOptions, ReplySpeechResult, ...}
 // ---------------------------------------------------------------------------
@@ -217,7 +233,7 @@ pub mod reply_speech {
     use serde_json::Value;
 
     use crate::config::Config;
-    use crate::rpc::RpcOutcome;
+    use crate::core::Outcome;
 
     /// One frame on the viseme timeline. Mirrors the real type.
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -260,7 +276,7 @@ pub mod reply_speech {
         _config: &Config,
         _text: &str,
         _opts: &ReplySpeechOptions,
-    ) -> Result<RpcOutcome<ReplySpeechResult>, String> {
+    ) -> Result<Outcome<ReplySpeechResult>, String> {
         Err(super::DISABLED_MSG.to_string())
     }
 }
@@ -274,7 +290,7 @@ pub mod cloud_transcribe {
     use serde::{Deserialize, Serialize};
 
     use crate::config::Config;
-    use crate::rpc::RpcOutcome;
+    use crate::core::Outcome;
 
     /// Caller-tunable knobs. Mirrors the real type (fields + `Default`).
     #[derive(Debug, Default, Clone)]
@@ -296,7 +312,7 @@ pub mod cloud_transcribe {
         _config: &Config,
         _audio_base64: &str,
         _opts: &CloudTranscribeOptions,
-    ) -> Result<RpcOutcome<CloudTranscribeResult>, String> {
+    ) -> Result<Outcome<CloudTranscribeResult>, String> {
         Err(super::DISABLED_MSG.to_string())
     }
 }

@@ -18,6 +18,7 @@ import { safeInvoke as invoke, isTauri } from '../../../utils/tauriCommands/comm
 import Alert from '../../ui/Alert';
 import Button from '../../ui/Button';
 import Card from '../../ui/Card';
+import Field from '../../ui/Field';
 import { resetWalkthrough } from '../../walkthrough/AppWalkthrough';
 
 const LogsFolderRow = () => {
@@ -44,28 +45,25 @@ const LogsFolderRow = () => {
   if (!isTauri()) return null;
 
   return (
-    <Card className="px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-content">{t('devOptions.appLogs')}</div>
-          <div className="mt-0.5 text-xs text-content-secondary">{t('devOptions.appLogsDesc')}</div>
-          {path && (
-            <div className="mt-1 truncate font-mono text-[11px] text-content-muted">{path}</div>
-          )}
-        </div>
-        <Button variant="secondary" size="sm" onClick={onClick} className="shrink-0">
-          {t('devOptions.openLogsFolder')}
-        </Button>
-      </div>
+    <div>
+      <Field
+        label={t('devOptions.appLogs')}
+        description={path ?? t('devOptions.appLogsDesc')}
+        control={
+          <Button variant="secondary" size="sm" onClick={onClick}>
+            {t('devOptions.openLogsFolder')}
+          </Button>
+        }
+      />
       {error && (
         <div
           role="status"
           aria-live="polite"
-          className="mt-2 text-xs text-coral-600 dark:text-coral-300">
+          className="px-4 pb-3 text-xs text-coral-600 dark:text-coral-300">
           {error}
         </div>
       )}
-    </Card>
+    </div>
   );
 };
 
@@ -137,19 +135,15 @@ const RestartTourRow = () => {
   };
 
   return (
-    <Card className="px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-content">{t('settings.restartTour')}</div>
-          <div className="mt-0.5 text-xs text-content-secondary">
-            {t('settings.restartTourDesc')}
-          </div>
-        </div>
-        <Button variant="secondary" size="sm" onClick={onClick} className="shrink-0">
+    <Field
+      label={t('settings.restartTour')}
+      description={t('settings.restartTourDesc')}
+      control={
+        <Button variant="secondary" size="sm" onClick={onClick}>
           {t('settings.restartTour')}
         </Button>
-      </div>
-    </Card>
+      }
+    />
   );
 };
 
@@ -159,16 +153,14 @@ const SystemDiagnostics = () => {
   const showSentryTest = APP_ENVIRONMENT === 'staging';
 
   return (
-    <div>
-      <h3 className="px-1 pb-2 text-sm font-medium text-content">
-        {t('devOptions.titleDiagnostics')}
-      </h3>
-      <div className="space-y-3">
+    <>
+      <Card title={t('devOptions.titleDiagnostics')} data-testid="about-diagnostics">
         <LogsFolderRow />
-        {showSentryTest && <SentryTestRow />}
         <RestartTourRow />
-      </div>
-    </div>
+      </Card>
+      {/* Staging-only, and loud on purpose: it sends a real event. */}
+      {showSentryTest && <SentryTestRow />}
+    </>
   );
 };
 

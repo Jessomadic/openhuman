@@ -28,8 +28,14 @@ const CONFIG_LOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// resolution found. Normalization still runs, because that is a shaping step
 /// handlers depend on, not a re-read.
 pub async fn load_config_with_timeout() -> Result<Config, String> {
-    if let Some(mut config) = crate::core::runtime::context::CoreContext::current_embedder_config()
-    {
+    // SaaS reads only the task's own scope, as `Config::load_or_init` does, so
+    // a task that lost its user scope fails rather than getting the operator's.
+    let scoped = if crate::core::runtime::is_saas() {
+        crate::core::runtime::CoreContext::scoped().and_then(|ctx| ctx.embedder_config().cloned())
+    } else {
+        crate::core::runtime::context::CoreContext::current_embedder_config()
+    };
+    if let Some(mut config) = scoped {
         normalize_loaded_config(&mut config).await;
         return Ok(config);
     }
@@ -47,6 +53,28 @@ pub async fn load_config_with_timeout() -> Result<Config, String> {
         Ok(Err(e)) => Err(format!("{e:#}")),
         Err(_) => Err("Config loading timed out".to_string()),
     }
+}
+
+/// The config of the ambient context: an embedded agent's own config under
+/// its context, else the persisted config (initialised on first run).
+///
+/// The context-aware counterpart of [`Config::load_or_init`] for code that
+/// runs inside a turn: [`load_config_with_timeout`] with the context's
+/// inference route applied.
+pub async fn load_current_or_init() -> anyhow::Result<Config> {
+    let mut config = load_config_with_timeout()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    if let Some(route) = config.ephemeral_route.clone() {
+        tracing::trace!(
+            agent = crate::core::runtime::agent_scope::current_agent_id()
+                .as_deref()
+                .unwrap_or(""),
+            "[config] applying the context's inference route"
+        );
+        crate::config::schema::ephemeral_route::apply(&mut config, route);
+    }
+    Ok(config)
 }
 
 /// Loads the config that belongs to `workspace_dir`, rather than whichever one

@@ -19,7 +19,7 @@ use super::*;
 /// `"cancelled"`, corrupting the run-honesty status it already recorded, and an
 /// already-`interrupted` run (reconciled by the drop-guard / boot sweep, bug
 /// B42) could be clobbered back to `"cancelled"`.
-pub async fn flows_cancel_run(config: &Config, run_id: &str) -> Result<RpcOutcome<Value>, String> {
+pub async fn flows_cancel_run(config: &Config, run_id: &str) -> Result<Outcome<Value>, String> {
     let run = store::get_flow_run(config, run_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("flow run '{run_id}' not found"))?;
@@ -48,7 +48,7 @@ pub async fn flows_cancel_run(config: &Config, run_id: &str) -> Result<RpcOutcom
         // The in-flight run's cancellation arm owns the terminal write + the
         // checkpoint drop; we've signalled it and return. Its settle is
         // eventual (the run future unwinds), so report "requested".
-        return Ok(RpcOutcome::single_log(
+        return Ok(Outcome::single_log(
             json!({ "run_id": run_id, "cancelled": true, "was_in_flight": true }),
             format!("flow run {run_id} cancellation requested"),
         ));
@@ -95,7 +95,7 @@ pub async fn flows_cancel_run(config: &Config, run_id: &str) -> Result<RpcOutcom
     }
     drop_checkpoint(config, run_id).await;
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({ "run_id": run_id, "cancelled": true, "was_in_flight": false }),
         format!("flow run {run_id} cancelled"),
     ))
@@ -131,10 +131,10 @@ pub async fn flows_list_runs(
     config: &Config,
     flow_id: &str,
     limit: usize,
-) -> Result<RpcOutcome<Vec<FlowRun>>, String> {
+) -> Result<Outcome<Vec<FlowRun>>, String> {
     sweep_expired_parked_runs(config).await;
     let runs = store::list_flow_runs(config, flow_id, limit).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         runs,
         format!("flow runs listed: {flow_id}"),
     ))
@@ -146,11 +146,11 @@ pub async fn flows_list_runs(
 pub async fn flows_list_all_runs(
     config: &Config,
     limit: usize,
-) -> Result<RpcOutcome<Vec<FlowRun>>, String> {
+) -> Result<Outcome<Vec<FlowRun>>, String> {
     sweep_expired_parked_runs(config).await;
     let runs = store::list_all_flow_runs(config, limit).map_err(|e| e.to_string())?;
     let count = runs.len();
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         runs,
         format!("all flow runs listed: {count} run(s)"),
     ))
@@ -163,11 +163,11 @@ pub async fn flows_list_all_runs(
 /// automatically on every new-run insert; this RPC exposes it for an explicit
 /// on-demand sweep (e.g. a maintenance action). Returns the number of runs
 /// pruned.
-pub async fn flows_prune_runs(config: &Config, flow_id: &str) -> Result<RpcOutcome<Value>, String> {
+pub async fn flows_prune_runs(config: &Config, flow_id: &str) -> Result<Outcome<Value>, String> {
     let keep = store::MAX_FLOW_RUNS_PER_FLOW;
     let pruned = store::prune_flow_runs(config, flow_id, keep).map_err(|e| e.to_string())?;
     tracing::info!(target: "flows", flow_id, pruned, keep, "[flows] flows_prune_runs: manual retention sweep");
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({ "flow_id": flow_id, "pruned": pruned, "kept": keep }),
         format!("flow runs pruned: {flow_id} ({pruned} removed)"),
     ))
@@ -176,12 +176,12 @@ pub async fn flows_prune_runs(config: &Config, flow_id: &str) -> Result<RpcOutco
 /// Loads a single flow run record by id (== `thread_id`). Runs the lazy
 /// parked-run TTL sweep first so a stale parked run is reported as `cancelled`
 /// rather than perpetually `pending_approval`.
-pub async fn flows_get_run(config: &Config, run_id: &str) -> Result<RpcOutcome<FlowRun>, String> {
+pub async fn flows_get_run(config: &Config, run_id: &str) -> Result<Outcome<FlowRun>, String> {
     sweep_expired_parked_runs(config).await;
     let run = store::get_flow_run(config, run_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("flow run '{run_id}' not found"))?;
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         run,
         format!("flow run loaded: {run_id}"),
     ))
@@ -270,6 +270,46 @@ pub async fn sweep_expired_parked_runs(config: &Config) -> usize {
 /// resumable — only `pending_approval` is). Best-effort by construction: a store
 /// error is logged and the sweep returns what it managed.
 pub async fn sweep_orphaned_running_runs_on_boot(config: &Config) -> usize {
+    match boot_sweep_plan(crate::storage::installed_is_shared()) {
+        BootSweepPlan::Nothing => {
+            tracing::info!(target: "flows", "[flows] boot sweep: skipped, the storage backend is shared");
+            0
+        }
+        BootSweepPlan::EveryScope => {
+            crate::storage::agents::for_each_scope("flows boot sweep", || {
+                sweep_orphaned_running_runs_in_scope(config)
+            })
+            .await
+            .into_iter()
+            .map(|(_, swept)| swept)
+            .sum()
+        }
+    }
+}
+
+/// Which scopes the boot sweep reconciles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BootSweepPlan {
+    /// `local`, then every agent scope (`crate::storage::agents`).
+    EveryScope,
+    /// No scope.
+    Nothing,
+}
+
+/// The boot sweep's scopes. On a backend other processes share (MongoDB) a
+/// `running` row below the boot floor — `local` or an agent's — can belong to
+/// a run another replica is still driving, and sweeping it would drop that
+/// run's checkpoint, so nothing is swept there, as the agent run reaper does.
+pub(crate) fn boot_sweep_plan(shared: bool) -> BootSweepPlan {
+    if shared {
+        BootSweepPlan::Nothing
+    } else {
+        BootSweepPlan::EveryScope
+    }
+}
+
+/// [`sweep_orphaned_running_runs_on_boot`] for the current storage scope.
+async fn sweep_orphaned_running_runs_in_scope(config: &Config) -> usize {
     let now_str = Utc::now().to_rfc3339();
     const REASON: &str =
         "Run interrupted by an app restart — no live run was executing this row after boot.";

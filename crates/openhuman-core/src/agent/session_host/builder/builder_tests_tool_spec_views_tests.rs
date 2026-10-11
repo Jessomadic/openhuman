@@ -57,7 +57,7 @@ fn the_three_spec_views_share_their_leaf_schemas() {
     // rewrite mutate in place would silently scope the durable set, and a
     // change that deep-copied everything again would still pass an
     // exclusion-only test.
-    let use_skill = crate::tools::toolpacks::USE_SKILL;
+    let use_skill = tinyagents_harness::tool::packs::USE_SKILL;
     let mut saw_scoped_use_skill = false;
     let mut saw_scoped_spawn = false;
 
@@ -91,7 +91,8 @@ fn the_three_spec_views_share_their_leaf_schemas() {
                 "the orchestrator cannot spawn itself: {ids:?}"
             );
             assert!(
-                ids.iter().any(|id| id.as_str() == Some("researcher")),
+                ids.iter()
+                    .any(|id| id.as_str() == Some("task_manager_agent")),
                 "an allowlisted id survives: {ids:?}"
             );
             saw_scoped_spawn = true;
@@ -157,7 +158,6 @@ fn spec_views_stay_consistent_for_a_tool_less_agent() {
     let agent = crate::agent::SessionHostBuilder::new()
         .chat_model(model)
         .tools(Vec::new())
-        .memory(crate::memory::test_support::noop_memory())
         .tool_dispatcher(Box::new(tinytools_agent::dialect::XmlDialect))
         .build()
         .expect("a tool-less agent is a legal build");

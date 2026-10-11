@@ -12,8 +12,8 @@ interface RouteEntry {
 // Back-compat redirects are included so the router redirect itself is tested.
 //   /human       → renders the Human surface (first-class route)
 //   /skills      → /connections (Phase 2)
-//   /activity    → /settings/notifications (Phase 6)
-//   /intelligence → /settings/notifications (Phase 6)
+//   /activity    → /settings/account (Phase 6)
+//   /intelligence → /settings/account (Phase 6)
 //   /home        → /chat (Home folded into the unified two-panel chat surface)
 const ROUTES: RouteEntry[] = [
   { route: '/home', expectedHash: '/chat' }, // back-compat redirect (Home → chat)
@@ -21,8 +21,8 @@ const ROUTES: RouteEntry[] = [
   { route: '/chat' },
   { route: '/connections' },
   { route: '/skills', expectedHash: '/connections' }, // back-compat redirect
-  { route: '/activity', expectedHash: '/settings/notifications' }, // back-compat redirect
-  { route: '/intelligence', expectedHash: '/settings/notifications' }, // back-compat redirect
+  { route: '/activity', expectedHash: '/settings/account' }, // back-compat redirect
+  { route: '/intelligence', expectedHash: '/settings/account' }, // back-compat redirect
   // Desktop Settings is a modal overlay (the backgroundLocation pattern): the
   // /settings index redirects to the first panel and the modal renders on top
   // of the /chat fallback backdrop.

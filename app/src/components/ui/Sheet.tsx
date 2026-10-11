@@ -7,16 +7,14 @@ import { DialogOverlay } from './Dialog';
 
 export const SheetRoot = DialogPrimitive.Root;
 export const SheetTrigger = DialogPrimitive.Trigger;
-export const SheetClose = DialogPrimitive.Close;
 export const SheetTitle = DialogPrimitive.Title;
-export const SheetDescription = DialogPrimitive.Description;
 
 /**
  * A side-anchored panel. Radix has no Drawer primitive, so this is a Dialog
- * pinned to an edge — which is what the six hand-rolled drawers in the app
- * (`SubagentDrawer`, `MeetDefaultsDrawer`, `FlowRunInspectorDrawer`,
- * `NodeConfigDrawer`, `FlowRunsDrawer`, `WhatLeavesMyComputerSheet`) each
- * reimplemented, none of them with a focus trap.
+ * pinned to an edge — which is what the hand-rolled drawers in the app
+ * (`MeetDefaultsDrawer`, `FlowRunInspectorDrawer`, `NodeConfigDrawer`,
+ * `FlowRunsDrawer`, `WhatLeavesMyComputerSheet`) each reimplemented, none of
+ * them with a focus trap.
  *
  * Deliberately not `vaul`: its value is drag-to-dismiss on touch, and this is a
  * desktop app with essentially no touch surface.

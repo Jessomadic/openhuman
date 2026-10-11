@@ -2,7 +2,7 @@
 //!
 //! ## Mounting
 //!
-//! The router is mounted by `crates/openhuman-core/src/core/jsonrpc.rs`:
+//! The router is mounted by `crates/openhuman-rpc/src/server/http/mod.rs`:
 //! ```ignore
 //! .nest("/v1", crate::inference::http::router())
 //! ```

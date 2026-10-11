@@ -1,7 +1,24 @@
 //! Core-owned wallet onboarding metadata, derived account visibility, and
-//! the agent-facing execution surface (balances, transfers, swaps,
-//! contract calls). See [`execution`] for the prepare/confirm/execute flow
-//! and [`chains`] for the per-chain signing/broadcast implementations.
+//! the agent-facing execution surface (balances, transfers, transaction
+//! lookups).
+//!
+//! ## Where the logic lives
+//!
+//! The wallet engine — balances, the prepare/confirm/execute flow, the per-chain
+//! signing choreography and the agent tools — lives in
+//! `tinywallet_web3::crypto`. This module is the host adapter over it:
+//!
+//! - [`ops`] — setup, status, recovery-phrase reveal and `secret_material`
+//!   (keyring, consent, credentials). Stays here: it is the host's state.
+//! - [`execution`] — the engine's operations wrapped in the controller
+//!   contract's `Outcome`.
+//! - [`endpoints`] — the `OPENHUMAN_WALLET_RPC_*` / `OPENHUMAN_SOLANA_CLUSTER`
+//!   environment resolution the engine's `RpcEndpoints` seam asks.
+//! - [`transport`] / [`rpc`] — the host `Transport` seam: endpoint resolution,
+//!   URL redaction and error classification over the shared `reqwest` client.
+//! - `schemas` — the controllers, with their RPC namespace strings.
+//! - The seam implementations and the process-wide engine are in
+//!   [`crate::web3::seams`].
 //!
 //! ## Compile-time gate (`web3` feature)
 //!
@@ -20,11 +37,7 @@
 //! the only thing that catches drift.
 
 #[cfg(feature = "web3")]
-mod abi;
-#[cfg(feature = "web3")]
-mod chains;
-#[cfg(feature = "web3")]
-mod defaults;
+pub(crate) mod endpoints;
 #[cfg(feature = "web3")]
 mod execution;
 #[cfg(feature = "web3")]
@@ -34,6 +47,8 @@ pub(crate) mod rpc;
 
 #[cfg(feature = "web3")]
 mod schemas;
+/// The wallet agent tools, re-exported from `tinywallet-web3`. The host builds
+/// them over the process-wide engine in `tools/ops.rs`.
 #[cfg(feature = "web3")]
 pub mod tools;
 /// The host side of the wallet primitives' `Transport` seam — endpoint resolution,
@@ -45,14 +60,7 @@ pub(crate) mod transport;
 pub(crate) mod test_support;
 
 #[cfg(feature = "web3")]
-pub use abi::encode_erc20_transfer;
-#[cfg(feature = "web3")]
-pub use defaults::{
-    asset_catalog, default_rpc_url, env_var_for_chain, evm_asset_catalog, explorer_tx_url,
-    find_asset, find_asset_for_network, network_defaults, rpc_source_for_chain, rpc_url_for_chain,
-    rpc_url_for_evm_network, solana_cluster, EvmNetwork, RpcSource, SolanaCluster,
-    WalletAssetDefinition, WalletNetworkDefaults,
-};
+pub use endpoints::solana_cluster;
 #[cfg(feature = "web3")]
 pub use execution::{
     balances, chain_status, execute_prepared, lookup_tx,
@@ -61,10 +69,6 @@ pub use execution::{
     ExecutionResult, PrepareTransferParams, PreparedKind, PreparedStatus, PreparedTransaction,
     ProviderStatus, SupportedAsset, TxLookupInfo, TxReceiptInfo, TxState, TxStatusInfo,
 };
-/// Crate-internal signing primitives the `web3` layer builds on. Not part of
-/// the agent / RPC surface.
-#[cfg(feature = "web3")]
-pub(crate) use execution::{sign_and_broadcast_evm, sign_and_broadcast_solana};
 #[cfg(feature = "web3")]
 pub(crate) use ops::secret_material;
 #[cfg(feature = "web3")]
@@ -76,6 +80,13 @@ pub use ops::{
 pub use schemas::{
     all_controller_schemas, all_registered_controllers, all_wallet_controller_schemas,
     all_wallet_registered_controllers, schemas, wallet_schemas,
+};
+#[cfg(feature = "web3")]
+pub use tinywallet_web3::crypto::abi::encode_erc20_transfer;
+#[cfg(feature = "web3")]
+pub use tinywallet_web3::crypto::defaults::{
+    evm_asset_catalog, explorer_tx_url, EvmNetwork, RpcSource, SolanaCluster,
+    WalletAssetDefinition, WalletNetworkDefaults,
 };
 
 // ---------------------------------------------------------------------------

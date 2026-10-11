@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { Badge, type BadgeVariant } from '../../../components/ui';
 import { useT } from '../../../lib/i18n/I18nContext';
 import OnboardingNextButton from '../components/OnboardingNextButton';
 import type { AiMode } from '../OnboardingContext';
@@ -22,25 +23,22 @@ interface ChoiceCardProps {
   testId: string;
 }
 
-const ACCENT_CLASSES: Record<
-  Accent,
-  { selected: string; dot: string; badge: string; highlight: string }
-> = {
+const ACCENT_CLASSES: Record<Accent, { selected: string; dot: string; highlight: string }> = {
   sage: {
     selected: 'border-sage-500! bg-sage-50 dark:bg-sage-500/10 shadow-xs',
     dot: 'bg-sage-500',
-    badge: 'bg-sage-500/10 text-sage-700 dark:text-sage-300',
     highlight:
       'border-sage-300 dark:border-sage-500/40 bg-sage-100 dark:bg-sage-500/20 text-sage-800 dark:text-sage-200',
   },
   primary: {
     selected: 'border-primary-500! bg-primary-50 dark:bg-primary-500/15 shadow-xs',
     dot: 'bg-primary-500',
-    badge: 'bg-primary-500/10 text-primary-600 dark:text-primary-300',
     highlight:
       'border-primary-200 dark:border-primary-500/30 bg-primary-50 dark:bg-primary-500/15 text-primary-700 dark:text-primary-300',
   },
 };
+
+const ACCENT_BADGE_VARIANT: Record<Accent, BadgeVariant> = { sage: 'success', primary: 'primary' };
 
 const ChoiceCard = ({
   selected,
@@ -68,10 +66,9 @@ const ChoiceCard = ({
       <div className="flex items-start justify-between gap-3">
         <h3 className="text-base font-semibold text-content">{title}</h3>
         {badge ? (
-          <span
-            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${accentClasses.badge}`}>
+          <Badge variant={ACCENT_BADGE_VARIANT[accent]} dot={false}>
             {badge}
-          </span>
+          </Badge>
         ) : null}
       </div>
       <p className="mt-1 text-xs text-content-muted">{tagline}</p>

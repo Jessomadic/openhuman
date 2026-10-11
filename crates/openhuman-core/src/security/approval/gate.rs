@@ -60,6 +60,36 @@ pub enum DecideMiss {
     NeverRegistered,
 }
 
+/// A decision refused by the gate before it reached the store.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ApprovalError {
+    /// The request was parked by a different agent than the one deciding it.
+    #[error("approval request {request_id} belongs to another agent")]
+    WrongAgent { request_id: String },
+}
+
+/// The key `thread_to_request` files a parked chat thread under, keyed by
+/// the tenant that parked it: the thread id alone for the process's own
+/// sessions, `<agent>\x1f<thread>` for an embedded agent (both unchanged),
+/// and the [`tenant_key`](crate::core::runtime::tenant_key) of the thread for
+/// a SaaS profile, so two profiles' default agents (which have no agent id)
+/// never share a route. A profile key starts with `\x1e`, which no agent id
+/// contains, and the desktop and SaaS modes never share a process.
+pub(crate) fn thread_route_key(tenant: &crate::core::runtime::Tenant, thread_id: &str) -> String {
+    match (&tenant.profile, &tenant.agent) {
+        (Some(_), _) => crate::core::runtime::tenant_key(tenant, thread_id),
+        (None, Some(agent)) => format!("{agent}\u{1f}{thread_id}"),
+        (None, None) => thread_id.to_string(),
+    }
+}
+
+/// The tenant whose approvals the calling task parks and answers. A SaaS
+/// task with no scope gets a tenant nothing else shares, so it can neither
+/// find nor clear another user's route.
+pub(crate) fn current_route_tenant() -> crate::core::runtime::Tenant {
+    crate::core::runtime::tenant::current_tenant_or_isolated("approval_gate")
+}
+
 /// How long the gate will park a future before timing out and
 /// returning `Deny`. 10 minutes matches the default `expires_at`
 /// written into the persisted row.
@@ -77,6 +107,39 @@ const DEFAULT_APPROVAL_TTL: Duration = Duration::from_secs(60 * 10);
 /// branch scopes the task-local below.
 const COPILOT_APPROVAL_TTL: Duration = Duration::from_secs(180);
 
+/// Shorter park window for approvals raised inside a sub-agent run — a
+/// delegated worker (`image_agent`, `video_agent`, `skill_setup`, …) calling
+/// an external-effect tool. Same three-minute window and the same rationale
+/// as [`COPILOT_APPROVAL_TTL`]: the prompt is one level removed from what the
+/// user is looking at (an async sub-agent's card lands on a parent turn that
+/// may already have finished), and a ten-minute park left every failed
+/// `media_generate_image` / `media_generate_video` / `skill_registry_install`
+/// blocking for exactly 600s with the result never delivered. If nobody answers
+/// in three minutes the call is denied with an "approval wasn't answered"
+/// result so the parent agent can tell the user and they can ask again.
+const SUBAGENT_APPROVAL_TTL: Duration = Duration::from_secs(180);
+
+/// Phrase every TTL-expiry denial carries, so a caller that renders its own
+/// refusal (the hosted `OpenHumanSecurityGate`) can tell "nobody answered" from
+/// "the user said no" without parsing the rest of the reason. See
+/// [`is_unanswered_approval_reason`].
+pub const APPROVAL_UNANSWERED_PHRASE: &str = "nobody answered the approval prompt";
+
+/// Whether the parked `request_id` was routed to its chat thread from a task
+/// detached from that turn (an async-delegated sub-agent, #5499), so its card
+/// can outlive the turn. Read by the web-channel surface when it bridges
+/// `ApprovalRequested` (the route is recorded before the event is published);
+/// `false` when no gate is installed or the request is unknown.
+pub fn is_detached_request(request_id: &str) -> bool {
+    ApprovalGate::try_global().is_some_and(|gate| gate.request_is_detached(request_id))
+}
+
+/// Whether a [`GateOutcome::Deny`] reason is a TTL expiry (the prompt went
+/// unanswered) rather than a refusal.
+pub fn is_unanswered_approval_reason(reason: &str) -> bool {
+    reason.contains(APPROVAL_UNANSWERED_PHRASE)
+}
+
 /// Per-turn chat context for routing a parked approval's yes/no reply back to
 /// the originating thread. The web channel scopes this task-local around the
 /// agent run (`web_chat`); because the `run_turn` handler, the
@@ -88,6 +151,11 @@ const COPILOT_APPROVAL_TTL: Duration = Duration::from_secs(180);
 pub struct ApprovalChatContext {
     pub thread_id: String,
     pub client_id: String,
+    /// The turn currently running on this thread, when the caller has one in
+    /// scope. Carried through to `external_transfer_pending` (and any other
+    /// event this context backs) so the frontend can correlate a disclosure
+    /// to the turn that triggered it instead of only the thread.
+    pub request_id: Option<String>,
 }
 
 tokio::task_local! {
@@ -114,8 +182,8 @@ tokio::task_local! {
 /// so a tool call parked from that run can correlate
 /// [`PendingApproval::source_context`](super::types::PendingApproval) back to
 /// the exact flow + run (the origin alone only carries `flow_id`, not
-/// `run_id`). Absent for every non-flow caller — chat, cron, subconscious,
-/// CLI never scope this.
+/// `run_id`). Absent for every non-flow caller — chat, cron, background
+/// jobs, CLI never scope this.
 #[derive(Clone, Debug)]
 pub struct FlowRunContext {
     pub flow_id: String,
@@ -186,17 +254,49 @@ pub fn try_boot_state() -> Option<ApprovalGateBootState> {
     BOOT_STATE.get().copied()
 }
 
+/// Routing correlation captured at park time for one `request_id`: the chat
+/// thread/client to surface a decision to, plus the gated tool call's
+/// provider-assigned call id. Looked up by [`ApprovalGate::take_request_route`]
+/// when a decision resolves so `DomainEvent::ApprovalDecided` can carry the
+/// same routing the original `ApprovalRequested` did, without re-deriving it
+/// from ambient task-locals that may no longer be in scope (a decision can
+/// resolve from an RPC call with no chat context of its own).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RequestRoute {
+    pub(crate) thread_id: Option<String>,
+    pub(crate) client_id: Option<String>,
+    pub(crate) tool_call_id: Option<String>,
+    pub(crate) forced: bool,
+    pub(crate) agent_id: Option<String>,
+    /// Instance barrier captured at registration, independent of decision context.
+    pub(crate) approval_scope: Option<Arc<super::ApprovalScope>>,
+    /// The [`thread_route_key`] the request was parked under, so a decision
+    /// made outside the parking task's scope clears the right route.
+    pub(crate) thread_key: Option<String>,
+    /// The park can outlive the chat turn it is shown on — an async-delegated
+    /// sub-agent routed through the origin fallback (#5499). Carried so the
+    /// replay path re-emits the same `detached` flag the live event had.
+    pub(crate) detached: bool,
+}
+
 /// Coordinator for pending approvals.
 pub struct ApprovalGate {
     config: Config,
     session_id: String,
     ttl: Duration,
     waiters: Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>,
-    /// thread_id → request_id for the approval currently parked on that chat
-    /// thread, so the web channel can route a yes/no reply to `approval_decide`.
+    /// [`thread_route_key`] → request_id for the approval currently parked on
+    /// that chat thread, so the web channel can route a yes/no reply to
+    /// `approval_decide`.
     /// In-memory only (session-scoped — a parked approval doesn't survive a
     /// restart, and the oneshot waiter is in-memory anyway).
     thread_to_request: Mutex<HashMap<String, String>>,
+    /// request_id → [`RequestRoute`] for every currently-parked call. Populated
+    /// at park time (`intercept_audited_inner`), consulted when a decision
+    /// resolves (`decide`, and the TTL/channel-drop paths in
+    /// `gate_intercept.rs`) so `ApprovalDecided` can mirror the same
+    /// thread/client/tool_call_id the original `ApprovalRequested` carried.
+    request_routes: Mutex<HashMap<String, RequestRoute>>,
 }
 
 /// RAII guard that tears the parked waiter down even when the surrounding turn
@@ -219,7 +319,10 @@ pub struct ApprovalGate {
 struct WaiterGuard<'a> {
     gate: &'a ApprovalGate,
     request_id: String,
-    thread_id: Option<String>,
+    thread_key: Option<String>,
+    /// Storage scope of the parking call, kept for `Drop`: the acting agent's
+    /// task-local is gone by then.
+    docs: Result<Option<super::store_documents::Docs>, String>,
     armed: bool,
 }
 
@@ -247,11 +350,29 @@ impl Drop for WaiterGuard<'_> {
         // an unconditional `remove` would delete the *new* request's routing, so
         // the next typed yes/no would fall through as a fresh chat turn instead
         // of resolving the live gate (#4774).
-        if let Some(thread_id) = &self.thread_id {
+        if let Some(thread_key) = &self.thread_key {
             self.gate
-                .clear_thread_route_if_owned(thread_id, &self.request_id);
+                .clear_thread_route_if_owned(thread_key, &self.request_id);
         }
-        let _ = store::decide(&self.gate.config, &self.request_id, ApprovalDecision::Deny);
+        let decided = store::decide_captured(
+            &self.gate.config,
+            &self.docs,
+            &self.request_id,
+            ApprovalDecision::Deny,
+        );
+        if let Ok(Some(row)) = decided {
+            let route = self.gate.take_request_route(&self.request_id);
+            BUS.publish(DomainEvent::ApprovalDecided {
+                request_id: row.request_id,
+                tool_name: row.tool_name,
+                decision: ApprovalDecision::Deny.as_str().to_string(),
+                thread_id: route.as_ref().and_then(|r| r.thread_id.clone()),
+                client_id: route.as_ref().and_then(|r| r.client_id.clone()),
+                tool_call_id: route.and_then(|r| r.tool_call_id),
+                resolution: Some("cancelled".to_string()),
+                agent_id: row.agent_id,
+            });
+        }
         tracing::warn!(
             request_id = %self.request_id,
             "[approval::gate] parked approval future dropped mid-park (external turn teardown) — \
@@ -262,6 +383,7 @@ impl Drop for WaiterGuard<'_> {
 
 include!("gate_setup.rs");
 include!("gate_intercept.rs");
+include!("gate_intercept_decision.rs");
 include!("gate_state.rs");
 fn now_ms() -> u64 {
     std::time::SystemTime::now()

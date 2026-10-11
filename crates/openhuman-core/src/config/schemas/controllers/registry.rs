@@ -5,11 +5,10 @@ use crate::core::ControllerSchema;
 
 use super::super::schema_defs::schemas;
 use super::agent::{
-    handle_get_activity_level_settings, handle_get_agent_settings, handle_get_autonomy_settings,
-    handle_get_memory_sync_settings, handle_get_privacy_mode, handle_get_sandbox_settings,
-    handle_set_browser_allow_all, handle_set_privacy_mode, handle_update_activity_level_settings,
+    handle_get_agent_settings, handle_get_autonomy_settings, handle_get_privacy_mode,
+    handle_get_sandbox_settings, handle_set_browser_allow_all, handle_set_privacy_mode,
     handle_update_agent_settings, handle_update_autonomy_settings, handle_update_browser_settings,
-    handle_update_memory_sync_settings, handle_update_sandbox_settings,
+    handle_update_computer_settings, handle_update_sandbox_settings,
 };
 use super::inference::{
     handle_get_client_config, handle_get_config, handle_get_runtime_flags, handle_resolve_api_url,
@@ -27,9 +26,9 @@ use super::voice::{
 use super::workspace::{
     handle_agent_server_status, handle_get_agent_paths, handle_get_analytics_settings,
     handle_get_dashboard_settings, handle_get_data_paths, handle_get_onboarding_completed,
-    handle_reset_local_data, handle_set_onboarding_completed, handle_update_agent_paths,
-    handle_update_analytics_settings, handle_workspace_onboarding_flag_exists,
-    handle_workspace_onboarding_flag_set,
+    handle_get_user_timezone, handle_reset_local_data, handle_set_onboarding_completed,
+    handle_update_agent_paths, handle_update_analytics_settings, handle_update_user_timezone,
+    handle_workspace_onboarding_flag_exists, handle_workspace_onboarding_flag_set,
 };
 
 pub fn all_controller_schemas() -> Vec<ControllerSchema> {
@@ -40,6 +39,7 @@ pub fn all_controller_schemas() -> Vec<ControllerSchema> {
         schemas("update_memory_settings"),
         schemas("update_runtime_settings"),
         schemas("update_browser_settings"),
+        schemas("update_computer_settings"),
         schemas("update_local_ai_settings"),
         schemas("resolve_api_url"),
         schemas("get_runtime_flags"),
@@ -48,6 +48,8 @@ pub fn all_controller_schemas() -> Vec<ControllerSchema> {
         schemas("workspace_onboarding_flag_set"),
         schemas("update_analytics_settings"),
         schemas("get_analytics_settings"),
+        schemas("update_user_timezone"),
+        schemas("get_user_timezone"),
         schemas("get_dashboard_settings"),
         schemas("agent_server_status"),
         schemas("reset_local_data"),
@@ -70,10 +72,6 @@ pub fn all_controller_schemas() -> Vec<ControllerSchema> {
         schemas("update_agent_settings"),
         schemas("update_search_settings"),
         schemas("get_search_settings"),
-        schemas("get_activity_level_settings"),
-        schemas("update_activity_level_settings"),
-        schemas("get_memory_sync_settings"),
-        schemas("update_memory_sync_settings"),
         schemas("get_sandbox_settings"),
         schemas("update_sandbox_settings"),
     ]
@@ -106,6 +104,10 @@ pub fn all_registered_controllers() -> Vec<RegisteredController> {
             handler: handle_update_browser_settings,
         },
         RegisteredController {
+            schema: schemas("update_computer_settings"),
+            handler: handle_update_computer_settings,
+        },
+        RegisteredController {
             schema: schemas("update_local_ai_settings"),
             handler: handle_update_local_ai_settings,
         },
@@ -136,6 +138,14 @@ pub fn all_registered_controllers() -> Vec<RegisteredController> {
         RegisteredController {
             schema: schemas("get_analytics_settings"),
             handler: handle_get_analytics_settings,
+        },
+        RegisteredController {
+            schema: schemas("update_user_timezone"),
+            handler: handle_update_user_timezone,
+        },
+        RegisteredController {
+            schema: schemas("get_user_timezone"),
+            handler: handle_get_user_timezone,
         },
         RegisteredController {
             schema: schemas("get_dashboard_settings"),
@@ -224,22 +234,6 @@ pub fn all_registered_controllers() -> Vec<RegisteredController> {
         RegisteredController {
             schema: schemas("get_search_settings"),
             handler: handle_get_search_settings,
-        },
-        RegisteredController {
-            schema: schemas("get_activity_level_settings"),
-            handler: handle_get_activity_level_settings,
-        },
-        RegisteredController {
-            schema: schemas("update_activity_level_settings"),
-            handler: handle_update_activity_level_settings,
-        },
-        RegisteredController {
-            schema: schemas("get_memory_sync_settings"),
-            handler: handle_get_memory_sync_settings,
-        },
-        RegisteredController {
-            schema: schemas("update_memory_sync_settings"),
-            handler: handle_update_memory_sync_settings,
         },
         RegisteredController {
             schema: schemas("get_sandbox_settings"),

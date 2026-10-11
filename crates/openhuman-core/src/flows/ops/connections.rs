@@ -13,7 +13,7 @@ use super::*;
 /// fails the whole picker.
 pub async fn flows_list_connections(
     config: &Config,
-) -> Result<RpcOutcome<Vec<FlowConnection>>, String> {
+) -> Result<Outcome<Vec<FlowConnection>>, String> {
     tracing::debug!(
         "[flows] rpc flows_list_connections: aggregating composio + http_cred picker sources"
     );
@@ -97,7 +97,7 @@ pub async fn flows_list_connections(
         "flows_list_connections: {} connection(s)",
         connections.len()
     ));
-    Ok(RpcOutcome::new(connections, logs))
+    Ok(Outcome::new(connections, logs))
 }
 
 /// Fold Composio connected accounts + named HTTP credentials into the flat,
@@ -119,7 +119,7 @@ pub(super) fn build_flow_connections(
     http: Vec<crate::security::credentials::HttpCredentialSummary>,
     identities: &[crate::integrations::composio::providers::ConnectedIdentity],
 ) -> Vec<FlowConnection> {
-    use tinymemory_api::composio::normalize_connection_identifier;
+    use crate::integrations::composio::contract::normalize_connection_identifier;
 
     let identity_lookup: std::collections::HashMap<(String, String), &_> = identities
         .iter()
@@ -260,7 +260,7 @@ pub(crate) async fn connected_toolkits(config: &Config) -> std::collections::Has
 /// `oh:` tools and `http_request` nodes need no Composio connection and are
 /// skipped.
 pub async fn compute_required_connections(config: &Config, graph: &WorkflowGraph) -> Vec<Value> {
-    use tinymemory_api::composio::toolkit_from_slug;
+    use crate::integrations::composio::contract::toolkit_from_slug;
 
     // Collect required toolkits (deduped, order-preserving).
     let mut required: Vec<String> = Vec::new();
@@ -315,10 +315,10 @@ pub async fn compute_required_connections(config: &Config, graph: &WorkflowGraph
 pub async fn flows_required_connections(
     config: &Config,
     graph_json: Value,
-) -> Result<RpcOutcome<Value>, String> {
+) -> Result<Outcome<Value>, String> {
     let graph = migrate_and_deserialize_graph(graph_json)?;
     let required = compute_required_connections(config, &graph).await;
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({ "required_connections": required }),
         "required connections computed",
     ))

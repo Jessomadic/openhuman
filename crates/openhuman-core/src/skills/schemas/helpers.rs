@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 // ── Config / workspace resolution ────────────────────────────────────────────
 
@@ -76,6 +76,6 @@ pub(super) fn deserialize_params<T: DeserializeOwned>(
     serde_json::from_value(Value::Object(params)).map_err(|e| format!("invalid params: {e}"))
 }
 
-pub(super) fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+pub(super) fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     outcome.into_cli_compatible_json()
 }

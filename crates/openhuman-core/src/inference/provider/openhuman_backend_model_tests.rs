@@ -42,105 +42,57 @@ fn managed_model_advertises_tool_and_vision_capabilities() {
 }
 
 #[test]
+fn managed_model_supports_only_serializable_native_media_inputs() {
+    use tinyinference_llm::model::{InputModality, InputSource};
+
+    let model = backend();
+    for mime in ["image/png", "image/jpeg", "image/webp", "image/gif"] {
+        for source in [InputSource::Base64, InputSource::Url] {
+            assert!(
+                model.supports_input(InputModality::Image, mime, source),
+                "managed transport should serialize {mime} from {source:?}"
+            );
+        }
+    }
+
+    for mime in ["audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp3"] {
+        assert!(
+            model.supports_input(InputModality::Audio, mime, InputSource::Base64),
+            "managed transport should serialize inline {mime}"
+        );
+        assert!(
+            !model.supports_input(InputModality::Audio, mime, InputSource::Url),
+            "managed transport must not advertise URL serialization for {mime}"
+        );
+    }
+
+    for modality in [InputModality::Image, InputModality::Audio] {
+        for source in [InputSource::Base64, InputSource::Url, InputSource::Path] {
+            assert!(
+                !model.supports_input(modality, "application/pdf", source),
+                "managed transport must reject PDF as {modality:?}/{source:?}"
+            );
+        }
+    }
+    for modality in [InputModality::Video, InputModality::Document] {
+        for source in [InputSource::Base64, InputSource::Url, InputSource::Path] {
+            assert!(
+                !model.supports_input(modality, "application/octet-stream", source),
+                "managed transport must reject {modality:?}/{source:?}"
+            );
+        }
+    }
+    assert!(!model.supports_input(InputModality::Image, "image/tiff", InputSource::Base64));
+    assert!(!model.supports_input(InputModality::Audio, "audio/ogg", InputSource::Base64));
+    assert!(!model.supports_input(InputModality::Image, "image/png", InputSource::Path));
+}
+
+#[test]
 fn resolve_model_normalizes_blank_and_trims_non_empty_values() {
     assert_eq!(resolve_model(""), crate::config::MODEL_MANAGED_DEFAULT);
     assert_eq!(resolve_model(" \t\n"), crate::config::MODEL_MANAGED_DEFAULT);
     assert_eq!(resolve_model("  reasoning-v1  "), "reasoning-v1");
     assert_eq!(resolve_model("hint:reasoning"), "hint:reasoning");
-}
-
-/// The managed `openhuman.{billing,usage}` envelope on `raw` must re-project
-/// into the host `UsageInfo` the cost bridge reads — charged USD, cached
-/// tokens, and context window — exactly as the legacy legacy model-adapter path did.
-#[test]
-fn project_managed_usage_recovers_charged_and_cached() {
-    use crate::agent::tinyagents::model::usage_info_from_response;
-    use tinyinference_llm::message::AssistantMessage;
-    use tinyinference_llm::usage::Usage;
-
-    let raw = serde_json::json!({
-        "openhuman": {
-            "usage": { "cached_input_tokens": 128, "context_window": 200000 },
-            "billing": { "charged_amount_usd": 0.0042 }
-        }
-    });
-    let response = ModelResponse {
-        message: AssistantMessage {
-            id: None,
-            content: vec![],
-            tool_calls: vec![],
-            usage: None,
-            origin: None,
-        },
-        usage: Some(Usage {
-            input_tokens: 1000,
-            output_tokens: 50,
-            ..Usage::default()
-        }),
-        finish_reason: None,
-        raw: Some(raw),
-        resolved_model: None,
-        continue_turn: None,
-        served_from_cache: false,
-        correlation: None,
-        resolved_route: None,
-    };
-
-    let projected = project_managed_usage(response);
-    let usage = usage_info_from_response(&projected).expect("usage recovered");
-    assert!(
-        (usage.charged_amount_usd - 0.0042).abs() < 1e-9,
-        "charged={}",
-        usage.charged_amount_usd
-    );
-    assert_eq!(usage.cached_input_tokens, 128, "cached tokens backfilled");
-    assert_eq!(usage.context_window, 200_000);
-    assert_eq!(usage.input_tokens, 1000);
-    assert_eq!(usage.output_tokens, 50);
-}
-
-/// A response with no `openhuman` envelope stays untouched — no meta key, no
-/// charged USD — so non-managed/billing-free responses aren't fabricated.
-#[test]
-fn project_managed_usage_is_noop_without_envelope() {
-    use crate::agent::tinyagents::model::usage_info_from_response;
-    use tinyinference_llm::message::AssistantMessage;
-    use tinyinference_llm::usage::Usage;
-
-    let response = ModelResponse {
-        message: AssistantMessage {
-            id: None,
-            content: vec![],
-            tool_calls: vec![],
-            usage: None,
-            origin: None,
-        },
-        usage: Some(Usage {
-            input_tokens: 10,
-            output_tokens: 5,
-            cache_read_tokens: 3,
-            ..Usage::default()
-        }),
-        finish_reason: None,
-        raw: Some(serde_json::json!({ "id": "resp_1" })),
-        resolved_model: None,
-        continue_turn: None,
-        served_from_cache: false,
-        correlation: None,
-        resolved_route: None,
-    };
-
-    let projected = project_managed_usage(response);
-    // raw keeps only the wire fields — no meta key injected.
-    assert!(projected
-        .raw
-        .as_ref()
-        .unwrap()
-        .get("openhuman_usage_meta")
-        .is_none());
-    let usage = usage_info_from_response(&projected).expect("usage present");
-    assert_eq!(usage.charged_amount_usd, 0.0);
-    assert_eq!(usage.cached_input_tokens, 3, "crate cached count preserved");
 }
 
 // ── probe_readiness (B45 — flows provider-connectivity author gate) ────
@@ -317,6 +269,9 @@ async fn spawn_static_chat_server(status: axum::http::StatusCode, body: Value) -
     addr.to_string()
 }
 
+#[path = "openhuman_backend_model_stream_tests.rs"]
+mod stream_tests;
+
 async fn slow_chat_handler() -> axum::response::Response {
     use axum::response::IntoResponse;
     // Longer than the probe's 5s timeout — the probe must return before
@@ -405,16 +360,77 @@ async fn probe_readiness_fails_open_on_timeout_or_5xx() {
     );
 }
 
-// ── resolve_bearer local-expiry precheck (#5503, part e) ───────────────
+#[path = "openhuman_backend_model_reasoning_tests.rs"]
+mod reasoning_tests;
+
+// ── shared pooled client (time to first token) ──────────────────────────
+
+/// A TCP relay in front of `upstream` that counts the connections it accepts.
+async fn spawn_counting_relay(
+    upstream: String,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind relay");
+    let addr = listener.local_addr().expect("relay addr").to_string();
+    let counter = accepted.clone();
+    tokio::spawn(async move {
+        while let Ok((mut inbound, _)) = listener.accept().await {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let upstream = upstream.clone();
+            tokio::spawn(async move {
+                if let Ok(mut outbound) = tokio::net::TcpStream::connect(&upstream).await {
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                }
+            });
+        }
+    });
+    (addr, accepted)
+}
+
+/// Every managed call used to build its own `reqwest::Client`, so each call
+/// opened a new connection (a fresh TCP + TLS handshake against the real
+/// backend) before its first token. Consecutive calls must now reuse one.
+#[tokio::test]
+async fn consecutive_managed_calls_reuse_one_connection() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    seed_app_session(tmp.path());
+    let upstream = spawn_static_chat_server(
+        axum::http::StatusCode::OK,
+        serde_json::json!({
+            "id": "chatcmpl-pool",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "reasoning-v1",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "ok" },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+        }),
+    )
+    .await;
+    let (relay, accepted) = spawn_counting_relay(upstream).await;
+    let backend = backend_pointed_at(&relay, tmp.path());
+
+    for call in 0..3 {
+        backend
+            .probe_readiness()
+            .await
+            .unwrap_or_else(|error| panic!("managed call {call} failed: {error}"));
+    }
+
+    assert_eq!(
+        accepted.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "three consecutive managed calls must share one pooled connection"
+    );
+}
 
 #[test]
 fn resolve_bearer_fast_fails_session_expired_on_expired_token() {
-    // An app-session JWT whose recorded `exp` is in the past must fail the
-    // precheck as a `SESSION_EXPIRED` sentinel BEFORE any request is built —
-    // so the web-chat classifier routes it to `session_expired` (actionable
-    // re-auth) instead of a doomed request that can surface as a misleading
-    // "model unavailable" (#5503). No backend is stood up: a correct
-    // precheck never reaches the network.
     let tmp = tempfile::TempDir::new().unwrap();
     let past = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
     seed_app_session_with_expiry(tmp.path(), &past);
@@ -436,8 +452,6 @@ fn resolve_bearer_fast_fails_session_expired_on_expired_token() {
 
 #[test]
 fn resolve_bearer_returns_token_when_expiry_in_future() {
-    // A recorded `exp` comfortably in the future resolves normally — the
-    // precheck only rejects the past-expiry case.
     let tmp = tempfile::TempDir::new().unwrap();
     let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
     seed_app_session_with_expiry(tmp.path(), &future);
@@ -448,8 +462,6 @@ fn resolve_bearer_returns_token_when_expiry_in_future() {
         .expect("a live (future-exp) managed JWT must resolve");
     assert_eq!(token, "test.session.jwt");
 }
-
-// ── managed-bearer transport safety for a stored API key (CWE-319) ─────
 
 fn backend_with_api_key(api_url: &str, dir: &std::path::Path) -> OpenHumanBackendModel {
     crate::security::credentials::api_key::store_api_key_in(dir, false, "th_test_key")
@@ -479,27 +491,33 @@ fn resolve_bearer_refuses_a_stored_api_key_over_plaintext_non_loopback() {
     let msg = err.to_string();
     assert!(
         msg.contains("refusing to send")
-            && msg.contains("non-HTTPS")
+            && msg.contains("unmanaged or insecure")
             && msg.contains("api.example.test"),
         "error must name the refusal and the offending endpoint: {msg}"
     );
 }
 
 #[test]
-fn resolve_bearer_sends_a_stored_api_key_over_https() {
+fn resolve_bearer_sends_a_stored_api_key_to_managed_https() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let backend = backend_with_api_key("https://api.example.test", tmp.path());
+    let backend = backend_with_api_key("https://api.tinyhumans.ai", tmp.path());
 
     let token = backend
         .resolve_bearer()
-        .expect("https must be allowed to carry the api-key bearer");
+        .expect("managed HTTPS must be allowed to carry the api-key bearer");
     assert_eq!(token, "th_test_key");
 }
 
 #[test]
+fn resolve_bearer_rejects_foreign_https_for_api_key() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let backend = backend_with_api_key("https://api.example.test", tmp.path());
+    let error = backend.resolve_bearer().unwrap_err();
+    assert!(error.to_string().contains("unmanaged or insecure"));
+}
+
+#[test]
 fn resolve_bearer_sends_a_stored_api_key_over_plain_loopback() {
-    // Plain HTTP to loopback stays allowed — the same local-testing
-    // allowance `openhuman_embed::turn::is_safe_endpoint_for_bearer` makes.
     let tmp = tempfile::TempDir::new().unwrap();
     let backend = backend_with_api_key("http://127.0.0.1:9999", tmp.path());
 
@@ -511,10 +529,6 @@ fn resolve_bearer_sends_a_stored_api_key_over_plain_loopback() {
 
 #[test]
 fn resolve_bearer_returns_token_for_exp_less_offline_session() {
-    // Offline / local sessions record no `exp`, so the precheck falls
-    // through to presence-only and their behaviour is unchanged (the
-    // post-call 401 net still covers a server-side revocation). Guards the
-    // #5503 precheck against breaking the offline path.
     let tmp = tempfile::TempDir::new().unwrap();
     seed_app_session(tmp.path());
     let backend = backend_pointed_at("127.0.0.1:9", tmp.path());
@@ -524,3 +538,10 @@ fn resolve_bearer_returns_token_for_exp_less_offline_session() {
         .expect("an exp-less offline session must resolve (presence-only)");
     assert_eq!(token, "test.session.jwt");
 }
+#[path = "openhuman_backend_model_auth_tests.rs"]
+mod auth_tests;
+#[path = "openhuman_backend_model_endpoint_tests.rs"]
+mod endpoint_tests;
+
+#[path = "openhuman_backend_model_offline_session_tests.rs"]
+mod offline_session_tests;

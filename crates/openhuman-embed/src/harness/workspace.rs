@@ -1,12 +1,16 @@
 //! Where the harness keeps its state.
 //!
-//! Session history, memory, attachments and skills all live beneath one
-//! directory, and `tinyagents::session` keys its SQLite database on it
-//! (`{workspace}/session_db/sessions.db`). There is no storage trait to swap and
-//! the in-memory database variant is `#[cfg(test)]`, so **the workspace
-//! directory is the only storage axis an embedder has** — which is precisely why
-//! it is a first-class builder input rather than something discovered from the
+//! By default session history, memory, attachments and skills all live
+//! beneath one directory, and `tinyagents::session` keys its SQLite database on
+//! it (`{workspace}/session_db/sessions.db`), which is why the workspace is a
+//! first-class builder input rather than something discovered from the
 //! environment.
+//!
+//! A host that keeps conversations in its own database instead gives the
+//! runtime a session store
+//! ([`RuntimeBuilder::session_store`](crate::RuntimeBuilder::session_store))
+//! and picks [`Workspace::Stateless`]: then nothing that must outlive the
+//! process is written to disk at all.
 
 use std::path::{Path, PathBuf};
 
@@ -26,6 +30,17 @@ pub enum Workspace {
     Ephemeral,
     /// A caller-owned directory. Created if absent; persists across runs.
     Dir(PathBuf),
+    /// No durable state on disk: every agent's transcripts, journal, goals and
+    /// todos go through the runtime's session store
+    /// ([`RuntimeBuilder::session_store`](crate::RuntimeBuilder::session_store)),
+    /// which is required.
+    ///
+    /// For a cloud host serving many users from one process, where a pod can
+    /// be replaced at any moment. A private scratch directory still backs the
+    /// core's process-local caches (cost log, app state, migration markers);
+    /// it is created like [`Workspace::Ephemeral`]'s and removed with the
+    /// runtime, so losing it loses nothing.
+    Stateless,
     /// The machine's configured OpenHuman workspace — the one the desktop app
     /// and CLI use, resolved the usual way (`OPENHUMAN_WORKSPACE`,
     /// `active_user.toml`, `~/.openhuman/...`).
@@ -41,6 +56,11 @@ impl Workspace {
         Self::Ephemeral
     }
 
+    /// A workspace with no durable state on disk; see [`Workspace::Stateless`].
+    pub fn stateless() -> Self {
+        Self::Stateless
+    }
+
     /// A caller-owned workspace directory.
     pub fn dir(path: impl Into<PathBuf>) -> Self {
         Self::Dir(path.into())
@@ -50,7 +70,7 @@ impl Workspace {
     ///
     /// `true` only for [`Workspace::Inherit`]. Guards the writes the harness
     /// would otherwise make on the caller's behalf — see
-    /// [`skills`](super::skills).
+    /// the internal skill-copy module.
     pub fn is_operator_owned(&self) -> bool {
         matches!(self, Self::Inherit)
     }
@@ -79,7 +99,7 @@ impl ResolvedWorkspace {
     /// Materialize `workspace`, creating directories as needed.
     ///
     /// The layout for the harness-owned variants mirrors
-    /// `crates/openhuman-core/src/bin/library_profile/harness.rs::fixture()`, which is the recipe
+    /// `profile/src/bin/library_profile/harness.rs::fixture()` in openhuman-benchmarks, which is the recipe
     /// already proven against real turns: a `workspace/` for internal state and
     /// a sibling `action/` for the agent's read/write root. Keeping them
     /// siblings rather than nesting matters — `is_workspace_internal_path`
@@ -95,9 +115,13 @@ impl ResolvedWorkspace {
         action_dir_override: Option<&Path>,
     ) -> Result<Self, HarnessError> {
         match workspace {
-            Workspace::Ephemeral => {
+            Workspace::Ephemeral | Workspace::Stateless => {
                 let temp = tempfile::Builder::new()
-                    .prefix("openhuman-harness-")
+                    .prefix(if matches!(workspace, Workspace::Stateless) {
+                        "openhuman-scratch-"
+                    } else {
+                        "openhuman-harness-"
+                    })
                     .tempdir()
                     .map_err(|source| HarnessError::Workspace {
                         what: "create a temporary workspace",

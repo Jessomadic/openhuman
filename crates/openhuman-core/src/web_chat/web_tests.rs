@@ -1,15 +1,14 @@
 use super::{
     all_web_channel_controller_schemas, all_web_channel_registered_controllers, cancel_chat,
-    channel_web_cancel, channel_web_queue_clear, channel_web_queue_status,
-    classify_inference_error, drain_queued_turns_for_test, event_session_id_for,
-    extract_provider_error_detail, generic_inference_error_user_message,
-    in_flight_entries_for_test, inference_budget_exceeded_user_message,
-    is_inference_budget_exceeded_error, json_output, key_for, locale_reply_directive,
-    normalize_model_override, optional_f64, optional_string, parallel_in_flight_entries_for_test,
-    provider_role_for_model_override, required_string, schemas, sentry_suppression_reason,
+    channel_web_cancel, channel_web_queue_clear, channel_web_queue_remove,
+    channel_web_queue_status, classify_inference_error, drain_queued_turns_for_test,
+    event_session_id_for, generic_inference_error_user_message, in_flight_entries_for_test,
+    inference_budget_exceeded_user_message, is_inference_budget_exceeded_error, key_for,
+    locale_reply_directive, normalize_model_override, parallel_in_flight_entries_for_test,
+    provider_role_for_model_override, schemas, sentry_suppression_reason,
     set_test_forced_run_chat_task_error, set_test_run_chat_task_block, start_chat,
-    subscribe_web_channel_events, ChatRequestMetadata, ClassifiedError, TestRunChatTaskBlock,
-    WebChatParams,
+    subscribe_web_channel_events, ChatRequestMetadata, ClassifiedError, StartChatError,
+    TestRunChatTaskBlock, WebChatParams,
 };
 use crate::core::TypeSchema;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,11 +61,13 @@ fn fp(
 ) -> SessionCacheFingerprint {
     SessionCacheFingerprint {
         model_override: model_override.map(String::from),
+        effective_model: "sample-model".to_string(),
         temperature,
         target_agent_id: target.to_string(),
         provider_binding: provider_binding.to_string(),
         autonomy_signature: "sig-default".to_string(),
         model_registry_signature: "registry-default".to_string(),
+        workspace_dir: std::path::PathBuf::from("/ws/a"),
     }
 }
 
@@ -101,6 +102,7 @@ fn make_block() -> TestRunChatTaskBlock {
         started: Arc::new(AtomicBool::new(false)),
         dropped: Arc::new(AtomicBool::new(false)),
         release: Arc::new(tokio::sync::Notify::new()),
+        succeed_in: None,
     }
 }
 
@@ -119,8 +121,12 @@ async fn wait_for_parallel<F: Fn(&[(String, String)]) -> bool>(pred: F) -> Vec<(
     .expect("parallel in-flight condition not met before timeout")
 }
 
+#[path = "web_tests_cancel_scoping_tests.rs"]
+mod cancel_scoping_tests;
 #[path = "web_tests_error_code_classification_tests.rs"]
 mod error_code_classification_tests;
+#[path = "web_tests_error_copy_fixture_tests.rs"]
+mod error_copy_fixture_tests;
 #[path = "web_tests_queue_acceptance_tests.rs"]
 mod queue_acceptance_tests;
 #[path = "web_tests_rate_limit_classification_tests.rs"]

@@ -37,7 +37,7 @@ vi.mock('./pages/WebCallbackPage', () => ({ default: () => <div /> }));
 vi.mock('./AppRoutesIOS', () => ({ default: () => <div /> }));
 vi.mock('./features/human/HumanPage', () => ({ default: () => <div /> }));
 vi.mock('./pages/Accounts', () => ({ default: () => <div /> }));
-vi.mock('./pages/Brain', () => ({ default: () => <div /> }));
+vi.mock('./pages/Memory', () => ({ default: () => <div /> }));
 vi.mock('./pages/dev/AgentInsightsPreview', () => ({ default: () => <div /> }));
 vi.mock('./pages/dev/UiGallery', () => ({ default: () => <div /> }));
 vi.mock('./pages/Invites', () => ({ default: () => <div /> }));
@@ -85,8 +85,8 @@ function landingFor(entry: string) {
 // below fails — the list cannot silently fall behind the code.
 const REDIRECTS: Array<{ from: string; pathname: string; search: string }> = [
   { from: '/home', pathname: '/chat', search: '' },
-  { from: '/activity', pathname: '/settings/notifications', search: '' },
-  { from: '/intelligence', pathname: '/settings/notifications', search: '' },
+  { from: '/activity', pathname: '/settings/account', search: '' },
+  { from: '/intelligence', pathname: '/settings/account', search: '' },
   { from: '/skills', pathname: '/connections', search: '' },
   { from: '/accounts', pathname: '/chat', search: '' },
   { from: '/channels', pathname: '/connections', search: '?tab=messaging' },

@@ -12,7 +12,13 @@
  */
 import { waitForApp } from '../helpers/app-helpers';
 import { callOpenhumanRpc } from '../helpers/core-rpc';
-import { clickSelector, textExists, waitForText } from '../helpers/element-helpers';
+import {
+  clickSelector,
+  getSwitchCheckedByLabel,
+  textExists,
+  toggleSwitchByLabel,
+  waitForText,
+} from '../helpers/element-helpers';
 import { resetApp } from '../helpers/reset-app';
 import { navigateViaHash } from '../helpers/shared-flows';
 import { startMockServer, stopMockServer } from '../mock-server';
@@ -60,7 +66,7 @@ describe('Settings - Channels & Permissions', () => {
     await navigateViaHash('/home');
     await navigateViaHash('/connections?tab=messaging');
 
-    await waitForText('Default Messaging Channel', 15_000);
+    await waitForText('Web', 15_000);
     expect(await textExists('Telegram')).toBe(true);
     expect(await textExists('Web')).toBe(true);
 
@@ -90,7 +96,32 @@ describe('Settings - Channels & Permissions', () => {
     // is "Share Product Analytics and Diagnostics".
     await waitForText('Product Analytics', 15_000);
     expect(await textExists('Share Product Analytics and Diagnostics')).toBe(true);
-    // Capability list section is "What leaves your computer" (not "Permission Metadata")
-    await waitForText('What leaves your computer', 5_000);
+
+    const analyticsLabel = 'Share Product Analytics and Diagnostics';
+    expect(await textExists(analyticsLabel)).toBe(true);
+    const initialState = await getSwitchCheckedByLabel('privacy-analytics-toggle', analyticsLabel);
+    await toggleSwitchByLabel('privacy-analytics-toggle', analyticsLabel);
+    const expectedState = !initialState;
+    await browser.waitUntil(
+      async () =>
+        (await getSwitchCheckedByLabel('privacy-analytics-toggle', analyticsLabel)) ===
+        expectedState,
+      { timeout: 10_000, timeoutMsg: 'analytics preference did not change' }
+    );
+
+    // Leaving and reopening the route remounts PrivacyPanel from the refreshed
+    // core snapshot, proving the preference was persisted by the core.
+    await navigateViaHash('/settings/account');
+    await navigateViaHash('/settings/privacy');
+    await waitForText(analyticsLabel, 15_000);
+    await browser.waitUntil(
+      async () =>
+        (await getSwitchCheckedByLabel('privacy-analytics-toggle', analyticsLabel)) ===
+        expectedState,
+      {
+        timeout: 10_000,
+        timeoutMsg: 'analytics preference was lost after reopening privacy settings',
+      }
+    );
   });
 });

@@ -27,20 +27,45 @@ export const PALETTE_DND_MIME = 'application/tinyflows-node';
 interface NodePaletteProps {
   /** Add a node from the given palette entry at the canvas's default position. */
   onAdd: (entry: PaletteEntry) => void;
+  /**
+   * `overlay` (default) floats over the canvas's top-right corner; `panel`
+   * fills a host side panel, with the entries in a two-column grid.
+   */
+  variant?: 'overlay' | 'panel';
 }
 
-function NodePalette({ onAdd }: NodePaletteProps) {
+function NodePalette({ onAdd, variant = 'overlay' }: NodePaletteProps) {
   const { t } = useT();
+  const panel = variant === 'panel';
 
   return (
     <aside
-      className="pointer-events-auto absolute right-3 top-14 z-10 flex max-h-[calc(100%-4rem)] w-48 flex-col overflow-hidden rounded-xl border border-line bg-surface/95 shadow-xs backdrop-blur"
+      className={
+        panel
+          ? 'flex h-full min-h-0 flex-col'
+          : 'pointer-events-auto absolute right-3 top-14 z-10 flex max-h-[calc(100%-4rem)] w-48 flex-col overflow-hidden rounded-xl border border-line bg-surface/95 shadow-xs backdrop-blur'
+      }
       data-testid="flow-node-palette"
       aria-label={t('flows.palette.title')}>
-      <div className="flex flex-col gap-2 overflow-y-auto p-2">
+      {panel && (
+        <p className="px-4 pt-3 text-xs leading-relaxed text-content-muted">
+          {t('flows.palette.panelHint')}
+        </p>
+      )}
+      <div
+        className={
+          panel
+            ? 'flex flex-col gap-4 overflow-y-auto p-4'
+            : 'flex flex-col gap-2 overflow-y-auto p-2'
+        }>
         {NODE_GROUP_ORDER.map(group => (
-          <div key={group} className="flex flex-col gap-1">
-            <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-content-faint">
+          <div key={group} className={panel ? 'grid grid-cols-2 gap-1.5' : 'flex flex-col gap-1'}>
+            <div
+              className={
+                panel
+                  ? 'col-span-2 text-[11px] font-semibold uppercase tracking-wide text-content-faint'
+                  : 'px-1 text-[10px] font-semibold uppercase tracking-wide text-content-faint'
+              }>
               {t(`flows.palette.group.${group}`)}
             </div>
             {PALETTE_ENTRIES_BY_GROUP[group].map(entry => {

@@ -5,7 +5,7 @@
 //! plus a [`EventHandler`] implementation that translates relevant
 //! [`DomainEvent`] variants into [`CoreNotificationEvent`] payloads.
 //!
-//! The Socket.IO bridge in `core::socketio::spawn_web_channel_bridge`
+//! The Socket.IO bridge in `openhuman_rpc::server::socketio::spawn_web_channel_bridge`
 //! subscribes to this bus and forwards every event to all connected clients
 //! as `core_notification` / `core:notification` Socket.IO messages.
 
@@ -111,7 +111,7 @@ impl NotificationBridgeSubscriber {
     /// Whether a notification should reach connected clients.
     ///
     /// Storing an event under its own workspace is only half the answer. The
-    /// live path has no per-client routing at all — `core::socketio`'s bridge
+    /// live path has no per-client routing at all — `openhuman_rpc::server::socketio`'s bridge
     /// emits `core_notification` to *every* connected client, and the banner
     /// prints the server's qualified name and its error — so a supervisor
     /// event from a workspace the user has switched away from would show one
@@ -469,6 +469,45 @@ fn translate(event: &DomainEvent) -> Option<CoreNotificationEvent> {
     }
 }
 
+/// The agent whose storage scope a notification raised by `event` belongs
+/// in: the owner of the cron job a `CronJobCompleted` names, when a storage
+/// backend is installed and an agent's scope holds the job; `None` (`local`)
+/// otherwise — including a job found in `local` or found nowhere.
+///
+/// # Errors
+///
+/// When no scope reported the job and a scope's lookup failed.
+async fn event_owner(
+    config: &crate::config::Config,
+    event: &DomainEvent,
+) -> Result<Option<String>, crate::storage::agents::LookupFailed> {
+    let DomainEvent::CronJobCompleted { job_id, .. } = event else {
+        return Ok(None);
+    };
+    // Noted by the scheduler as the job completed — the only record of a
+    // one-shot job, which is deleted before the event is published.
+    if let Some(agent) = crate::cron::completion_owner::take(job_id) {
+        return Ok(Some(agent));
+    }
+    if crate::storage::installed().is_none() {
+        return Ok(None);
+    }
+    let owner = crate::storage::agents::find_owner("notification owner", || async {
+        match crate::cron::get_job(config, job_id) {
+            Ok(_) => Ok(true),
+            // tinyflows reports a missing job as `Cron job '<id>' not found`
+            // (an untyped `anyhow` error in the vendored crate); match that
+            // whole shape for this job rather than any message mentioning it.
+            Err(error) if error.to_string() == format!("Cron job '{job_id}' not found") => {
+                Ok(false)
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    })
+    .await?;
+    Ok(owner.flatten())
+}
+
 #[async_trait]
 impl EventHandler<DomainEvent> for NotificationBridgeSubscriber {
     fn name(&self) -> &str {
@@ -491,7 +530,26 @@ impl EventHandler<DomainEvent> for NotificationBridgeSubscriber {
                 // A workspace-bound event is stored in ITS OWN workspace, not
                 // whichever one this bridge was registered with (#5931).
                 let config = self.store_target(config, event);
-                match super::store::insert_core_notification(&config, &notification) {
+                // Stored with the record that raised it: a cron job's
+                // completion goes to the agent the job belongs to
+                // (`crate::storage`), `local` otherwise.
+                let stored = match event_owner(&config, event).await {
+                    Ok(owner) => {
+                        crate::storage::agents::within_agent(owner.as_deref(), async {
+                            super::store::insert_core_notification(&config, &notification)
+                        })
+                        .await
+                    }
+                    Err(failed) => {
+                        // Unknown owner: not stored rather than stored in the
+                        // wrong scope. The live broadcast below still goes out.
+                        log::warn!(
+                            "{LOG_PREFIX} notification owner unknown ({failed}); not persisted"
+                        );
+                        None
+                    }
+                };
+                match stored.unwrap_or(Ok(false)) {
                     Ok(true) => log::debug!(
                         "{LOG_PREFIX} persisted core notification id={}",
                         notification.id

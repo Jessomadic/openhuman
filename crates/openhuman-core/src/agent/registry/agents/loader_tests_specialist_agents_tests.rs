@@ -22,12 +22,8 @@ fn workflow_builder_is_registered_worker_with_bounded_authoring_scope() {
     // (hard-refused otherwise, regardless of the user's scope preference)
     // against an already-connected toolkit — see `builder_tools.rs`'s
     // module doc. This pins the invariant in the agent definition itself,
-    // not just the tool implementations. It also has read-only grounding
-    // in the user's memory via `memory_recall` (direct lookups) and
-    // `memory_hybrid_search` (keyword/lexical lookups — pairs with
-    // `memory_recall` the same way the sibling `flow_discovery` agent
-    // does) — no `memory_store`, so it can look up context but never
-    // write it.
+    // not just the tool implementations. It reaches the user's memory
+    // through the single `memory` tool.
     let def = find("workflow_builder");
     assert_eq!(def.agent_tier, AgentTier::Worker);
     assert_eq!(def.delegate_name.as_deref(), Some("build_workflow"));
@@ -84,8 +80,7 @@ fn workflow_builder_is_registered_worker_with_bounded_authoring_scope() {
                 "composio_list_toolkits",
                 "composio_list_connections",
                 "composio_connect",
-                "memory_recall",
-                "memory_hybrid_search",
+                "memory",
             ];
             for required in expected {
                 assert!(
@@ -112,8 +107,6 @@ fn workflow_builder_is_registered_worker_with_bounded_authoring_scope() {
                 "apply_patch",
                 "composio_execute",
                 "spawn_subagent",
-                // Memory access must stay read-only: no write tool.
-                "memory_store",
             ] {
                 assert!(
                     !names.iter().any(|n| n == forbidden),
@@ -161,7 +154,6 @@ fn flow_discovery_is_registered_readonly_reasoning_scout() {
             );
             // A representative slice of the read-only gathering surface.
             for required in [
-                "memory_recall",
                 "list_flows",
                 "list_flow_connections",
                 "search_tool_catalog",
@@ -183,7 +175,7 @@ fn flow_discovery_is_registered_readonly_reasoning_scout() {
                 "shell",
                 "file_write",
                 "edit",
-                "memory_store",
+                "memory",
                 "thread_message_append",
                 "spawn_subagent",
             ] {
@@ -210,24 +202,24 @@ fn flow_discovery_is_registered_readonly_reasoning_scout() {
 
 #[test]
 fn specialist_agents_are_registered_with_narrow_tools() {
-    let scheduler = find("scheduler_agent");
-    assert!(matches!(scheduler.model, ModelSpec::Hint(ref h) if h == "burst"));
-    match &scheduler.tools {
+    // Scheduling is the `scheduling` skill over the collapsed `cron` tool,
+    // with the time tools the orchestrator holds directly.
+    let scheduling = crate::tools::toolpacks::pack("scheduling").expect("scheduling skill");
+    assert_eq!(
+        scheduling.tools,
+        &["cron"],
+        "the skill uses collapsed `cron`"
+    );
+    match &find("orchestrator").tools {
         ToolScope::Named(names) => {
-            for required in ["current_time", "resolve_time", "cron"] {
+            for required in ["current_time", "resolve_time"] {
                 assert!(
                     names.iter().any(|name| name == required),
-                    "scheduler_agent missing `{required}`"
-                );
-            }
-            for legacy in ["cron_add", "cron_list", "cron_remove"] {
-                assert!(
-                    !names.iter().any(|name| name == legacy),
-                    "scheduler_agent must use collapsed `cron`, not `{legacy}`"
+                    "orchestrator must hold `{required}` to ground a schedule"
                 );
             }
         }
-        other => panic!("scheduler_agent must use Named tool scope, got {other:?}"),
+        other => panic!("orchestrator must use Named tool scope, got {other:?}"),
     }
 
     // `presentation_agent` is only registered under the `documents` feature
@@ -240,304 +232,105 @@ fn specialist_agents_are_registered_with_narrow_tools() {
         match &presentation.tools {
             ToolScope::Named(names) => {
                 assert!(names.iter().any(|name| name == "generate_presentation"));
-                assert!(!names.iter().any(|name| name == "call_memory_agent"));
                 assert!(names.iter().any(|name| name == "web_search_tool"));
             }
             other => panic!("presentation_agent must use Named tool scope, got {other:?}"),
         }
-        // Memory pre-fetch is no longer eager; `omit_memory_context = false`
-        // still gives the deck builder the cheap per-turn recall.
-        assert_eq!(presentation.trigger_memory_agent, TriggerMemoryAgent::Never);
+        // `omit_memory_context = false` opens the deck builder's session
+        // with the compiled memory context.
+        assert!(!presentation.omit_memory_context);
     }
-}
-
-#[test]
-fn archivist_runs_in_background() {
-    let def = find("archivist");
-    assert!(def.background);
-    assert_eq!(def.max_iterations, 3);
 }
 
 #[test]
 fn morning_briefing_is_read_only() {
     let def = find("morning_briefing");
     assert_eq!(def.sandbox_mode, SandboxMode::ReadOnly);
-    assert!(matches!(def.tools, ToolScope::Wildcard));
-    // The brief pulls its own last-24h memory via the `memory_tree`
-    // `cover_window` tool, so the stale all-time memory blob is suppressed.
-    assert!(def.omit_memory_context);
+    // A named belt, not a wildcard: a cron-driven read-only job has no use
+    // for every registered tool.
+    match &def.tools {
+        ToolScope::Named(tools) => {
+            for required in ["composio_execute", "tool_search", "current_time"] {
+                assert!(
+                    tools.iter().any(|t| t == required),
+                    "morning_briefing needs `{required}`"
+                );
+            }
+            assert!(!tools.iter().any(|t| t == "shell" || t == "file_write"));
+            // `memory` reports Write permission without arguments, which the
+            // read-only sandbox cannot admit.
+            assert!(!tools.iter().any(|t| t == "memory"));
+        }
+        ToolScope::Wildcard => panic!("morning_briefing must have a named belt"),
+    }
+    // The brief grounds itself in the compiled memory context.
+    assert!(!def.omit_memory_context);
     assert!(def.omit_identity);
     assert!(def.omit_safety_preamble);
     assert_eq!(def.max_iterations, 8);
 }
 
 #[test]
-fn help_uses_gitbooks_tools_and_is_read_only() {
-    let def = find("help");
-    assert_eq!(def.sandbox_mode, SandboxMode::ReadOnly);
-    match &def.tools {
-        ToolScope::Named(tools) => {
-            assert!(
-                tools.iter().any(|t| t == "gitbooks_search"),
-                "help needs gitbooks_search"
-            );
-            assert!(
-                tools.iter().any(|t| t == "gitbooks_get_page"),
-                "help needs gitbooks_get_page"
-            );
-            assert!(!tools.iter().any(|t| t == "call_memory_agent"));
-            // Help is docs-only — no write/exec tools.
-            assert!(!tools.iter().any(|t| t == "shell"));
-            assert!(!tools.iter().any(|t| t == "file_write"));
-            assert!(!tools.iter().any(|t| t == "curl"));
-            assert!(!tools.iter().any(|t| t == "spawn_subagent"));
-        }
-        ToolScope::Wildcard => panic!("help must have a Named tool scope"),
-    }
-    assert!(def.omit_identity);
-    assert!(def.omit_safety_preamble);
-    assert!(!def.omit_memory_context);
-    // Help personalises from the cheap per-turn recall (memory_context on),
-    // so it no longer pre-fetches the full memory agent before every turn.
-    assert_eq!(def.trigger_memory_agent, TriggerMemoryAgent::Never);
-}
-
-#[test]
-fn orchestrator_and_nested_agents_do_not_expose_agent_prepare_context() {
-    // First-turn context preparation is owned by the harness. Keeping the
-    // direct tool out of the orchestrator scope prevents a duplicate scout
-    // pass after the harness has already prepared context.
-    let orch = find("orchestrator");
-    if let ToolScope::Named(tools) = &orch.tools {
-        assert!(
-            !tools.iter().any(|t| t == "agent_prepare_context"),
-            "orchestrator must NOT allowlist `agent_prepare_context`"
-        );
-    }
-    // The planner must NOT: when invoked via delegate_plan it runs under
-    // the orchestrator's PARENT_CONTEXT, so a nested scout would render the
-    // wrong (orchestrator) visible catalog/session.
-    let planner = find("planner");
-    if let ToolScope::Named(tools) = &planner.tools {
-        assert!(
-            !tools.iter().any(|t| t == "agent_prepare_context"),
-            "planner must NOT allowlist `agent_prepare_context` (nested-context mismatch)"
-        );
-    }
-    // The scout itself must NOT see the tool (would be circular).
-    let scout = find("context_scout");
-    if let ToolScope::Named(tools) = &scout.tools {
-        assert!(!tools.iter().any(|t| t == "agent_prepare_context"));
-    }
-}
-
-#[test]
-fn context_scout_is_read_only_worker_with_bounded_output() {
-    let def = find("context_scout");
-    assert_eq!(def.agent_tier, AgentTier::Worker);
-    assert_eq!(def.sandbox_mode, SandboxMode::ReadOnly);
-    // The context scout rides the cheap, high-throughput `burst` tier
-    // (resolves to `burst-v1` on the managed backend), not the pricier
-    // agentic/reasoning tiers.
-    assert!(
-        matches!(&def.model, ModelSpec::Hint(h) if h == "burst"),
-        "context_scout must spawn on the burst tier, got {:?}",
-        def.model
-    );
-    // Bundle cap — load-bearing for the parent's context budget. Leaves
-    // room for the `recommended_skills` block alongside summary + plan.
-    assert_eq!(def.max_result_chars, Some(5000));
-    // Keeps goals/profile + long-term memory so it can ground the
-    // orchestrator in who the user is and what they want.
-    assert!(!def.omit_profile, "context_scout needs PROFILE.md (goals)");
-    assert!(!def.omit_memory_md, "context_scout needs MEMORY.md");
-    // Strictly read-only gathering surface — no writes / shell / delegation.
-    match &def.tools {
-        ToolScope::Named(tools) => {
-            for required in [
-                "memory_recall",
-                // Transcripts + thread metadata + message reader (read-only).
-                // Skill discovery (read-only).
-                "list_workflows",
-                "skill_registry_browse",
-                "skill_registry_search",
-                // Web.
-                "web_search_tool",
-                "web_fetch",
-            ] {
-                assert!(
-                    tools.iter().any(|t| t == required),
-                    "context_scout needs read-only gathering tool `{required}`"
-                );
-            }
-            for forbidden in [
-                "shell",
-                "file_write",
-                "spawn_subagent",
-                "spawn_async_subagent",
-                "agent_prepare_context",
-                // memory_tree bundles a write mode (ingest_document) under a
-                // ReadOnly wrapper — must not be reachable by the auto-run scout.
-                "memory_tree",
-                // Write-capable thread + skill tools must stay out of the
-                // auto-run, prompt-injectable scout.
-                "thread_create",
-                "thread_delete",
-                "skill_registry_install",
-                "skill_registry_uninstall",
-            ] {
-                assert!(
-                    !tools.iter().any(|t| t == forbidden),
-                    "context_scout must NOT have `{forbidden}` — it only gathers context"
-                );
-            }
-        }
-        ToolScope::Wildcard => panic!("context_scout must have a Named tool scope"),
-    }
-    // Worker leaf: no onward delegation.
-    assert!(
-        def.subagents.is_empty(),
-        "context_scout is a leaf and must not list subagents"
-    );
-}
-
-#[cfg(feature = "flows")]
-#[test]
-fn flow_memory_agent_is_read_only_worker_with_bounded_memory_belt() {
-    let def = find("flow_memory_agent");
-    assert_eq!(def.agent_tier, AgentTier::Worker);
-    assert_eq!(def.sandbox_mode, SandboxMode::ReadOnly);
-    assert!(
-        matches!(&def.model, ModelSpec::Hint(h) if h == "burst"),
-        "flow_memory_agent must spawn on the burst tier, got {:?}",
-        def.model
-    );
-    // Bundle cap — load-bearing for the flow's context budget.
-    assert_eq!(def.max_result_chars, Some(4000));
-    // Keeps goals/profile + long-term memory so it can ground retrieval
-    // in who the user is and what they want.
-    assert!(
-        !def.omit_profile,
-        "flow_memory_agent needs PROFILE.md (goals)"
-    );
-    assert!(!def.omit_memory_md, "flow_memory_agent needs MEMORY.md");
-    // Strictly bounded read-only memory/context belt — exactly 8 tools,
-    // no more, no less.
-    match &def.tools {
-        ToolScope::Named(tools) => {
-            let expected = ["memory_recall", "memory_hybrid_search", "memory_flavour"];
-            for required in expected {
-                assert!(
-                    tools.iter().any(|t| t == required),
-                    "flow_memory_agent needs read-only belt tool `{required}`"
-                );
-            }
-            assert_eq!(
-                tools.len(),
-                expected.len(),
-                "flow_memory_agent scope must be EXACTLY the bounded read-only \
-                 memory belt (got {tools:?})"
-            );
-            for forbidden in [
-                // `memory_tree` bundles a write mode (`ingest_document`)
-                // under a ReadOnly-declared wrapper — must never be
-                // reachable by this auto-run, prompt-injectable agent.
-                "memory_tree",
-                "memory_store",
-                "update_memory_md",
-                "shell",
-                "file_write",
-                "spawn_subagent",
-                "web_search_tool",
-                "web_fetch",
-            ] {
-                assert!(
-                    !tools.iter().any(|t| t == forbidden),
-                    "flow_memory_agent must NOT have `{forbidden}` — it only \
-                     retrieves memory/context"
-                );
-            }
-        }
-        ToolScope::Wildcard => panic!("flow_memory_agent must have a Named tool scope"),
-    }
-    // Worker leaf: no onward delegation.
-    assert!(
-        def.subagents.is_empty(),
-        "flow_memory_agent is a leaf and must not list subagents"
-    );
-}
-
-#[test]
 fn chatty_sub_agents_have_bounded_output() {
-    // critic + archivist results flow up to the orchestrator verbatim
-    // (delegate_critic / delegate_archivist). Without a cap their output
-    // is unbounded and bloats the orchestrator's context (#4099). Both
-    // must carry the normal sub-agent cap so a long diff review or a
-    // verbose memory-write confirmation can't leak unbounded text.
+    // critic results flow up verbatim. Without a cap the output is
+    // unbounded and bloats the caller's context (#4099), so it must carry
+    // the normal sub-agent cap so a long diff review can't leak unbounded
+    // text.
     assert_eq!(
         find("critic").max_result_chars,
         Some(8000),
         "critic output must be bounded so reviews don't leak unbounded text up"
     );
-    assert_eq!(
-        find("archivist").max_result_chars,
-        Some(8000),
-        "archivist output must be bounded so memory summaries stay concise"
-    );
 }
 
+/// R4 regression: `hint:vision` is deprecated (`vision-v1` silently falls
+/// back to the chat default on managed routes, with no error), so no
+/// built-in agent may still declare `ModelSpec::Hint("vision")`.
 #[test]
-fn researcher_is_bounded_to_search_and_fetch() {
-    let def = find("researcher");
-    assert_eq!(
-        def.max_iterations, 10,
-        "researcher keeps enough turns to recover from bad search results without broadening its tool surface"
-    );
-    assert_eq!(
-        def.max_turn_output_tokens,
-        Some(4096),
-        "researcher must cap each model turn so verbose research loops cannot flood context"
-    );
-    assert!(
-        def.extra_tools.is_empty(),
-        "researcher must not widen its tool surface via extra_tools"
-    );
-    match &def.tools {
-        ToolScope::Named(tools) => {
-            assert_eq!(
-                tools,
-                &vec!["web_search_tool".to_string(), "web_fetch".to_string()],
-                "researcher must stay limited to search+fetch so simple lookups do not fan out into deep research loops"
-            );
-        }
-        ToolScope::Wildcard => panic!("researcher must have Named tool scope"),
+fn no_builtin_agent_declares_the_deprecated_vision_hint() {
+    for def in load_builtins().expect("built-ins load") {
+        assert!(
+            !matches!(&def.model, ModelSpec::Hint(h) if h == "vision"),
+            "`{}` still declares the deprecated `hint:vision` — pin an exact model instead",
+            def.id
+        );
     }
 }
 
+/// The three media agents are pinned to their dedicated OpenRouter
+/// passthrough models (regression R4), not left on `Inherit` or a `Hint`.
 #[test]
-fn code_executor_has_curl_for_artifact_downloads() {
-    let def = find("code_executor");
-    match &def.tools {
-        ToolScope::Named(tools) => {
-            assert!(
-                tools.iter().any(|t| t == "curl"),
-                "code_executor needs curl for artifact/dataset fetches"
-            );
+fn media_agents_are_pinned_to_their_exact_models() {
+    use crate::config::{
+        MODEL_IMAGE_GENERATION_AGENT, MODEL_MEDIA_UNDERSTANDING, MODEL_VIDEO_GENERATION_AGENT,
+    };
+
+    for (agent_id, expected_model) in [
+        ("vision_agent", MODEL_MEDIA_UNDERSTANDING),
+        ("image_agent", MODEL_IMAGE_GENERATION_AGENT),
+        ("video_agent", MODEL_VIDEO_GENERATION_AGENT),
+    ] {
+        let def = find(agent_id);
+        match &def.model {
+            ModelSpec::Exact(model) => assert_eq!(
+                model, expected_model,
+                "{agent_id} must be pinned to `{expected_model}`, got `{model}`"
+            ),
+            other => panic!("{agent_id} must use ModelSpec::Exact, got {other:?}"),
         }
-        ToolScope::Wildcard => panic!("code_executor must have Named tool scope"),
     }
 }
 
 #[test]
 fn orchestrator_does_not_get_curl() {
-    // Per design: curl is a `Write` permission tool that writes
-    // to the workspace. The orchestrator delegates rather than
-    // executing — code_executor / tools_agent own actual downloads.
+    // Per design: curl is a `Write` permission tool that writes to the
+    // workspace. It stays off the orchestrator's belt; the orchestrator
+    // reaches it as a `Deferred` tool (skill `coding` / `tool_search`).
     let def = find("orchestrator");
     if let ToolScope::Named(tools) = &def.tools {
         assert!(
             !tools.iter().any(|t| t == "curl"),
-            "orchestrator must not have curl — it should delegate"
+            "orchestrator must not carry curl on its belt — it is deferred"
         );
     }
 }

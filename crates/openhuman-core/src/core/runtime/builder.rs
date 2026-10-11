@@ -10,25 +10,24 @@
 //!    background loops. After `build`, [`CoreRuntime::invoke`] can dispatch any
 //!    RPC method in-process, and agent turns can run — so a harness-only embedder
 //!    (`ServiceSet::none`) needs nothing more.
-//! 2. [`CoreRuntime::serve`] — *transport + background services*: bind the HTTP
-//!    listener, mount the router, fire the readiness signal, spawn the selected
-//!    background services, and serve until shutdown.
+//! 2. *Transport + background services*: `openhuman_rpc::server::serve` binds
+//!    the HTTP listener, mounts the router, fires the readiness signal, calls
+//!    [`CoreRuntime::start_services`], and serves until shutdown. A runtime
+//!    with no transport calls `start_services` itself.
 //!
-//! The legacy entry points (`run_server`, `run_server_embedded`,
-//! `run_server_embedded_with_ready`) are now thin shims over this builder, so
-//! the desktop shell, the standalone CLI, and any new embedder share one path.
+//! The host boot in `openhuman-rpc` (`host::{cli, desktop}`) and its
+//! `run_server*` entry points build on this builder, so the desktop shell, the
+//! standalone CLI, and any new embedder share one path.
 //! See the pluggable-core work (`core::runtime`) for how this fits with
 //! [`context`](crate::core::runtime::context) and `services`.
 
 use std::sync::Arc;
 
-use tokio_util::sync::CancellationToken;
-
 use crate::config::Config;
-use crate::core::all::DomainGroup;
-use crate::core::jsonrpc::{self, EmbeddedReadySignal};
 use crate::core::runtime::context::CoreContext;
 use crate::core::types::HostKind;
+
+pub use super::domain_set::DomainSet;
 
 /// Selects which background services and transports a [`CoreRuntime`] runs.
 ///
@@ -46,14 +45,12 @@ pub struct ServiceSet {
     pub cron: bool,
     /// Spawn realtime channel listeners (Telegram, Discord, …).
     pub channels: bool,
-    /// Spawn login-gated services (local AI, voice, autocomplete) + subconscious/heartbeat.
-    pub heartbeat: bool,
+    /// Spawn login-gated services (local AI, voice, autocomplete).
+    pub login_gated: bool,
     /// Spawn the periodic self-update checker.
     pub update_scheduler: bool,
     /// Start memory queue workers during runtime bootstrap.
     pub memory_queue: bool,
-    /// Run one-shot harness initialization during runtime bootstrap.
-    pub harness_init: bool,
     /// Refresh the skill catalog during runtime bootstrap.
     pub skill_catalog_refresh: bool,
     /// Boot installed MCP servers and supervise reconnects during runtime bootstrap.
@@ -72,10 +69,9 @@ impl ServiceSet {
             socketio: true,
             cron: true,
             channels: true,
-            heartbeat: true,
+            login_gated: true,
             update_scheduler: true,
             memory_queue: true,
-            harness_init: true,
             skill_catalog_refresh: true,
             mcp_boot: true,
             integrations: true,
@@ -84,17 +80,16 @@ impl ServiceSet {
     }
 
     /// HTTP JSON-RPC only — a single-core cloud/server deployment. No Socket.IO,
-    /// no cron/channels/heartbeat; the supervisor decides those per plan.
+    /// no cron/channels/login-gated services; the supervisor decides those per plan.
     pub fn headless_api() -> Self {
         Self {
             rpc_http: true,
             socketio: false,
             cron: false,
             channels: false,
-            heartbeat: false,
+            login_gated: false,
             update_scheduler: false,
             memory_queue: false,
-            harness_init: false,
             skill_catalog_refresh: false,
             mcp_boot: false,
             integrations: false,
@@ -110,10 +105,9 @@ impl ServiceSet {
             socketio: false,
             cron: false,
             channels: false,
-            heartbeat: false,
+            login_gated: false,
             update_scheduler: false,
             memory_queue: false,
-            harness_init: false,
             skill_catalog_refresh: false,
             mcp_boot: false,
             integrations: false,
@@ -139,311 +133,13 @@ impl ServiceSet {
             socketio: false,
             cron: true,
             channels: false,
-            heartbeat: true,
+            login_gated: true,
             update_scheduler: false,
             memory_queue: true,
-            harness_init: true,
             skill_catalog_refresh: true,
             mcp_boot: false,
             integrations: false,
             memory_sync: true,
-        }
-    }
-}
-
-/// Selects which domain *families* exist at runtime on a [`CoreRuntime`] (#4796).
-///
-/// Sibling of [`ServiceSet`]: where `ServiceSet` selects background services and
-/// transports, `DomainSet` selects which controller/tool/store/subscriber
-/// surfaces are live. Each flag is an independent [`DomainGroup`]; presets cover
-/// the common hosts:
-/// [`DomainSet::full`] (every family — today's behavior, the default),
-/// [`DomainSet::harness`] (agent + memory + threads + config + security only —
-/// the embeddable agent core used by `examples/embed_headless.rs`), and
-/// [`DomainSet::none`] (all domain families disabled; transport built-ins and
-/// always-on core infrastructure still run).
-///
-/// `full()` is byte-identical to pre-#4796 registration, so the desktop shell
-/// and standalone CLI are unchanged. Per-gate Cargo `[features]` (children
-/// #4797–#4804) narrow the *compile-time* surface further; this struct is the
-/// *runtime* axis they compose with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DomainSet {
-    /// Agent definition/registry/experience, orchestration, session DB/import.
-    pub agent: bool,
-    /// Documents, knowledge graph, memory tree/sources/sync/diff/goals.
-    pub memory: bool,
-    /// Conversation threads, per-thread goals, todos.
-    pub threads: bool,
-    /// Persisted runtime configuration.
-    pub config: bool,
-    /// Encryption, keyring consent, security policy, approval, plan-review.
-    pub security: bool,
-    /// Saved automation workflows (tinyflows graphs).
-    pub flows: bool,
-    /// SKILL.md skills, skill runtime, skill registry.
-    pub skills: bool,
-    /// MCP client subsystem (Smithery registry, local servers, audit).
-    pub mcp: bool,
-    /// Messaging channels + webview bridges (web channel, whatsapp data, …).
-    pub channels: bool,
-    /// Wallet, high-level web3 surface, x402 machine payments.
-    pub web3: bool,
-    /// Speech-to-text / text-to-speech, audio toolkit.
-    pub voice: bool,
-    /// Image/video media generation. NOTE: today this gates only the
-    /// `media_generate_*` **agent tools** — no controller/store/subscriber is
-    /// tagged `Media` (there is no `media` RPC namespace yet), so a custom set
-    /// with `media: false, platform: true` drops the media tools while any
-    /// future backing controller would stay live. Fold the media-generation
-    /// controller into this group when it lands.
-    pub media: bool,
-    /// Medulla integration: cloud client, session runtime, chat store, and
-    /// authored harness workflows.
-    pub medulla: bool,
-    /// Model inference: providers, routing, local engines, embeddings.
-    pub inference: bool,
-    /// External connectors (Composio, calendar, file storage, task sources).
-    pub integrations: bool,
-    /// Background initiative: cron + the subconscious tick loop.
-    pub automation: bool,
-    /// Code-execution substrate: Node/Python runtimes, pool, sandbox.
-    pub runtimes: bool,
-    /// Desktop-shell-facing surfaces.
-    pub desktop: bool,
-    /// Clients of the hosted TinyHumans backend.
-    pub hosted: bool,
-    /// Loadable native modules: the module host, registry and `modules` RPC.
-    pub modules: bool,
-    /// Everything not in a named family — always on in `full()`.
-    pub platform: bool,
-}
-
-impl DomainSet {
-    /// Every family on — today's behavior and the [`CoreBuilder`] default.
-    /// Registration is byte-identical to pre-#4796.
-    pub fn full() -> Self {
-        Self {
-            agent: true,
-            memory: true,
-            threads: true,
-            config: true,
-            security: true,
-            flows: true,
-            skills: true,
-            mcp: true,
-            channels: true,
-            web3: true,
-            voice: true,
-            media: true,
-            medulla: true,
-            inference: true,
-            integrations: true,
-            automation: true,
-            runtimes: true,
-            desktop: true,
-            hosted: true,
-            modules: true,
-            platform: true,
-        }
-    }
-
-    /// The embeddable agent core: agent + memory + threads + config + security.
-    /// Every gate family AND `platform` are off. Used by
-    /// `examples/embed_headless.rs`.
-    pub fn harness() -> Self {
-        Self {
-            agent: true,
-            memory: true,
-            threads: true,
-            config: true,
-            security: true,
-            flows: false,
-            skills: false,
-            mcp: false,
-            channels: false,
-            web3: false,
-            voice: false,
-            media: false,
-            medulla: false,
-            inference: false,
-            integrations: false,
-            automation: false,
-            runtimes: false,
-            desktop: false,
-            hosted: false,
-            modules: false,
-            platform: false,
-        }
-    }
-
-    /// A long-lived embedded host: the harness core plus the Medulla
-    /// integration and the workflow engine it runs on, and the supporting
-    /// runtime, automation, integration, and platform surfaces it needs.
-    ///
-    /// Named for the *shape* rather than any downstream consumer — the core
-    /// does not know which host embeds it, and a preset naming one would invert
-    /// that. Suits any process that drives the core in-process through the
-    /// typed facade and owns its own presentation layer.
-    ///
-    /// Deliberately NOT built on [`DomainSet::harness`]: that preset sets
-    /// `platform: false`, which drops credentials, config, cron, task_sources
-    /// and todos, and leaves `channels` off — but `channel.web_chat` is tagged
-    /// `DomainGroup::Channels` and an embedded host drives chat turns through it.
-    ///
-    /// `flows: true` is load-bearing, not incidental: `medulla_workflows` runs
-    /// on the tinyflows engine and boot reconciliation keys off
-    /// `ctx.domains().flows` rather than a `ServiceSet` flag.
-    ///
-    /// An embedded host supplies its own harness wrappers, networking and
-    /// routing, so `web3` / `voice` / `media` / `mcp` stay off.
-    pub fn embedded() -> Self {
-        Self {
-            agent: true,
-            memory: true,
-            threads: true,
-            config: true,
-            security: true,
-            flows: true,
-            skills: true,
-            mcp: false,
-            channels: true,
-            web3: false,
-            voice: false,
-            media: false,
-            medulla: true,
-            inference: true,
-            integrations: true,
-            automation: true,
-            runtimes: true,
-            desktop: false,
-            hosted: false,
-            modules: false,
-            platform: true,
-        }
-    }
-
-    /// The kernel floor: threads, config, security — and nothing else.
-    ///
-    /// Distinct from [`DomainSet::none`], which is "no domains at all". This is
-    /// "the minimum a host needs before opting a subsystem back in", so an
-    /// embedder can request kernel + exactly one family. `agent` and `memory`
-    /// are OFF on purpose: they are the two largest subsystems and the ones an
-    /// alternative driver would replace, so a host that wants them says so.
-    ///
-    /// See `examples/embed_kernel.rs`.
-    pub fn kernel() -> Self {
-        Self {
-            agent: false,
-            memory: false,
-            threads: true,
-            config: true,
-            security: true,
-            flows: false,
-            skills: false,
-            mcp: false,
-            channels: false,
-            web3: false,
-            voice: false,
-            media: false,
-            medulla: false,
-            inference: false,
-            integrations: false,
-            automation: false,
-            runtimes: false,
-            desktop: false,
-            hosted: false,
-            modules: false,
-            platform: false,
-        }
-    }
-
-    /// Nothing on — every family disabled.
-    pub fn none() -> Self {
-        Self {
-            agent: false,
-            memory: false,
-            threads: false,
-            config: false,
-            security: false,
-            flows: false,
-            skills: false,
-            mcp: false,
-            channels: false,
-            web3: false,
-            voice: false,
-            media: false,
-            medulla: false,
-            inference: false,
-            integrations: false,
-            automation: false,
-            runtimes: false,
-            desktop: false,
-            hosted: false,
-            modules: false,
-            platform: false,
-        }
-    }
-
-    /// Whether the given [`DomainGroup`] is enabled in this set.
-    pub fn allows(&self, group: DomainGroup) -> bool {
-        match group {
-            DomainGroup::Agent => self.agent,
-            DomainGroup::Memory => self.memory,
-            DomainGroup::Threads => self.threads,
-            DomainGroup::Config => self.config,
-            DomainGroup::Security => self.security,
-            DomainGroup::Flows => self.flows,
-            DomainGroup::Skills => self.skills,
-            DomainGroup::Mcp => self.mcp,
-            DomainGroup::Channels => self.channels,
-            DomainGroup::Web3 => self.web3,
-            DomainGroup::Voice => self.voice,
-            DomainGroup::Media => self.media,
-            DomainGroup::Medulla => self.medulla,
-            DomainGroup::Inference => self.inference,
-            DomainGroup::Integrations => self.integrations,
-            DomainGroup::Automation => self.automation,
-            DomainGroup::Runtimes => self.runtimes,
-            DomainGroup::Desktop => self.desktop,
-            DomainGroup::Hosted => self.hosted,
-            DomainGroup::Modules => self.modules,
-            DomainGroup::Platform => self.platform,
-        }
-    }
-
-    /// Field-wise AND with `other`: a family is on in the result only if it
-    /// was on in both.
-    ///
-    /// Used to clamp a derived context's requested domains to what the
-    /// parent context actually registered — see
-    /// [`CoreContext::derive_with`](crate::core::runtime::CoreContext::derive_with).
-    /// A derived overlay is meant to *narrow* the parent, never state a
-    /// family the parent never registered back into existence.
-    #[must_use]
-    pub fn intersect(&self, other: &DomainSet) -> DomainSet {
-        DomainSet {
-            agent: self.agent && other.agent,
-            memory: self.memory && other.memory,
-            threads: self.threads && other.threads,
-            config: self.config && other.config,
-            security: self.security && other.security,
-            flows: self.flows && other.flows,
-            skills: self.skills && other.skills,
-            mcp: self.mcp && other.mcp,
-            channels: self.channels && other.channels,
-            web3: self.web3 && other.web3,
-            voice: self.voice && other.voice,
-            media: self.media && other.media,
-            medulla: self.medulla && other.medulla,
-            inference: self.inference && other.inference,
-            integrations: self.integrations && other.integrations,
-            automation: self.automation && other.automation,
-            runtimes: self.runtimes && other.runtimes,
-            desktop: self.desktop && other.desktop,
-            hosted: self.hosted && other.hosted,
-            modules: self.modules && other.modules,
-            platform: self.platform && other.platform,
         }
     }
 }
@@ -472,7 +168,7 @@ pub struct CoreBuilder {
     host: Option<String>,
     port: Option<u16>,
     config: Option<crate::config::Config>,
-    backend_transport: Option<std::sync::Arc<dyn crate::api::transport::BackendTransport>>,
+    backend_transport: Option<std::sync::Arc<dyn crate::backend::transport::BackendTransport>>,
 }
 
 impl CoreBuilder {
@@ -493,26 +189,25 @@ impl CoreBuilder {
     }
 
     /// Bind the transport this core's handlers reach the hosted TinyHumans
-    /// backend through (see [`crate::api::transport`]).
+    /// backend through (see [`crate::backend::transport`]).
     ///
     /// Optional: without it the core resolves the process-global transport
     /// installed with
-    /// [`install_backend_transport`](crate::api::transport::install_backend_transport),
+    /// [`install_backend_transport`](crate::backend::transport::install_backend_transport),
     /// and with neither every backend-touching call degrades to a typed
     /// "backend unavailable" error while agents, memory, tools and RPC keep
     /// working. Library hosts that build one runtime per process prefer this
     /// builder form; the desktop shell and CLI, which boot the core through
-    /// `run_server_embedded_with_ready` / `run_core_from_args`, install the
-    /// global.
+    /// `openhuman_rpc::host`, install the global.
     pub fn backend_transport(
         mut self,
-        transport: std::sync::Arc<dyn crate::api::transport::BackendTransport>,
+        transport: std::sync::Arc<dyn crate::backend::transport::BackendTransport>,
     ) -> Self {
         self.backend_transport = Some(transport);
         self
     }
 
-    /// Choose which background services / transports [`CoreRuntime::serve`] runs.
+    /// Choose which background services and transports this runtime runs.
     pub fn services(mut self, services: ServiceSet) -> Self {
         self.services = services;
         self
@@ -630,8 +325,7 @@ impl CoreBuilder {
     /// Sugar over [`config`](Self::config), like [`workspace`](Self::workspace).
     /// Worth having as its own method because the value reaches more than the
     /// obvious client: `/auth/me` session validation, the hosted-backend
-    /// surfaces, and — with no `OPENHUMAN_MEDULLA_BASE_URL` override — the
-    /// Medulla client all resolve through it. A host that sets only one of
+    /// surfaces all resolve through it. A host that sets only one of
     /// those has the other two pointing at a different deployment, which fails
     /// as "backend rejected session token" rather than as a mismatch.
     pub fn backend_url(mut self, url: impl Into<String>) -> Self {
@@ -685,12 +379,14 @@ impl CoreBuilder {
             has_operator_token,
             host: self.host,
             port: self.port,
+            service_tasks: crate::core::runtime::services::ServiceTasks::default(),
         })
     }
 }
 
 /// A built, initialized core. Dispatch RPC in-process with [`CoreRuntime::invoke`],
-/// or run the selected transport + background services with [`CoreRuntime::serve`].
+/// start its background services with [`CoreRuntime::start_services`], or hand it
+/// to `openhuman_rpc::server::serve` to run the selected transport as well.
 pub struct CoreRuntime {
     ctx: Arc<CoreContext>,
     config: Option<Config>,
@@ -698,6 +394,10 @@ pub struct CoreRuntime {
     has_operator_token: bool,
     host: Option<String>,
     port: Option<u16>,
+    /// The background services [`start_services`](Self::start_services)
+    /// started; aborted by [`stop_services`](Self::stop_services) and when
+    /// the runtime drops.
+    service_tasks: crate::core::runtime::services::ServiceTasks,
 }
 
 impl CoreRuntime {
@@ -712,7 +412,7 @@ impl CoreRuntime {
     }
 
     /// Dispatch an RPC method in-process — the same path the HTTP `/rpc` handler
-    /// and the CLI use ([`jsonrpc::invoke_method`]). No network involved.
+    /// and the CLI use ([`crate::core::invoke::invoke_method`]). No network involved.
     pub async fn invoke(
         &self,
         method: &str,
@@ -734,7 +434,11 @@ impl CoreRuntime {
         log::trace!("[core-runtime] invoke_in method={method}");
         CoreContext::scope(
             ctx,
-            jsonrpc::invoke_method(jsonrpc::default_state(), method, params),
+            crate::core::invoke::invoke_method(
+                crate::core::invoke::default_state(),
+                method,
+                params,
+            ),
         )
         .await
     }
@@ -748,287 +452,65 @@ impl CoreRuntime {
         CoreContext::scope(ctx, fut).await
     }
 
-    /// Spawn the selected background services and, when `rpc_http` is set, bind
-    /// the HTTP listener and serve until shutdown.
-    ///
-    /// When `rpc_http` is not selected this returns immediately (a harness-only
-    /// embedder has no transport to run); background services selected in the
-    /// [`ServiceSet`] are still spawned.
-    ///
-    /// In a slim build compiled without the `http-server` feature an `rpc_http`
-    /// request cannot be honoured — the axum / Socket.IO transport is compiled
-    /// out — so `serve` returns a build-feature `Err` rather than binding no
-    /// listener and reporting success. The no-transport (`!rpc_http`) path above
-    /// is unaffected and still returns `Ok(())`.
-    pub async fn serve(
-        &self,
-        ready_tx: Option<tokio::sync::oneshot::Sender<EmbeddedReadySignal>>,
-        shutdown_token: Option<CancellationToken>,
-    ) -> anyhow::Result<()> {
-        if !self.services.rpc_http {
-            // No transport: just spawn the selected background services and
-            // return. The caller owns the process lifetime.
-            self.start_selected_services().await;
-            return Ok(());
-        }
-
-        // Transport compiled out (#5048): run the selected background services
-        // and return without binding an HTTP/Socket.IO listener — same shape as
-        // the no-`rpc_http` guard above. The desktop shell always ships
-        // `http-server`; this keeps slim / headless-embedding builds linkable.
-        #[cfg(not(feature = "http-server"))]
-        {
-            // `rpc_http` was requested (we passed the guard above) but the HTTP +
-            // Socket.IO transport is compiled out of this slim build. Fail loudly
-            // rather than returning Ok with no listener bound — a supervisor / CLI
-            // (`openhuman run`, `serve`, `--headless-api`) would otherwise observe
-            // a clean start while the requested API is unavailable. Embedders that
-            // genuinely want no transport leave `ServiceSet::rpc_http` unset, which
-            // is handled by the early return above.
-            //
-            // The bind inputs are only read by the compiled-out `serve_http`; touch
-            // them so they don't read as dead fields in the slim build.
-            let _ = (
-                ready_tx,
-                shutdown_token,
-                self.has_operator_token,
-                self.host.as_ref(),
-                self.port,
-            );
-            anyhow::bail!(
-                "rpc_http transport was requested but this build was compiled \
-                 without the `http-server` feature; rebuild with the default \
-                 `http-server` feature, or use an embedding that does not set \
-                 `ServiceSet::rpc_http`"
-            );
-        }
-
-        #[cfg(feature = "http-server")]
-        {
-            self.serve_http(ready_tx, shutdown_token).await
-        }
+    /// The host this runtime was built to bind, when the builder set one.
+    pub fn host(&self) -> Option<&str> {
+        self.host.as_deref()
     }
 
-    /// HTTP + Socket.IO transport body of [`Self::serve`].
-    ///
-    /// Compiled only under the `http-server` feature (#5048): builds the axum
-    /// router, binds the listener, starts the selected background services, and
-    /// serves until shutdown. With the feature off, [`serve`](Self::serve) runs
-    /// background services and returns without binding (see the arms above).
-    #[cfg(feature = "http-server")]
-    async fn serve_http(
-        &self,
-        ready_tx: Option<tokio::sync::oneshot::Sender<EmbeddedReadySignal>>,
-        shutdown_token: Option<CancellationToken>,
-    ) -> anyhow::Result<()> {
-        // --- Host / port resolution ---
-        let (resolved_port, port_source) = match self.port {
-            Some(p) => (p, "builder port"),
-            None => (
-                jsonrpc::core_port(),
-                if std::env::var("OPENHUMAN_CORE_PORT").is_ok() {
-                    "env OPENHUMAN_CORE_PORT"
-                } else {
-                    "default"
-                },
-            ),
-        };
-        let (resolved_host, host_source) = match &self.host {
-            Some(h) => (h.clone(), "builder host"),
-            None => (
-                jsonrpc::core_host(),
-                if std::env::var("OPENHUMAN_CORE_HOST")
-                    .ok()
-                    .filter(|s| !s.is_empty())
-                    .is_some()
-                {
-                    "env OPENHUMAN_CORE_HOST"
-                } else {
-                    "default"
-                },
-            ),
-        };
-
-        log::debug!(
-            "[core] Bind resolution: host={resolved_host} (from {host_source}), port={resolved_port} (from {port_source})"
-        );
-
-        // Safety check: refuse to bind on a non-loopback address without an
-        // explicit operator-supplied RPC token. Without this, the entire RPC
-        // surface (tool execution, file access, credentials) is unauthenticated
-        // and reachable from the network. See issue #1919. The self-generated
-        // {workspace}/core.token does NOT count — remote clients cannot read it,
-        // so treating it as "explicit" would be fail-open.
-        if crate::security::pairing::is_public_bind(&resolved_host) && !self.has_operator_token {
-            log::error!(
-                "[core] SECURITY: refusing to bind on public address {resolved_host} without an \
-                 explicit operator-supplied RPC token. Set {} in your environment (or hand the \
-                 bearer in-memory via the embedded core handle) to secure the RPC endpoint.",
-                crate::core::auth::CORE_TOKEN_ENV_VAR
-            );
-            eprintln!(
-                "\n\x1b[1;31m[SECURITY]\x1b[0m Refusing to bind on {resolved_host} without {}.\n\
-                 The auto-generated {{workspace}}/core.token does NOT secure a public bind —\n\
-                 remote clients cannot read it. Set {} in your environment to secure the\n\
-                 RPC endpoint, or bind on a loopback address.\n",
-                crate::core::auth::CORE_TOKEN_ENV_VAR,
-                crate::core::auth::CORE_TOKEN_ENV_VAR
-            );
-            anyhow::bail!(
-                "refusing to bind on non-loopback address {resolved_host} without an explicit \
-                 operator-supplied RPC token ({})",
-                crate::core::auth::CORE_TOKEN_ENV_VAR
-            );
-        }
-
-        let preferred_port = resolved_port;
-        let host = resolved_host;
-        let pick = crate::platform::connectivity::rpc::pick_listen_port_for_host(
-            host.as_str(),
-            preferred_port,
-        )
-        .await
-        .map_err(|err| {
-            log::error!("[core] Failed to bind to {host}:{preferred_port}: {err}");
-            anyhow::Error::new(err)
-        })?;
-        let listen_port = pick.port;
-        let bind_addr = format!("{host}:{listen_port}");
-        let listener = pick.listener;
-
-        // Synchronize OPENHUMAN_CORE_RPC_URL with the actual bound port so
-        // connectivity::rpc::resolve_listen_port() reports the live listener
-        // instead of the originally-requested port when fallback engaged.
-        //
-        // SAFETY: set_var is process-global; this runs once during bind. Flagged
-        // in the pluggable-core drift ledger as single-runtime-per-process.
-        unsafe {
-            std::env::set_var("OPENHUMAN_CORE_RPC_URL", format!("http://{bind_addr}/rpc"));
-        }
-
-        let ctx = Arc::clone(&self.ctx);
-        let app = jsonrpc::build_core_http_router(self.services.socketio).layer(
-            axum::middleware::from_fn(
-                move |req: axum::extract::Request, next: axum::middleware::Next| {
-                    let ctx = Arc::clone(&ctx);
-                    async move { CoreContext::scope(ctx, next.run(req)).await }
-                },
-            ),
-        );
-
-        // Await startup migrations before publishing readiness or allowing
-        // background writers to touch their crate-backed stores.
-        self.start_selected_services().await;
-
-        log::info!(
-            "[core] OpenHuman core is ready — listening on http://{bind_addr} (version {})",
-            env!("CARGO_PKG_VERSION")
-        );
-        log::info!("[rpc:http] JSON-RPC — POST http://{bind_addr}/rpc (JSON-RPC 2.0)");
-        if self.services.socketio {
-            log::info!("[rpc:socketio] Socket.IO — ws://{bind_addr}/socket.io/ (same HTTP server)");
-        } else {
-            log::info!("[rpc:socketio] disabled (--jsonrpc-only)");
-        }
-
-        if let Some(tx) = ready_tx {
-            let _ = tx.send(EmbeddedReadySignal {
-                port: listen_port,
-                fallback_from: pick.fallback_from,
-            });
-        }
-
-        // Arms memory's exit gate for the eventual exit (and clears one a
-        // previous server in this process may have left): from here on a
-        // memory binding built during exit is refused rather than missed.
-        crate::memory::exit::server_starting();
-
-        // The serve result is held, not propagated, until the exit work below
-        // has run. A `?` here on a server error would skip the memory teardown
-        // on exactly the exits where a wedged store is likeliest, and the
-        // callers only forward the error — nobody else runs the cleanup.
-        let served = if let Some(shutdown_token) = shutdown_token {
-            log::info!(
-                "[core] embedded server waiting on cancellation token for graceful shutdown"
-            );
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    shutdown_token.cancelled().await;
-                })
-                .await
-        } else {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(crate::core::shutdown::signal())
-                .await
-        };
-        if let Err(error) = &served {
-            log::warn!(
-                "[core] embedded server ended with an error; running exit cleanup before \
-                 reporting it: {error}"
-            );
-        }
-
-        // Memory first. The engine's queue worker holds leases on in-flight
-        // jobs, and releasing them is a write to the store, so it has to happen
-        // while the store is still open and before anything else on the way
-        // out (tinymemory#133). Bounded inside, on one shared deadline: a
-        // wedged store costs at most that budget, never the exit.
-        crate::memory::exit::shutdown_for_exit().await;
-
-        // Server has stopped accepting and in-flight requests drained. Kill any
-        // `ollama serve` openhuman itself spawned (no-op when externally
-        // managed) so the next launch doesn't try to reclaim a dead daemon.
-        // Bounded so a wedged Ollama can't hold up app shutdown.
-        if let Some(svc) = crate::inference::host_runtime::try_global() {
-            let cfg = crate::config::Config::load_or_init()
-                .await
-                .unwrap_or_default();
-            let runtime = crate::inference::local_runtime_config(&cfg);
-            log::info!("[core] shutdown: cleaning up openhuman-owned ollama if any");
-            let shutdown_fut = svc.shutdown_owned_ollama(&runtime);
-            if tokio::time::timeout(std::time::Duration::from_secs(2), shutdown_fut)
-                .await
-                .is_err()
-            {
-                log::warn!(
-                    "[core] shutdown: ollama cleanup exceeded 2s budget; proceeding with exit"
-                );
-            }
-        }
-
-        served?;
-        Ok(())
+    /// The port this runtime was built to bind, when the builder set one.
+    pub fn port(&self) -> Option<u16> {
+        self.port
     }
 
-    /// Spawn each selected background service. Selection is by [`ServiceSet`];
-    /// each service keeps its own runtime config gate.
-    async fn start_selected_services(&self) {
-        use crate::core::runtime::services;
-        jsonrpc::start_core_runtime_services(
+    /// Whether the RPC bearer came from the operator (env or an in-memory
+    /// handoff) rather than the self-generated `{workspace}/core.token`. A
+    /// server must not bind a public address without one (#1919).
+    pub fn has_operator_token(&self) -> bool {
+        self.has_operator_token
+    }
+
+    /// Record that a transport bound its listener at `local_addr`.
+    pub fn listener_bound(&self, local_addr: std::net::SocketAddr) {
+        #[cfg(feature = "modules")]
+        crate::desktop::control::set_listener_is_loopback(local_addr.ip().is_loopback());
+        #[cfg(not(feature = "modules"))]
+        let _ = local_addr;
+    }
+
+    /// Cleanup to run once a transport has stopped serving, whether it ended
+    /// cleanly or with an error.
+    ///
+    /// Memory holds nothing to flush: turns are logged as they happen and
+    /// queued background jobs are persisted. There is no local model runtime
+    /// to stop either: the user runs Ollama / LM Studio / MLX themselves and
+    /// OpenHuman never spawns it.
+    pub async fn exit_cleanup(&self) {
+        log::debug!("[core] shutdown: exit cleanup done (no owned local runtime to stop)");
+    }
+
+    /// Spawn each selected background service.
+    ///
+    /// A transport calls this once its listener is bound, so a failed bind
+    /// never leaves pollers, one-shot jobs, MCP processes or socket
+    /// reconnect work running without a live runtime. A runtime with no
+    /// transport calls it directly.
+    ///
+    /// Idempotent while they run; the long-lived loops stop with
+    /// [`stop_services`](Self::stop_services) or when this runtime drops.
+    pub async fn start_services(&self) {
+        crate::core::runtime::services::start_selected_services(
+            &self.service_tasks,
             self.services,
             self.config.as_ref(),
-            self.ctx.domains().flows,
+            &self.ctx,
         )
         .await;
+    }
 
-        if self.services.heartbeat {
-            services::spawn_login_gated_services(self.ctx.host_kind().is_desktop_shell());
-        }
-        if self.services.update_scheduler {
-            services::spawn_update_scheduler();
-        }
-        if self.services.cron {
-            services::spawn_cron_service();
-        }
-        // Flow-run boot reconciliation is selected by the flows *domain*, not by
-        // a background service — runs can be started without cron in the
-        // ServiceSet, so their orphans must be reconcilable without it too.
-        if self.ctx.domains().flows {
-            services::spawn_flows_boot_reconcile();
-        }
-        if self.services.channels {
-            services::spawn_channels_service();
-        }
+    /// Stop the services [`start_services`](Self::start_services) started
+    /// (they may be restarted). Also runs on drop.
+    pub fn stop_services(&self) {
+        self.service_tasks.stop();
     }
 }
 

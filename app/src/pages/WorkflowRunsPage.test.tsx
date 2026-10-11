@@ -164,7 +164,9 @@ describe('WorkflowRunsPage', () => {
 
     const row = await screen.findByTestId('workflow-run-r1');
     await waitFor(() => expect(row).toHaveTextContent('pending approval'));
-    expect(row.querySelector('span')).toHaveClass('bg-amber-50');
+    // Badge now renders the shared outline chip; the warning colour comes
+    // from `data-variant`, not a literal `bg-amber-50` fill class.
+    expect(row.querySelector('span[data-slot="badge"]')).toHaveAttribute('data-variant', 'warning');
   });
 
   it('leaves a running run without a matching flow approval labeled "running"', async () => {

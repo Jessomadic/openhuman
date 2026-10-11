@@ -1,32 +1,9 @@
-use super::super::commands::{classify_health_result, ChannelHealthState};
 use super::super::runtime::spawn_supervised_listener;
 use super::super::{traits, Channel};
 use super::common::AlwaysFailChannel;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-
-fn classify_health_ok_true() {
-    let state = classify_health_result(&Ok(true));
-    assert_eq!(state, ChannelHealthState::Healthy);
-}
-
-#[test]
-fn classify_health_ok_false() {
-    let state = classify_health_result(&Ok(false));
-    assert_eq!(state, ChannelHealthState::Unhealthy);
-}
-
-#[tokio::test]
-async fn classify_health_timeout() {
-    let result = tokio::time::timeout(Duration::from_millis(1), async {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        true
-    })
-    .await;
-    let state = classify_health_result(&result);
-    assert_eq!(state, ChannelHealthState::Timeout);
-}
 
 #[tokio::test]
 async fn supervised_listener_marks_error_and_restarts_on_failures() {

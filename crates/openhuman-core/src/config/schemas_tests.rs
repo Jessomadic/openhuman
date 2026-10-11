@@ -2,27 +2,12 @@ use super::schema_defs::schemas;
 use super::*;
 
 #[test]
-fn catalog_counts_match_and_nonempty() {
-    let s = all_controller_schemas();
-    let h = all_registered_controllers();
-    assert_eq!(s.len(), h.len());
-    assert!(s.len() >= 20, "config namespace should expose ≥20 fns");
-}
-
-#[test]
 fn all_schemas_use_config_namespace_and_have_descriptions() {
     for s in all_controller_schemas() {
         assert_eq!(s.namespace, "config", "function {}", s.function);
         assert!(!s.description.is_empty(), "function {} desc", s.function);
         assert!(!s.outputs.is_empty(), "function {} outputs", s.function);
     }
-}
-
-#[test]
-fn unknown_function_returns_unknown_schema() {
-    let s = schemas("no_such_fn");
-    assert_eq!(s.function, "unknown");
-    assert_eq!(s.namespace, "config");
 }
 
 #[test]
@@ -41,6 +26,8 @@ fn every_registered_key_resolves_to_non_unknown_schema() {
         "workspace_onboarding_flag_set",
         "update_analytics_settings",
         "get_analytics_settings",
+        "update_user_timezone",
+        "get_user_timezone",
         "update_autonomy_settings",
         "get_autonomy_settings",
         "get_agent_settings",
@@ -78,8 +65,7 @@ fn json_output_helper_builds_required_json_field() {
 
 #[test]
 fn to_json_wraps_rpc_outcome() {
-    let v =
-        to_json(RpcOutcome::single_log(serde_json::json!({"ok": true}), "l")).expect("serialize");
+    let v = to_json(Outcome::single_log(serde_json::json!({"ok": true}), "l")).expect("serialize");
     assert!(v.get("logs").is_some() || v.get("result").is_some());
 }
 
@@ -175,34 +161,13 @@ fn autonomy_settings_rpc_is_registered() {
 }
 
 #[test]
-fn memory_sync_settings_rpc_is_registered() {
-    let funcs: Vec<&str> = all_controller_schemas()
-        .iter()
-        .map(|s| s.function)
-        .collect();
-    assert!(funcs.contains(&"get_memory_sync_settings"));
-    assert!(funcs.contains(&"update_memory_sync_settings"));
-    // The handler registry must stay in lockstep with the schema list.
-    let handlers: Vec<&str> = all_registered_controllers()
-        .iter()
-        .map(|h| h.schema.function)
-        .collect();
-    assert!(handlers.contains(&"get_memory_sync_settings"));
-    assert!(handlers.contains(&"update_memory_sync_settings"));
-}
-
-#[test]
 fn deserialize_params_parses_memory_settings_update() {
     let mut m = Map::new();
-    m.insert("backend".into(), Value::String("sqlite".into()));
-    m.insert("auto_save".into(), Value::Bool(true));
     m.insert(
         "embedding_dimensions".into(),
         Value::Number(serde_json::Number::from(1536)),
     );
     let out: MemorySettingsUpdate = deserialize_params(m).unwrap();
-    assert_eq!(out.backend.as_deref(), Some("sqlite"));
-    assert_eq!(out.auto_save, Some(true));
     assert_eq!(out.embedding_dimensions, Some(1536));
 }
 
@@ -219,7 +184,6 @@ fn deserialize_params_parses_local_ai_settings_update() {
     m.insert("model_id".into(), Value::String("local-default".into()));
     m.insert("chat_model_id".into(), Value::String("local-chat".into()));
     m.insert("usage_embeddings".into(), Value::Bool(true));
-    m.insert("usage_subconscious".into(), Value::Bool(false));
 
     let out: LocalAiSettingsUpdate = deserialize_params(m).unwrap();
     assert_eq!(out.runtime_enabled, Some(true));
@@ -232,7 +196,6 @@ fn deserialize_params_parses_local_ai_settings_update() {
     assert_eq!(out.model_id.as_deref(), Some("local-default"));
     assert_eq!(out.chat_model_id.as_deref(), Some("local-chat"));
     assert_eq!(out.usage_embeddings, Some(true));
-    assert_eq!(out.usage_subconscious, Some(false));
 }
 
 #[test]
@@ -288,7 +251,7 @@ fn deserialize_params_parses_workspace_onboarding_flag_set_params() {
     let mut m = Map::new();
     m.insert("value".into(), Value::Bool(true));
     let out: WorkspaceOnboardingFlagSetParams = deserialize_params(m).unwrap();
-    assert_eq!(out.value, true);
+    assert!(out.value);
     assert!(out.flag_name.is_none());
 }
 
@@ -328,7 +291,7 @@ use crate::config::TEST_ENV_LOCK;
 
 #[tokio::test]
 async fn handle_get_autonomy_settings_returns_current_value() {
-    let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = TEST_ENV_LOCK.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     unsafe {
         std::env::set_var("OPENHUMAN_WORKSPACE", tmp.path());
@@ -358,7 +321,7 @@ async fn handle_get_autonomy_settings_returns_current_value() {
 
 #[tokio::test]
 async fn handle_update_autonomy_settings_rejects_invalid_value() {
-    let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = TEST_ENV_LOCK.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     unsafe {
         std::env::set_var("OPENHUMAN_WORKSPACE", tmp.path());
@@ -396,7 +359,7 @@ async fn handle_get_agent_paths_returns_action_workspace_and_projects() {
     // the action sandbox / internal workspace paths instead of the hard-coded
     // `~/OpenHuman/projects` / `~/.openhuman/workspace` strings that drift
     // when an operator sets OPENHUMAN_ACTION_DIR.
-    let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = TEST_ENV_LOCK.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     unsafe {
         std::env::set_var("OPENHUMAN_WORKSPACE", tmp.path());
@@ -445,7 +408,7 @@ async fn handle_get_agent_paths_reflects_openhuman_action_dir_env_override() {
     // must show that override in the panel. The override is honoured by
     // default_action_dir() at Config load time; this test verifies the RPC
     // surface forwards the loaded value unchanged.
-    let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = TEST_ENV_LOCK.lock().await;
     let tmp = tempfile::tempdir().unwrap();
     let custom_actions = tmp.path().join("custom-actions-3237");
     std::fs::create_dir_all(&custom_actions).expect("create custom action dir");

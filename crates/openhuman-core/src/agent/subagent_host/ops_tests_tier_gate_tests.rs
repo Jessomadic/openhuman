@@ -1,38 +1,6 @@
 use super::*;
 use crate::agent::subagent_host::run_subagent;
 
-// ── Guard: #3152 prefix tier must stay strictly unique ──────────────
-//
-// When a truncated slug prefix-matches MORE than one catalogued action,
-// the resolver must refuse rather than guess — a mis-dispatched write
-// could create/update the wrong resource (data-integrity). Also asserts
-// the length gate: a too-short request never fans out.
-#[test]
-fn prefix_tier_refuses_ambiguous_and_short_slugs() {
-    use crate::agent::prompts::ConnectedIntegrationTool;
-    let mk = |name: &str| ConnectedIntegrationTool {
-        name: name.into(),
-        description: "d".into(),
-        parameters: None,
-    };
-    let resolver = LazyToolkitResolver {
-        config: std::sync::Arc::new(crate::config::Config::default()),
-        actions: vec![
-            mk("NOTION_SEARCH_NOTION_PAGE"),
-            mk("NOTION_SEARCH_NOTION_DATABASE"),
-            mk("NOTION_CREATE_NOTION_PAGE"),
-        ],
-        resolved: std::sync::Mutex::default(),
-    };
-    // `NOTION_SEARCH_NOTION` is a prefix of TWO actions → ambiguous → None.
-    assert!(
-        resolver.resolve("NOTION_SEARCH_NOTION").is_none(),
-        "#3152: ambiguous prefix must not silently dispatch to a guess"
-    );
-    // Short slug below the length gate never engages the prefix tier.
-    assert!(resolver.resolve("NOTION").is_none());
-}
-
 #[test]
 fn tier_gate_skips_when_parent_unresolved() {
     use crate::agent::harness::definition::AgentTier;
@@ -111,7 +79,7 @@ fn tier_gate_denies_chat_to_chat() {
 #[test]
 fn tier_gate_allows_upward_reasoning_to_chat() {
     use crate::agent::harness::definition::AgentTier;
-    // Upward delegation is intentionally legal (subconscious reasoner →
+    // Upward delegation is intentionally legal (reasoning agent →
     // orchestrator chat). The gate must not deny it.
     let mut parent = make_def_named_tools(&[]);
     let mut child = make_def_named_tools(&[]);

@@ -12,7 +12,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::config::workspace::ops::bundled_default_contents;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 /// Hard cap on the size accepted by [`write_workspace_file`] and tolerated by
 /// [`read_workspace_file`]. `SOUL.md` / `IDENTITY.md` are prose prompts
@@ -54,7 +54,7 @@ fn ensure_editable(filename: &str) -> Result<&'static str, String> {
 pub fn read_workspace_file(
     workspace_dir: &Path,
     filename: &str,
-) -> Result<RpcOutcome<WorkspaceFile>, String> {
+) -> Result<Outcome<WorkspaceFile>, String> {
     let default_contents = ensure_editable(filename)?;
     let path = workspace_dir.join(filename);
 
@@ -69,7 +69,7 @@ pub fn read_workspace_file(
             log::debug!(
                 "[workspace][rpc] read fallback-to-default file='{filename}' (missing on disk)"
             );
-            return Ok(RpcOutcome::new(
+            return Ok(Outcome::new(
                 WorkspaceFile {
                     filename: filename.to_string(),
                     contents: default_contents.to_string(),
@@ -115,7 +115,7 @@ pub fn read_workspace_file(
         "[workspace][rpc] read ok file='{filename}' bytes={}",
         contents.len()
     );
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         WorkspaceFile {
             filename: filename.to_string(),
             contents,
@@ -132,7 +132,7 @@ pub fn write_workspace_file(
     workspace_dir: &Path,
     filename: &str,
     contents: &str,
-) -> Result<RpcOutcome<WorkspaceFile>, String> {
+) -> Result<Outcome<WorkspaceFile>, String> {
     ensure_editable(filename)?;
     if contents.len() as u64 > MAX_WORKSPACE_FILE_BYTES {
         log::debug!(
@@ -162,7 +162,7 @@ pub fn write_workspace_file(
         "[workspace][rpc] write ok file='{filename}' bytes={}",
         contents.len()
     );
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         WorkspaceFile {
             filename: filename.to_string(),
             contents: contents.to_string(),
@@ -177,7 +177,7 @@ pub fn write_workspace_file(
 pub fn reset_workspace_file(
     workspace_dir: &Path,
     filename: &str,
-) -> Result<RpcOutcome<WorkspaceFile>, String> {
+) -> Result<Outcome<WorkspaceFile>, String> {
     let default_contents = ensure_editable(filename)?;
     let path = workspace_dir.join(filename);
     std::fs::create_dir_all(workspace_dir).map_err(|e| {
@@ -195,7 +195,7 @@ pub fn reset_workspace_file(
         format!("failed to reset {filename}: {e}")
     })?;
     log::debug!("[workspace][rpc] reset ok file='{filename}' (restored bundled default)");
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         WorkspaceFile {
             filename: filename.to_string(),
             contents: default_contents.to_string(),

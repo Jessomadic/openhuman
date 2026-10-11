@@ -13,13 +13,12 @@
 //! prompt with a filtered tool list, on a cheaper model where applicable.
 //!
 use crate::agent::harness::definition::AgentDefinitionRegistry;
+use crate::agent::orchestration::tools::dispatch::{incomplete_stop, stopped_subagent_result};
 use crate::agent::progress::AgentProgress;
 use crate::agent::subagent_host::{
     run_subagent_with_parent, SubagentRunOptions, SubagentRunOutcome, SubagentRunStatus,
 };
-use crate::memory::conversations::{
-    self as conversations, ConversationMessage, CreateConversationThread,
-};
+use crate::threads::store::{self as conversations, ConversationMessage, CreateConversationThread};
 use async_trait::async_trait;
 use serde_json::json;
 use std::path::PathBuf;
@@ -149,6 +148,7 @@ fn persist_worker_thread(
             parent_thread_id: None,
             labels: Some(vec!["tasks".to_string()]),
             personality_id: None,
+            working_dir: None,
         },
     )
     .map_err(|err| format!("ensure_thread: {err}"))?;
@@ -222,84 +222,6 @@ fn render_worker_thread_result(
         thread_id = thread_id,
         payload = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
     )
-}
-
-/// Build the user-facing explanation for an allowlisted-but-not-active
-/// integration during an `integrations_agent` spawn (#2365).
-///
-/// The single message that previously covered every cause ("available
-/// but the user has not authorized it yet") looked confused to users
-/// who had Gmail showing in Settings (because Settings reflects the
-/// FE's optimistic post-OAuth view, while the spawn gate reads the
-/// backend's authoritative status). We now pivot on the upstream
-/// connection status:
-///
-/// - `INITIATED` / `INITIALIZING` / `PENDING` — OAuth in progress;
-///   ask the user to finish the flow in their browser.
-/// - `EXPIRED` — token rolled over; reconnect.
-/// - `FAILED` / `ERROR` — handshake didn't land; reconnect.
-/// - any other non-active status — quote the upstream verbatim.
-/// - `None` — no connection row at all (truly disconnected).
-///
-/// Returns text the model reads literally; the orchestrator paraphrases
-/// it into a user-facing reply. Keep the *intent* stable across
-/// rewordings — the "Connections → {toolkit}" path is
-/// load-bearing for the UI navigation tests.
-pub(crate) fn describe_unconnected_state(toolkit: &str, status: Option<&str>) -> String {
-    // Keep the original (trimmed) status separately so the
-    // unknown-status branch can quote it verbatim — CodeRabbit
-    // review on #2373: matching on the uppercased value AND
-    // formatting with that uppercased value broke the
-    // "quote upstream status verbatim" contract for mixed/lowercase
-    // wire shapes.
-    let trimmed = status.map(str::trim).filter(|s| !s.is_empty());
-    let upper = trimmed.map(|s| s.to_ascii_uppercase());
-    match upper.as_deref() {
-        Some("INITIATED") | Some("INITIALIZING") | Some("PENDING") => format!(
-            "Integration '{toolkit}' has an OAuth flow in progress but it hasn't reached \
-             ACTIVE yet. Do NOT retry this spawn. Tell the user the authorization is \
-             pending and ask them to finish the browser OAuth flow (Connections → \
-             '{toolkit}') before retrying. If they already closed the \
-             browser tab, they can restart the connection from the same Connections page."
-        ),
-        Some("EXPIRED") => format!(
-            "Integration '{toolkit}' is connected but the OAuth token has expired. \
-             Do NOT retry this spawn. Tell the user the connection expired and ask \
-             them to reconnect '{toolkit}' at Connections → '{toolkit}' \
-             before retrying the original request."
-        ),
-        Some("FAILED") | Some("ERROR") => {
-            // Quote the actual upstream label (FAILED / ERROR) instead of
-            // hard-coding "FAILED" — triage cross-references backend logs
-            // and a misquoted `ERROR` row showing up as "FAILED" wastes
-            // their time. graycyrus review on #2373.
-            let raw = trimmed.unwrap_or("");
-            format!(
-                "Integration '{toolkit}' has a previous OAuth attempt in a `{raw}` state. \
-                 Do NOT retry this spawn. Tell the user the connection failed and ask them \
-                 to reconnect '{toolkit}' at Connections → '{toolkit}' before \
-                 retrying the original request."
-            )
-        }
-        Some(_) => {
-            // Quote the *original* upstream status, not its uppercased
-            // form — preserves "DeauthRequired" / "needs_relink"-style
-            // mixed-case wire values for triage.
-            let raw = trimmed.unwrap_or("");
-            format!(
-                "Integration '{toolkit}' has a connection row but its status is `{raw}`, \
-                 which is not yet usable. Do NOT retry this spawn. Tell the user the \
-                 connection is in an unusable state and ask them to reconnect '{toolkit}' \
-                 at Connections → '{toolkit}'."
-            )
-        }
-        _ => format!(
-            "Integration '{toolkit}' is available but the user has not authorized it \
-             yet. Do NOT retry this spawn. Tell the user the integration is available \
-             and ask them to authorize '{toolkit}' in Connections → \
-             '{toolkit}' before retrying the original request."
-        ),
-    }
 }
 
 #[cfg(test)]

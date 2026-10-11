@@ -1,7 +1,14 @@
 import { cn } from '../../lib/cn';
 import type { Translate } from '../../lib/flows/cron';
 import type { FlowRunStatus as FlowRunStatusValue } from '../../services/api/flowsApi';
+import { Badge, type BadgeVariant } from '../ui';
 
+/**
+ * @deprecated Kept only because `FlowRunStatus.test.tsx` still asserts on
+ * these literal accent classes. The `badge` presentation below renders
+ * through the shared `Badge` primitive now (see {@link FLOW_RUN_STATUS_VARIANT}
+ * / {@link flowRunStatusVariant}), so this map has no other reader.
+ */
 export const FLOW_RUN_STATUS_ACCENT: Record<FlowRunStatusValue, string> = {
   running:
     'border-primary-200 bg-primary-50 text-primary-700 dark:border-primary-500/30 dark:bg-primary-500/10 dark:text-primary-300',
@@ -26,6 +33,17 @@ export const FLOW_RUN_STATUS_DOT: Record<FlowRunStatusValue, string> = {
   failed: 'bg-coral-500',
   cancelled: 'bg-surface-strong',
   interrupted: 'bg-amber-500',
+};
+
+/** Badge variant for each wire status — the single source of truth for the `badge` presentation's colour. */
+export const FLOW_RUN_STATUS_VARIANT: Record<FlowRunStatusValue, BadgeVariant> = {
+  running: 'primary',
+  completed: 'success',
+  completed_with_warnings: 'warning',
+  pending_approval: 'warning',
+  failed: 'danger',
+  cancelled: 'neutral',
+  interrupted: 'warning',
 };
 
 export const FLOW_RUN_STATUS_KEY: Record<FlowRunStatusValue, string> = {
@@ -53,6 +71,11 @@ export function flowRunStatusAccentClass(status: FlowRunStatusValue): string {
 /** Runtime-safe dot class lookup — falls back for an unrecognized status. */
 export function flowRunStatusDotClass(status: FlowRunStatusValue): string {
   return FLOW_RUN_STATUS_DOT[status] ?? UNKNOWN_STATUS_DOT;
+}
+
+/** Runtime-safe `Badge` variant lookup — falls back to `neutral` for an unrecognized status. */
+export function flowRunStatusVariant(status: FlowRunStatusValue): BadgeVariant {
+  return FLOW_RUN_STATUS_VARIANT[status] ?? 'neutral';
 }
 
 /**
@@ -98,15 +121,12 @@ export function FlowRunStatus({
   }
 
   return (
-    <span
+    <Badge
+      variant={flowRunStatusVariant(status)}
       data-testid={testId}
       data-status={status}
-      className={cn(
-        'inline-flex items-center rounded-full border px-2 py-0.5 font-medium',
-        flowRunStatusAccentClass(status),
-        className
-      )}>
+      className={className}>
       {label}
-    </span>
+    </Badge>
   );
 }

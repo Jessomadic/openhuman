@@ -1,33 +1,40 @@
-//! `OpenHumanSessionHost::from_config` factory methods and the internal
-//! `build_session_agent_inner` constructor.
+//! `OpenHumanSessionHost::from_config` factory methods and internal `build_session_agent_inner` constructor.
 
 use super::dispatcher::{resolve_dispatcher_kind, DispatcherKind};
-use super::helpers::prefetch_tool_memory_rules_blocking;
+use super::host_tools::derive_turn_workspace_descriptor;
 use super::should_synthesize_delegation_tools;
-use crate::agent::harness::definition::NO_TOOLS_SENTINEL;
-use crate::agent::harness::definition::{AgentDefinitionRegistry, PromptSource, ToolScope};
+use crate::agent::harness::definition::{
+    AgentDefinitionRegistry, PromptSource, ToolScope, NO_TOOLS_SENTINEL,
+};
 use crate::agent::host_runtime;
 use crate::agent::prompts::SystemPromptBuilder;
 use crate::agent::session_host::types::OpenHumanSessionHost;
 use crate::config::Config;
-use crate::inference::provider;
-use crate::memory::tool_memory::capture::ToolMemoryCaptureHook;
-use crate::memory::Memory;
 use crate::security::SecurityPolicy;
 use crate::tools;
 use anyhow::Result;
 use std::sync::Arc;
-use tinytools::{PermissionLevel, Tool};
+use tinytools::Tool;
 use tinytools_agent::dialect::{
     CodeDialect, NativeDialect, PFormatDialect, ToolDialect, XmlDialect,
 };
 
+#[path = "factory_workflows.rs"]
+mod workflows;
+
 impl OpenHumanSessionHost {
+    /// Returns whether `agent_id` resolves to a runnable definition for this
+    /// configuration. This is deliberately the same resolution path used by
+    /// [`Self::from_config_for_agent`], so configuration writers cannot save
+    /// a web-chat route that the session factory would later reject.
+    pub(crate) fn is_runnable_agent_id(config: &Config, agent_id: &str) -> bool {
+        resolve_target_definition(config, agent_id).is_ok()
+    }
+
     /// Constructs an `OpenHumanSessionHost` instance from a global system configuration.
     ///
-    /// Thin wrapper around [`OpenHumanSessionHost::from_config_for_agent`] that always
-    /// targets the orchestrator definition. This preserves the legacy
-    /// "main agent = orchestrator" behaviour for CLI / REPL / any caller
+    /// Thin wrapper around [`OpenHumanSessionHost::from_config_for_agent`] targeting the
+    /// orchestrator for legacy CLI / REPL callers.
     /// that does not participate in the #525 onboarding-routing flow.
     ///
     /// Callers that need to select a different agent at session-build
@@ -50,10 +57,10 @@ impl OpenHumanSessionHost {
     /// Shared infrastructure between agent ids is identical:
     /// 1. Initializing the host runtime (native or docker).
     /// 2. Setting up security policies.
-    /// 3. Initializing memory and embedding services.
-    /// 4. Registering all built-in and orchestrator tools.
-    /// 5. Configuring the routed AI provider.
-    /// 6. Setting up the learning system and post-turn hooks.
+    /// 3. Registering all built-in and orchestrator tools (the `memory` tool
+    ///    only while memory is on).
+    /// 4. Configuring the routed AI provider.
+    /// 5. Setting up post-turn hooks.
     ///
     /// What differs per agent id:
     /// * `visible_tool_names` is the agent's `ToolScope::Named` list
@@ -81,7 +88,7 @@ impl OpenHumanSessionHost {
 
         log::info!(
             "[agent::builder] building session agent id={} \
-             (scope={}, omit_identity={}, omit_profile={}, omit_memory_md={}, temperature={:.2})",
+             (scope={}, omit_identity={}, omit_memory_context={}, temperature={:.2})",
             agent_id,
             target_def
                 .as_ref()
@@ -94,22 +101,21 @@ impl OpenHumanSessionHost {
                 .as_ref()
                 .map(|d| d.omit_identity)
                 .unwrap_or(false),
-            target_def.as_ref().map(|d| d.omit_profile).unwrap_or(true),
             target_def
                 .as_ref()
-                .map(|d| d.omit_memory_md)
-                .unwrap_or(true),
+                .map(|d| d.omit_memory_context)
+                .unwrap_or(false),
             target_def
                 .as_ref()
                 .map(|d| d.temperature)
                 .unwrap_or(config.default_temperature)
         );
 
-        Self::build_session_agent_inner(config, agent_id, target_def.as_ref(), false)
+        Self::build_session_agent_inner(config, agent_id, target_def.as_ref(), false, None, None)
     }
 
     /// Build a session agent from a definition the caller already holds,
-    /// rather than an id resolved through `AgentDefinitionRegistry::global()`
+    /// rather than an id resolved through `AgentDefinitionRegistry::current()`
     /// or `config.agent_registry`.
     ///
     /// The definition is authoritative for this agent's prompt, tool scope,
@@ -127,7 +133,7 @@ impl OpenHumanSessionHost {
             definition.id,
             definition.sandbox_mode,
         );
-        Self::build_session_agent_inner(config, &definition.id, Some(definition), false)
+        Self::build_session_agent_inner(config, &definition.id, Some(definition), false, None, None)
     }
 
     /// Internal constructor that consumes the optionally-resolved agent
@@ -144,7 +150,9 @@ impl OpenHumanSessionHost {
         config: &Config,
         agent_id: &str,
         target_def: Option<&crate::agent::harness::definition::AgentDefinition>,
-        read_only_tools_only: bool,
+        host_only: bool,
+        host: Option<&super::HostTools>,
+        session_id: Option<&str>,
     ) -> Result<Self> {
         let workspace_descriptor = derive_turn_workspace_descriptor();
 
@@ -162,40 +170,10 @@ impl OpenHumanSessionHost {
             config.workspace_dir.clone(),
         )?;
 
-        // The session's store, through the same binding the archivist resolves
-        // two statements down — so one subtree yields one store rather than an
-        // engine handle beside a driver over the same files.
-        //
-        // The two reasons this was deferred are both settled. **Embedder
-        // resolution**: the factory's ladder and the driver's are the same
-        // code reading the same field. `Config::workload_local_model` and
-        // `EngineRuntimeConfig::workload_local_model` both take
-        // `embeddings_provider`, strip `"ollama:"`, trim and reject empty, and
-        // that `Option` is the only input to `effective_embedding_settings`.
-        // The Ollama health-gate is not a difference either: it lives inside
-        // `create_unified_memory_full`, which the module runs because the
-        // module *is* the engine, and its probe address is proxied back here
-        // through `EmbeddingHost::ollama_base_url`. (`embedding_routes` never
-        // mattered — the engine's own parameter is underscore-prefixed and
-        // unused.) **The test build**: `binding::module_provider` under
-        // `cfg(test)` loads the module when `TINYMEMORY_TEST_MODULE` names it
-        // and degrades to the null driver otherwise, which is the same footing
-        // the archivist has had here all along.
-        let memory: Arc<dyn Memory> =
-            crate::agent::experience::ops::DriverMemory::for_config(config)
-                .map_err(|e| anyhow::anyhow!("session memory binding: {e}"))?;
-        // The archivist takes the bound driver for this session's memory
-        // subtree — the same subtree `session_memory` opened — rather than the
-        // raw SQLite handle the factory used to strip off the engine result.
-        // That handle was the #5378 `:290` blocker: a concrete connection no
-        // module or remote driver can supply. The engine's connection is now
-        // exclusively the engine's. Lane C (#6040) rides the same binding.
-        let (archivist_provider, auto_recall) = super::helpers::bind_session_memory(config)?;
-
         // Load the user's persisted tool preferences once. They drive two
         // things below: granting the App UI Control / App Automation mutation
         // opt-in (#3762) and filtering the tool set to the enabled snapshot.
-        let enabled_tools: Vec<String> = {
+        let mut enabled_tools: Vec<String> = {
             use crate::desktop::app_state::load_stored_app_state;
             match load_stored_app_state(config) {
                 Ok(stored) => stored
@@ -210,46 +188,41 @@ impl OpenHumanSessionHost {
                 }
             }
         };
-
+        if config.browser.enabled && !enabled_tools.is_empty() {
+            // Browser's explicit opt-in outranks a positive-only onboarding snapshot.
+            enabled_tools.extend(["browser".to_string(), "browser_open".to_string()]);
+        }
         // Share a single `Arc<Config>` across the heavyweight per-build consumers
-        // (the tool registry, the reflection hook, the turn provider) instead of
+        // (the tool registry, the turn provider) instead of
         // deep-cloning the large `Config` at each site (#5050, Fix 1). `Config` is
         // immutable after construction, so one refcounted instance is behaviourally
         // identical to N independent clones.
         let base_config: Arc<Config> = Arc::new(config.clone());
         let tool_config: Arc<Config> = Arc::clone(&base_config);
 
-        let mut tools = tools::ops::all_tools_with_runtime(
-            Arc::clone(&tool_config),
-            &security,
-            runtime,
-            audit,
-            &tool_config.browser,
-            &tool_config.http_request,
-            &tool_config.action_dir,
-            &tool_config.agents,
-            &tool_config,
-            workspace_descriptor
-                .as_ref()
-                .map(|descriptor| descriptor.root.as_path()),
-        );
+        // Host-only (`host_only.rs`): no config-derived tool is even built.
+        let mut tools = if host_only {
+            Vec::new()
+        } else {
+            tools::ops::all_tools_with_runtime(
+                Arc::clone(&tool_config),
+                &security,
+                runtime,
+                audit,
+                &tool_config.browser,
+                &tool_config.http_request,
+                &tool_config.action_dir,
+                &tool_config.agents,
+                &tool_config,
+                workspace_descriptor
+                    .as_ref()
+                    .map(|descriptor| descriptor.root.as_path()),
+            )
+        };
 
         // Filter tools by the user preference loaded above.
         if !enabled_tools.is_empty() {
             crate::tools::filter_tools_by_user_preference(&mut tools, &enabled_tools);
-        }
-
-        if read_only_tools_only {
-            let before = tools.len();
-            tools.retain(|tool| {
-                tool.permission_level() <= PermissionLevel::ReadOnly
-                    && !matches!(tool.scope(), tinytools::ToolScope::CliRpcOnly)
-            });
-            log::info!(
-                "[agent::builder] read-only tool filter applied: before={} after={}",
-                before,
-                tools.len()
-            );
         }
 
         // Route the main agent's chat through the unified per-workload
@@ -284,7 +257,7 @@ impl OpenHumanSessionHost {
         // `hint:coding`, while existing pre-registry callers continue using
         // `config.default_model` unchanged.
         let provider_role =
-            provider_role_for_definition(agent_id, config.default_model.as_deref(), target_def);
+            provider_role_for_definition(config.default_model.as_deref(), target_def);
         // Retry/backoff is now owned by the crate `RetryPolicy` at the harness
         // model call (issue #4249, Phase 3a) — see `tinyagents::run_policy_for`.
         // The turn path therefore no longer wraps the resolved provider in
@@ -314,29 +287,13 @@ impl OpenHumanSessionHost {
         let target_is_lead = target_def
             .map(|def| !def.subagents.is_empty())
             .unwrap_or(true);
-        // The `subconscious` workload's model is governed by `subconscious_provider`
-        // + the managed-tier registry — NOT by an interactive agent model pin.
-        // The tick reuses the orchestrator definition (agent_id="orchestrator"),
-        // so without this guard a configured `[orchestrator].model` pin would
-        // clobber the resolved subconscious model and send an unrelated tier to
-        // the Subconscious provider (Codex P2).
-        if provider_role != "subconscious" {
-            if let Some(pinned_model) =
-                config.configured_agent_model(target_agent_id, target_is_lead)
-            {
-                log::debug!(
-                    "[session-builder] agent_id={} using config-level model pin model={}",
-                    target_agent_id,
-                    pinned_model
-                );
-                model_name = pinned_model.to_string();
-            }
-        } else {
+        if let Some(pinned_model) = config.configured_agent_model(target_agent_id, target_is_lead) {
             log::debug!(
-                "[session-builder] agent_id={} provider_role=subconscious — skipping agent model \
-                 pin so the subconscious provider/registry model is preserved",
-                target_agent_id
+                "[session-builder] agent_id={} using config-level model pin model={}",
+                target_agent_id,
+                pinned_model
             );
+            model_name = pinned_model.to_string();
         }
 
         // Resolve the user-configured vision flag for the (now-final) model while
@@ -386,9 +343,10 @@ impl OpenHumanSessionHost {
         // fetched asynchronously on session start land in the prompt.
         // `Inline`/`File` sources still resolve to just the archetype
         // body and get wrapped by [`SystemPromptBuilder::for_subagent`].
-        let mut prompt_builder = match target_def {
+        let prompt_builder = match target_def {
             Some(def) => match &def.system_prompt {
                 PromptSource::Dynamic(build) => SystemPromptBuilder::from_dynamic(*build),
+                PromptSource::Verbatim(text) => SystemPromptBuilder::verbatim(text.clone()),
                 PromptSource::Inline(text) => SystemPromptBuilder::for_subagent(
                     text.clone(),
                     def.omit_identity,
@@ -434,140 +392,8 @@ impl OpenHumanSessionHost {
             },
             None => SystemPromptBuilder::with_defaults(),
         };
-        if config.learning.enabled {
-            // Insert the privileged reflection block ahead of the
-            // generic `user_memory` section when one is already
-            // present (the `with_defaults` chain includes it). For
-            // builders that do not contain `user_memory` (dynamic /
-            // sub-agent prompts), the helper falls back to appending,
-            // which still keeps reflections ahead of the
-            // learned-context / user-profile blocks added immediately
-            // after.
-            prompt_builder = prompt_builder
-                .insert_section_before(
-                    "user_memory",
-                    Box::new(crate::agent::prompts::UserReflectionsSection),
-                )
-                .add_section(Box::new(
-                    crate::agent::learning::LearnedContextSection::new(memory.clone()),
-                ))
-                .add_section(Box::new(crate::agent::learning::UserProfileSection::new(
-                    memory.clone(),
-                )));
-            // NOTE: MemoryAccessSection is added after tool-filtering so we can
-            // gate it on retrieval-tool visibility — see below.
-            log::info!(
-                "[learning] prompt sections registered (user_reflections, learned_context, user_profile)"
-            );
-        }
-
-        // Explicit-preferences injection — independent of the full learning
-        // subsystem.  When `explicit_preferences_enabled` is true (the default)
-        // and the full learning subsystem is NOT already wiring UserProfileSection,
-        // we add it here so pinned preferences written by `remember_preference`
-        // reach every session prompt.  The `fetch_learned_context` gate is
-        // widened by `explicit_preferences_enabled` on the OpenHumanSessionHost (see
-        // `session/turn.rs`) so the data is actually fetched and populated.
-        if config.learning.explicit_preferences_enabled && !config.learning.enabled {
-            prompt_builder = prompt_builder.add_section(Box::new(
-                crate::agent::learning::UserProfileSection::new(memory.clone()),
-            ));
-            log::info!(
-                "[learning] explicit-preference UserProfileSection registered \
-                 (learning.enabled=false, explicit_preferences_enabled=true)"
-            );
-        }
-
-        // Build post-turn hooks when learning is enabled
-        let mut post_turn_hooks: Vec<Arc<dyn crate::agent::hooks::PostTurnHook>> = Vec::new();
-        if config.learning.enabled {
-            if config.learning.reflection_enabled {
-                // The reflection hook needs an owned `Arc<Config>`; reuse the
-                // shared base config (a refcount bump) rather than a second deep
-                // clone of the full config (#5050, Fix 1).
-                let full_config = Arc::clone(&base_config);
-                // For cloud reflection, wrap the provider in an Arc.
-                // For local, no provider needed.
-                let reflection_provider: Option<Arc<dyn tinyinference_llm::model::ChatModel<()>>> =
-                    if config.learning.reflection_source == crate::config::ReflectionSource::Cloud {
-                        let (model, resolved_model) =
-                            provider::create_chat_model_with_model_id("reasoning", config, 0.3)?;
-                        log::debug!(
-                            "[learning] built crate-native reflection model resolved_model={resolved_model}"
-                        );
-                        Some(model)
-                    } else {
-                        None
-                    };
-                post_turn_hooks.push(Arc::new(crate::agent::learning::ReflectionHook::new(
-                    config.learning.clone(),
-                    full_config.clone(),
-                    memory.clone(),
-                    reflection_provider,
-                )));
-                log::info!(
-                    "[learning] reflection hook registered (source={:?})",
-                    config.learning.reflection_source
-                );
-            }
-
-            if config.learning.user_profile_enabled {
-                post_turn_hooks.push(Arc::new(crate::agent::learning::UserProfileHook::new(
-                    config.learning.clone(),
-                    memory.clone(),
-                )));
-                log::info!("[learning] user_profile hook registered");
-            }
-
-            if config.learning.tool_tracking_enabled {
-                post_turn_hooks.push(Arc::new(crate::agent::learning::ToolTrackerHook::new(
-                    config.learning.clone(),
-                    memory.clone(),
-                )));
-                log::info!("[learning] tool_tracker hook registered");
-            }
-
-            if config.learning.tool_memory_capture_enabled {
-                post_turn_hooks.push(Arc::new(ToolMemoryCaptureHook::new(memory.clone(), true)));
-                log::info!("[learning] tool_memory_capture hook registered");
-            }
-
-            if config.learning.tool_memory_capture_enabled {
-                post_turn_hooks.push(Arc::new(
-                    crate::agent::experience::AgentExperienceCaptureHook::new(memory.clone(), true),
-                ));
-                log::info!("[learning] agent_experience_capture hook registered");
-            }
-        }
-
-        // ── ArchivistHook — register independently of learning.enabled ──────
-        //
-        // Episodic capture (FTS5 index, segment lifecycle, LLM recap, embedding)
-        // is the system-of-record for chat turns and must stay active even when
-        // the inference stack (`reflection`, `stability_detector`) is disabled.
-        // Gated only on `config.learning.episodic_capture_enabled` (default: true)
-        // using the explicit SQLite resource returned by the session factory.
-        let archivist_hook_arc: Option<Arc<crate::agent::harness::archivist::ArchivistHook>> =
-            if config.learning.episodic_capture_enabled {
-                let hook = Arc::new(
-                    crate::agent::harness::archivist::ArchivistHook::new(archivist_provider, true)
-                        .with_config(Arc::clone(&base_config)),
-                );
-                post_turn_hooks
-                    .push(Arc::clone(&hook) as Arc<dyn crate::agent::hooks::PostTurnHook>);
-                log::info!(
-                    "[archivist] episodic capture hook registered (learning.enabled={})",
-                    config.learning.enabled
-                );
-                Some(hook)
-            } else {
-                log::info!(
-                    "[archivist] episodic_capture_enabled=false — archivist hook not registered"
-                );
-                None
-            };
-
-        post_turn_hooks.extend(crate::agent::hooks::embedder_post_turn_hooks());
+        let post_turn_hooks: Vec<Arc<dyn crate::agent::hooks::PostTurnHook>> =
+            crate::agent::hooks::turn_post_turn_hooks();
 
         // Best-effort prewarm from the shared Composio cache. This avoids
         // building the session with a knowingly stale `&[]` integration view
@@ -588,7 +414,7 @@ impl OpenHumanSessionHost {
         // connected Composio action (reached through `tool_search`).
         //
         // For an agent without `subagents` (today: welcome, critic,
-        // archivist, etc.), no delegation tools are synthesised — the
+        // summarizer, etc.), no delegation tools are synthesised — the
         // LLM only sees the agent's own `ToolScope::Named` entries
         // from the global registry, narrowed by the visible-tool
         // filter.
@@ -605,13 +431,15 @@ impl OpenHumanSessionHost {
             Option<std::collections::HashSet<String>>,
         ) = match (
             target_def,
-            crate::agent::harness::definition::AgentDefinitionRegistry::global(),
+            crate::agent::harness::definition::AgentDefinitionRegistry::current(),
         ) {
+            // Host-only: no delegation; the host's names join an empty belt.
+            _ if host_only => (Vec::new(), Some(super::host_only::empty_belt())),
             (Some(def), Some(reg)) => {
                 let synthed = if should_synthesize_delegation_tools(def) {
                     tools::orchestrator_tools::collect_orchestrator_tools(
                         def,
-                        reg,
+                        &reg,
                         prewarmed_integrations_slice,
                     )
                 } else {
@@ -674,7 +502,7 @@ impl OpenHumanSessionHost {
                 let synthed = match reg.get("orchestrator") {
                     Some(orch_def) => tools::orchestrator_tools::collect_orchestrator_tools(
                         orch_def,
-                        reg,
+                        &reg,
                         prewarmed_integrations_slice,
                     ),
                     None => {
@@ -693,7 +521,7 @@ impl OpenHumanSessionHost {
                 // existed, or — the common case today — a `CustomRegistry`
                 // definition `resolve_target_definition` synthesizes
                 // straight from `config.agent_registry.entries` without
-                // ever consulting `AgentDefinitionRegistry::global()`, see
+                // ever consulting `AgentDefinitionRegistry::current()`, see
                 // `agent_registry::find_custom_in_config`). Delegation-tool
                 // synthesis needs the registry (to resolve named
                 // subagents), so it's skipped here, but `def.tools` is a
@@ -759,7 +587,11 @@ impl OpenHumanSessionHost {
         // (e.g. the orchestrator's curated list). An empty set already means
         // "no filter", so it needs nothing. Added BEFORE the disallow filter
         // below so an agent that explicitly disallows it still has it removed.
-        super::ensure_recovery_tool_visible(&mut visible, config.context.compaction_enabled);
+        // A summary names the tool in its footer too, and summaries run with
+        // the router off, so either one makes the tool necessary.
+        if !host_only {
+            super::ensure_tinyjuice_tools_visible(&mut visible, agent_id, config);
+        }
 
         if let Some(def) = target_def {
             if !def.disallowed_tools.is_empty() {
@@ -774,12 +606,15 @@ impl OpenHumanSessionHost {
                                     .filter(|t| t.exposure() != tinytools::ToolExposure::Hidden)
                                     .map(|t| t.name().to_string()),
                             )
-                            .filter(|name| !definition_disallows_tool(&def.disallowed_tools, name))
+                            .filter(|name| {
+                                !crate::tools::rules::glob_list_matches(&def.disallowed_tools, name)
+                            })
                             .collect();
                     }
                     ToolScope::Named(_) => {
-                        visible
-                            .retain(|name| !definition_disallows_tool(&def.disallowed_tools, name));
+                        visible.retain(|name| {
+                            !crate::tools::rules::glob_list_matches(&def.disallowed_tools, name)
+                        });
                     }
                 }
                 // Disallowing every tool must remain a zero-tool scope. An
@@ -790,44 +625,10 @@ impl OpenHumanSessionHost {
             }
         }
 
-        // Memory prompt sections — the read side (#566) and the write side
-        // (#6048); both gates live in `helpers::add_memory_prompt_sections`.
-        prompt_builder = super::helpers::add_memory_prompt_sections(
-            prompt_builder,
-            &tools,
-            &delegation_tools,
-            &visible,
-            agent_id,
-        );
-
         // The delegation tools stay beside the durable registry rather than
         // inside it: the builder holds them in `OpenHumanSessionHost::synthesized_tools`,
         // drops any name a durable tool already owns, and
         // `refresh_delegation_tools` replaces the whole set later (#6145).
-
-        // Pre-fetch Critical + High priority tool-scoped memory rules so they
-        // pin into the (compression-resistant) system prompt for the whole
-        // session. Done here — after the tool list is finalised — so we only
-        // fetch rules for tools this agent can actually use.  Skipped when
-        // `learning.enabled` is false (no new rules are written in that mode,
-        // and users who opt out of learning expect no stored rules to surface)
-        // or when the runtime cannot host a synchronous bridge (single-threaded
-        // test harnesses).
-        if config.learning.enabled && config.learning.tool_memory_capture_enabled {
-            let agent_tool_names: Vec<String> = tools
-                .iter()
-                .chain(delegation_tools.iter())
-                .map(|t| t.name().to_string())
-                .collect();
-            let pinned = prefetch_tool_memory_rules_blocking(memory.clone(), &agent_tool_names);
-            if !pinned.is_empty() {
-                log::info!(
-                    "[memory::tool_memory] pinning {} tool-scoped rule(s) into system prompt",
-                    pinned.len()
-                );
-                prompt_builder = prompt_builder.with_tool_memory_rules(pinned);
-            }
-        }
 
         // Build the P-Format registry AFTER the tool list is finalised
         // (including orchestrator tools) so every tool gets a signature
@@ -839,8 +640,7 @@ impl OpenHumanSessionHost {
                 .chain(delegation_tools.iter())
                 .map(|tool| (tool.name(), tool.parameters_schema())),
         );
-        let dispatcher_kind =
-            resolve_dispatcher_kind(&dispatcher_choice, supports_native, agent_id);
+        let dispatcher_kind = resolve_dispatcher_kind(&dispatcher_choice, supports_native);
         let tool_dispatcher: Box<dyn ToolDialect> = match dispatcher_kind {
             DispatcherKind::Native => Box::new(NativeDialect),
             DispatcherKind::Xml => Box::new(XmlDialect),
@@ -863,14 +663,11 @@ impl OpenHumanSessionHost {
             .map(|def| def.temperature)
             .unwrap_or(config.default_temperature);
 
-        // Thread PROFILE.md + MEMORY.md inclusion from the resolved
-        // definition. Legacy / no-definition path stays on the safe
-        // `true` default (omit) for both files.
-        let effective_omit_profile = target_def.map(|def| def.omit_profile).unwrap_or(true);
-        let effective_omit_memory_md = target_def.map(|def| def.omit_memory_md).unwrap_or(true);
-        let effective_trigger_memory_agent = target_def
-            .map(|def| def.trigger_memory_agent)
-            .unwrap_or_default();
+        // Whether a new session gets `context.md` prepended to its first user
+        // message; agents without a definition get it.
+        let effective_omit_memory_context = target_def
+            .map(|def| def.omit_memory_context)
+            .unwrap_or(false);
         let effective_tokenjuice_compression = target_def
             .map(|def| def.effective_tokenjuice_compression())
             .unwrap_or(crate::inference::tokenjuice::AgentTokenjuiceCompression::Full);
@@ -906,18 +703,17 @@ impl OpenHumanSessionHost {
         //
         // Issue #574 — when a tool returns a huge payload (Composio
         // dump, long file read, web scrape), it should be compressed
-        // by a dedicated `summarizer` sub-agent before entering the
-        // orchestrator's history. We resolve the summarizer agent
-        // definition from the global registry and construct a
-        // `SubagentPayloadSummarizer` parameterized from the
-        // [`ContextConfig`] thresholds. Every other agent id gets
+        // by TinyJuice's summary stage before entering the orchestrator's
+        // history. TinyJuice owns the prompt and the thresholds (installed
+        // from [`ContextConfig`]); the host supplies only the model call,
+        // through a `SubagentPayloadSummarizer` built from the `summarizer`
+        // agent definition. Every other agent id gets
         // `None` and their tool results stay untouched (the summarizer
         // itself MUST be `None` to avoid recursive self-summarization).
         let payload_summarizer: Option<
             std::sync::Arc<dyn crate::agent::tinyagents::payload_summarizer::PayloadSummarizer>,
-        > = if agent_id == "orchestrator" && config.context.summarizer_payload_threshold_tokens > 0
-        {
-            match crate::agent::harness::definition::AgentDefinitionRegistry::global() {
+        > = if !host_only && super::summarizes_tool_output(agent_id, config) {
+            match crate::agent::harness::definition::AgentDefinitionRegistry::current() {
                 Some(reg) => match reg.get("summarizer") {
                     Some(summarizer_def) => {
                         log::info!(
@@ -929,8 +725,6 @@ impl OpenHumanSessionHost {
                         Some(std::sync::Arc::new(
                             crate::agent::tinyagents::payload_summarizer::SubagentPayloadSummarizer::new(
                                 summarizer_def.clone(),
-                                config.context.summarizer_payload_threshold_tokens,
-                                config.context.summarizer_max_payload_tokens,
                             ),
                         ))
                     }
@@ -960,37 +754,45 @@ impl OpenHumanSessionHost {
         // `agent_harness_e2e` mock now serves SSE for streaming, so the crate-native
         // streaming path is exercised end-to-end.
         //
-        // Issue #4868 — resolve the per-agent iteration cap. When a named
-        // definition is present, its `effective_max_iterations()` (which honors
-        // `iteration_policy = "extended"` -> 50, and the declared `max_iterations`
-        // for strict agents) takes priority over the global
-        // `config.agent.max_tool_iterations` (default 10). This is the single
-        // shared resolution point that closes #4868 for every direct-invocation
-        // path: flows_build, flows_discover, agent-node runtime, cron, MCP
-        // server, etc. Falls back to the global default when there is no
-        // definition for this agent_id.
+        // Resolve the per-turn iteration cap in one place so an explicit
+        // operator override takes precedence over the selected definition,
+        // while definitions still take precedence over the global default.
         let mut effective_agent_config = config.agent.clone();
+        let effective_cap =
+            super::iteration_cap::resolve_max_tool_iterations(&config.agent, target_def);
         if let Some(def) = target_def {
-            let def_cap = def.effective_max_iterations();
             log::info!(
-                "[agent::builder] applying definition iteration cap for agent_id={}: \
+                "[agent::builder] resolved iteration cap for agent_id={}: \
                  definition.max_iterations={} iteration_policy={:?} -> effective={} \
-                 (was global default {})",
+                 (global default {}, explicit override {:?})",
                 agent_id,
                 def.max_iterations,
                 def.iteration_policy,
-                def_cap,
+                effective_cap,
                 config.agent.max_tool_iterations,
+                config.agent.max_tool_iterations_override,
             );
-            effective_agent_config.max_tool_iterations = def_cap;
         }
+        effective_agent_config.max_tool_iterations = effective_cap;
+        let merged_host_tools = super::host_tools::merge_for_turn(
+            host,
+            agent_id,
+            session_id,
+            &mut tools,
+            &mut visible,
+        )?;
+        let session_definition = super::host_tools::scope_def(target_def, &merged_host_tools);
+        let host_policy =
+            super::host_only::session_policy(host_only, &tools, merged_host_tools.policy);
+        let withheld_tool_names = merged_host_tools.withheld;
         let mut builder = OpenHumanSessionHost::builder()
             .crate_native_provider(provider_role, Arc::clone(&base_config))
             .tools(tools)
             .synthesized_tools(delegation_tools)
             .visible_tool_names(visible)
-            .memory(memory)
-            .auto_recall(Some(auto_recall))
+            .withheld_tool_names(withheld_tool_names)
+            .permanent_tool_names(merged_host_tools.permanent)
+            .deferred_tools(target_def.map_or_else(Vec::new, |d| d.deferred_tools.clone()))
             .tool_dispatcher(tool_dispatcher)
             .prompt_builder(prompt_builder)
             .config(effective_agent_config)
@@ -1001,25 +803,20 @@ impl OpenHumanSessionHost {
             .workspace_dir(config.workspace_dir.clone())
             .action_dir(config.action_dir.clone())
             .workspace_descriptor(workspace_descriptor)
-            .workflows({
-                let mut catalogue = crate::skills::load_workflow_metadata(&config.workspace_dir);
-                #[cfg(feature = "flows")]
-                catalogue.extend(crate::flows::catalogue::flow_entries(config));
-                catalogue
-            })
-            .auto_save(config.memory.auto_save)
+            .workflows(workflows::session_workflows(config, host_only))
             .post_turn_hooks(post_turn_hooks)
-            .learning_enabled(config.learning.enabled)
-            .explicit_preferences_enabled(config.learning.explicit_preferences_enabled)
             .agent_definition_name(agent_id.to_string())
-            .omit_profile(effective_omit_profile)
-            .omit_memory_md(effective_omit_memory_md)
-            .trigger_memory_agent(effective_trigger_memory_agent)
+            .omit_memory_context(effective_omit_memory_context)
             .tokenjuice_compression(effective_tokenjuice_compression);
         if let Some(ps) = payload_summarizer {
             builder = builder.payload_summarizer(ps);
         }
-        builder = builder.archivist_hook(archivist_hook_arc);
+        // A host gate REPLACES the session's rather than fronting it --
+        // `tool_policy` assigns. `HostTurnTools::with_policy` says why, and
+        // what it costs a host that gates only its own names.
+        if let Some(policy) = host_policy {
+            builder = builder.tool_policy(policy);
+        }
         let mut agent = builder.build()?;
         let connected_integrations_initialized = prewarmed_integrations.is_some();
         agent.connected_integrations = prewarmed_integrations.unwrap_or_default();
@@ -1029,21 +826,18 @@ impl OpenHumanSessionHost {
         // second resident copy of a 95-field struct with nested `Vec`s
         // (openhuman#6218).
         agent.runtime_config = Some(Arc::clone(&base_config));
-        agent.hosted_base = AgentDefinitionRegistry::global_arc().map(|definitions| {
+        agent.hosted_base = AgentDefinitionRegistry::current().map(|definitions| {
             Arc::new(crate::agent::tinyagents::host::OpenHumanHostBase {
                 config: Arc::clone(&base_config),
                 definitions,
                 security_policy: security,
-                memory: agent.memory_arc(),
                 post_turn_hooks: agent.post_turn_hooks.clone(),
-                // The caller's own definition, when this session was built from
-                // one rather than from a registry id. `AgentSpec::into_core`
-                // re-stamps the built-in orchestrator under the caller's id, so
-                // ids like `harness`/`alpha`/`beta` reach hosted resolution as
-                // names no registry holds; without handing the definition over
-                // here the lookup misses and the turn is rejected as a policy
-                // failure before any provider call (#6404/#6392/#6393).
-                session_definition: target_def.cloned().map(Arc::new),
+                session_definition: session_definition.clone().map(|definition| {
+                    Arc::new(super::host_tools::add_permanent_tools(
+                        definition,
+                        &agent.permanent_tool_names,
+                    ))
+                }),
             })
         });
         if agent.hosted_base.is_none() {
@@ -1051,7 +845,7 @@ impl OpenHumanSessionHost {
                 "[tinyagents] hosted invocation base unavailable: agent definition registry was not initialized"
             );
         }
-        agent.definition = target_def.cloned().map(Arc::new);
+        agent.definition = session_definition.map(Arc::new);
         agent.last_seen_integrations_hash =
             crate::integrations::composio::connected_set_hash(&agent.connected_integrations);
         Ok(agent)
@@ -1086,9 +880,9 @@ fn resolve_target_definition(
     config: &Config,
     agent_id: &str,
 ) -> Result<Option<crate::agent::harness::definition::AgentDefinition>> {
-    let registry = AgentDefinitionRegistry::global();
+    let registry = AgentDefinitionRegistry::current();
 
-    if let Some(reg) = registry {
+    if let Some(reg) = registry.as_deref() {
         if let Some(def) = reg.get(agent_id) {
             return Ok(Some(def.clone()));
         }
@@ -1133,40 +927,17 @@ fn resolve_target_definition(
     ))
 }
 
-fn definition_disallows_tool(disallowed: &[String], name: &str) -> bool {
-    disallowed.iter().any(|entry| {
-        if let Some(prefix) = entry.strip_suffix('*') {
-            name.starts_with(prefix)
-        } else {
-            entry == name
-        }
-    })
-}
-
 /// Resolve the provider/workload role for a session build.
 ///
-/// The `subconscious` workload has two entry points and both must route here:
-/// - the cloud tick builds via `OpenHumanSessionHost::from_config` (agent_id `"orchestrator"`)
-///   with `default_model = "hint:subconscious"`;
-/// - the event-driven long-lived session builds via
-///   `OpenHumanSessionHost::from_config_for_agent(_, "subconscious")` and does NOT set the hint.
-///
-/// Routing on `agent_id == "subconscious"` covers the second case (Codex P2:
-/// otherwise promoted background turns fall through to `chat_provider` and ignore
-/// Connections → API keys → LLM "Subconscious"). Other explicit `hint:<role>` markers route to
-/// their workload; everything else (incl. the legacy `default_model` tier the
-/// bootstrap pinned) falls through to `chat` so `chat_provider` drives the
-/// user-facing turn.
-pub(crate) fn provider_role_for(agent_id: &str, default_model: Option<&str>) -> &'static str {
-    if agent_id.trim() == "subconscious" {
-        return "subconscious";
-    }
+/// Explicit `hint:<role>` markers route to their workload; everything else
+/// (incl. the legacy `default_model` tier the bootstrap pinned) falls through
+/// to `chat` so `chat_provider` drives the user-facing turn.
+pub(crate) fn provider_role_for(default_model: Option<&str>) -> &'static str {
     match default_model.map(str::trim) {
         Some("hint:agentic") => "agentic",
         Some("hint:coding") => "coding",
         Some("hint:summarization") => "summarization",
         Some("hint:reasoning") => "reasoning",
-        Some("hint:subconscious") => "subconscious",
         _ => "chat",
     }
 }
@@ -1178,7 +949,6 @@ mod provider_role_tests;
 /// Resolve the initial harness workload without constructing a session.
 /// Flow readiness shares this path so it checks the provider used at runtime.
 pub(crate) fn provider_role_for_definition(
-    agent_id: &str,
     default_model: Option<&str>,
     target_def: Option<&crate::agent::harness::definition::AgentDefinition>,
 ) -> &'static str {
@@ -1199,22 +969,5 @@ pub(crate) fn provider_role_for_definition(
             })
         })
         .flatten();
-    provider_role_for(agent_id, master_hint.as_deref().or(default_model))
-}
-
-fn derive_turn_workspace_descriptor() -> Option<tinytools::WorkspaceDescriptor> {
-    let root = crate::agent::turn_workspace::current()?;
-    if !root.is_dir() {
-        tracing::warn!(
-            root = %root.display(),
-            "[turn_workspace] scoped root is not an existing directory — \
-             falling back to the shared action_dir cwd for this turn"
-        );
-        return None;
-    }
-    tracing::debug!(
-        root = %root.display(),
-        "[turn_workspace] turn bound to the embedder's per-turn root as default cwd"
-    );
-    Some(tinytools::WorkspaceDescriptor::new(root).with_policy_id("turn-workspace"))
+    provider_role_for(master_hint.as_deref().or(default_model))
 }

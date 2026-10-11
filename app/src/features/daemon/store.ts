@@ -24,7 +24,6 @@ interface DaemonUserState {
   components: {
     gateway?: ComponentHealth;
     channels?: ComponentHealth;
-    heartbeat?: ComponentHealth;
     scheduler?: ComponentHealth;
   };
   lastHealthUpdate: string | null;

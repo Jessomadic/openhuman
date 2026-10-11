@@ -10,6 +10,7 @@ import type {
   ThreadDeleteData,
   ThreadMessage,
   ThreadMessagesData,
+  ThreadSearchHit,
   ThreadsListData,
 } from '../../types/thread';
 import type {
@@ -23,6 +24,7 @@ import type {
   RunEvent,
   RunEventListResponse,
 } from '../../types/turnState';
+import type { ChatThreadTodoItem, ThreadGoal } from '../chatService';
 import { callCoreRpc } from '../coreRpcClient';
 
 interface Envelope<T> {
@@ -77,6 +79,15 @@ export const threadApi = {
     });
     const data = unwrapEnvelope(response);
     return { ...data, messages: data.messages.map(normalizeThreadMessage) };
+  },
+
+  /** Message text search across every thread, newest first. */
+  searchMessages: async (query: string, limit?: number): Promise<ThreadSearchHit[]> => {
+    const response = await callCoreRpc<Envelope<{ hits?: ThreadSearchHit[] }>>({
+      method: 'openhuman.threads_search',
+      params: { query, limit },
+    });
+    return unwrapEnvelope(response)?.hits ?? [];
   },
 
   appendMessage: async (threadId: string, message: ThreadMessage): Promise<ThreadMessage> => {
@@ -166,6 +177,34 @@ export const threadApi = {
     return data?.turnStates ?? [];
   },
 
+  /**
+   * The thread's current live todo list, for thread open / reconnect (the
+   * `thread_todos_changed` socket event covers every update after that).
+   * Wire method `openhuman.threads_todos_get`.
+   */
+  getTodos: async (threadId: string): Promise<ChatThreadTodoItem[]> => {
+    const response = await callCoreRpc<{ data?: { todos?: ChatThreadTodoItem[] } }>({
+      method: 'openhuman.threads_todos_get',
+      params: { thread_id: threadId },
+    });
+    const data = unwrapEnvelope(response);
+    return data?.todos ?? [];
+  },
+
+  /**
+   * The thread's current goal (or `null`), for thread open / reconnect (the
+   * `thread_goal_updated` / `thread_goal_cleared` socket events cover every
+   * update after that). Wire method `openhuman.threads_goal_get`.
+   */
+  getGoal: async (threadId: string): Promise<ThreadGoal | null> => {
+    const response = await callCoreRpc<{ data?: { goal?: ThreadGoal | null } }>({
+      method: 'openhuman.threads_goal_get',
+      params: { thread_id: threadId },
+    });
+    const data = unwrapEnvelope(response);
+    return data?.goal ?? null;
+  },
+
   /** One specific past turn of a thread, by its producing request id (Phase 4). */
   getTurnStateForRequest: async (
     threadId: string,
@@ -229,6 +268,19 @@ export const threadApi = {
     const response = await callCoreRpc<Envelope<Thread>>({
       method: 'openhuman.threads_update_labels',
       params: { thread_id: threadId, labels },
+    });
+    return unwrapEnvelope(response);
+  },
+
+  /**
+   * Bind (absolute path) or clear (`''`) the working folder of a thread that
+   * has no messages yet. The core validates the folder and refuses once the
+   * conversation has started.
+   */
+  updateWorkingDir: async (threadId: string, actionDir: string): Promise<Thread> => {
+    const response = await callCoreRpc<Envelope<Thread>>({
+      method: 'openhuman.threads_update_working_dir',
+      params: { thread_id: threadId, action_dir: actionDir },
     });
     return unwrapEnvelope(response);
   },

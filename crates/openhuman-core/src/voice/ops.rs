@@ -1,6 +1,6 @@
 //! Voice domain business logic — hosted STT and local piper TTS.
 //!
-//! Each public function follows the `RpcOutcome<T>` pattern used by other
+//! Each public function follows the `Outcome<T>` pattern used by other
 //! domain modules (billing, health, etc.).
 
 use chrono::Utc;
@@ -8,8 +8,8 @@ use log::{debug, warn};
 use std::time::Instant;
 
 use crate::config::Config;
+use crate::core::Outcome;
 use crate::inference::host_runtime as local_ai;
-use crate::rpc::RpcOutcome;
 use tinyinference_local::models as model_ids;
 
 use super::factory::{create_stt_provider, effective_stt_provider};
@@ -21,7 +21,7 @@ const LOG_PREFIX: &str = "[voice]";
 
 /// Check availability of the STT engine and the TTS binary/model without
 /// executing them.
-pub async fn voice_status(config: &Config) -> Result<RpcOutcome<VoiceStatus>, String> {
+pub async fn voice_status(config: &Config) -> Result<Outcome<VoiceStatus>, String> {
     debug!("{LOG_PREFIX} checking voice status");
 
     let runtime = crate::inference::local_runtime_config(config);
@@ -81,7 +81,7 @@ pub async fn voice_status(config: &Config) -> Result<RpcOutcome<VoiceStatus>, St
         tts_provider,
     };
 
-    Ok(RpcOutcome::single_log(status, "voice status checked"))
+    Ok(Outcome::single_log(status, "voice status checked"))
 }
 
 /// Transcribe audio from a file path through the configured STT engine.
@@ -93,7 +93,7 @@ pub async fn voice_transcribe(
     audio_path: &str,
     context: Option<&str>,
     skip_cleanup: bool,
-) -> Result<RpcOutcome<VoiceSpeechResult>, String> {
+) -> Result<Outcome<VoiceSpeechResult>, String> {
     let started = Instant::now();
     debug!("{LOG_PREFIX} transcribing audio_path={audio_path}");
 
@@ -130,7 +130,7 @@ pub async fn voice_transcribe(
         started.elapsed().as_millis()
     );
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         VoiceSpeechResult {
             text,
             raw_text,
@@ -150,7 +150,7 @@ pub async fn voice_transcribe_bytes(
     extension: Option<String>,
     context: Option<&str>,
     skip_cleanup: bool,
-) -> Result<RpcOutcome<VoiceSpeechResult>, String> {
+) -> Result<Outcome<VoiceSpeechResult>, String> {
     let started = Instant::now();
     let ext = normalize_extension(extension)?;
     debug!(
@@ -222,7 +222,7 @@ pub async fn voice_transcribe_bytes(
     };
     if hallucinated {
         debug!("{LOG_PREFIX} transcribe_bytes: hallucination detected, returning empty result");
-        return Ok(RpcOutcome::single_log(
+        return Ok(Outcome::single_log(
             VoiceSpeechResult {
                 text: String::new(),
                 raw_text,
@@ -245,7 +245,7 @@ pub async fn voice_transcribe_bytes(
         started.elapsed().as_millis()
     );
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         VoiceSpeechResult {
             text,
             raw_text,
@@ -260,7 +260,7 @@ pub async fn voice_tts(
     config: &Config,
     text: &str,
     output_path: Option<&str>,
-) -> Result<RpcOutcome<VoiceTtsResult>, String> {
+) -> Result<Outcome<VoiceTtsResult>, String> {
     debug!(
         "{LOG_PREFIX} tts text_length={} output_path={:?}",
         text.len(),
@@ -274,7 +274,7 @@ pub async fn voice_tts(
 
     debug!("{LOG_PREFIX} tts completed, output={}", output.output_path);
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         VoiceTtsResult::from(output),
         "voice tts completed",
     ))

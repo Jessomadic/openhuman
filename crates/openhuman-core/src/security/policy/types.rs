@@ -71,31 +71,10 @@ pub enum CommandRiskLevel {
     High,
 }
 
-/// Coarse permission bucket the harness approval gate keys on.
-///
-/// Classification is **fail-closed**: a command that is not provably read-only
-/// (and not a recognized network/destructive command) is treated as at least
-/// [`CommandClass::Write`]. Across multiple shell segments the **highest** class
-/// wins (so `ls | curl …` is `Network`). Variants are ordered low→high so
-/// [`Ord`] / [`Iterator::max`] compose them directly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum CommandClass {
-    /// Provably read-only / observational (curated safe-read allowlist).
-    Read,
-    /// State-changing but not inherently catastrophic — the fail-closed default
-    /// for anything not recognized as read/network/destructive.
-    Write,
-    /// Reaches the network (curl/wget/ssh/scp/…). Always prompts, every tier.
-    Network,
-    /// Installs an OS / language package (system package manager, or a *global*
-    /// npm/pnpm/yarn/cargo/pip install). Always-ask in every acting tier,
-    /// including Full — mirrors the dedicated `install_tool` gate so shell
-    /// installs can't slip past it. Project-local installs are ordinary `Write`.
-    Install,
-    /// Catastrophic / irreversible / privilege-escalating / system-control.
-    /// Always prompts, even in Full.
-    Destructive,
-}
+/// Coarse permission bucket the harness approval gate keys on. Defined with the
+/// classifier in `tinybox_core::shell::classify`; re-exported here so host
+/// callers keep their path.
+pub use tinybox_core::shell::classify::CommandClass;
 
 /// What the harness should do with an acting tool call of a given
 /// [`CommandClass`] under the session's [`AutonomyLevel`]. Computed by
@@ -186,7 +165,6 @@ pub(super) const WORKSPACE_INTERNAL_DIRS: &[&str] = &[
     "cron",
     "devices",
     "mcp_clients",
-    "subconscious",
     "vault",
     "task_sources",
     // The whatsapp_data store was removed along with the scanner that wrote it,
@@ -194,6 +172,10 @@ pub(super) const WORKSPACE_INTERNAL_DIRS: &[&str] = &[
     // (chat and message history) from an older version. Keep the directory on
     // the internal denylist so agents with workspace access cannot read it.
     "whatsapp_data",
+    // The retired background-reasoning engine kept its SQLite state under
+    // `subconscious/`. The engine is gone, but an upgraded profile can still
+    // hold that database (memory-derived reflections). Keep it denied.
+    "subconscious",
     // The redirect_links domain was removed (#5051), but an upgraded profile can
     // still hold a legacy `redirect_links/links.db` (stored URL history) written
     // by an older version. Keep the directory on the internal denylist so agents
@@ -208,6 +190,32 @@ pub(super) const WORKSPACE_INTERNAL_DIRS: &[&str] = &[
     "tinyplace",
 ];
 
+/// The artifact store under `workspace_dir`. Its per-artifact directories are
+/// internal state (see `is_workspace_internal_path`); only
+/// [`ARTIFACT_TOOL_RESULTS_DIR`] inside it stays agent-readable.
+pub(super) const ARTIFACTS_DIR: &str = "artifacts";
+/// The account config file, stored beside `workspace_dir` (see
+/// `is_workspace_internal_path`).
+pub(super) const ACCOUNT_CONFIG_FILE: &str = "config.toml";
+/// Where oversized tool outputs are persisted for the agent to read back.
+pub(super) const ARTIFACT_TOOL_RESULTS_DIR: &str = "tool-results";
+
+/// Where oversized tool outputs are persisted for the agent to read back:
+/// `<workspace_dir>/artifacts/tool-results`.
+///
+/// Inside the core's own state, not the agent's working directory. The action
+/// directory is often a project the agent is editing, and a tool output saved
+/// there becomes a stray file in that project (picked up by `git add -A`, shown
+/// in the diff). This is the one subdirectory of the internal `artifacts/` store
+/// agent file tools may read (`is_workspace_internal_path`), and `from_config`
+/// grants it as a read-only root so the absolute pointer the store hands out
+/// stays readable when `workspace_only` refuses other absolute paths.
+pub fn tool_result_artifacts_dir(workspace_dir: &std::path::Path) -> PathBuf {
+    workspace_dir
+        .join(ARTIFACTS_DIR)
+        .join(ARTIFACT_TOOL_RESULTS_DIR)
+}
+
 /// Files directly under `workspace_dir` that hold secrets or persona config
 /// and must not be writable by agent tools.
 pub(super) const WORKSPACE_INTERNAL_FILES: &[&str] = &[
@@ -216,6 +224,8 @@ pub(super) const WORKSPACE_INTERNAL_FILES: &[&str] = &[
     ".env",
     "SOUL.md",
     "IDENTITY.md",
+    // No longer seeded or read (#5701), but an upgraded workspace can still
+    // hold one; keep it out of the agent-writable surface.
     "HEARTBEAT.md",
     "PROFILE.md",
 ];
@@ -281,8 +291,7 @@ pub struct SecurityPolicy {
     pub auto_approve: Vec<String>,
     /// When true, the approval gate auto-approves ALL tool calls without
     /// prompting — a blanket bypass, not just the `auto_approve` allowlist
-    /// above. `TrustedAutomationSource::SubconsciousTainted` and
-    /// `AgentTurnOrigin::Unknown` origins are still denied by the gate
+    /// above. `AgentTurnOrigin::Unknown` origins are still denied by the gate
     /// regardless of this flag. A remote-origin triage dispatch is *not* in
     /// that protected set: with this flag on it is allowed without parking and
     /// without a `pending_approvals` audit row (openhuman#5634, accepted).

@@ -10,9 +10,9 @@ use crate::agent::orchestration::{
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
-use tinyagents_graph::orchestration::{OrchestrationTaskRecord, OrchestrationTaskStatus};
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::tool::{ToolDispatch, ToolExecutionContext};
+use tinyagents_tasks::{OrchestrationTaskRecord, OrchestrationTaskStatus};
 use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext};
 
 pub struct ListSubagentsTool;
@@ -163,8 +163,15 @@ fn overlay_task_store_status(
         parent_session,
     ) {
         Ok(record) => record,
-        Err(running_subagents::WaitError::Unknown) => return,
-        Err(running_subagents::WaitError::NotOwned) => {
+        Err(tinyagents_orchestration::subagent::WaitError::Unknown) => return,
+        Err(tinyagents_orchestration::subagent::WaitError::RegistryPoisoned) => {
+            log::warn!(
+                "[subagent_reuse] task store overlay skipped task_id={} reason=registry_poisoned",
+                task_id
+            );
+            return;
+        }
+        Err(tinyagents_orchestration::subagent::WaitError::NotOwned) => {
             log::warn!(
                 "[subagent_reuse] task store overlay rejected task_id={} subagent_session_id={} reason=not_owned",
                 task_id,

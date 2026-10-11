@@ -19,7 +19,7 @@ fn openai_entry(id: &str, slug: &str) -> CloudProviderCreds {
 
 #[test]
 fn build_remote_provider_managed_uses_backend_id_and_default_model() {
-    // Default config → subconscious workload resolves to the managed backend →
+    // Default config → chat workload resolves to the managed backend →
     // the managed default model.
     let config = test_config();
     let resolved = build_remote_provider(&config).expect("remote provider should build");
@@ -45,12 +45,12 @@ fn build_remote_provider_managed_follows_the_pinned_default_model() {
 }
 
 #[test]
-fn build_remote_provider_falls_back_to_managed_when_subconscious_local() {
+fn build_remote_provider_falls_back_to_managed_when_chat_local() {
     // #1257: triage must never run on a local provider. A local
-    // `subconscious_provider` falls back to the managed backend so a trigger
+    // `chat_provider` falls back to the managed backend so a trigger
     // never errors because Ollama is down.
     let mut config = test_config();
-    config.subconscious_provider = Some("ollama:llama3.2:3b".to_string());
+    config.chat_provider = Some("ollama:llama3.2:3b".to_string());
     let resolved = build_remote_provider(&config).expect("remote provider should build");
     assert_eq!(resolved.provider_name, INFERENCE_BACKEND_ID);
     assert_eq!(resolved.model, crate::config::MODEL_MANAGED_DEFAULT);
@@ -68,7 +68,7 @@ fn build_remote_provider_forces_managed_for_local_cli_routes() {
         "claude-code:opus",
     ] {
         let mut config = test_config();
-        config.subconscious_provider = Some(route.to_string());
+        config.chat_provider = Some(route.to_string());
         let resolved = build_remote_provider(&config)
             .unwrap_or_else(|e| panic!("route {route} should build, got {e}"));
         assert_eq!(
@@ -95,11 +95,11 @@ fn is_local_cli_route_classifies_cli_delegates_only() {
 }
 
 #[test]
-fn build_remote_provider_routes_through_byok_subconscious() {
-    // A concrete BYOK cloud subconscious provider governs triage classification.
+fn build_remote_provider_routes_through_byok_chat() {
+    // A concrete BYOK cloud chat provider governs triage classification.
     let mut config = test_config();
     config.cloud_providers.push(openai_entry("p_oai", "openai"));
-    config.subconscious_provider = Some("openai:gpt-4o-mini".to_string());
+    config.chat_provider = Some("openai:gpt-4o-mini".to_string());
     let resolved = build_remote_provider(&config).expect("remote provider should build");
     assert_eq!(resolved.provider_name, "openai");
     assert_eq!(resolved.model, "gpt-4o-mini");
@@ -108,11 +108,11 @@ fn build_remote_provider_routes_through_byok_subconscious() {
 
 #[test]
 fn build_remote_provider_falls_back_when_byok_build_fails() {
-    // A non-local, non-managed subconscious provider whose slug has no matching
+    // A non-local, non-managed chat provider whose slug has no matching
     // `cloud_providers` entry fails to build — triage falls back to the managed
     // backend rather than erroring the turn.
     let mut config = test_config();
-    config.subconscious_provider = Some("groq:llama3".to_string());
+    config.chat_provider = Some("groq:llama3".to_string());
     let resolved = build_remote_provider(&config).expect("remote provider should build");
     assert_eq!(resolved.provider_name, INFERENCE_BACKEND_ID);
     assert_eq!(resolved.model, crate::config::MODEL_MANAGED_DEFAULT);

@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use crate::core::bus::BUS;
 use crate::core::events::DomainEvent;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 const RESTART_DELAY_ENV: &str = "OPENHUMAN_RESTART_DELAY_MS";
 const DEFAULT_RESTART_DELAY_MS: u64 = 350;
@@ -69,7 +69,7 @@ pub fn apply_startup_restart_delay_from_env() {
 pub async fn service_restart(
     source: Option<String>,
     reason: Option<String>,
-) -> Result<RpcOutcome<RestartStatus>, String> {
+) -> Result<Outcome<RestartStatus>, String> {
     let source = source
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -90,7 +90,7 @@ pub async fn service_restart(
         reason: reason.clone(),
     });
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         RestartStatus {
             accepted: true,
             source,

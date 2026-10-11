@@ -370,40 +370,6 @@ fn resolve_model_for_hint_handles_unknown_hint_passthrough() {
     assert_eq!(result, "hint:unknown_tier");
 }
 
-#[test]
-fn resolve_model_for_hint_subconscious_managed_is_the_default_model() {
-    // Managed (no BYOK subconscious_provider) resolves to the default model so
-    // the RPC `inference.resolve_model` reports the model the tick actually runs.
-    let config = Config::default();
-    assert_eq!(
-        resolve_model_for_hint("hint:subconscious", &config),
-        MODEL_MANAGED_DEFAULT
-    );
-
-    // An explicit managed sentinel still resolves to the model, not the raw hint.
-    let mut config = Config::default();
-    config.subconscious_provider = Some("openhuman".to_string());
-    assert_eq!(
-        resolve_model_for_hint("hint:subconscious", &config),
-        MODEL_MANAGED_DEFAULT
-    );
-}
-
-#[test]
-fn resolve_model_for_hint_subconscious_reads_subconscious_provider() {
-    // The `subconscious` hint must read `subconscious_provider` — NOT the
-    // chat-tier provider it shares a model with — so a BYOK subconscious route
-    // surfaces its own model id.
-    let mut config = Config::default();
-    config.subconscious_provider = Some("openai:gpt-4o-mini".to_string());
-    // A different chat_provider must not leak into the subconscious resolution.
-    config.chat_provider = Some("anthropic:claude-sonnet-4-20250514".to_string());
-    assert_eq!(
-        resolve_model_for_hint("hint:subconscious", &config),
-        "gpt-4o-mini"
-    );
-}
-
 // ── role_for_model_tier ─────────────────────────────────────────────────
 
 #[test]
@@ -426,8 +392,6 @@ fn role_for_model_tier_normalises_hint_aliases() {
     assert_eq!(role_for_model_tier("hint:reasoning"), "reasoning");
     assert_eq!(role_for_model_tier("hint:chat"), "chat");
     assert_eq!(role_for_model_tier("hint:coding"), "coding");
-    // Subconscious rides the chat tier's model.
-    assert_eq!(role_for_model_tier("hint:subconscious"), "chat");
 }
 
 #[test]

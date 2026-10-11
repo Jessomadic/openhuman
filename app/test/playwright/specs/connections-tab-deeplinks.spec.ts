@@ -33,9 +33,10 @@ import {
  * That is an environment constraint of this lane, recorded in W3-ui-bugs.md §3.
  *
  * Tab ids come from `pages/Skills.tsx:517-543`: canonical `welcome | composio |
- * channels | mcp | skills | llm | voice | embeddings | search | usage |
- * composio-key | wallet`, plus the legacy aliases `apps → composio`,
- * `messaging → channels`, `tools → mcp`, `explorer → skills`.
+ * channels | mcp | skills | llm | voice | voice-agents | embeddings | search |
+ * usage | composio-key | wallet`, plus the legacy aliases `apps → composio`,
+ * `messaging → channels`, `tools → mcp`, `explorer → skills`, and
+ * `voice-agent | live-voice → voice-agents`.
  */
 
 /**
@@ -57,7 +58,7 @@ async function openRoute(
   // from the same deterministic guest-to-user transition used by the alias
   // coverage instead.
   await bootRuntimeReadyGuestPage(page);
-  await signInViaBypassUser(page, userId);
+  await signInViaBypassUser(page, userId, { waitForInitialThread: true });
   await page.evaluate(
     ({ target }) => {
       try {

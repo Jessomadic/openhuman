@@ -3,23 +3,30 @@ use super::channel_has_approval_surface;
 // Sub-issue 2 of #3098: this gate is what decides whether the dispatch
 // loop sets an `ApprovalChatContext` (→ gate fires for `Prompt`-class
 // tools) versus the legacy bypass (→ tool calls silently allowed).
-// Pin the matrix so silently broadening to a new channel can't
-// accidentally TTL-deny every parked tool call there.
+// Pin the matrix: every chat channel is served by
+// `ChannelApprovalSurfaceSubscriber`; channels with no conversational reply
+// path must not be scoped, or every parked call would TTL-deny.
 
 #[test]
-fn telegram_has_approval_surface() {
-    assert!(channel_has_approval_surface("telegram"));
+fn chat_channels_have_an_approval_surface() {
+    for channel in [
+        "telegram",
+        "discord",
+        "slack",
+        "imessage",
+        "mattermost",
+        "signal",
+        "whatsapp",
+        "irc",
+    ] {
+        assert!(channel_has_approval_surface(channel), "{channel}");
+    }
 }
 
 #[test]
-fn other_channels_do_not_yet_have_an_approval_surface() {
-    for channel in ["discord", "slack", "imessage", "mattermost", "web", "irc"] {
-        assert!(
-            !channel_has_approval_surface(channel),
-            "channel {channel:?} is not (yet) wired to a per-channel approval surface; \
-             the dispatch loop must not scope an ApprovalChatContext for it or every \
-             Prompt-class tool call will park with nobody to answer and TTL-deny"
-        );
+fn channels_without_a_reply_path_do_not_have_an_approval_surface() {
+    for channel in ["email", "cli", "webhook", "web"] {
+        assert!(!channel_has_approval_surface(channel), "{channel}");
     }
 }
 

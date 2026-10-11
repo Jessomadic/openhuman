@@ -165,7 +165,7 @@ async fn flows_run_on_trigger_only_graph_surfaces_no_actionable_nodes_note() {
     );
     assert!(
         outcome.logs.iter().any(|l| l.contains("no actionable")),
-        "the note should also surface via the RpcOutcome logs, got: {:?}",
+        "the note should also surface via the Outcome logs, got: {:?}",
         outcome.logs
     );
 

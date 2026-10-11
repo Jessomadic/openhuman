@@ -5,9 +5,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
 use crate::platform::about_app::CapabilityCategory;
-use crate::rpc::RpcOutcome;
 
 #[derive(Debug, Deserialize, Default)]
 struct AboutAppListParams {
@@ -71,7 +71,7 @@ pub fn about_app_schemas(function: &str) -> ControllerSchema {
             description: "Look up one user-facing capability by its stable id.",
             inputs: vec![required_string(
                 "id",
-                "Capability id, such as local_ai.download_model.",
+                "Capability id, such as local_ai.configure_provider.",
             )],
             outputs: vec![capability_output(
                 "capability",
@@ -139,7 +139,7 @@ fn deserialize_params<T: DeserializeOwned>(params: Map<String, Value>) -> Result
     serde_json::from_value(Value::Object(params)).map_err(|e| format!("invalid params: {e}"))
 }
 
-fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     outcome.into_cli_compatible_json()
 }
 

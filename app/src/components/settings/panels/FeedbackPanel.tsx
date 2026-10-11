@@ -1,4 +1,5 @@
 import debugFactory from 'debug';
+import { MessageSquare, Plus } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useUser } from '../../../hooks/useUser';
@@ -14,7 +15,16 @@ import type {
 import FeedbackFilterSelect from '../../feedback/FeedbackFilterSelect';
 import FeedbackItemRow from '../../feedback/FeedbackItemRow';
 import FeedbackSubmitForm from '../../feedback/FeedbackSubmitForm';
-import Button from '../../ui/Button';
+import {
+  Button,
+  Card,
+  DialogContent,
+  DialogDescription,
+  DialogRoot,
+  DialogTitle,
+  ToggleGroupItem,
+  ToggleGroupRoot,
+} from '../../ui';
 import SettingsPanel from '../layout/SettingsPanel';
 
 const log = debugFactory('feedback:panel');
@@ -59,6 +69,7 @@ const FeedbackPanel = () => {
   const [sort, setSort] = useState<FeedbackSort>('hot');
   const [typeFilter, setTypeFilter] = useState<FeedbackType | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<FeedbackStatus | 'all'>('all');
+  const [composeOpen, setComposeOpen] = useState(false);
 
   const loadRequestIdRef = useRef(0);
   const pageRef = useRef(1);
@@ -137,6 +148,8 @@ const FeedbackPanel = () => {
     if (accepted && acceptedItemMatchesFilters(accepted, typeFilter, statusFilter)) {
       reload();
     }
+    // The post is on the board now; close the composer so the user sees it.
+    setComposeOpen(false);
   };
 
   const hasMore = items.length < total;
@@ -160,54 +173,63 @@ const FeedbackPanel = () => {
     // other one instead of approximating them. The title comes from the
     // `feedback` registry entry rather than being passed here, which is what
     // keeps the sidebar row and the page heading from drifting apart.
-    <SettingsPanel description={t('feedback.header.desc')} testId="feedback-page">
-      <div className="animate-fade-up space-y-5">
-        <FeedbackSubmitForm onAccepted={handleAccepted} />
+    <SettingsPanel
+      description={t('feedback.header.desc')}
+      testId="feedback-page"
+      action={
+        <Button
+          size="sm"
+          leadingIcon={<Plus className="h-3.5 w-3.5" aria-hidden />}
+          analyticsId="feedback-compose"
+          onClick={() => setComposeOpen(true)}
+          data-testid="feedback-compose">
+          {t('feedback.submit.heading')}
+        </Button>
+      }>
+      {/* Posting is a secondary action next to reading the board, so the form
+          lives in a dialog behind the header button instead of a full-width
+          card that pushed the board below the fold. */}
+      <DialogRoot open={composeOpen} onOpenChange={setComposeOpen}>
+        <DialogContent className="max-w-xl p-6">
+          <DialogTitle className="font-title text-base font-semibold text-content">
+            {t('feedback.submit.heading')}
+          </DialogTitle>
+          <DialogDescription className="mt-0.5 mb-4 text-xs text-content-muted">
+            {t('feedback.submit.subheading')}
+          </DialogDescription>
+          <FeedbackSubmitForm bare onAccepted={handleAccepted} />
+        </DialogContent>
+      </DialogRoot>
 
-        <section className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-            <h2 className="flex items-center gap-2 font-title text-base font-semibold text-content">
-              {t('feedback.board')}
-              {total > 0 && (
-                <span className="rounded-full bg-content-muted/10 px-2 py-0.5 text-xs font-medium tabular-nums text-content-muted">
-                  {total}
-                </span>
-              )}
-            </h2>
-
-            {/* A sort control, not a tab set: `aria-pressed` toggles are the
-                right semantics here, and `ChipTabs as="tab"` would emit a
-                `role="tablist"` with no tabpanel behind it. Each option is a
-                `<Button>` so it picks up the shared focus ring — the raw
-                `<button>`s this replaced had no focus treatment at all. */}
-            <div className="inline-flex gap-0.5 rounded-xl border border-line bg-surface-muted p-0.5 dark:border-line-strong">
-              {SORTS.map(option => (
-                <Button
-                  key={option}
-                  type="button"
-                  variant={sort === option ? 'primary' : 'tertiary'}
-                  size="xs"
-                  analyticsId="feedback-sort"
-                  onClick={() => setSort(option)}
-                  aria-pressed={sort === option}
-                  className="h-auto rounded-lg px-3 py-1 text-xs">
-                  {t(SORT_LABEL_KEYS[option])}
-                </Button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2 px-1">
-            <FeedbackFilterSelect
-              ariaLabel={t('feedback.filter.allTypes')}
+      <section className="space-y-3">
+        {/* Toolbar: type chips and status filter on the left, sort on the right. */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <ToggleGroupRoot
+              type="single"
+              variant="secondary"
+              size="xs"
               value={typeFilter}
-              onChange={v => setTypeFilter(v as FeedbackType | 'all')}
-              options={[
-                { value: 'all', label: t('feedback.filter.allTypes') },
-                { value: 'feature', label: t('feedback.type.feature') },
-                { value: 'bug', label: t('feedback.type.bug') },
-              ]}
-            />
+              onValueChange={next => {
+                if (next) setTypeFilter(next as FeedbackType | 'all');
+              }}
+              aria-label={t('feedback.filter.allTypes')}
+              className="overflow-hidden rounded-lg border border-line gap-0 *:rounded-none *:border-0">
+              {(
+                [
+                  ['all', t('feedback.filter.allTypes')],
+                  ['feature', t('feedback.type.feature')],
+                  ['bug', t('feedback.type.bug')],
+                ] as const
+              ).map(([value, label]) => (
+                <ToggleGroupItem
+                  key={value}
+                  value={value}
+                  className="h-auto px-2.5 py-1 text-xs font-medium data-[state=on]:bg-primary-500 data-[state=on]:text-content-inverted">
+                  {label}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroupRoot>
             <FeedbackFilterSelect
               ariaLabel={t('feedback.filter.allStatuses')}
               value={statusFilter}
@@ -221,65 +243,91 @@ const FeedbackPanel = () => {
             />
           </div>
 
-          {loadError && (
-            <p className="rounded-xl bg-coral-500/10 px-4 py-3 text-center text-xs text-coral-600 dark:text-coral-400">
-              {loadError}
-            </p>
-          )}
-
-          {isLoading && items.length === 0 ? (
-            <div className="space-y-2.5">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="h-28 animate-pulse rounded-2xl border border-line bg-surface-subtle"
-                />
-              ))}
-            </div>
-          ) : items.length > 0 ? (
-            <div className="space-y-2.5">
-              {items.map(item => (
-                <FeedbackItemRow
-                  key={item.id}
-                  item={item}
-                  isAdmin={isAdmin}
-                  onChange={handleItemChange}
-                  onCommentAdded={handleCommentAdded}
-                />
-              ))}
-            </div>
-          ) : loadError ? null : (
-            <div className="rounded-2xl border border-dashed border-line py-12 text-center">
-              <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-surface-subtle">
-                <svg
-                  className="h-5 w-5 text-content-faint"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.8}
-                    d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"
-                  />
-                </svg>
-              </div>
-              <p className="text-sm text-content-muted">{t('feedback.empty')}</p>
-            </div>
-          )}
-
-          {hasMore && (
-            <div className="flex justify-center pt-1">
+          {/* A sort control, not a tab set: `aria-pressed` toggles are the
+              right semantics here, and `ChipTabs as="tab"` would emit a
+              `role="tablist"` with no tabpanel behind it. */}
+          <div className="inline-flex overflow-hidden rounded-lg border border-line">
+            {SORTS.map(option => (
               <Button
-                variant="secondary"
-                onClick={() => void load(pageRef.current + 1, true)}
-                disabled={isLoading}>
-                {isLoading ? '...' : t('feedback.loadMore')}
+                key={option}
+                type="button"
+                variant="tertiary"
+                size="xs"
+                analyticsId="feedback-sort"
+                onClick={() => setSort(option)}
+                aria-pressed={sort === option}
+                className={`h-auto rounded-none px-2.5 py-1 text-xs ${
+                  sort === option ? 'bg-primary-500 text-content-inverted hover:bg-primary-500' : ''
+                }`}>
+                {t(SORT_LABEL_KEYS[option])}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        {loadError && (
+          <p className="rounded-xl bg-coral-500/10 px-4 py-3 text-center text-xs text-coral-600 dark:text-coral-400">
+            {loadError}
+          </p>
+        )}
+
+        <Card
+          title={t('feedback.board')}
+          headerRight={
+            total > 0 ? (
+              <span className="text-xs tabular-nums text-content-muted">{total}</span>
+            ) : undefined
+          }
+          className="pb-1"
+          data-testid="feedback-board">
+          {isLoading && items.length === 0 ? (
+            Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="flex gap-3 px-4 py-4">
+                <div className="h-12 w-10 animate-pulse rounded-lg bg-surface-subtle" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3 w-24 animate-pulse rounded bg-surface-subtle" />
+                  <div className="h-4 w-2/3 animate-pulse rounded bg-surface-subtle" />
+                  <div className="h-3 w-1/2 animate-pulse rounded bg-surface-subtle" />
+                </div>
+              </div>
+            ))
+          ) : items.length > 0 ? (
+            items.map(item => (
+              <FeedbackItemRow
+                key={item.id}
+                item={item}
+                isAdmin={isAdmin}
+                onChange={handleItemChange}
+                onCommentAdded={handleCommentAdded}
+              />
+            ))
+          ) : loadError ? (
+            <div className="px-4 py-8" />
+          ) : (
+            <div className="flex flex-col items-center gap-3 px-4 py-12 text-center">
+              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-surface-subtle">
+                <MessageSquare className="h-5 w-5 text-content-faint" aria-hidden />
+              </span>
+              <p className="text-sm text-content-muted">{t('feedback.empty')}</p>
+              <Button variant="secondary" size="sm" onClick={() => setComposeOpen(true)}>
+                {t('feedback.submit.heading')}
               </Button>
             </div>
           )}
-        </section>
-      </div>
+        </Card>
+
+        {hasMore && (
+          <div className="flex justify-center pt-1">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void load(pageRef.current + 1, true)}
+              disabled={isLoading}>
+              {isLoading ? '...' : t('feedback.loadMore')}
+            </Button>
+          </div>
+        )}
+      </section>
     </SettingsPanel>
   );
 };

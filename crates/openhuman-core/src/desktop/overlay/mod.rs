@@ -11,13 +11,13 @@
 //!   1. **STT / dictation** — driven by the existing `dictation:toggle`
 //!      and `dictation:transcription` events (see `voice::dictation_listener`).
 //!   2. **Attention** — a short, user-visible message the core wants to
-//!      surface without stealing focus. Any core-side caller (subconscious
-//!      loop, heartbeat, and other services) can publish an
+//!      surface without stealing focus. Any core-side caller (cron jobs and
+//!      other background services) can publish an
 //!      `OverlayAttentionEvent` via [`publish_attention`] and it will be
 //!      broadcast to the overlay window as `overlay:attention`.
 //!
 //! Keep this module light: it is export-focused and owns one broadcast
-//! bus. The Socket.IO bridge lives in `crates/openhuman-core/src/core/socketio.rs`.
+//! bus. The Socket.IO bridge lives in `crates/openhuman-rpc/src/server/socketio.rs`.
 
 pub mod bus;
 pub mod types;

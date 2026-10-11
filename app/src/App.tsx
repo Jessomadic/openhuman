@@ -19,18 +19,22 @@ import CommandProvider from './components/commands/CommandProvider';
 import ServiceBlockingGate from './components/daemon/ServiceBlockingGate';
 import DictationHotkeyManager from './components/DictationHotkeyManager';
 import ErrorFallbackScreen from './components/ErrorFallbackScreen';
-import HarnessInitOverlay from './components/InitProgressScreen/HarnessInitOverlay';
 import KeyringConsentOverlay from './components/keyring/KeyringConsentOverlay';
 import AppSidebar from './components/layout/shell/AppSidebar';
 import RootShellLayout from './components/layout/shell/RootShellLayout';
 import { SidebarSlotProvider } from './components/layout/shell/SidebarSlot';
-import LocalAIDownloadSnackbar from './components/LocalAIDownloadSnackbar';
+import WindowDragBar from './components/layout/shell/WindowDragBar';
+import WindowsWindowControls, {
+  isWindowsDesktop,
+} from './components/layout/shell/WindowsWindowControls';
 import NoticeCenter from './components/notices/NoticeCenter';
 import OpenhumanLinkModal from './components/OpenhumanLinkModal';
 import PersistRehydrationScreen from './components/PersistRehydrationScreen';
 import PttHotkeyManager from './components/PttHotkeyManager';
 import SecurityBanner from './components/SecurityBanner';
+import { Toaster } from './components/ui/Toast';
 import AppWalkthrough from './components/walkthrough/AppWalkthrough';
+import { useDevSkipOnboarding } from './hooks/useDevSkipOnboarding';
 import { useNotchBootSync } from './hooks/useNotchBootSync';
 import { I18nProvider } from './lib/i18n/I18nContext';
 import {
@@ -48,8 +52,9 @@ import {
   stopInternetStatusListener,
 } from './services/internetStatusListener';
 import { persistor, store } from './store';
-import { DEV_FORCE_ONBOARDING } from './utils/config';
+import { DEV_FORCE_ONBOARDING, DEV_SKIP_ONBOARDING } from './utils/config';
 import { installExternalLinkGuard } from './utils/externalLinkGuard';
+import { installFileDropGuard } from './utils/fileDropGuard';
 
 startNativeNotificationsService();
 // Connectivity status (#1527): wire navigator.onLine + start core sidecar
@@ -76,6 +81,11 @@ function App() {
   // covers every other anchor the app renders. Installed here, above the
   // router, so it is live for the whole session.
   useEffect(() => installExternalLinkGuard(), []);
+
+  // Same one-way trap for a dropped file: unclaimed, the webview opens it as
+  // the top-level document. Only an open chat thread takes files; everywhere
+  // else the drop is refused.
+  useEffect(() => installFileDropGuard(), []);
 
   // On mobile (iOS or Android) the SocketProvider would try to connect to the
   // local core HTTP socket, which does not exist on device (the core runs on
@@ -109,48 +119,51 @@ function App() {
    * @end-source:provider-chain
    */
   return (
-    <Sentry.ErrorBoundary
-      fallback={({ error, componentStack, resetError, eventId }) => (
-        <ErrorFallbackScreen
-          error={error}
-          componentStack={componentStack}
-          eventId={eventId}
-          onReset={resetError}
-        />
-      )}>
-      <Provider store={store}>
-        <PersistGate loading={<PersistRehydrationScreen />} persistor={persistor}>
-          <ThemeProvider>
-            <I18nProvider>
-              <BootCheckGate>
-                <CoreStateProvider>
-                  {socketWrapped(
-                    <ChatRuntimeProvider>
-                      <Router>
-                        <CommandProvider>
-                          <ServiceBlockingGate>
-                            <AnalyticsPageTracker />
-                            <AppShell />
-                            <SecurityBanner />
-                            {!onMobile && <DictationHotkeyManager />}
-                            {!onMobile && <PttHotkeyManager />}
-                            {!onMobile && <LocalAIDownloadSnackbar />}
-                            {!onMobile && <AppUpdatePrompt />}
-                            <KeyringConsentOverlay />
-                            <HarnessInitOverlay />
-                            <AnnouncementGate />
-                          </ServiceBlockingGate>
-                        </CommandProvider>
-                      </Router>
-                    </ChatRuntimeProvider>
-                  )}
-                </CoreStateProvider>
-              </BootCheckGate>
-            </I18nProvider>
-          </ThemeProvider>
-        </PersistGate>
-      </Provider>
-    </Sentry.ErrorBoundary>
+    <div className={`relative h-screen overflow-hidden ${isWindowsDesktop() ? 'rounded-xs' : ''}`}>
+      {!onMobile && <WindowDragBar />}
+      <Sentry.ErrorBoundary
+        fallback={({ error, componentStack, resetError, eventId }) => (
+          <ErrorFallbackScreen
+            error={error}
+            componentStack={componentStack}
+            eventId={eventId}
+            onReset={resetError}
+          />
+        )}>
+        <Provider store={store}>
+          <PersistGate loading={<PersistRehydrationScreen />} persistor={persistor}>
+            <ThemeProvider>
+              <I18nProvider>
+                {!onMobile && <WindowsWindowControls />}
+                <Toaster />
+                <BootCheckGate>
+                  <CoreStateProvider>
+                    {socketWrapped(
+                      <ChatRuntimeProvider>
+                        <Router>
+                          <CommandProvider>
+                            <ServiceBlockingGate>
+                              <AnalyticsPageTracker />
+                              <AppShell />
+                              <SecurityBanner />
+                              {!onMobile && <DictationHotkeyManager />}
+                              {!onMobile && <PttHotkeyManager />}
+                              {!onMobile && <AppUpdatePrompt />}
+                              <KeyringConsentOverlay />
+                              <AnnouncementGate />
+                            </ServiceBlockingGate>
+                          </CommandProvider>
+                        </Router>
+                      </ChatRuntimeProvider>
+                    )}
+                  </CoreStateProvider>
+                </BootCheckGate>
+              </I18nProvider>
+            </ThemeProvider>
+          </PersistGate>
+        </Provider>
+      </Sentry.ErrorBoundary>
+    </div>
   );
 }
 
@@ -180,10 +193,18 @@ function AppShell() {
 export function AppShellDesktop() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { snapshot, isBootstrapping } = useCoreState();
+  const { snapshot, isBootstrapping, setOnboardingCompletedFlag } = useCoreState();
   const onOnboardingRoute = location.pathname.startsWith('/onboarding');
   const onboardingPending =
-    !!snapshot.sessionToken && (DEV_FORCE_ONBOARDING || !snapshot.onboardingCompleted);
+    !!snapshot.sessionToken &&
+    (DEV_FORCE_ONBOARDING || (!snapshot.onboardingCompleted && !DEV_SKIP_ONBOARDING));
+
+  useDevSkipOnboarding({
+    isBootstrapping,
+    sessionToken: snapshot.sessionToken,
+    onboardingCompleted: snapshot.onboardingCompleted,
+    setOnboardingCompletedFlag,
+  });
 
   // Onboarding gate: while `onboarding_completed=false`, force any non-
   // onboarding route back to `/onboarding`. Once completed, bounce the
@@ -257,13 +278,9 @@ export function AppShellDesktop() {
           {chromeless ? (
             content
           ) : (
-            // Nothing sets `unframed` today. It existed for live CEF provider
-            // webviews — WebviewHost handed the Rust side a plain rectangle and
-            // CEF composited that child view above the whole HTML layer, so a
-            // rounded card under it showed four square corners punching through
-            // the radius. That surface was removed upstream along with
-            // WebviewHost, so no route needs the escape hatch right now; the
-            // prop stays on the primitive for the next full-bleed surface.
+            // The root surface is full-bleed by default. The floating sidebar
+            // supplies the inset/elevation; another rounded outer card would
+            // expose an unnecessary band of window chrome around the content.
             <RootShellLayout sidebar={<AppSidebar />}>{content}</RootShellLayout>
           )}
         </div>

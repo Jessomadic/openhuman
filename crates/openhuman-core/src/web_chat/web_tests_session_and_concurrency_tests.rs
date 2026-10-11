@@ -99,6 +99,20 @@ fn locale_reply_directive_renders_known_locales() {
     assert!(zh.contains("Simplified Chinese"));
 }
 
+/// Every non-English locale the app offers (`app/src/lib/i18n/types.ts`) gets
+/// a directive; de, ja, ko, pl and tr used to fall through to none.
+#[test]
+fn locale_reply_directive_covers_every_app_locale() {
+    for locale in [
+        "zh-CN", "hi", "es", "ar", "fr", "bn", "pt", "de", "ru", "id", "it", "ja", "ko", "pl", "tr",
+    ] {
+        assert!(
+            locale_reply_directive(locale).is_some(),
+            "no reply directive for app locale {locale}"
+        );
+    }
+}
+
 // ── PTT field additions (Task 1 of global-ptt plan) ─────────────────────────
 
 #[test]
@@ -300,16 +314,11 @@ async fn wedged_turn_hits_wall_clock_backstop_and_emits_turn_timeout_chat_error(
     // Panic-safe teardown of the process-global env override: if any assertion
     // below unwinds, this guard still clears `OPENHUMAN_WEB_TURN_TIMEOUT_SECS` so
     // a 1s backstop can't leak into unrelated tests sharing this process.
-    struct EnvGuard;
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            std::env::remove_var("OPENHUMAN_WEB_TURN_TIMEOUT_SECS");
-        }
-    }
-    let _env_guard = EnvGuard;
-    // Tight 1s backstop so the parked (30s) turn trips it quickly. Scoped to this
-    // serialized test and cleared by `EnvGuard` on drop (even on unwind).
-    std::env::set_var("OPENHUMAN_WEB_TURN_TIMEOUT_SECS", "1");
+    let _env_guard = crate::config::test_env::EnvVarGuard::locked_set_async(
+        "OPENHUMAN_WEB_TURN_TIMEOUT_SECS",
+        "1",
+    )
+    .await;
     let block = make_block();
     set_test_run_chat_task_block(Some(block.clone())).await;
 
@@ -543,4 +552,56 @@ fn classify_genuine_param_400_keeps_model_mismatch_copy_not_glitch() {
     assert_eq!(c.error_type, "provider_request_rejected");
     assert!(!c.retryable, "param mismatch is not retryable");
     assert!(!c.message.contains("cleared it"), "got: {}", c.message);
+}
+
+/// The Stop button must reach a thread's detached background sub-agents. They
+/// run on their own tasks and drop the spawning turn's cancellation, so before
+/// this the parent turn stopped but the child kept working — and its result
+/// later started a fresh delivery turn on the thread. A scoped cancel (one named
+/// request) must leave them alone.
+#[tokio::test]
+async fn unscoped_cancel_stops_the_threads_detached_subagents() {
+    let _serial = FORCED_ERROR_TEST_LOCK.lock().await;
+    let _registry = crate::config::TEST_ENV_LOCK.lock().await;
+    use crate::agent::orchestration::running_subagents;
+
+    let thread_id = "stop-detached-subagent-thread";
+    let workspace = tempfile::tempdir().expect("workspace");
+    let child = tokio::spawn(std::future::pending::<()>());
+    let (_status_tx, status_rx) = running_subagents::status_channel();
+    running_subagents::register(
+        "task-web-stop-1".into(),
+        "researcher".into(),
+        "session-web-stop".into(),
+        None,
+        None,
+        workspace.path().to_path_buf(),
+        Some(thread_id.into()),
+        std::sync::Arc::new(tinyagents_harness::run_queue::RunQueue::new()),
+        child.abort_handle(),
+        status_rx,
+    );
+
+    // A scoped cancel for some other request is not a Stop: the child lives.
+    let scoped = channel_web_cancel("stop-client", thread_id, Some("req-unrelated"))
+        .await
+        .expect("scoped cancel");
+    assert_eq!(scoped.value["cancelled"], serde_json::json!(false));
+    assert_eq!(scoped.value["subagents_cancelled"], serde_json::json!(0));
+    assert!(
+        !child.is_finished(),
+        "scoped cancel must not stop sub-agents"
+    );
+
+    // The Stop button: no turn in flight, but the detached child is stopped.
+    let stop = channel_web_cancel("stop-client", thread_id, None)
+        .await
+        .expect("stop");
+    assert_eq!(stop.value["cancelled"], serde_json::json!(true));
+    assert_eq!(stop.value["request_id"], serde_json::Value::Null);
+    assert_eq!(stop.value["subagents_cancelled"], serde_json::json!(1));
+    let joined = tokio::time::timeout(std::time::Duration::from_secs(2), child)
+        .await
+        .expect("aborted child finishes promptly");
+    assert!(joined.expect_err("child aborted").is_cancelled());
 }

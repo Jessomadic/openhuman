@@ -13,7 +13,8 @@ use crate::tools::agent_policy::{
     TaskProfile, TaskRiskLevel, ToolCapability, ToolPolicyAction, ToolPolicyDecision,
     ToolPolicySession,
 };
-use crate::tools::toolpacks::{append_pack_tools, bind_pack_registry, USE_SKILL};
+use crate::tools::toolpacks::{append_pack_tools, bind_pack_registry};
+use tinyagents_harness::tool::packs::USE_SKILL;
 use tinytools::{PermissionLevel, ToolResult};
 
 struct RoutingFakeTool(&'static str);
@@ -101,13 +102,63 @@ fn non_owner_middleware_at(allowed: PermissionLevel) -> ToolPolicyMiddleware {
     };
 
     ToolPolicyMiddleware::new(
-        Arc::new(crate::agent::tool_policy::AllowAllToolPolicy::default()),
+        Arc::new(crate::agent::tool_policy::AllowAllToolPolicy),
         session,
         vec![tools],
         "sess".to_string(),
         "web_chat".to_string(),
         "orchestrator".to_string(),
     )
+}
+
+#[test]
+fn desktop_approval_bypass_skips_only_require_approval_channel_verdict() {
+    fn middleware(action: ToolPolicyAction) -> ToolPolicyMiddleware {
+        let name = "desktop_goal";
+        let session = ToolPolicySession {
+            profile: TaskProfile {
+                agent_id: "orchestrator".to_owned(),
+                channel: "web_chat".to_owned(),
+                entrypoint: "chat".to_owned(),
+                risk_level: TaskRiskLevel::Low,
+                allowed_permission: PermissionLevel::Dangerous,
+            },
+            capabilities: Vec::new(),
+            allowed_tool_names: Default::default(),
+            blocked_tool_names: Default::default(),
+            hidden_tool_names: Default::default(),
+            decisions: [(
+                name.to_owned(),
+                ToolPolicyDecision {
+                    tool_name: name.to_owned(),
+                    action,
+                    required_permission: Some(PermissionLevel::Write),
+                    allowed_permission: PermissionLevel::Dangerous,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        ToolPolicyMiddleware::new(
+            Arc::new(crate::agent::tool_policy::AllowAllToolPolicy),
+            session,
+            vec![Arc::new(vec![Box::new(RoutingFakeTool(name))])],
+            "sess".to_owned(),
+            "web_chat".to_owned(),
+            "orchestrator".to_owned(),
+        )
+    }
+    let approval_middleware = middleware(ToolPolicyAction::RequireApproval);
+    let request = call("desktop_goal", json!({"app":"TextEdit","goal":"type"}));
+    assert!(approval_middleware
+        .channel_permission_block(&request, false)
+        .is_some());
+    assert!(approval_middleware
+        .channel_permission_block(&request, true)
+        .is_none());
+    assert!(middleware(ToolPolicyAction::Deny)
+        .channel_permission_block(&request, true)
+        .is_some());
 }
 
 fn call(name: &str, args: serde_json::Value) -> TaToolCall {
@@ -189,10 +240,13 @@ async fn a_use_skill_call_that_names_a_tool_is_not_rendered_as_a_listing() {
 async fn a_use_skill_denial_names_a_delegate_this_session_can_call() {
     let mw = non_owner_middleware();
     let message = mw
-        .channel_permission_block(&call(
-            "use_skill",
-            json!({ "skill": "workflows", "tool": "propose_workflow" }),
-        ))
+        .channel_permission_block(
+            &call(
+                "use_skill",
+                json!({ "skill": "workflows", "tool": "propose_workflow" }),
+            ),
+            false,
+        )
         .expect("propose_workflow is denied for a non-owner");
 
     assert!(
@@ -234,7 +288,7 @@ async fn a_session_without_the_delegate_is_not_told_to_call_it() {
         decisions: [allow(USE_SKILL)].into_iter().collect(),
     };
     let mw = ToolPolicyMiddleware::new(
-        Arc::new(crate::agent::tool_policy::AllowAllToolPolicy::default()),
+        Arc::new(crate::agent::tool_policy::AllowAllToolPolicy),
         session,
         vec![tools],
         "sess".to_string(),
@@ -243,10 +297,13 @@ async fn a_session_without_the_delegate_is_not_told_to_call_it() {
     );
 
     let message = mw
-        .channel_permission_block(&call(
-            "use_skill",
-            json!({ "skill": "workflows", "tool": "propose_workflow" }),
-        ))
+        .channel_permission_block(
+            &call(
+                "use_skill",
+                json!({ "skill": "workflows", "tool": "propose_workflow" }),
+            ),
+            false,
+        )
         .expect("propose_workflow is denied");
 
     assert!(
@@ -292,7 +349,7 @@ async fn use_skill_reaches_a_withheld_packed_tool() {
     );
 
     let mw = ToolPolicyMiddleware::new(
-        Arc::new(crate::agent::tool_policy::AllowAllToolPolicy::default()),
+        Arc::new(crate::agent::tool_policy::AllowAllToolPolicy),
         session,
         vec![tools],
         "sess".to_string(),
@@ -301,10 +358,10 @@ async fn use_skill_reaches_a_withheld_packed_tool() {
     );
 
     assert!(
-        mw.channel_permission_block(&call(
-            "use_skill",
-            json!({ "skill": "goals", "tool": "goal_set" }),
-        ))
+        mw.channel_permission_block(
+            &call("use_skill", json!({ "skill": "goals", "tool": "goal_set" }),),
+            false
+        )
         .is_none(),
         "a withheld packed tool must stay reachable through use_skill — that is \
          the only route it has"
@@ -339,7 +396,7 @@ async fn a_prompt_hidden_delegate_is_not_offered_as_a_direct_route() {
     // delegate prompt-hidden and therefore NOT directly callable.
     let mut visible: std::collections::HashSet<String> =
         tools.iter().map(|t| t.name().to_string()).collect();
-    strip_packed_from_visible(&mut visible, "orchestrator");
+    strip_packed_from_visible(&mut visible, "unrelated_agent");
     assert!(
         !visible.contains("build_workflow"),
         "precondition: the delegate is prompt-hidden here"
@@ -354,7 +411,7 @@ async fn a_prompt_hidden_delegate_is_not_offered_as_a_direct_route() {
         &visible,
     );
     let mw = ToolPolicyMiddleware::new(
-        Arc::new(crate::agent::tool_policy::AllowAllToolPolicy::default()),
+        Arc::new(crate::agent::tool_policy::AllowAllToolPolicy),
         session,
         vec![tools],
         "sess".to_string(),
@@ -381,10 +438,13 @@ async fn a_prompt_hidden_delegate_is_not_offered_as_a_direct_route() {
 async fn an_invented_tool_name_in_a_skill_is_not_reported_as_a_denial() {
     let mw = non_owner_middleware();
     let message = mw
-        .channel_permission_block(&call(
-            "use_skill",
-            json!({ "skill": "workflows", "tool": "install_workflow" }),
-        ))
+        .channel_permission_block(
+            &call(
+                "use_skill",
+                json!({ "skill": "workflows", "tool": "install_workflow" }),
+            ),
+            false,
+        )
         .expect("an invented tool must be answered, not dispatched");
 
     let workflows = crate::tools::toolpacks::pack("workflows").expect("workflows pack");
@@ -414,10 +474,13 @@ async fn an_invented_tool_name_in_a_skill_is_not_reported_as_a_denial() {
 fn an_invented_tool_name_is_not_found_even_under_the_packs_permission_ceiling() {
     let mw = non_owner_middleware_at(PermissionLevel::ReadOnly);
     let message = mw
-        .channel_permission_block(&call(
-            "use_skill",
-            json!({ "skill": "workflows", "tool": "install_workflow" }),
-        ))
+        .channel_permission_block(
+            &call(
+                "use_skill",
+                json!({ "skill": "workflows", "tool": "install_workflow" }),
+            ),
+            false,
+        )
         .expect("an invented tool must be answered, not dispatched");
 
     assert!(
@@ -449,10 +512,13 @@ fn a_pack_member_this_session_never_registered_is_not_found_not_forbidden() {
     );
 
     let message = mw
-        .channel_permission_block(&call(
-            "use_skill",
-            json!({ "skill": "workflows", "tool": "save_workflow" }),
-        ))
+        .channel_permission_block(
+            &call(
+                "use_skill",
+                json!({ "skill": "workflows", "tool": "save_workflow" }),
+            ),
+            false,
+        )
         .expect("an unregistered member must be answered, not dispatched");
 
     assert_eq!(

@@ -23,7 +23,7 @@ pub async fn flows_resume(
     thread_id: &str,
     approvals: Vec<String>,
     rejections: Vec<String>,
-) -> Result<RpcOutcome<Value>, String> {
+) -> Result<Outcome<Value>, String> {
     let flow = store::get_flow(config, flow_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("flow '{flow_id}' not found"))?;
@@ -364,7 +364,7 @@ pub async fn flows_resume(
                 tracing::warn!(target: "flows", flow_id = %flow_id, error = %e, "[flows] flows_resume: failed to record cancelled run");
             }
             drop_checkpoint(config, thread_id).await;
-            return Ok(RpcOutcome::single_log(
+            return Ok(Outcome::single_log(
                 json!({
                     "output": Value::Null,
                     "pending_approvals": Vec::<String>::new(),
@@ -452,7 +452,7 @@ pub async fn flows_resume(
         "[flows] flows_resume: finished"
     );
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({
             "output": outcome.output,
             "pending_approvals": outcome.pending_approvals,
@@ -462,88 +462,13 @@ pub async fn flows_resume(
     ))
 }
 
-/// Computes a stable content hash of the flow configuration a run was approved
-/// against — the T-M1 stale-approval guard (see `flows_resume`'s doc).
-/// Persisted on a run row the moment it parks at `pending_approval`, and
-/// recompared against the **current** flow before a resume is allowed to
-/// execute, so a rewrite between park and resume is detected instead of
-/// silently firing the new configuration under the old approval.
-///
-/// Covers the graph **and `require_approval`**. The flag is not cosmetic: it
-/// feeds `workflow_origin(...)`, which becomes the `AgentTurnOrigin` for the
-/// whole resumed execution, and `TrustedAutomationSource::Workflow {
-/// require_approval: false }` **auto-allows every `external_effect` tool call**
-/// where `true` parks each one for its own human decision. It is also settable
-/// independently of the graph — `flows_update(.., graph_json: None,
-/// require_approval: Some(false), ..)` leaves `.graph` byte-identical. Hashing
-/// the graph alone would therefore leave the exact hole this guard exists to
-/// close: park at a gate, user approves, the flag is flipped to `false` with the
-/// graph untouched (pin still matches), and on resume every downstream
-/// outbound node that would have parked now fires unattended.
-///
-/// Hashes a *canonicalized* JSON serialization — `serde_json::Value`'s object
-/// map preserves insertion order in this crate (the `preserve_order` feature
-/// is enabled transitively via other dependencies), so the same logical graph
-/// serialized through two different code paths is not guaranteed to emit its
-/// object keys in the same order. [`canonicalize_json`] recursively sorts
-/// every object's keys before hashing so the hash depends only on graph
-/// content, never on incidental key order. Returns `None` (never panics) if
-/// the graph somehow fails to serialize.
-///
-/// **`None` means different things on the two sides, and the resume side fails
-/// CLOSED.** At park time `None` simply stores no pin, so that run later takes
-/// the legacy "unknown — allow, with a warning" path. At resume time the
-/// comparison is `Some(expected) != None`, which is *true*, so a hash failure
-/// is treated as a mismatch: the run is refused, settled terminally, and its
-/// checkpoint dropped. That is the safer direction — a run whose current graph
-/// cannot be hashed is a run whose approval cannot be verified — but it is the
-/// opposite of fail-open, so do not read this as a guarantee that a serialize
-/// failure leaves a resumable run resumable.
-pub(super) fn compute_graph_hash(graph: &WorkflowGraph, require_approval: bool) -> Option<String> {
-    let raw = match serde_json::to_value(graph) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                target: "flows",
-                error = %e,
-                "[flows] compute_graph_hash: failed to serialize graph to JSON — proceeding without a graph pin"
-            );
-            return None;
-        }
-    };
-    let raw = serde_json::json!({ "graph": raw, "require_approval": require_approval });
-    let canonical = canonicalize_json(&raw);
-    let serialized = match serde_json::to_string(&canonical) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(
-                target: "flows",
-                error = %e,
-                "[flows] compute_graph_hash: failed to serialize canonicalized graph — proceeding without a graph pin"
-            );
-            return None;
-        }
-    };
-    let digest = Sha256::digest(serialized.as_bytes());
-    Some(hex::encode(digest))
-}
-
-/// Recursively rewrites every JSON object's keys into sorted order, leaving
-/// arrays (whose element order is semantically meaningful) and scalars
-/// unchanged. See [`compute_graph_hash`] for why this is needed before
-/// hashing rather than trusting `serde_json`'s default map order.
-fn canonicalize_json(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let mut sorted = serde_json::Map::new();
-            for key in keys {
-                sorted.insert(key.clone(), canonicalize_json(&map[key]));
-            }
-            Value::Object(sorted)
-        }
-        Value::Array(items) => Value::Array(items.iter().map(canonicalize_json).collect()),
-        other => other.clone(),
-    }
-}
+// The T-M1 stale-approval guard's content pin. Persisted on a run row the moment
+// it parks at `pending_approval` and recompared against the **current** flow
+// before a resume executes (see `flows_resume`'s doc), so a rewrite between park
+// and resume is detected instead of silently firing the new configuration under
+// the old approval. It covers the graph AND `require_approval`: the flag becomes
+// the `AgentTurnOrigin` for the whole resumed execution and `false` auto-allows
+// every `external_effect` tool call, and it is settable without touching the
+// graph. The algorithm and its fixed-vector test live in `tinyflows-catalog`
+// because the digest is a persisted format.
+pub(super) use tinyflows_catalog::graph_hash::compute_graph_hash;

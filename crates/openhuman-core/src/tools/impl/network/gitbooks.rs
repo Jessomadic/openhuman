@@ -33,6 +33,10 @@ impl GitbooksSearchTool {
 
 #[async_trait]
 impl Tool for GitbooksSearchTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         "gitbooks_search"
     }
@@ -82,7 +86,7 @@ impl Tool for GitbooksSearchTool {
             .call_tool("searchDocumentation", json!({ "query": query }))
             .await
         {
-            Ok(result) => Ok(crate::skills::types::tool_result_from_mcp(result.rendered)),
+            Ok(result) => Ok(tinymcp::tools::tool_result(result.rendered)),
             Err(e) => Ok(ToolResult::error(format!("gitbooks_search failed: {e}"))),
         }
     }
@@ -114,6 +118,10 @@ impl GitbooksGetPageTool {
 
 #[async_trait]
 impl Tool for GitbooksGetPageTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         "gitbooks_get_page"
     }
@@ -162,7 +170,7 @@ impl Tool for GitbooksGetPageTool {
             .call_tool("getPage", json!({ "url": url }))
             .await
         {
-            Ok(result) => Ok(crate::skills::types::tool_result_from_mcp(result.rendered)),
+            Ok(result) => Ok(tinymcp::tools::tool_result(result.rendered)),
             Err(e) => Ok(ToolResult::error(format!("gitbooks_get_page failed: {e}"))),
         }
     }

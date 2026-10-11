@@ -6,7 +6,7 @@
 // tests libtest skips at runtime. The two numbers differ and the difference is
 // not fully explained: `openhuman-core` has 96 attributes in source while a
 // scoped `--lib` run reported 83 ignored. Feature gating accounts for exactly
-// one of those (`core/jsonrpc_tests.rs`), so the rest is open. The static count
+// one of those (the listener-shutdown test, since moved to `openhuman-rpc`), so the rest is open. The static count
 // is the right thing to ratchet anyway: it is what a reviewer actually adds in
 // a diff, and it is deterministic without a build or a feature-set choice —
 // which is why this gate can run in `rust-quality` before clippy instead of

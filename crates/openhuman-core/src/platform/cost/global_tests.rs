@@ -3,16 +3,8 @@ use crate::platform::cost::tracker_test_lock;
 use crate::platform::cost::types::CostRecord;
 use tempfile::TempDir;
 
-fn make_usage(input: u64, output: u64, charged: f64) -> UsageInfo {
-    UsageInfo {
-        input_tokens: input,
-        output_tokens: output,
-        context_window: 0,
-        cached_input_tokens: 0,
-        cache_creation_tokens: 0,
-        reasoning_tokens: 0,
-        charged_amount_usd: charged,
-    }
+fn make_usage(input: u64, output: u64, charged: f64) -> BilledUsage {
+    BilledUsage::from_counts(input, output).with_charged_usd(charged)
 }
 
 #[test]
@@ -53,7 +45,7 @@ fn build_token_usage_emits_when_tokens_present_even_with_zero_cost() {
 ///
 /// The tracker is a process-wide `OnceCell` shared by every test in this
 /// binary — including the runtime-bootstrap tests, which call
-/// `platform::cost::init_global` through `core/jsonrpc.rs`. A test therefore
+/// `platform::cost::init_global` through `core/runtime/bootstrap.rs`. A test therefore
 /// cannot assume it owns the global, and **cannot assume the global is
 /// absent**: that is precisely why the two tests below assert on records
 /// written through whichever tracker is installed, rather than on
@@ -140,9 +132,9 @@ fn init_global_is_idempotent() {
     // A second `init_global` must be a no-op and must preserve the tracker the
     // first caller installed (`global.rs` early-returns when the cell is set).
     //
-    // Asserting that through `try_global()` alone would be vacuous: the cell is
-    // a `OnceCell`, so `set` refuses the replacement even with the early return
-    // deleted, and the *pointer* stays equal either way. The observable that
+    // Asserting that through `try_global()` alone would be vacuous: the slot is
+    // only filled when empty, so it refuses the replacement even with the early
+    // return deleted, and the *pointer* stays equal either way. The observable that
     // actually distinguishes the two is one level down — `CostTracker::new`
     // eagerly creates `<workspace>/state/` (`CostStorage::new` ->
     // `fs::create_dir_all`). So if the guard is removed, the second call
@@ -181,4 +173,103 @@ fn init_global_is_idempotent() {
         std::sync::Arc::ptr_eq(&before, &after),
         "second init_global replaced the installed tracker instance"
     );
+}
+
+#[test]
+fn rebind_global_moves_recording_to_the_new_workspace() {
+    let _lock = tracker_test_lock();
+    const MODEL_A: &str = "test-model/rebind-before-login";
+    const MODEL_B: &str = "test-model/rebind-after-login";
+    let previous = try_global();
+    let before_login = TempDir::new().unwrap();
+    let after_login = TempDir::new().unwrap();
+    let mut cfg = CostConfig::default();
+    cfg.enabled = true;
+
+    rebind_global(cfg.clone(), before_login.path());
+    record_provider_usage(MODEL_A, &make_usage(10, 5, 0.1));
+
+    rebind_global(cfg.clone(), after_login.path());
+    let bound = try_global().expect("rebind leaves a tracker installed");
+    assert_eq!(bound.workspace_dir(), after_login.path());
+    record_provider_usage(MODEL_B, &make_usage(20, 10, 0.2));
+
+    let ledger = |dir: &TempDir| {
+        std::fs::read_to_string(dir.path().join("state").join("costs.jsonl")).unwrap_or_default()
+    };
+    assert!(ledger(&before_login).contains(MODEL_A));
+    assert!(!ledger(&before_login).contains(MODEL_B));
+    assert!(ledger(&after_login).contains(MODEL_B));
+    assert!(!ledger(&after_login).contains(MODEL_A));
+    assert_eq!(records_for_model(&bound, MODEL_B).len(), 1);
+    assert!(records_for_model(&bound, MODEL_A).is_empty());
+
+    rebind_global(cfg, after_login.path());
+    let unchanged = try_global().unwrap();
+    assert!(
+        std::sync::Arc::ptr_eq(&bound, &unchanged),
+        "rebinding to the workspace already served must keep the tracker"
+    );
+
+    *GLOBAL_TRACKER.write() = previous;
+}
+
+/// Persisted cost rows are `TokenUsage`/`CostRecord` JSON lines. Pin the exact
+/// serialized key set produced from a provider usage record, and prove a row
+/// written by the current release (literal JSON) still deserializes.
+#[test]
+fn token_usage_row_shape_is_stable_and_old_rows_load() {
+    let usage = BilledUsage::from_counts(1000, 500)
+        .with_cached_input_tokens(400)
+        .with_cache_creation_tokens(30)
+        .with_reasoning_tokens(7)
+        .with_charged_usd(0.0123);
+    let row = build_token_usage("m/x", &usage).unwrap();
+    let mut value = serde_json::to_value(&row).unwrap();
+    let obj = value.as_object_mut().unwrap();
+    obj.remove("timestamp").expect("timestamp key present");
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "model": "m/x",
+            "input_tokens": 1000,
+            "output_tokens": 500,
+            "total_tokens": 1500,
+            "cached_input_tokens": 400,
+            "cache_creation_tokens": 30,
+            "reasoning_tokens": 7,
+            "cost_usd": 0.0123,
+            "cost_source": "provider_charged"
+        })
+    );
+
+    let old = r#"{"model":"m/x","input_tokens":10,"output_tokens":5,"total_tokens":15,"cost_usd":0.25,"timestamp":"2026-01-02T03:04:05Z"}"#;
+    let parsed: TokenUsage = serde_json::from_str(old).expect("old row loads");
+    assert_eq!(parsed.input_tokens, 10);
+    assert_eq!(parsed.cost_usd, 0.25);
+}
+
+#[test]
+fn a_tenant_tracker_belongs_to_its_profile_alone() {
+    use crate::core::runtime::{ContextOverlay, CoreContext, DomainSet};
+    let tmp = tempfile::tempdir().unwrap();
+    let config = crate::config::Config {
+        workspace_dir: tmp.path().to_path_buf(),
+        ..crate::config::Config::default()
+    };
+    let root = CoreContext::for_test(DomainSet::full(), None);
+    let derive = |id: &str| {
+        root.derive_with(
+            ContextOverlay::new(config.clone(), DomainSet::kernel(), Default::default())
+                .profile(id),
+        )
+    };
+    let (alice, bob) = (derive("u-alice"), derive("u-bob"));
+    assert!(tracker_in(Some(&alice)).is_none());
+    seed_tenant_tracker(&alice, &config);
+    let tracker = tracker_in(Some(&alice)).expect("seeded at open");
+    assert_eq!(tracker.workspace_dir(), tmp.path());
+    assert!(tracker_in(Some(&bob)).is_none(), "never another profile's");
+    assert!(tracker_in(Some(&root)).is_none(), "nor the operator's");
+    assert!(tracker_in(None).is_none(), "an unscoped task has none");
 }

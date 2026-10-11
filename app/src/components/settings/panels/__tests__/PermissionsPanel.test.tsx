@@ -30,6 +30,9 @@ const agentPaths = (overrides: Partial<AgentPaths> = {}): AgentPaths => ({
   workspace_dir: '/home/test/.openhuman/users/u1/workspace',
   projects_dir: '/home/test/OpenHuman/projects',
   action_dir_source: 'default',
+  files_dir: '/home/test/OpenHuman/projects/Files',
+  default_files_dir: '/home/test/OpenHuman/projects/Files',
+  files_dir_source: 'default',
   ...overrides,
 });
 
@@ -198,14 +201,14 @@ describe('PermissionsPanel', () => {
     expect(screen.getByTestId('permissions-action-dir-env-locked')).toBeInTheDocument();
   });
 
-  it('shows the desktop-only notice and skips loading off-Tauri', async () => {
+  it('loads settings over core RPC off-Tauri without a desktop-only notice', async () => {
     vi.mocked(isTauri).mockReturnValue(false);
     renderWithProviders(<PermissionsPanel />);
+    await waitFor(() => expect(mockGet).toHaveBeenCalled());
+    expect(mockGetPaths).toHaveBeenCalled();
     expect(
-      await screen.findByText('Access settings are only available in the desktop app.')
-    ).toBeInTheDocument();
-    expect(mockGet).not.toHaveBeenCalled();
-    expect(mockGetPaths).not.toHaveBeenCalled();
+      screen.queryByText('Access settings are only available in the desktop app.')
+    ).not.toBeInTheDocument();
   });
 
   it('surfaces a load error without crashing', async () => {

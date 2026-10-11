@@ -1,9 +1,9 @@
 use serde_json::{Map, Value};
 
-use openhuman_core::config::rpc as config_rpc;
-use openhuman_core::core::all::{ControllerFuture, RegisteredController};
-use openhuman_core::core::{ControllerSchema, FieldSchema, TypeSchema};
-use openhuman_core::rpc::RpcOutcome;
+use openhuman_embed::__host::config::rpc as config_rpc;
+use openhuman_embed::__host::core::all::{ControllerFuture, RegisteredController};
+use openhuman_embed::__host::core::Outcome;
+use openhuman_embed::__host::core::{ControllerSchema, FieldSchema, TypeSchema};
 
 pub fn all_announcements_controller_schemas() -> Vec<ControllerSchema> {
     vec![announcements_schemas("announcements_get_latest")]
@@ -50,7 +50,7 @@ fn handle_announcements_get_latest(_params: Map<String, Value>) -> ControllerFut
     })
 }
 
-fn to_json(outcome: RpcOutcome<Value>) -> Result<Value, String> {
+fn to_json(outcome: Outcome<Value>) -> Result<Value, String> {
     outcome.into_cli_compatible_json()
 }
 

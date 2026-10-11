@@ -4,16 +4,18 @@
  *
  * **Servers** is the rows (`McpServerRows`) and, once a row is opened, that
  * server's detail with the credential form and its tools. **mcp.json** is the
- * same configuration as one document. **Registry** is the browse-only
- * directories. The rows and their statuses are read here rather than in the
- * rows component so a save in the document tab can re-read them, and so the
- * directory can hide what is already declared.
+ * same configuration as one document. **Registry** is the directories, where a
+ * hosted server can be added in one step. The rows and their statuses are read
+ * here rather than in the rows component so a save in the document tab or an
+ * add from the directory can re-read them, and so the directory can mark what
+ * is already declared.
  */
 import debug from 'debug';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
 import { mcpClientsApi } from '../../../services/api/mcpClientsApi';
+import { Alert, AlertDescription } from '../../ui';
 import Button from '../../ui/Button';
 import InstalledServerDetail from './InstalledServerDetail';
 import McpJsonEditor from './McpJsonEditor';
@@ -168,7 +170,7 @@ const McpServersTab = ({ tab, onTabChange }: McpServersTabProps) => {
   }
 
   if (tab === 'registry') {
-    return <McpRegistryBrowser installedNames={installedNames} />;
+    return <McpRegistryBrowser installedNames={installedNames} onDeclared={handleDocumentSaved} />;
   }
 
   if (loading) {
@@ -177,10 +179,12 @@ const McpServersTab = ({ tab, onTabChange }: McpServersTabProps) => {
     );
   }
 
-  // Detail view — a server's own page, reached from a row's name.
+  // Detail view — a server's own page, reached from a row's name. The page
+  // body does not scroll on this tab (the rows table owns its scroll), so the
+  // detail view brings its own.
   if (view.mode === 'detail' && selectedServer) {
     return (
-      <div className="space-y-3">
+      <div className="-mr-4 h-full space-y-3 overflow-y-auto pb-4 pr-4">
         <Button
           variant="tertiary"
           size="xs"
@@ -208,13 +212,11 @@ const McpServersTab = ({ tab, onTabChange }: McpServersTabProps) => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       {loadError && (
-        <p
-          role="alert"
-          className="rounded-md border border-coral-500/30 bg-coral-500/10 px-3 py-2 text-xs text-coral-700 dark:text-coral-300">
-          {loadError}
-        </p>
+        <Alert variant="destructive" density="compact">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
       )}
 
       <McpServerRows

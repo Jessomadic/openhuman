@@ -5,7 +5,6 @@ use crate::config::Config;
 use crate::cron::CronJob;
 use crate::security::SecurityPolicy;
 use std::process::Stdio;
-use tokio::process::Command;
 use tokio::time::{self, Duration};
 
 pub(super) const SHELL_JOB_TIMEOUT_SECS: u64 = 120;
@@ -126,15 +125,26 @@ pub(super) async fn run_job_command_with_timeout(
         );
     }
 
-    let child = match Command::new("sh")
-        .arg("-lc")
-        .arg(&job.command)
-        .current_dir(&config.action_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
+    // Through `platform_shell`, like every other shell spawn in this crate.
+    // `Command::new("sh")` fails at `CreateProcessW` on Windows, which is the
+    // whole reason that module exists — this call site was the one that still
+    // named the program itself.
+    //
+    // The `preserving_pipe_status` variant, not the ordinary one: a job's exit
+    // status is recorded per run and spends a retry budget, so `set -o pipefail`
+    // would flip an existing job ending in a tolerated pipe stage (`false |
+    // true`, a `… | grep -q` that finds nothing) from success to failure. That
+    // is a change to somebody's schedule, not a lint. The `-lc` flag and the
+    // per-platform shell are shared with every other caller.
+    let child = match crate::agent::platform_shell::build_tokio_command_preserving_pipe_status(
+        &job.command,
+    )
+    .current_dir(&config.action_dir)
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .kill_on_drop(true)
+    .spawn()
     {
         Ok(child) => child,
         Err(e) => return (false, format!("spawn error: {e}")),

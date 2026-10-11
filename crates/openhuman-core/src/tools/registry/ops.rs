@@ -4,10 +4,10 @@ use serde_json::{json, Map, Value};
 
 use crate::config::Config;
 use crate::core::all;
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
 use crate::mcp::audit::McpWriteListQuery;
 use crate::mcp::server::McpToolSpec;
-use crate::rpc::RpcOutcome;
 
 use super::providers::capability_provider_diagnostics;
 use super::types::{
@@ -28,17 +28,17 @@ const POLICY_SURFACES: &[&str] = &[
 ];
 
 /// Return the current read-only tool registry snapshot.
-pub fn list_tools() -> RpcOutcome<ToolRegistryList> {
+pub fn list_tools() -> Outcome<ToolRegistryList> {
     let tools = registry_entries();
     log::debug!(
         "[tool_registry] list_tools completed entries={}",
         tools.len()
     );
-    RpcOutcome::new(ToolRegistryList { tools }, vec![])
+    Outcome::new(ToolRegistryList { tools }, vec![])
 }
 
 /// Return redacted diagnostics for policy/tool visibility reviews.
-pub async fn diagnostics() -> Result<RpcOutcome<ToolPolicyDiagnostics>, String> {
+pub async fn diagnostics() -> Result<Outcome<ToolPolicyDiagnostics>, String> {
     log::debug!("[tool_registry] diagnostics loading_config");
     let config = Config::load_or_init().await.map_err(|err| {
         log::warn!("[tool_registry] diagnostics config_load_failed error={err}");
@@ -48,7 +48,7 @@ pub async fn diagnostics() -> Result<RpcOutcome<ToolPolicyDiagnostics>, String> 
 }
 
 /// Return redacted diagnostics using a specific config snapshot.
-pub fn diagnostics_for_config(config: &Config) -> RpcOutcome<ToolPolicyDiagnostics> {
+pub fn diagnostics_for_config(config: &Config) -> Outcome<ToolPolicyDiagnostics> {
     log::debug!("[tool_registry] diagnostics_for_config start");
 
     let tools = registry_entries_for_config(config);
@@ -111,7 +111,7 @@ pub fn diagnostics_for_config(config: &Config) -> RpcOutcome<ToolPolicyDiagnosti
         diagnostics.capability_providers.trusted_enabled_providers,
         diagnostics.capability_providers.registry_errors.len()
     );
-    RpcOutcome::new(diagnostics, vec![])
+    Outcome::new(diagnostics, vec![])
 }
 
 fn posture_from_config(config: &Config) -> ToolPolicyPosture {
@@ -194,7 +194,7 @@ fn mcp_write_audit_health(config: &Config) -> McpWriteAuditHealth {
 }
 
 /// Look up one registry entry by stable `tool_id`.
-pub fn get_tool(tool_id: &str) -> Result<RpcOutcome<ToolRegistryEntry>, String> {
+pub fn get_tool(tool_id: &str) -> Result<Outcome<ToolRegistryEntry>, String> {
     let normalized = tool_id.trim();
     if normalized.is_empty() {
         return Err("tool_id must be a non-empty string".to_string());
@@ -210,7 +210,7 @@ pub fn get_tool(tool_id: &str) -> Result<RpcOutcome<ToolRegistryEntry>, String> 
         tool.tool_id,
         tool.transport
     );
-    Ok(RpcOutcome::new(tool, vec![]))
+    Ok(Outcome::new(tool, vec![]))
 }
 
 /// Build sorted registry entries from the current MCP and controller metadata.
@@ -421,6 +421,11 @@ fn type_schema_to_json(ty: &TypeSchema) -> Value {
     match ty {
         TypeSchema::Bool => json!({ "type": "boolean" }),
         TypeSchema::I64 | TypeSchema::U64 => json!({ "type": "integer" }),
+        TypeSchema::BoundedU64 { min, max } => json!({
+            "type": "integer",
+            "minimum": min,
+            "maximum": max,
+        }),
         TypeSchema::F64 => json!({ "type": "number" }),
         TypeSchema::String => json!({ "type": "string" }),
         TypeSchema::Json => json!({}),

@@ -1,198 +1,9 @@
 use super::*;
+use crate::tools::{filter_tools_by_user_preference, http_request_tool, BrowserOpenTool};
+use tinytools_std::filesystem::{ApplyPatchTool, CsvExportTool};
 
 #[tokio::test]
-async fn all_tools_executes_parallel_and_web_search_family_against_fake_backend() {
-    let backend = integration_test_support::spawn_fake_integration_backend().await;
-    let tmp = TempDir::new().unwrap();
-    let cfg = integration_test_config(&tmp, &backend.base_url);
-    store_test_session_token(&cfg);
-    let tools = integration_tools_for_config(&tmp, &cfg);
-
-    let web_search = find_tool(&tools, "web_search_tool")
-        .execute(serde_json::json!({ "query": "rust testing" }))
-        .await
-        .expect("web_search_tool execute");
-    assert!(web_search
-        .output()
-        .contains("Search results for: rust testing"));
-    assert!(web_search.output().contains("Objective: rust testing"));
-
-    let parallel_search = find_tool(&tools, "parallel_search")
-        .execute(serde_json::json!({
-            "objective": "tool wiring",
-            "search_queries": ["tool wiring", "mock backend"],
-            "num_results": 3,
-            "max_characters_per_excerpt": 200
-        }))
-        .await
-        .expect("parallel_search execute");
-    assert!(parallel_search
-        .output()
-        .contains("Search results (2 found):"));
-    assert!(parallel_search.output().contains("Result for tool wiring"));
-    assert!(parallel_search.output().contains("Objective: tool wiring"));
-
-    let extract = find_tool(&tools, "parallel_extract")
-        .execute(serde_json::json!({
-            "urls": ["https://example.com/a"],
-            "objective": "capture the summary",
-            "full_content": true
-        }))
-        .await
-        .expect("parallel_extract execute");
-    assert!(extract.output().contains("Extracted https://example.com/a"));
-    assert!(extract
-        .output()
-        .contains("Full content for https://example.com/a"));
-
-    let chat = find_tool(&tools, "parallel_chat")
-        .execute(serde_json::json!({
-            "model": "base",
-            "messages": [{ "role": "user", "content": "what changed?" }]
-        }))
-        .await
-        .expect("parallel_chat execute");
-    assert!(chat.output().contains("Model base answered: what changed?"));
-    assert!(chat.output().contains("\"sources\""));
-
-    let research = find_tool(&tools, "parallel_research")
-        .execute(serde_json::json!({
-            "input": { "company": "Tiny Humans" },
-            "processor": "core",
-            "timeout_seconds": 30
-        }))
-        .await
-        .expect("parallel_research execute");
-    let research_display = research.output_for_llm(true);
-    assert!(research_display.contains("Status: completed"));
-    assert!(research_display.contains("\"company\": \"Tiny Humans\""));
-    assert!(!research_display.contains("research-core"));
-    let research_payload = only_json_content(&research);
-    assert!(research_payload.get("run_id").is_none());
-
-    let enrich = find_tool(&tools, "parallel_enrich")
-        .execute(serde_json::json!({
-            "input": "Tiny Humans",
-            "processor": "lite",
-            "output_schema": { "type": "object" }
-        }))
-        .await
-        .expect("parallel_enrich execute");
-    let enrich_display = enrich.output_for_llm(true);
-    assert!(enrich_display.contains("Enriched entity"));
-    assert!(enrich_display.contains("\"inputEcho\": \"Tiny Humans\""));
-    assert!(!enrich_display.contains("enrich-1"));
-    let enrich_payload = only_json_content(&enrich);
-    assert!(enrich_payload.get("run_id").is_none());
-
-    let dataset = find_tool(&tools, "parallel_dataset")
-        .execute(serde_json::json!({
-            "objective": "Find AI startups",
-            "entity_type": "company",
-            "match_conditions": [{ "name": "AI-focused" }],
-            "generator": "base",
-            "match_limit": 25
-        }))
-        .await
-        .expect("parallel_dataset execute");
-    assert!(dataset.output().contains("findall_id: dataset-company"));
-    assert!(dataset.output().contains("match_limit: 25"));
-
-    let requests = backend.requests();
-    let paths: Vec<&str> = requests.iter().map(|req| req.path.as_str()).collect();
-    assert_eq!(
-        paths,
-        vec![
-            "/agent-integrations/parallel/search",
-            "/agent-integrations/parallel/search",
-            "/agent-integrations/parallel/extract",
-            "/agent-integrations/parallel/chat",
-            "/agent-integrations/parallel/research",
-            "/agent-integrations/parallel/enrich",
-            "/agent-integrations/parallel/dataset",
-        ]
-    );
-    assert_eq!(
-        requests[1].body["excerpts"]["numResults"],
-        serde_json::json!(3)
-    );
-    assert_eq!(requests[2].body["fullContent"], serde_json::json!(true));
-    assert_eq!(requests[6].body["matchLimit"], serde_json::json!(25));
-}
-
-#[tokio::test]
-async fn all_tools_executes_tinyfish_family_against_fake_backend() {
-    let backend = integration_test_support::spawn_fake_integration_backend().await;
-    let tmp = TempDir::new().unwrap();
-    let cfg = integration_test_config(&tmp, &backend.base_url);
-    store_test_session_token(&cfg);
-    let tools = integration_tools_for_config(&tmp, &cfg);
-
-    let search = find_tool(&tools, "tinyfish_search")
-        .execute(serde_json::json!({
-            "query": "web automation",
-            "location": "US",
-            "language": "en",
-            "page": 2,
-            "include_thumbnail": true
-        }))
-        .await
-        .expect("tinyfish_search execute");
-    assert!(search
-        .output()
-        .contains("TinyFish returned 1 search result(s)"));
-    assert!(search
-        .output()
-        .contains("TinyFish result for web automation"));
-
-    let fetch = find_tool(&tools, "tinyfish_fetch")
-        .execute(serde_json::json!({
-            "urls": ["https://example.com/a"],
-            "format": "markdown",
-            "links": true,
-            "image_links": true
-        }))
-        .await
-        .expect("tinyfish_fetch execute");
-    assert!(fetch.output().contains("TinyFish fetched 1 page(s)"));
-    assert!(fetch
-        .output()
-        .contains("TinyFish content for https://example.com/a"));
-
-    let run = find_tool(&tools, "tinyfish_agent_run")
-        .execute(serde_json::json!({
-            "url": "https://example.com/shop",
-            "goal": "Extract product names. Return JSON.",
-            "browser_profile": "stealth",
-            "proxy_country_code": "US",
-            "output_schema": { "type": "object" }
-        }))
-        .await
-        .expect("tinyfish_agent_run execute");
-    assert!(run.output().contains("TinyFish automation finished."));
-    assert!(!run.output().contains("run_tinyfish_fake"));
-    assert!(run.output().contains("\"ok\":true"));
-
-    let requests = backend.requests();
-    let paths: Vec<&str> = requests.iter().map(|req| req.path.as_str()).collect();
-    assert_eq!(
-        paths,
-        vec![
-            "/agent-integrations/tinyfish/search",
-            "/agent-integrations/tinyfish/fetch",
-            "/agent-integrations/tinyfish/agent/run",
-        ]
-    );
-    assert_eq!(requests[0].body["location"], serde_json::json!("US"));
-    assert_eq!(requests[1].body["links"], serde_json::json!(true));
-    assert_eq!(
-        requests[2].body["proxy_config"]["country_code"],
-        serde_json::json!("US")
-    );
-}
-
-#[tokio::test]
-async fn all_tools_executes_stock_and_twilio_family_against_fake_backend() {
+async fn all_tools_executes_stock_family_against_fake_backend() {
     let backend = integration_test_support::spawn_fake_integration_backend().await;
     let tmp = TempDir::new().unwrap();
     let cfg = integration_test_config(&tmp, &backend.base_url);
@@ -247,16 +58,6 @@ async fn all_tools_executes_stock_and_twilio_family_against_fake_backend() {
     assert!(commodity.output().contains("WTI (weekly)"));
     assert!(commodity.output().contains("2026-05-16  80.1000"));
 
-    let twilio = find_tool(&tools, "twilio_call")
-        .execute(serde_json::json!({
-            "to": "+14155551234",
-            "message": "Hello from tests"
-        }))
-        .await
-        .expect("twilio_call execute");
-    assert!(twilio.output().contains("Call SID: CA1234"));
-    assert!(twilio.output().contains("Status: queued"));
-
     let requests = backend.requests();
     let paths: Vec<&str> = requests.iter().map(|req| req.path.as_str()).collect();
     assert_eq!(
@@ -267,11 +68,9 @@ async fn all_tools_executes_stock_and_twilio_family_against_fake_backend() {
             "/agent-integrations/financial-apis/options",
             "/agent-integrations/financial-apis/crypto-series",
             "/agent-integrations/financial-apis/commodity",
-            "/agent-integrations/twilio/call",
         ]
     );
     assert_eq!(requests[2].body["requireGreeks"], serde_json::json!(true));
-    assert_eq!(requests[5].body["to"], serde_json::json!("+14155551234"));
 }
 
 /// Every acting tool gates on `can_act()` and returns its own read-only refusal
@@ -306,12 +105,18 @@ async fn readonly_acting_tools_carry_policy_blocked_marker() {
         // The `computer`-family tools are compiled out with the
         // `desktop-automation` feature; gate these two cases per-element so the
         // rest of the read-only policy assertions still run in the slim build.
+        #[cfg(feature = "modules")]
         (
-            Box::new(BrowserOpenTool::new(sec.clone(), vec![])),
+            Box::new(BrowserOpenTool::new(
+                sec.clone(),
+                Arc::new(crate::modules::browser::BrowserClient::new(Arc::new(
+                    crate::config::Config::default(),
+                ))),
+            )),
             serde_json::json!({ "url": "https://example.com" }),
         ),
         (
-            Box::new(HttpRequestTool::new(sec.clone(), vec![], 0, 0)),
+            Box::new(http_request_tool(sec.clone(), vec![], 0, 0)),
             serde_json::json!({ "url": "https://example.com" }),
         ),
     ];
@@ -394,20 +199,7 @@ fn knowledge_tools_are_registered() {
     let tmp = TempDir::new().unwrap();
     let names = tool_names(&expansion_tools_for(&tmp));
 
-    // Base knowledge tools that are always present
-    let mut expected_tools = vec![
-        "learning_list_facets",
-        "learning_get_facet",
-        "learning_cache_stats",
-        "learning_update_facet",
-        "learning_pin_facet",
-        "learning_unpin_facet",
-        "learning_forget_facet",
-        "learning_rebuild_cache",
-        "learning_reset_cache",
-        "learning_save_profile",
-        "learning_enrich_profile",
-    ];
+    let mut expected_tools: Vec<&str> = Vec::new();
 
     // Add gated tools only when their feature is enabled. All of these —
     // list/describe/read_resource/recent_runs/read_run_log,
@@ -477,10 +269,7 @@ fn knowledge_default_off_tools_are_filtered_when_not_opted_in() {
 fn knowledge_default_off_tools_retained_when_opted_in() {
     let tmp = TempDir::new().unwrap();
     let mut tools = expansion_tools_for(&tmp);
-    filter_tools_by_user_preference(
-        &mut tools,
-        &["workflow_manage".to_string(), "learning_manage".to_string()],
-    );
+    filter_tools_by_user_preference(&mut tools, &["workflow_manage".to_string()]);
     let names = tool_names(&tools);
     let off_tools = knowledge_default_off();
     for on in &off_tools {
@@ -572,7 +361,18 @@ fn account_tools_survive_a_narrow_user_preference_set() {
 fn desktop_tools_are_registered() {
     let tmp = TempDir::new().unwrap();
     let names = tool_names(&expansion_tools_for(&tmp));
+    if !cfg!(feature = "modules") {
+        assert!(!names.iter().any(|name| name.starts_with("desktop_")));
+        return;
+    }
     assert_contains_all(&names, DESKTOP_TOOLS);
+    assert!(names.iter().any(|name| name == "desktop_goal"));
+    assert!(names.iter().any(|name| name == "desktop_launch"));
+    assert!(names.iter().any(|name| name == "desktop_snapshot"));
+    assert!(
+        !names.iter().any(|name| name == "desktop_act"),
+        "raw ref actions must not enter the agent/tool_search registry"
+    );
 }
 
 #[test]

@@ -25,15 +25,16 @@ const USER_ID = 'e2e-tool-shell-git';
  * RPC and registry contract end-to-end, and skip the LLM-driven assertion
  * with an explicit reason. The execution path itself is covered by the Rust
  * unit suite under `crates/openhuman-core/src/tools/impl/system/shell.rs` and
- * `crates/openhuman-core/src/tools/impl/filesystem/git_operations.rs`.
+ * `tinytools-std filesystem/git_operations/mod.rs`.
  *
  * What this spec proves end-to-end:
- *  - 6.2.1 — the agent runtime is up and the `tools_agent` definition that
- *    inherits the shell tool is wired into the live registry served over
- *    JSON-RPC (`openhuman.agent_list_definitions`).
- *  - 6.2.2 — the same agent definition surfaces the wildcard tool scope so
- *    the security policy's command-allowlist check (validated in Rust unit
- *    tests) is reachable through the live registry path. We additionally
+ *  - 6.2.1 — the agent runtime is up and the `orchestrator` definition, which
+ *    owns the coding surface directly (`shell`, `git_operations`,
+ *    `file_write`; there is no separate tools/code specialist any more), is
+ *    wired into the live registry served over JSON-RPC
+ *    (`openhuman.agent_list_definitions`).
+ *  - 6.2.2 — the security policy's command-allowlist check (validated in Rust
+ *    unit tests) sits behind that same registry path. We additionally
  *    cross-check that a denial-class command returns `ok=false` when issued
  *    via the related shell-like surface (memory_write_file with a clearly
  *    invalid argument) — this confirms the RPC denial envelope shape callers
@@ -46,7 +47,7 @@ const USER_ID = 'e2e-tool-shell-git';
  *  - 6.2.4 — same fixture supports a Node-side commit, proving that a write
  *    op is structurally feasible against the resolved workspace. The full
  *    sidecar-driven write path is exercised by
- *    `crates/openhuman-core/src/tools/impl/filesystem/git_operations_tests.rs`.
+ *    tinytools-std `filesystem/git_operations/test.rs`.
  *
  * Future: when the harness gains a deterministic mock-LLM that emits
  * structured tool_calls (tracked alongside #68 in skill-execution-flow), the
@@ -74,6 +75,7 @@ interface ServerStatus {
 interface AgentDef {
   id?: string;
   tools?: unknown;
+  direct_tool_names?: string[];
   disallowed_tools?: string[];
 }
 
@@ -167,7 +169,7 @@ describe('System tools — Shell + Git (registry, denial envelope, fixture repo)
     await stopMockServer();
   });
 
-  it('6.2.1 sidecar runtime is reachable and `tools_agent` (shell-bearing) is registered', async () => {
+  it('6.2.1 sidecar runtime is reachable and the orchestrator carries the shell/git tools', async () => {
     // Probe the agent runtime — this is the same RPC the React UI's service
     // page hits, so failure here means the entire system-tool surface is
     // unreachable. core.ping is independent of agent-runtime bootstrap.
@@ -182,9 +184,9 @@ describe('System tools — Shell + Git (registry, denial envelope, fixture repo)
     const statusPayload = (status.result as any)?.result ?? status.result;
     expect(statusPayload?.running).toBe(true);
 
-    // tools_agent inherits the orchestrator's full built-in tool surface
-    // (shell, file_read, file_write, git_operations, browser_open, browser).
-    // Asserting it is registered proves the registry path that resolves
+    // The orchestrator owns the inspect → edit → verify loop itself: shell,
+    // git_operations and file_write are direct tools on its belt. Asserting
+    // them on the live definition proves the registry path that resolves
     // shell/git tools is live behind JSON-RPC.
     const list = await callOpenhumanRpc<ListDefinitionsResult>(
       'openhuman.agent_list_definitions',
@@ -195,11 +197,14 @@ describe('System tools — Shell + Git (registry, denial envelope, fixture repo)
     });
     expect(list.ok).toBe(true);
     const defs = list.result?.definitions ?? [];
-    const toolsAgent = defs.find(d => d?.id === 'tools_agent');
-    expect(toolsAgent).toBeDefined();
-    // The wildcard scope (`tools_agent.tools = { wildcard = {} }`) must
-    // serialise as an object rather than an empty/null sentinel.
-    expect(toolsAgent?.tools).toBeDefined();
+    const orchestrator = defs.find(d => d?.id === 'orchestrator');
+    expect(orchestrator).toBeDefined();
+    const direct = orchestrator?.direct_tool_names ?? [];
+    for (const tool of ['shell', 'git_operations', 'file_write']) {
+      expect(direct).toContain(tool);
+    }
+    // The retired `tools_agent` specialist must not come back.
+    expect(defs.find(d => d?.id === 'tools_agent')).toBeUndefined();
   });
 
   it('6.2.2 RPC denial envelope is structurally consistent (precondition for restricted-command surfacing)', async () => {
@@ -250,7 +255,7 @@ describe('System tools — Shell + Git (registry, denial envelope, fixture repo)
     const repoDir = path.join(workspaceDir(), FIXTURE_REPO_REL);
     // Add a second file and commit — proves the same fixture supports the
     // full add → commit lifecycle the agent's `git_operations` write path
-    // uses (validated structurally in git_operations_tests.rs).
+    // uses (validated structurally in filesystem/git_operations/test.rs).
     const followupFile = 'CHANGELOG.md';
     await fs.writeFile(
       path.join(repoDir, followupFile),

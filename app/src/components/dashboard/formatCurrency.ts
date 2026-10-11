@@ -1,32 +1,71 @@
-/**
- * Format a USD-denominated amount with the requested display currency label.
- * Falls back to the locale "USD" formatter when the configured currency
- * code is not a valid ISO-4217 currency Intl supports — this keeps
- * arbitrary display labels (e.g. "USD ($)") from throwing.
- */
-export function formatCurrency(amountUsd: number, currency: string): string {
-  const safe = Number.isFinite(amountUsd) ? amountUsd : 0;
+const ONE_CENT = 0.01;
+
+function currencyFormatter(currency: string, maximumFractionDigits: number): Intl.NumberFormat {
   const normalized = currency?.trim() ? currency.trim().toUpperCase() : 'USD';
   try {
     return new Intl.NumberFormat(undefined, {
       style: 'currency',
       currency: normalized,
-      maximumFractionDigits: safe >= 100 ? 0 : 2,
-    }).format(safe);
+      maximumFractionDigits,
+    });
   } catch {
     return new Intl.NumberFormat(undefined, {
       style: 'currency',
       currency: 'USD',
-      maximumFractionDigits: safe >= 100 ? 0 : 2,
-    }).format(safe);
+      maximumFractionDigits,
+    });
   }
+}
+
+interface FormatCurrencyOptions {
+  /**
+   * Show sub-cent amounts to four decimals instead of collapsing them to
+   * "<$0.01". For chart axes, where several ticks below one cent would
+   * otherwise all read the same.
+   */
+  precise?: boolean;
+}
+
+/**
+ * Format a USD-denominated amount with the requested display currency label.
+ * Falls back to the locale "USD" formatter when the configured currency
+ * code is not a valid ISO-4217 currency Intl supports — this keeps
+ * arbitrary display labels (e.g. "USD ($)") from throwing.
+ *
+ * A non-zero amount below one cent renders as "<$0.01" rather than "$0.00",
+ * so real spend never reads as none. Negative zero (an empty Rust sum
+ * serialises as `-0.0`) renders as plain zero.
+ */
+export function formatCurrency(
+  amountUsd: number,
+  currency: string,
+  options: FormatCurrencyOptions = {}
+): string {
+  const finite = Number.isFinite(amountUsd) ? amountUsd : 0;
+  const safe = Object.is(finite, -0) ? 0 : finite;
+  if (safe !== 0 && Math.abs(safe) < ONE_CENT) {
+    if (options.precise) {
+      return currencyFormatter(currency, 4).format(safe);
+    }
+    return `${safe < 0 ? '-' : ''}<${currencyFormatter(currency, 2).format(ONE_CENT)}`;
+  }
+  return currencyFormatter(currency, Math.abs(safe) >= 100 ? 0 : 2).format(safe);
 }
 
 export function formatTokens(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return '0';
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  // Round to one decimal in thousands first: 999_960 is "1000.0K" otherwise.
+  const thousands = Math.round(n / 100) / 10;
+  if (n >= 1_000_000 || thousands >= 1_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${thousands.toFixed(1)}K`;
   return Math.round(n).toString();
+}
+
+/** Percentage to one decimal; a non-zero share below 0.1% reads "<0.1%", not "0.0%". */
+export function formatPercent(percent: number): string {
+  const safe = Number.isFinite(percent) ? Math.max(0, percent) : 0;
+  if (safe > 0 && safe < 0.1) return '<0.1%';
+  return `${safe.toFixed(1)}%`;
 }
 
 export function shortDayLabel(isoDate: string): string {

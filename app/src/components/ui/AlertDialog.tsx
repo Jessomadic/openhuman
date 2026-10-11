@@ -32,7 +32,7 @@ export interface AlertDialogOverlayProps extends ComponentPropsWithoutRef<
   typeof AlertDialogPrimitive.Overlay
 > {}
 
-export const AlertDialogOverlay = forwardRef<
+const AlertDialogOverlay = forwardRef<
   ElementRef<typeof AlertDialogPrimitive.Overlay>,
   AlertDialogOverlayProps
 >(({ className, ...rest }, ref) => (

@@ -5,8 +5,8 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::agent::messages::ChatMessage;
 use crate::agent::subagent_host::SubagentRunStatus;
+use tinyagents_session::transcript::TranscriptMessage;
 
 use super::types::{
     DurableSubagentSession, DurableSubagentStatus, ReuseDecision, SubagentSessionSelector,
@@ -114,7 +114,6 @@ pub fn upsert_running(
             worker_thread_id: upsert.worker_thread_id.clone(),
             agent_id: upsert.selector.agent_id.clone(),
             display_name: upsert.display_name.clone(),
-            toolkit: upsert.selector.toolkit.clone(),
             model: upsert.selector.model.clone(),
             sandbox_mode: upsert.selector.sandbox_mode.clone(),
             action_root: upsert.selector.action_root.clone(),
@@ -153,7 +152,7 @@ pub fn mark_finished(
     subagent_session_id: &str,
     task_id: &str,
     run_status: &SubagentRunStatus,
-    history: Vec<ChatMessage>,
+    history: Vec<TranscriptMessage>,
 ) -> Result<(), String> {
     let updated = update_session(store, subagent_session_id, |session, now| {
         session.current_task_id = Some(task_id.to_string());

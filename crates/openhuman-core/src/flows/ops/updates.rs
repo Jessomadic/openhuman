@@ -70,7 +70,7 @@ pub async fn flows_update(
     graph_json: Option<Value>,
     require_approval: Option<bool>,
     expected_version: Option<String>,
-) -> Result<RpcOutcome<Flow>, String> {
+) -> Result<Outcome<Flow>, String> {
     flows_update_inner(
         config,
         id,
@@ -83,33 +83,6 @@ pub async fn flows_update(
     .await
 }
 
-/// Update a flow while atomically disarming any automatic-trigger graph.
-///
-/// Remote authoring surfaces use this variant so revising a schedule,
-/// app-event, or webhook flow never preserves a prior local opt-in to run the
-/// old graph. The same guarded store write persists the graph and
-/// `enabled=false`, so no trigger can observe the revised graph armed between
-/// two writes.
-pub(crate) async fn flows_update_disarming_automatic(
-    config: &Config,
-    id: &str,
-    name: Option<String>,
-    graph_json: Option<Value>,
-    require_approval: Option<bool>,
-    expected_version: Option<String>,
-) -> Result<RpcOutcome<Flow>, String> {
-    flows_update_inner(
-        config,
-        id,
-        name,
-        graph_json,
-        require_approval,
-        expected_version,
-        true,
-    )
-    .await
-}
-
 async fn flows_update_inner(
     config: &Config,
     id: &str,
@@ -118,7 +91,7 @@ async fn flows_update_inner(
     require_approval: Option<bool>,
     expected_version: Option<String>,
     disarm_automatic: bool,
-) -> Result<RpcOutcome<Flow>, String> {
+) -> Result<Outcome<Flow>, String> {
     let existing = store::get_flow(config, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("flow '{id}' not found"))?;
@@ -251,7 +224,7 @@ async fn flows_update_inner(
                 .to_string(),
         );
     }
-    Ok(RpcOutcome::new(updated, logs))
+    Ok(Outcome::new(updated, logs))
 }
 
 /// Lists a flow's revision history (prior graph snapshots), newest first,
@@ -260,10 +233,10 @@ pub fn flows_get_history(
     config: &Config,
     id: &str,
     limit: usize,
-) -> Result<RpcOutcome<Vec<crate::flows::FlowRevision>>, String> {
+) -> Result<Outcome<Vec<crate::flows::FlowRevision>>, String> {
     let revisions = store::list_revisions(config, id, limit).map_err(|e| e.to_string())?;
     let count = revisions.len();
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         revisions,
         format!("flow history: {id} ({count} revisions)"),
     ))
@@ -278,7 +251,7 @@ pub async fn flows_rollback(
     id: &str,
     revision_id: &str,
     expected_version: Option<String>,
-) -> Result<RpcOutcome<Flow>, String> {
+) -> Result<Outcome<Flow>, String> {
     let rev = store::revision_by_id(config, id, revision_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("revision '{revision_id}' not found for flow '{id}'"))?;

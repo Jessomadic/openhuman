@@ -2,36 +2,18 @@ use super::*;
 
 use crate::agent::host_runtime::{NativeRuntime, RuntimeAdapter};
 use crate::config::{Config, DelegateAgentConfig};
-use crate::runtime::javascript::NodeBootstrap;
-use crate::runtime::python::PythonBootstrap;
 use crate::security::{AuditLogger, SecurityPolicy};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tinyagents_harness::tools::{self as harness_tools, CurrentTimeTool, ResolveTimeTool};
 use tinytools::Tool;
-#[cfg(test)]
-use tinytools::{ToolResult, ToolSpec};
-
-pub(crate) use super::capability::tool_capability;
-
-/// Derive the browser tool's host allowlist from the unified web-access list
-/// (`http_request.allowed_domains`).
-///
-/// The browser tool shares the single fetch allowlist rather than the
-/// deprecated `[browser].allowed_domains`, but the `"*"` allow-all wildcard is
-/// stripped on purpose: `web_fetch`/`curl` treat `"*"` as "open to all public
-/// sites", whereas the browser (a real Chromium with JS, cookies, and
-/// logged-in sessions) must NOT inherit blanket access from a fetch-side
-/// toggle. Browser allow-all stays gated by `OPENHUMAN_BROWSER_ALLOW_ALL`
-/// (`allow_all_browser_domains()`), and the tool itself stays behind
-/// `browser.enabled`. Net effect is fail-safe: unifying can only ever narrow
-/// the browser's reach, never widen it.
-pub(crate) fn browser_allowed_domains(http_allowed_domains: &[String]) -> Vec<String> {
-    http_allowed_domains
-        .iter()
-        .filter(|domain| domain.as_str() != "*")
-        .cloned()
-        .collect()
-}
+use tinytools_std::detect_tools::DetectToolsTool;
+use tinytools_std::filesystem::{
+    ApplyPatchTool, CsvExportTool, EditFileTool, FileReadTool, FileWriteTool, GitOperationsTool,
+    GlobTool, GrepTool, ImageInfoTool, ListFilesTool, ReadDiffTool, RunLinterTool, RunTestsTool,
+    WorkspaceStateTool,
+};
+use tinytools_std::network::{CurlTool, PushoverTool};
 
 /// Create the default tool registry
 pub fn default_tools(security: Arc<SecurityPolicy>) -> Vec<Box<dyn Tool>> {
@@ -97,57 +79,10 @@ pub fn all_tools_with_runtime(
     root_config: &crate::config::Config,
     approval_workspace_root: Option<&std::path::Path>,
 ) -> Vec<Box<dyn Tool>> {
-    // One shared snapshot of this session's configuration for both language
-    // clients. They each hand it to the `tinyruntime` module on every call —
-    // the module holds no configuration of its own — so the two must not be
-    // able to disagree about which version this session asked for. The
-    // registry is assembled under `config`, so the bootstraps share that same
-    // Arc rather than a separately-cloned `root_config` — one configuration
-    // snapshot for everything this session builds.
-    let shared_config = Arc::clone(&config);
-
-    // Build a session-scoped managed Node.js bootstrap once, so ShellTool,
-    // NodeExecTool, and NpmExecTool all share the same memoised resolution
-    // state. Disabled when `node.enabled = false` — in that case shell skips
-    // PATH injection and node/npm tools are not registered.
-    // `runtime-node` off => never construct a bootstrap: the stub resolves to
-    // nothing anyway, and this keeps the shell's PATH-injection branch dead
-    // rather than a silent per-invocation no-op.
-    let node_bootstrap: Option<Arc<NodeBootstrap>> = if cfg!(feature = "runtime-node")
-        && root_config.node.enabled
-    {
-        tracing::debug!(
-            version = %root_config.node.version,
-            prefer_system = root_config.node.prefer_system,
-            "[tools::ops] node runtime enabled — constructing shared NodeBootstrap"
-        );
-        Some(Arc::new(NodeBootstrap::new(Arc::clone(&shared_config))))
-    } else {
-        tracing::debug!(
-            "[tools::ops] node runtime disabled — shell PATH injection + node_exec/npm_exec suppressed"
-        );
-        None
-    };
-    let python_bootstrap: Option<Arc<PythonBootstrap>> = if root_config.runtime_python.enabled {
-        tracing::debug!(
-            minimum_version = %root_config.runtime_python.minimum_version,
-            prefer_system = root_config.runtime_python.prefer_system,
-            "[tools::ops] python runtime enabled — constructing shared PythonBootstrap"
-        );
-        Some(Arc::new(PythonBootstrap::new(Arc::clone(&shared_config))))
-    } else {
-        tracing::debug!(
-            "[tools::ops] python runtime disabled — shell python/pip PATH injection suppressed"
-        );
-        None
-    };
-
-    let shell: Box<dyn Tool> = Box::new(ShellTool::with_language_bootstraps(
+    let shell: Box<dyn Tool> = Box::new(ShellTool::new(
         security.clone(),
         Arc::clone(&runtime),
         Arc::clone(&audit),
-        node_bootstrap.as_ref().map(Arc::clone),
-        python_bootstrap.as_ref().map(Arc::clone),
     ));
 
     let file_write: Box<dyn Tool> = match approval_workspace_root {
@@ -185,22 +120,17 @@ pub fn all_tools_with_runtime(
         // Several agent scopes (orchestrator, crypto, markets, scheduler,
         // desktop control) name it, so it must exist in the base
         // registry or none of them can actually ask the user anything.
-        Box::new(AskClarificationTool::new()),
+        Box::new(harness_tools::AskClarificationTool::new()),
         // Read-only project overview (git status, recent commits, top-level
         // tree) rooted at the agent action dir. Named by the orchestrator and
         // planner scopes.
         Box::new(WorkspaceStateTool::new(action_dir.to_path_buf())),
-        // "Plan mode as a subagent": runs the read-only `context_scout`
-        // inline and returns a bounded context bundle + recommended next
-        // tool calls. Visible only to agents that allowlist it
-        // (orchestrator / planner).
-        Box::new(AgentPrepareContextTool::new()),
         // Steer/list/close reusable async sub-agents and collect results by
         // durable `subagent_session_id` (preferred) or transient `task_id`.
         Box::new(ListSubagentsTool::new()),
         Box::new(SteerSubagentTool::new()),
-        Box::new(WaitTool::new()),
-        Box::new(WaitLoopTool::new()),
+        Box::new(harness_tools::WaitTool::new()),
+        Box::new(harness_tools::WaitLoopTool::new()),
         Box::new(WaitSubagentTool::new()),
         Box::new(CloseSubagentTool::new()),
         Box::new(ContinueSubagentTool::new()),
@@ -213,7 +143,7 @@ pub fn all_tools_with_runtime(
         // The session todo list (Claude/Codex style): one whole-list write per
         // call, scoped to the conversation thread. `plan_exit` is the marker
         // that hands a plan-mode pass off to a build-mode pass.
-        Box::new(TodoTool::new()),
+        Box::new(TodoTool::new(root_config.workspace_dir.clone())),
         // Interactive plan-review gate: parks the live turn on a thread-scoped
         // plan the user must approve before execution (Codex/Claude plan mode).
         Box::new(crate::agent::plan_review::RequestPlanReviewTool::new()),
@@ -232,7 +162,7 @@ pub fn all_tools_with_runtime(
         // Reversibility for native tool-output compaction (Stage 1a): when a
         // large result is compacted with a `retrieve_tool_output("<hash>")`
         // marker, this hands the original back from the CCR store on demand.
-        Box::new(RetrieveToolOutputTool::new()),
+        Box::new(retrieve_tool_output_tool()),
         // TokenJuice 2.0 content-router retrieval: fetches the original (full or
         // by byte/line range) for a `⟦tj:<hash>⟧` marker from the CCR cache.
         // Supersedes `retrieve_tool_output`; both are kept live during migration.
@@ -328,7 +258,7 @@ pub fn all_tools_with_runtime(
         #[cfg(feature = "flows")]
         Box::new(GetToolOutputSampleTool::new(config.clone())),
         // Ground an `agent` node's `agent_ref` in real registered agent-kind ids
-        // (researcher / code_executor / …) — the agent analogue of
+        // (code_executor / critic / …) — the agent analogue of
         // search_tool_catalog. Read-only.
         #[cfg(feature = "flows")]
         Box::new(ListAgentDefinitionsTool::new()),
@@ -383,70 +313,20 @@ pub fn all_tools_with_runtime(
         // Wallet tools — expose wallet operations to the agent tool-call pipeline
         // so the crypto sub-agent can prepare transfers, check status, etc.
         // Gated with the `web3` feature (the wallet domain is compiled out when
-        // web3 is disabled; the concrete tool types live under `wallet::tools`).
+        // web3 is disabled; the concrete tool types live in `tinywallet-web3`,
+        // re-exported under `wallet::tools`, and run over the process-wide engine).
         #[cfg(feature = "web3")]
-        Box::new(WalletStatusTool::new()),
+        Box::new(WalletStatusTool::new(crate::web3::seams::engine())),
         #[cfg(feature = "web3")]
-        Box::new(WalletChainStatusTool::new()),
+        Box::new(WalletChainStatusTool::new(crate::web3::seams::engine())),
         #[cfg(feature = "web3")]
-        Box::new(WalletPrepareTransferTool::new()),
+        Box::new(WalletPrepareTransferTool::new(crate::web3::seams::engine())),
         #[cfg(feature = "web3")]
-        Box::new(WalletTxStatusTool::new()),
+        Box::new(WalletTxStatusTool::new(crate::web3::seams::engine())),
         #[cfg(feature = "web3")]
-        Box::new(WalletTxReceiptTool::new()),
+        Box::new(WalletTxReceiptTool::new(crate::web3::seams::engine())),
         #[cfg(feature = "web3")]
-        Box::new(WalletLookupTxTool::new()),
-        // The memory surface the model sees. The eleven per-operation tools it
-        // dispatches to stay registered as `ToolExposure::Hidden` so a
-        // replayed transcript or a saved skill naming `memory_*` still works —
-        // see `memory::tools::collapsed`.
-        Box::new(crate::memory::tools::MemoryTool::new(
-            config.clone(),
-            security.clone(),
-        )),
-        Box::new(MemoryStoreTool::new(security.clone())),
-        Box::new(MemoryRecallTool::new()),
-        Box::new(MemoryForgetTool::new(security.clone())),
-        // #4458: the memory read→dedupe→write→update-index protocol
-        // (`agent::harness::memory_protocol`) can only close its write cycle via a
-        // successful `update_memory_md` call, and the archivist's `[tools] named`
-        // allowlist selects it — but subagents only filter the *parent* tool set,
-        // so if this tool is absent from the registry the archivist silently loses
-        // it and the model hits a permanent unsatisfiable "call update_memory_md"
-        // nag loop (unknown-tool error → the tracker never sees IndexUpdate). It is
-        // always registered here (same as the other memory tools); per-agent
-        // visibility is governed by each agent's `named` allowlist. Targets the
-        // workspace `MEMORY.md`/`SKILL.md` (where `channels_prompt`/`session_memory`
-        // read them from), and prefers the live TinyAgents workspace descriptor at
-        // execution time when one is present.
-        Box::new(UpdateMemoryMdTool::new(root_config.workspace_dir.clone())),
-        // #002: read-only self-diagnosis of the memory pipeline so the agent
-        // can explain an empty/stalled wiki + the fix.
-        Box::new(MemoryDoctorTool::new(config.clone())),
-        // #5172: read-only access to the compiled persona flavour profiles
-        // (communication/coding_style/stack/workflow/environment/directives/
-        // anti_preferences) that persona ingestion builds but nothing
-        // previously surfaced to the agent loop.
-        Box::new(MemoryFlavourTool::new(config.clone())),
-        Box::new(MemoryQueryTool),
-        // memory_search tools — vector search, chunk context, hybrid search,
-        // and previously unregistered raw store tools.
-        Box::new(MemoryVectorSearchTool),
-        Box::new(MemoryChunkContextTool),
-        Box::new(MemoryHybridSearchTool),
-        Box::new(MemoryStoreRawSearchTool),
-        Box::new(MemoryStoreRawChunksTool),
-        Box::new(MemoryStoreKindsTool),
-        // Explicit user-preference pinning — always registered so the model
-        // can save user-stated preferences regardless of whether the full
-        // inference-based learning subsystem is enabled.  The preference
-        // injection into the system prompt is controlled independently by
-        // `config.learning.explicit_preferences_enabled`.
-        Box::new(RememberPreferenceTool::new(security.clone())),
-        // Two-lane explicit preferences (general → system prompt, situational →
-        // per-query recall). Written verbatim to user_pref_{general,situational};
-        // bypasses the inference/stability pipeline. Always registered.
-        Box::new(SavePreferenceTool::new(security.clone())),
+        Box::new(WalletLookupTxTool::new(crate::web3::seams::engine())),
         Box::new(ScheduleTool::new(security.clone(), root_config.clone())),
         Box::new(ProxyConfigTool::new(config.clone(), security.clone())),
         Box::new(UpdateCheckTool::new()),
@@ -455,6 +335,13 @@ pub fn all_tools_with_runtime(
             security.clone(),
             action_dir.to_path_buf(),
         )),
+        // Review loop for skill `coding` (and the workflow-run `critic`):
+        // diff, lint and test the working tree in the action sandbox. They
+        // were defined but never registered, so the belts naming them held
+        // nothing. `Deferred`, so they cost no schema until found.
+        Box::new(ReadDiffTool::new(action_dir.to_path_buf())),
+        Box::new(RunLinterTool::new(action_dir.to_path_buf())),
+        Box::new(RunTestsTool::new(action_dir.to_path_buf())),
         Box::new(PushoverTool::new(
             security.clone(),
             action_dir.to_path_buf(),
@@ -514,21 +401,6 @@ pub fn all_tools_with_runtime(
         Box::new(WorkflowInstallFromUrlTool::new(config.clone())),
         #[cfg(feature = "skills")]
         Box::new(WorkflowUninstallTool),
-        // Learning (user-profile facet cache) tools. Reads ship default-ON;
-        // every mutator ships default-OFF via `tools::user_filter`
-        // (learning_manage toggle) — they persistently rewrite the assistant's
-        // model of the user. enrich_profile also flags external_effect.
-        Box::new(LearningListFacetsTool),
-        Box::new(LearningGetFacetTool),
-        Box::new(LearningCacheStatsTool),
-        Box::new(LearningUpdateFacetTool),
-        Box::new(LearningPinFacetTool),
-        Box::new(LearningUnpinFacetTool),
-        Box::new(LearningForgetFacetTool),
-        Box::new(LearningRebuildCacheTool),
-        Box::new(LearningResetCacheTool),
-        Box::new(LearningSaveProfileTool),
-        Box::new(LearningEnrichProfileTool),
         // Task & productivity tools (issue: agent-tool expansion).
         // Read/observe + bounded-write tools are registered here; the
         // destructive/overextending siblings (artifact_delete,
@@ -559,6 +431,23 @@ pub fn all_tools_with_runtime(
         Box::new(CostDailyHistoryTool::new(config.clone())),
         Box::new(CostSummaryTool::new(config.clone())),
         Box::new(DashboardModelHealthTool::new(config.clone())),
+        #[cfg(feature = "modules")]
+        Box::new(DesktopTool::new(config.clone(), DesktopToolKind::Apps)),
+        #[cfg(feature = "modules")]
+        Box::new(DesktopTool::new(config.clone(), DesktopToolKind::Windows)),
+        #[cfg(feature = "modules")]
+        Box::new(DesktopTool::new(config.clone(), DesktopToolKind::Launch)),
+        #[cfg(feature = "modules")]
+        Box::new(DesktopTool::new(config.clone(), DesktopToolKind::Snapshot)),
+        #[cfg(feature = "modules")]
+        Box::new(DesktopTool::new(config.clone(), DesktopToolKind::Find)),
+        #[cfg(feature = "modules")]
+        Box::new(DesktopTool::new(config.clone(), DesktopToolKind::Goal)),
+        #[cfg(feature = "modules")]
+        Box::new(DesktopTool::new(
+            config.clone(),
+            DesktopToolKind::ContinueGoal,
+        )),
         Box::new(SecurityPolicyInfoTool::new(config.clone())),
         Box::new(ServiceStatusTool::new(config.clone())),
         Box::new(DaemonHostPrefsGetTool::new(config.clone())),
@@ -620,18 +509,24 @@ pub fn all_tools_with_runtime(
         Box::new(WorkspaceInitTool),
     ];
 
-    log::debug!(
-        "[tools::ops][memory_search] registered memory_vector_search, memory_chunk_context, \
-         memory_hybrid_search, memory_store_raw_search, memory_store_raw_chunks, memory_store_kinds"
-    );
+    // The single `memory` tool (recall | fetch | learn | forget), registered
+    // only while memory is on: with no usable engine (signed out, no CortexDB
+    // key) the model is not offered a tool that can only fail.
+    if crate::memory::engine::is_on(root_config) {
+        tools.push(Box::new(crate::memory::MemoryTool::new(config.clone())));
+        tracing::debug!("[tools::ops] registered memory tool");
+    } else {
+        tracing::debug!("[tools::ops] memory off; memory tool not registered");
+    }
 
-    // Presentation generation (#2778). Native-Rust engine (ppt-rs
-    // backed) as of the #2780-follow-up rust-engine refactor — no
-    // managed Python venv, no first-call install latency. Always
-    // registered.
+    // `juice_find` / `juice_extract` / `juice_summarize`: only while a handle can name them.
+    tools.extend(crate::inference::tokenjuice::repl_tools_for(root_config));
+
+    // Presentation generation (#2778), backed by the native Rust engine.
+    // Always registered.
     #[cfg(feature = "documents")]
-    tools.push(Box::new(PresentationTool::new(
-        root_config.workspace_dir.clone(),
+    tools.push(Box::new(PresentationTool::for_config(
+        root_config,
         security.clone(),
     )));
 
@@ -640,17 +535,9 @@ pub fn all_tools_with_runtime(
     // real `.docx` through the same byte-agnostic artifact pipeline as
     // the presentation tool. Always registered; same constructor shape.
     #[cfg(feature = "documents")]
-    tools.push(Box::new(DocumentTool::new(
-        root_config.workspace_dir.clone(),
+    tools.push(Box::new(DocumentTool::for_config(
+        root_config,
         security.clone(),
-    )));
-
-    // Long-term goals list tool. Used primarily by the background
-    // `goals_agent` (which filters to it via its `[tools] named` allowlist);
-    // also available to the main agent for explicit edits. One `op`-dispatched
-    // tool, not four — see the module docs on `memory::tools::goals`.
-    tools.push(Box::new(crate::memory::tools::goals::GoalsTool::new(
-        root_config.workspace_dir.clone(),
     )));
 
     // Thread-level goal tools (Codex-style per-thread completion contract).
@@ -658,48 +545,21 @@ pub fn all_tools_with_runtime(
     // thread is resolved from the ambient `thread_id`, so no thread arg is
     // taken. `goal_get`/`goal_set`/`goal_complete` — pause/resume/budget are
     // system-driven and have no model tool.
-    {
-        let goal_dir = root_config.workspace_dir.clone();
-        tools.push(Box::new(crate::agent::goals::GoalGetTool::new(
-            goal_dir.clone(),
-        )));
-        tools.push(Box::new(crate::agent::goals::GoalSetTool::new(
-            goal_dir.clone(),
-        )));
-        tools.push(Box::new(crate::agent::goals::GoalCompleteTool::new(
-            goal_dir,
-        )));
-    }
+    tools.extend(crate::agent::goals::goal_tools(&root_config.workspace_dir));
 
+    #[cfg(feature = "modules")]
     if browser_config.enabled {
-        // Unified web-access allowlist (merge fetch + browser firewalls): the
-        // browser tool shares the single `http_request.allowed_domains` host
-        // list rather than the now-deprecated `[browser].allowed_domains`. See
-        // `browser_allowed_domains` for why the `"*"` wildcard is stripped.
-        let browser_allowed_domains = browser_allowed_domains(&http_config.allowed_domains);
-        // Add legacy browser_open tool for simple URL opening
+        // BrowserClient enforces the shared `http_request.allowed_domains`
+        // policy for both browser tools.
+        let browser_client = Arc::new(crate::modules::browser::BrowserClient::new(config.clone()));
         tools.push(Box::new(BrowserOpenTool::new(
             security.clone(),
-            browser_allowed_domains.clone(),
+            browser_client.clone(),
         )));
-        // Add full browser automation tool (pluggable backend)
-        tools.push(Box::new(BrowserTool::new_with_backend(
+        tools.push(Box::new(BrowserTool::new(
             security.clone(),
-            browser_allowed_domains.clone(),
-            browser_config.session_name.clone(),
-            browser_config.backend.clone(),
-            browser_config.native_headless,
-            browser_config.native_webdriver_url.clone(),
-            browser_config.native_chrome_path.clone(),
-            ComputerUseConfig {
-                endpoint: browser_config.computer_use.endpoint.clone(),
-                api_key: None,
-                timeout_ms: browser_config.computer_use.timeout_ms,
-                allow_remote_endpoint: browser_config.computer_use.allow_remote_endpoint,
-                window_allowlist: browser_config.computer_use.window_allowlist.clone(),
-                max_coordinate_x: browser_config.computer_use.max_coordinate_x,
-                max_coordinate_y: browser_config.computer_use.max_coordinate_y,
-            },
+            browser_client,
+            browser_config.max_task_steps,
         )));
     }
 
@@ -707,7 +567,7 @@ pub fn all_tools_with_runtime(
     // + `security` still gate which hosts are reachable; there is no
     // enable flag because every session needs basic HTTP as a baseline
     // capability.
-    tools.push(Box::new(HttpRequestTool::new(
+    tools.push(Box::new(http_request_tool(
         security.clone(),
         http_config.allowed_domains.clone(),
         http_config.max_response_size,
@@ -719,13 +579,16 @@ pub fn all_tools_with_runtime(
     // or SPL payment signing, and ledger recording. Gated with the `web3`
     // feature (the x402 domain is compiled out when web3 is disabled).
     #[cfg(feature = "web3")]
-    tools.push(Box::new(crate::web3::x402::tools::X402RequestTool::new()));
+    tools.push(Box::new(crate::web3::x402::request_tool(
+        security.clone(),
+        http_config.allowed_domains.clone(),
+    )));
 
     // Coding-harness baseline `web_fetch` (issue #1205) — single-purpose
     // GET-and-read primitive that reuses the same allowed-domains gate
     // as `http_request`. Use this for docs/READMEs; reach for
     // `http_request` only when you need richer HTTP semantics.
-    tools.push(Box::new(WebFetchTool::new(
+    tools.push(Box::new(web_fetch_tool(
         security.clone(),
         http_config.allowed_domains.clone(),
         Some(http_config.max_response_size),
@@ -797,13 +660,26 @@ pub fn all_tools_with_runtime(
         if !mcp_registry.is_empty() {
             tools.push(Box::new(McpListServersTool::new(Arc::clone(&mcp_registry))));
             tools.push(Box::new(McpListToolsTool::new(Arc::clone(&mcp_registry))));
-            tools.push(Box::new(McpCallTool::new(
+            tools.push(Box::new(mcp_call_tool(
                 Arc::clone(&mcp_registry),
                 security.clone(),
             )));
             tracing::debug!(
                 count = mcp_registry.list().len(),
                 "[mcp_client] registered generic MCP bridge tools"
+            );
+            // And every cached server tool as its own `mcp_<server>_<tool>`,
+            // deferred unless the server asks for direct exposure. Names
+            // already taken keep their owner.
+            let reserved: std::collections::HashSet<String> =
+                tools.iter().map(|tool| tool.name().to_string()).collect();
+            tools.extend(
+                crate::tools::implementations::network::configured_server_tools(
+                    root_config,
+                    &mcp_registry,
+                    security,
+                    &reserved,
+                ),
             );
         } else {
             tracing::debug!("[mcp_client] no MCP servers registered — bridge tools skipped");
@@ -857,53 +733,8 @@ pub fn all_tools_with_runtime(
     // when the user is not signed in, so they register unconditionally.
     tools.extend(crate::web3::all_web3_agent_tools());
 
-    // Managed Node.js exec tools — gated on `root_config.node.enabled`.
-    // Both share the same `NodeBootstrap` as ShellTool so the download +
-    // extract + install pipeline runs at most once per session.
-    #[cfg(feature = "runtime-node")]
-    if let Some(bootstrap) = node_bootstrap.as_ref() {
-        tools.push(Box::new(NodeExecTool::new(
-            security.clone(),
-            Arc::clone(&runtime),
-            Arc::clone(bootstrap),
-            root_config.runtime_pool.clone(),
-            root_config.workspace_dir.clone(),
-        )));
-        tools.push(Box::new(NpmExecTool::new(
-            security.clone(),
-            Arc::clone(&runtime),
-            Arc::clone(bootstrap),
-        )));
-        tracing::debug!("[tools::ops] registered node_exec + npm_exec");
-    }
-
-    // Managed Python exec tool — gated on `root_config.runtime_python.enabled`.
-    // Shares the same `PythonBootstrap` as ShellTool. Inline code routes through
-    // the shared runtime pool (#5106) when enabled.
-    if let Some(bootstrap) = python_bootstrap.as_ref() {
-        tools.push(Box::new(PythonExecTool::new(
-            security.clone(),
-            Arc::clone(&runtime),
-            Arc::clone(bootstrap),
-            root_config.runtime_pool.clone(),
-            root_config.workspace_dir.clone(),
-        )));
-        tracing::debug!("[tools::ops] registered python_exec");
-    }
-
     // Image metadata is always available for user-provided images.
     tools.push(Box::new(ImageInfoTool::new(security.clone())));
-
-    // Tool effectiveness stats (enabled when learning is on)
-    tracing::debug!(
-        learning_enabled = root_config.learning.enabled,
-        tool_tracking_enabled = root_config.learning.tool_tracking_enabled,
-        "evaluating ToolStatsTool registration"
-    );
-    if root_config.learning.enabled && root_config.learning.tool_tracking_enabled {
-        tools.push(Box::new(ToolStatsTool::new()));
-        tracing::debug!("ToolStatsTool registered");
-    }
 
     // Add delegation tool when agents are configured
     if !agents.is_empty() {
@@ -940,17 +771,10 @@ pub fn all_tools_with_runtime(
         } else {
             tracing::debug!("[integrations] google_places disabled — skipping");
         }
-        // NOTE: parallel tools moved to the unified [search] engine
-        // selector above. `integrations.parallel` is parsed but no
-        // longer registers tools directly — set
-        // `search.engine = "parallel"` instead.
-        if root_config.integrations.parallel.is_active() {
-            tracing::debug!(
-                "[integrations] parallel toggle is active but tools are governed by search.engine now"
-            );
-        }
-        // TinyFish is search-owned and registers through the unified search
-        // surface above so `search.engine = "disabled"` suppresses it too.
+        // Web search providers (Exa, Gemini, TinyFish, ...) register through
+        // the TinySearch module above, so `[search] enabled = false`
+        // suppresses them too. `integrations.parallel` is parsed for old
+        // config files and no longer does anything.
         if root_config.integrations.stock_prices.is_active() {
             tools.push(Box::new(crate::tools::StockQuoteTool::new(Arc::clone(
                 &client,
@@ -971,33 +795,21 @@ pub fn all_tools_with_runtime(
         } else {
             tracing::debug!("[integrations] stock_prices disabled — skipping");
         }
-        if root_config.integrations.twilio.is_active() {
-            tools.push(Box::new(crate::tools::TwilioCallTool::new(Arc::clone(
-                &client,
-            ))));
-            tracing::debug!("[integrations] registered twilio tools");
-        } else {
-            tracing::debug!("[integrations] twilio disabled — skipping");
-        }
-
-        // Composio — backend-proxied 1000+ OAuth integrations. Registers
-        // five agent tools (list_toolkits, list_connections, authorize,
-        // list_tools, execute) when the composio toggle is on. See
-        // `crates/openhuman-core/src/integrations/composio/tools.rs` for per-tool details.
-        let composio_tools = crate::integrations::composio::all_composio_agent_tools(root_config);
-        if !composio_tools.is_empty() {
-            tracing::debug!(
-                count = composio_tools.len(),
-                "[integrations] registered composio tools"
-            );
-            tools.extend(composio_tools);
-        } else {
-            tracing::debug!("[integrations] composio disabled — skipping");
-        }
     } else {
         tracing::debug!(
             "[integrations] build_client returned None — integration tools not registered"
         );
+    }
+
+    let composio_tools = crate::integrations::composio::all_composio_agent_tools(root_config);
+    if composio_tools.is_empty() {
+        tracing::debug!("[integrations] composio unavailable — skipping");
+    } else {
+        tracing::debug!(
+            count = composio_tools.len(),
+            "[integrations] registered composio tools"
+        );
+        tools.extend(composio_tools);
     }
 
     // Coding-harness `lsp` tool (issue #1205) — capability-gated by the
@@ -1011,31 +823,19 @@ pub fn all_tools_with_runtime(
         tracing::debug!("[lsp] capability gate off (set OPENHUMAN_LSP_ENABLED=1 to register)");
     }
 
-    // Two INDEPENDENT post-filters over the assembled list (kernel.md §3.7's
-    // separate axes — a narrowed DomainSet must not narrow capabilities, and
-    // vice versa):
+    // Post-filters over the assembled list:
     //
     // 1. DomainSet (#4796): drop tools whose DomainGroup is disabled under the
-    //    ambient CoreContext. With no active context, or under
-    //    `DomainSet::full()`, every tool is kept (byte-identical). Under
-    //    `harness()` the gate-family tools (web3/mcp/skills/flows/media/voice)
-    //    are dropped so agent turns can't call a domain that isn't live;
-    //    only the memory + threads tools survive (the mapped harness families)
-    //    — see `tool_group` for the classification and its Platform-default
-    //    caveat.
-    // 2. Memory capability (M5.3): drop tools whose memory family the bound
-    //    driver does not advertise — see `tool_capability`.
-    //
-    // Both default OPEN: with no ambient context and with nothing bound the
-    // list is unchanged. Absence beats a stub that errors — a
-    // registered-but-failing memory tool teaches the model the capability
-    // exists and makes it retry (the `flows` compile-gate's reasoning).
+    //    ambient CoreContext; no context, or `DomainSet::full()`, keeps every
+    //    tool. Under `harness()` only the memory + threads families survive
+    //    (see `tool_group` and its Platform-default caveat). In SaaS,
+    //    `profiles::tools::admits` also applies the operator's host groups.
     let before = tools.len();
     let domains = crate::core::runtime::context::CoreContext::current().map(|c| c.domains());
     let mut tools: Vec<Box<dyn Tool>> = if let Some(set) = domains {
         tools
             .into_iter()
-            .filter(|t| set.allows(tool_group(t.name())))
+            .filter(|t| crate::profiles::tools::admits(t.name(), set.allows(tool_group(t.name()))))
             .collect()
     } else {
         // No ambient context (unit tests / pre-boot) ⇒ no domain filtering.
@@ -1043,13 +843,10 @@ pub fn all_tools_with_runtime(
     };
     let after_domains = tools.len();
 
-    tools.retain(|t| crate::core::all::capability_allowed(tool_capability(t.name())));
-    let after_capabilities = tools.len();
-
-    // 3. ToolGroups: a group an embedder set to `Off` is not registered at all.
+    // 2. ToolGroups: a group an embedder set to `Off` is not registered at all.
     //    `Advertised` and `Withheld` both keep the tool here — they differ only
     //    in whether its schema reaches the provider, which is decided later by
-    //    `strip_packed_from_visible`. Same default-open rule as the two filters
+    //    `strip_packed_from_visible`. Same default-open rule as the filter
     //    above: with no ambient context every group is `Withheld`, so nothing
     //    is dropped and the desktop list is unchanged.
     {
@@ -1059,7 +856,7 @@ pub fn all_tools_with_runtime(
 
     log::debug!(
         "[tools::ops][post-filter] {before} assembled → {after_domains} after DomainSet → \
-         {after_capabilities} after memory capabilities → {} after ToolGroups",
+         {} after ToolGroups",
         tools.len()
     );
 
@@ -1070,258 +867,16 @@ pub fn all_tools_with_runtime(
     // through this function.
     crate::tools::toolpacks::append_pack_tools(&mut tools);
     // The lookup half of `ToolExposure::Deferred` is not registered here: the
-    // tinyagents harness advertises its intrinsic `tool_search` / `tool_call`
-    // bridge whenever a run has a deferred tool (`tool::discover`), ranked by
-    // whatever `agent::tinyagents::discovery` installed. A host-registered
+    // tinyagents harness advertises its intrinsic `tool_search` bridge
+    // (a found tool is then called by its own name) whenever a run has a
+    // deferred tool (`tool::discover`), ranked by whatever `agent::tinyagents::discovery` installed. A host-registered
     // `tool_search` would shadow that bridge.
     tools
 }
 
-/// Classify an agent tool into its [`DomainGroup`](crate::core::all::DomainGroup)
-/// by its `name()`, so [`all_tools_with_runtime`] can drop tools whose family is
-/// disabled under the ambient [`DomainSet`](crate::core::runtime::DomainSet).
-///
-/// Named-family tools are matched here; everything without a domain family
-/// defaults to `Platform`. Under `harness()`, the Agent/Memory/Threads/Config/
-/// Security tools remain while gate-family and generic Platform tools drop.
-/// (Names verified against each Tool impl's `fn name()` on 2026-07-13.)
-fn tool_group(name: &str) -> crate::core::all::DomainGroup {
-    use crate::core::all::DomainGroup;
-
-    // Gate families with a domain-exclusive name prefix are matched by prefix
-    // (not an exact list) so a NEW tool in the family auto-gates instead of
-    // silently defaulting to Platform and leaking under a custom DomainSet
-    // (#4808 maintainer review). Web3 = wallet_/web3_/x402_, Media = media_,
-    // Mcp = mcp_ (below). Families without a clean prefix (Skills/Flows) keep
-    // their exact lists; `no_gate_family_tool_silently_defaults_to_platform`
-    // guards the prefix families.
-    const SKILLS: &[&str] = &[
-        "run_workflow",
-        "await_workflow",
-        "list_workflows",
-        "create_skill",
-        "describe_workflow",
-        "read_workflow_resource",
-        "list_workflow_runs",
-        "read_workflow_run_log",
-        "install_workflow_from_url",
-        "uninstall_workflow",
-        "skill_registry_browse",
-        "skill_registry_search",
-        "skill_registry_install",
-        "skill_registry_sources",
-        "skill_registry_uninstall",
-        "skill_runtime_resolve_runtimes",
-    ];
-    // Flows has no clean tool-name prefix, so it MUST list every flow-owned
-    // tool explicitly — a missing name falls through to `Platform` below and
-    // stays callable under a custom `DomainSet { platform: true, flows: false }`,
-    // leaking the flows surface past the runtime gate (#4808 review; #4797
-    // maintainer review). Keep this in lockstep with the `#[cfg(feature =
-    // "flows")]` registrations in `all_tools_with_runtime` above — the same 28
-    // names asserted by `default_tools_omits_flows_tools_when_feature_off`.
-    const FLOWS: &[&str] = &[
-        "propose_workflow",
-        "revise_workflow",
-        "edit_workflow",
-        "validate_workflow",
-        "get_flow_history",
-        "dry_run_workflow",
-        "save_workflow",
-        "suggest_workflows",
-        "run_flow",
-        "list_flow_runs",
-        "resume_flow_run",
-        "cancel_flow_run",
-        "create_workflow",
-        "duplicate_flow",
-        "list_flows",
-        "get_flow",
-        "get_flow_run",
-        "list_flow_connections",
-        "search_tool_catalog",
-        "get_tool_contract",
-        "get_tool_output_sample",
-        "list_agent_definitions",
-        "list_connectable_toolkits",
-        "list_node_kinds",
-        "get_node_kind_contract",
-        // Per-flow sandboxed memory (issue #5173) — `flow_` prefixed, not
-        // `memory_`, so it does NOT fall under the `memory_` prefix check
-        // below and must be listed here explicitly like every other
-        // flow-owned tool.
-        "flow_memory_recall",
-        "flow_memory_remember",
-    ];
-    // Voice family agent tools (audio_toolkit) — no `voice_`/`tts_`/`stt_`
-    // prefix, so they must be listed explicitly or they fall through to
-    // Platform and stay callable when Voice is gated off (#4808 review).
-    const VOICE: &[&str] = &[
-        "audio_generate_podcast",
-        "audio_email_podcast",
-        "audio_generate_and_email_podcast",
-    ];
-    // Threads: thread_* / todo_* handled by prefix below; these are the extras.
-    // Subconscious monitor + proactive-notify tools (Automation family).
-    const MONITORS: &[&str] = &[
-        "monitor",
-        "monitor_list",
-        "monitor_read",
-        "monitor_stop",
-        "notify_user",
-    ];
-    const THREADS_EXTRA: &[&str] = &["goal_get", "goal_set", "goal_complete"];
-    // Memory extras not covered by the `memory_`/`goals_` prefixes. `goals`
-    // has no trailing underscore since the four `goals_*` tools collapsed into
-    // one `op`-dispatched tool, so it needs an entry here rather than a prefix.
-    const MEMORY_EXTRA: &[&str] = &[
-        "remember_preference",
-        "save_preference",
-        "update_memory_md",
-        "tool_stats",
-        "goals",
-    ];
-
-    // MCP: every MCP tool name is `mcp_` prefixed (mcp_registry_*,
-    // mcp_call_tool, mcp_list_servers, mcp_list_tools).
-    if name.starts_with("mcp_") {
-        return DomainGroup::Mcp;
-    }
-    // Web3: wallet_/web3_/x402_ are all Web3-exclusive prefixes.
-    if name.starts_with("wallet_") || name.starts_with("web3_") || name.starts_with("x402_") {
-        return DomainGroup::Web3;
-    }
-    if SKILLS.contains(&name) {
-        return DomainGroup::Skills;
-    }
-    if FLOWS.contains(&name) {
-        return DomainGroup::Flows;
-    }
-    // Media generation: `media_` prefix (media_generate_image/video, media_list_models).
-    if name.starts_with("media_") {
-        return DomainGroup::Media;
-    }
-    // Voice family: explicit audio_* podcast tools plus the defensive
-    // voice_/tts_/stt_ prefixes for any future tool.
-    if VOICE.contains(&name)
-        || name.starts_with("voice_")
-        || name.starts_with("tts_")
-        || name.starts_with("stt_")
-    {
-        return DomainGroup::Voice;
-    }
-    // Memory family (harness-kept): memory_* store/search/etc + goals_* + extras.
-    //
-    // The bare `memory` name is matched explicitly: the collapsed tool drops
-    // the `memory_` prefix its members carry, so prefix matching alone would
-    // land it in `Platform` and leave the whole memory surface callable under
-    // a `DomainSet { platform: true, memory: false }`.
-    if name == crate::memory::tools::MEMORY_TOOL_NAME
-        || name.starts_with("memory_")
-        || name.starts_with("goals_")
-        || MEMORY_EXTRA.contains(&name)
-    {
-        return DomainGroup::Memory;
-    }
-    // Threads family (harness-kept): thread_* + per-thread goal + search.
-    // `thread_` is kept as a prefix even though the `thread_*` agent-tool
-    // family was removed: `goal_*` and the THREADS_EXTRA entries still
-    // classify here, and a future threads tool should land in Threads rather
-    // than falling through to Platform.
-    if name.starts_with("thread_") || THREADS_EXTRA.contains(&name) {
-        return DomainGroup::Threads;
-    }
-    // Harness families realigned out of Platform.
-    if name.starts_with("artifact_")
-        || name.starts_with("learning_")
-        || name.contains("subagent")
-        || matches!(
-            name,
-            "ask_user_clarification"
-                | "agent_prepare_context"
-                | "delegate"
-                | "delegate_graph"
-                | "delegate_to_personality"
-                | "todo"
-                | "wait"
-                | "wait_loop"
-                | "request_plan_review"
-                | "plan_exit"
-                | "spawn_parallel_agents"
-        )
-    {
-        return DomainGroup::Agent;
-    }
-    if name.starts_with("config_") || name.starts_with("workspace_") {
-        return DomainGroup::Config;
-    }
-    if name.starts_with("security_")
-        || name.starts_with("credential_")
-        || name.starts_with("session_")
-        || name.starts_with("oauth_")
-    {
-        return DomainGroup::Security;
-    }
-    // ── Families carved out of Platform by the DomainGroup realignment ──────
-    // Each of these previously fell through to Platform, which meant the tool
-    // stayed callable when its family was gated off under a custom DomainSet —
-    // leak the #4808 review flagged. Keep these in
-    // lockstep with the `push(...)` tags in `core::all`.
-    //
-    // Automation: scheduled jobs (`cron_*`) plus the subconscious monitor +
-    // proactive-notify surface.
-    if name.starts_with("cron_") || name == "schedule" || MONITORS.contains(&name) {
-        return DomainGroup::Automation;
-    }
-    // Integrations: every external connector reached on the user's behalf.
-    if name.starts_with("composio")
-        || name == "web_search_tool"
-        || name.starts_with("tinyfish_")
-        || name.starts_with("exa_")
-        || name.starts_with("brave_")
-        || name.starts_with("parallel_")
-        || name.starts_with("querit_") || name.starts_with("tavily_")
-        || name.starts_with("google_places_")
-        || name.starts_with("stock_")
-        || name.starts_with("storage_")
-        || name.starts_with("task_source_")
-        || name == "twilio_call"
-        // Hosting: `hosting_` is a domain-exclusive prefix, so a NEW hosting
-        // tool auto-gates rather than falling through to Platform and staying
-        // callable under a custom DomainSet. `hosting_launch_site` uploads a
-        // workspace directory to a third party and can provision a paid
-        // database, so it must not outlive its family's gate.
-        || name.starts_with("hosting_")
-    {
-        return DomainGroup::Integrations;
-    }
-    // Hosted: clients of the TinyHumans backend. The `billing_` / `team_` /
-    // `referral_` prefixes were removed with those agent-tool families; their
-    // controllers stay registered for the dashboard, which does not route
-    // through this classifier.
-    if name.starts_with("orchestration_") {
-        return DomainGroup::Hosted;
-    }
-    // Desktop: shell-facing surfaces.
-    if name.starts_with("dashboard_") {
-        return DomainGroup::Desktop;
-    }
-    // Runtimes: the managed Node/Python execution tools. These live under
-    // `tools/impl/system/` rather than `runtime/`, so they are matched by name.
-    if name == "node_exec" || name == "npm_exec" || name == "python_exec" {
-        return DomainGroup::Runtimes;
-    }
-    // Inference: the CCR retrieval surface. Matched against the crate's own
-    // constant list rather than a name prefix — the live tool is
-    // `tinyjuice_retrieve`, and `tokenjuice_retrieve` / `retrieve_tool_output`
-    // are migration aliases, so a prefix rule silently missed the real one.
-    if crate::inference::tokenjuice::RECOVERY_TOOL_NAMES.contains(&name) {
-        return DomainGroup::Inference;
-    }
-    // Everything else — shell/file and other kernel utilities — is Platform:
-    // present under full(), absent under harness()/none().
-    DomainGroup::Platform
-}
+#[path = "ops_tool_groups.rs"]
+mod tool_groups;
+pub(crate) use tool_groups::tool_group;
 
 #[cfg(test)]
 #[path = "ops_tests.rs"]

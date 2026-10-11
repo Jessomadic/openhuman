@@ -7,7 +7,7 @@ import {
 } from '../helpers/core-rpc';
 
 /**
- * Token & Cost panel — what the compression switches do when their settings
+ * Token savings panel — what the compression switches do when their settings
  * never arrive (#5925).
  *
  * Two separate properties, and before #5925 the panel got both wrong:
@@ -57,7 +57,7 @@ async function openUsageTab(page: Page) {
   await dismissWalkthroughIfPresent(page);
 }
 
-test.describe('Token & Cost — settings that fail to load', () => {
+test.describe('Token savings — settings that fail to load', () => {
   test('a settings failure disables every compression switch', async ({ page }) => {
     await bootAuthenticatedPage(page, 'pw-w6-tokenusage-settings-fail', '/connections?tab=usage');
     await failMethod(

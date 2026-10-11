@@ -3,7 +3,7 @@
 use super::defaults;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
@@ -12,8 +12,24 @@ pub struct RuntimeConfig {
     pub kind: String,
     #[serde(default)]
     pub docker: DockerRuntimeConfig,
+    /// Filesystem grants for the local OS jail (`[runtime.local_jail]`).
+    #[serde(default)]
+    pub local_jail: super::LocalJailConfig,
     #[serde(default)]
     pub reasoning_enabled: Option<bool>,
+    /// Reasoning ("thinking") effort for agent turns: `none`, `minimal`,
+    /// `low`, `medium`, `high` or `xhigh` (`off` and `max` are accepted
+    /// aliases). Unset leaves the provider's own default. A chat turn's
+    /// `reasoning_effort` overrides it for that thread. When this is unset and
+    /// `reasoning_enabled = false`, turns ask for no reasoning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// Per-model thinking level, keyed by the model id the turn runs on
+    /// (`default_model` after a chat's `model_override`). Same values as
+    /// [`Self::reasoning_effort`], which it outranks for that model; a model
+    /// with no entry falls back to the global level.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reasoning_effort_by_model: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -35,8 +51,7 @@ pub struct DockerRuntimeConfig {
     pub allowed_workspace_roots: Vec<String>,
 }
 
-/// `[shell]` — behaviour of the shell-family tools (`shell`, `node_exec`,
-/// `npm_exec`, monitor) when they spawn child processes.
+/// `[shell]` — behaviour of the shell-family tools (`shell`, monitor) when they spawn child processes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct ShellConfig {
@@ -91,7 +106,10 @@ impl Default for RuntimeConfig {
         Self {
             kind: default_runtime_kind(),
             docker: DockerRuntimeConfig::default(),
+            local_jail: super::LocalJailConfig::default(),
             reasoning_enabled: None,
+            reasoning_effort: None,
+            reasoning_effort_by_model: BTreeMap::new(),
         }
     }
 }

@@ -12,7 +12,8 @@ use tinyagents_harness::middleware::Middleware;
 use tinyinference_llm::tool::ToolCall as TaToolCall;
 
 use crate::tools::agent_policy::ToolPolicySession;
-use crate::tools::toolpacks::{self, GroupMode, USE_SKILL};
+use crate::tools::toolpacks::{self, GroupMode};
+use tinyagents_harness::tool::packs::USE_SKILL;
 
 /// `before_tool`: rewrite `name(args)` into
 /// `use_skill { "skill": <pack>, "tool": name, "args": args }` when `name` is a

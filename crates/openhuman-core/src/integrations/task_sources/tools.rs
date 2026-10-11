@@ -4,7 +4,7 @@
 //! / Linear / ClickUp issue & task feeds), trigger an on-demand fetch, list
 //! ingested tasks, and dry-run a filter. Each tool is a thin shim over the
 //! async functions in [`crate::integrations::task_sources::ops`], which return
-//! `RpcOutcome<T>`; the wrapper emits the inner value as JSON.
+//! `Outcome<T>`; the wrapper emits the inner value as JSON.
 //!
 //! The read/observe tools (`list` / `get` / `fetch` / `list_tasks` /
 //! `preview_filter` / `status`) are default-enabled. The persistent-config

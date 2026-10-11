@@ -399,7 +399,7 @@ test("records thread state for multi-turn mock LLM sessions", () => {
 // `worker_thread_id: (none)`, trailing instruction block).
 function subagentAwaitingUserEnvelope({
   taskId = "sub-abc123-fake-uuid",
-  agentId = "researcher",
+  agentId = "task_manager_agent",
   workerThreadId = "(none)",
   question = "Which repo should I search?",
 } = {}) {
@@ -421,7 +421,7 @@ test("renderDynamicPlaceholders substitutes task_id and agent_id from history", 
         role: "tool",
         content: subagentAwaitingUserEnvelope({
           taskId: "sub-runtime-42",
-          agentId: "researcher",
+          agentId: "task_manager_agent",
         }),
       },
       { role: "user", content: "the main repo" },
@@ -433,7 +433,7 @@ test("renderDynamicPlaceholders substitutes task_id and agent_id from history", 
   );
   assert.equal(
     rendered,
-    '{"task_id":"sub-runtime-42","agent_id":"researcher","message":"the main repo"}',
+    '{"task_id":"sub-runtime-42","agent_id":"task_manager_agent","message":"the main repo"}',
   );
 });
 
@@ -518,7 +518,7 @@ test("llmKeywordRules substitute {{DYNAMIC_TASK_ID}} in continue_subagent tool_c
           role: "tool",
           content: subagentAwaitingUserEnvelope({
             taskId: "sub-realtime-777",
-            agentId: "researcher",
+            agentId: "task_manager_agent",
           }),
         },
         { role: "user", content: "here is my user answer" },
@@ -531,7 +531,7 @@ test("llmKeywordRules substitute {{DYNAMIC_TASK_ID}} in continue_subagent tool_c
   const args = body.choices[0].message.tool_calls[0].function.arguments;
   const parsed = JSON.parse(args);
   assert.equal(parsed.task_id, "sub-realtime-777");
-  assert.equal(parsed.agent_id, "researcher");
+  assert.equal(parsed.agent_id, "task_manager_agent");
   assert.equal(parsed.message, "the main repo");
   // Placeholder text must be fully consumed.
   assert.ok(!args.includes("{{DYNAMIC_"), `args should not contain unresolved placeholders: ${args}`);

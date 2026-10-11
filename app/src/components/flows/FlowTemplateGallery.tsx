@@ -63,9 +63,7 @@ export default function FlowTemplateGallery({ onSelect, busyId }: FlowTemplateGa
               onSelect(template);
             }}
             className="h-auto flex-col items-start gap-1.5 rounded-2xl p-4 text-left font-normal hover:border-primary-300 hover:bg-primary-50/40 dark:hover:bg-primary-500/10">
-            <Badge variant="primary" className="rounded-full">
-              {t(templateCategoryKey(template.category))}
-            </Badge>
+            <Badge variant="primary">{t(templateCategoryKey(template.category))}</Badge>
             <span className="text-sm font-semibold text-content">
               {t(templateNameKey(template.id))}
             </span>

@@ -15,10 +15,10 @@
  *      overlay into STT mode; "released" (or the final transcription)
  *      dismisses it.
  *
- *   2. **Attention message** — when the core (subconscious loop, heartbeat,
- *      …) publishes an `OverlayAttentionEvent` via
+ *   2. **Attention message** — when the core (a scheduled cron job, a
+ *      proactive notification, …) publishes an `OverlayAttentionEvent` via
  *      `openhuman::overlay::publish_attention(...)`. The bridge in
- *      `core::socketio` forwards this as an `overlay:attention` event.
+ *      `openhuman_rpc::server::socketio` forwards this as an `overlay:attention` event.
  *      The bubble auto-dismisses after its ttl.
  *
  * There is **no** demo loop — the overlay is entirely event-driven.
@@ -252,7 +252,7 @@ export default function OverlayApp() {
     [scheduleDismiss]
   );
 
-  // ── Attention from subconscious / core ─────────────────────────────────
+  // ── Attention from the core ─────────────────────────────────────────────
   const handleAttention = useCallback(
     (payload: OverlayAttentionPayload) => {
       const message = payload?.message?.trim();
@@ -311,7 +311,7 @@ export default function OverlayApp() {
         });
 
         // Core emits each event under both colon and underscore forms
-        // (see `emit_with_aliases` in `crates/openhuman-core/src/core/socketio.rs`). Subscribe
+        // (see `emit_with_aliases` in `crates/openhuman-rpc/src/server/socketio.rs`). Subscribe
         // only to the canonical colon-delimited form so each signal fires
         // the handler exactly once.
         socket.on('dictation:toggle', handleDictationToggle);

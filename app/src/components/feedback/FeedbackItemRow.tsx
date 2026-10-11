@@ -59,7 +59,11 @@ export default function FeedbackItemRow({
   const avatarInitial = (item.createdByName?.trim() || handle).charAt(0).toUpperCase();
 
   return (
-    <div className="group flex items-start gap-3 rounded-2xl border border-line bg-surface p-4 transition-all hover:border-line-strong hover:shadow-soft dark:hover:border-line-strong">
+    // A row in the board's divided list card, not a card of its own: the list
+    // reads as one board, and each post no longer carries its own border.
+    <div
+      data-testid="feedback-item"
+      className="group flex items-start gap-3 px-4 py-3.5 transition-colors hover:bg-surface-hover/60">
       <FeedbackVoteControl item={item} onVoted={onChange} />
 
       <div className="min-w-0 flex-1">
@@ -70,7 +74,7 @@ export default function FeedbackItemRow({
           <FeedbackStatusBadge status={item.status} />
         </div>
 
-        <h3 className="mt-2 wrap-break-word font-title text-[15px] font-semibold leading-snug text-content">
+        <h3 className="mt-1.5 wrap-break-word font-title text-[15px] font-semibold leading-snug text-content">
           {item.title}
         </h3>
 
@@ -81,7 +85,7 @@ export default function FeedbackItemRow({
           {item.body}
         </p>
 
-        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-content-faint">
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-content-faint">
           <span className="flex items-center gap-1.5">
             <AvatarRoot className="h-5 w-5">
               <AvatarFallback

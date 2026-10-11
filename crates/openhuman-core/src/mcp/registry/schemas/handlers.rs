@@ -116,7 +116,14 @@ pub(super) fn handle_list_tools(params: Map<String, Value>) -> ControllerFuture 
     Box::pin(async move {
         let config = config_rpc::load_config_with_timeout().await?;
         let server_id = read_required::<String>(&params, "server_id")?;
-        to_json(crate::mcp::registry::ops::mcp_clients_list_tools(&config, server_id).await?)
+        to_json(
+            crate::mcp::registry::ops::mcp_clients_list_tools(
+                &config,
+                server_id,
+                crate::mcp::registry::ops::Caller::Rpc,
+            )
+            .await?,
+        )
     })
 }
 

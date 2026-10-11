@@ -98,7 +98,7 @@ pub fn schemas(function: &str) -> ControllerSchema {
         "delete_connection" => ControllerSchema {
             namespace: "composio",
             function: "delete_connection",
-            description: "Delete a Composio connection and optionally remove source-scoped memory.",
+            description: "Delete a Composio connection.",
             inputs: vec![
                 FieldSchema {
                     name: "connection_id",
@@ -106,24 +106,12 @@ pub fn schemas(function: &str) -> ControllerSchema {
                     comment: "Identifier of the connection to delete.",
                     required: true,
                 },
-                FieldSchema {
-                    name: "clear_memory",
-                    ty: TypeSchema::Bool,
-                    comment: "When true, delete memory chunks ingested from this connection.",
-                    required: false,
-                },
             ],
             outputs: vec![
                 FieldSchema {
                     name: "deleted",
                     ty: TypeSchema::Bool,
                     comment: "True when the backend confirmed the deletion.",
-                    required: true,
-                },
-                FieldSchema {
-                    name: "memory_chunks_deleted",
-                    ty: TypeSchema::U64,
-                    comment: "Number of memory chunks deleted for this connection.",
                     required: true,
                 },
             ],
@@ -266,8 +254,8 @@ pub fn schemas(function: &str) -> ControllerSchema {
             namespace: "composio",
             function: "refresh_all_identities",
             description:
-                "Re-fetch user profile for every active Composio connection and persist as \
-                 IdentityKind-tagged rows in user_profile (#1365). Best-effort per connection \
+                "Re-fetch user profile for every active Composio connection and persist its \
+                 identity fields in the workspace identities file (#1365). Best-effort per connection \
                  — failures don't abort the others.",
             inputs: vec![],
             outputs: vec![FieldSchema {
@@ -276,35 +264,6 @@ pub fn schemas(function: &str) -> ControllerSchema {
                 comment: "{ refreshed, failed, skippedNoProvider, skippedInactive, \
                           rowsWritten } — aggregate counts; per-connection trail in envelope \
                           messages.",
-                required: true,
-            }],
-        },
-        "sync" => ControllerSchema {
-            namespace: "composio",
-            function: "sync",
-            description:
-                "Run a sync pass for a Composio connection by dispatching to the toolkit's \
-                 native provider implementation. Persists results into the memory layer.",
-            inputs: vec![
-                FieldSchema {
-                    name: "connection_id",
-                    ty: TypeSchema::String,
-                    comment: "Composio connection id (from list_connections / authorize).",
-                    required: true,
-                },
-                FieldSchema {
-                    name: "reason",
-                    ty: TypeSchema::Option(Box::new(TypeSchema::String)),
-                    comment:
-                        "Optional reason: 'manual' (default), 'periodic', 'connection_created'.",
-                    required: false,
-                },
-            ],
-            outputs: vec![FieldSchema {
-                name: "outcome",
-                ty: TypeSchema::Json,
-                comment: "SyncOutcome: { toolkit, connectionId, reason, itemsIngested, \
-                          startedAtMs, finishedAtMs, summary, details }.",
                 required: true,
             }],
         },

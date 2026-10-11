@@ -3,26 +3,12 @@
 //! This module contains structs and methods for handling RPC requests and
 //! responses, as well as maintaining application state across subsystems.
 
-use serde::{Deserialize, Serialize};
-
-/// Standard response structure for commands that include execution logs.
-///
-/// This is commonly used in internal APIs and CLI outputs where it's
-/// important to see the side-effects or diagnostic information alongside
-/// the primary result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommandResponse<T> {
-    /// The primary data returned by the command.
-    pub result: T,
-    /// A list of log messages generated during command execution.
-    /// These can include warnings, info, or trace messages.
-    pub logs: Vec<String>,
-}
+use serde::Serialize;
 
 /// Success payload from a core RPC handler before JSON-RPC wrapping.
 ///
 /// This internal type allows handlers to return a generic JSON value along
-/// with optional logs. It is transformed into a [`RpcSuccess`] or a
+/// with optional logs. It is transformed into a [`crate::core::RpcSuccess`] or a
 /// combined object by [`invocation_to_rpc_json`].
 #[derive(Debug, Clone)]
 pub struct InvocationResult {
@@ -42,16 +28,6 @@ impl InvocationResult {
             logs: vec![],
         })
     }
-
-    /// Creates a success result from a serializable value with accompanying logs.
-    ///
-    /// Use this when the domain logic has meaningful logs to surface to the caller.
-    pub fn with_logs<T: Serialize>(v: T, logs: Vec<String>) -> Result<Self, String> {
-        Ok(Self {
-            value: serde_json::to_value(v).map_err(|e| e.to_string())?,
-            logs,
-        })
-    }
 }
 
 /// Formats an [`InvocationResult`] into its standard JSON-RPC format.
@@ -65,71 +41,11 @@ impl InvocationResult {
 /// - `!logs.is_empty()` -> `{ "result": inv.value, "logs": inv.logs }`
 pub fn invocation_to_rpc_json(inv: InvocationResult) -> serde_json::Value {
     // Delegates rather than repeating the rule. This function and
-    // `RpcOutcome::into_cli_compatible_json` are the two ways a controller
+    // `Outcome::into_cli_compatible_json` are the two ways a controller
     // result reaches a caller, and they carried independent copies of the same
     // six lines — so a fix to one would have silently left the other on the old
-    // shape. See `crate::rpc::apply_log_envelope` (#6080).
-    crate::rpc::apply_log_envelope(inv.value, inv.logs)
-}
-
-/// Standard JSON-RPC 2.0 request format.
-///
-/// As defined in the [JSON-RPC 2.0 Specification](https://www.jsonrpc.org/specification).
-#[derive(Debug, Deserialize)]
-pub struct RpcRequest {
-    /// The JSON-RPC version. MUST be exactly "2.0".
-    #[allow(dead_code)]
-    pub jsonrpc: String,
-    /// Unique identifier for the request. MUST be a String, Number, or Null.
-    /// The server will return this same ID in the response.
-    pub id: serde_json::Value,
-    /// The name of the method to be invoked (e.g., `openhuman.memory_doc_put`).
-    pub method: String,
-    /// Parameters for the method call. MUST be a structured value (Object or Array).
-    /// Defaults to null if not provided.
-    #[serde(default)]
-    pub params: serde_json::Value,
-}
-
-/// Standard JSON-RPC 2.0 success response format.
-#[derive(Debug, Serialize)]
-pub struct RpcSuccess {
-    /// The JSON-RPC version. ALWAYS "2.0".
-    pub jsonrpc: &'static str,
-    /// The identifier mirrored from the original request.
-    pub id: serde_json::Value,
-    /// The result of the successful method invocation.
-    pub result: serde_json::Value,
-}
-
-/// Standard JSON-RPC 2.0 error response format.
-#[derive(Debug, Serialize)]
-pub struct RpcFailure {
-    /// The JSON-RPC version. ALWAYS "2.0".
-    pub jsonrpc: &'static str,
-    /// The identifier mirrored from the original request.
-    pub id: serde_json::Value,
-    /// Information about the error that occurred.
-    pub error: RpcError,
-}
-
-/// Detail about an RPC invocation error.
-///
-/// Contains a code, a message, and optional extra data for debugging.
-#[derive(Debug, Serialize)]
-pub struct RpcError {
-    /// Standardized error code.
-    /// - -32700: Parse error
-    /// - -32600: Invalid Request
-    /// - -32601: Method not found
-    /// - -32602: Invalid params
-    /// - -32603: Internal error
-    /// - -32000 to -32099: Reserved for implementation-defined server-errors.
-    pub code: i64,
-    /// A short, human-readable error message.
-    pub message: String,
-    /// Optional additional diagnostic data, which can be any JSON value.
-    pub data: Option<serde_json::Value>,
+    // shape. See `crate::core::apply_log_envelope` (#6080).
+    crate::core::apply_log_envelope(inv.value, inv.logs)
 }
 
 /// Global core-level application state.
@@ -171,6 +87,11 @@ pub enum HostKind {
     Cli,
     Docker,
     Library,
+    /// A many-user server behind a trusted gateway ([`Mode::Saas`]). Treated
+    /// as the most restrictive host wherever behaviour differs by host.
+    ///
+    /// [`Mode::Saas`]: crate::core::runtime::Mode::Saas
+    Saas,
 }
 
 impl HostKind {
@@ -209,6 +130,7 @@ impl HostKind {
             HostKind::Cli => "cli",
             HostKind::Docker => "docker",
             HostKind::Library => "library",
+            HostKind::Saas => "saas",
         }
     }
 }
@@ -236,7 +158,9 @@ pub fn approval_gate_boot_decision(
     env_override_requested: bool,
 ) -> ApprovalGateBootDecision {
     match host {
-        HostKind::TauriShell => ApprovalGateBootDecision {
+        // A SaaS core, like the desktop shell, never lets the environment
+        // switch the gate off.
+        HostKind::TauriShell | HostKind::Saas => ApprovalGateBootDecision {
             install_gate: true,
             override_ignored: env_override_requested,
             gate_disabled_by_override: false,

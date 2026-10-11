@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 
 import { bootAuthenticatedPage, waitForAppReady } from '../helpers/core-rpc';
 
@@ -11,19 +11,18 @@ interface PanelCheck {
 
 const panels: PanelCheck[] = [
   { hash: '/settings', markers: ['Settings', 'Appearance', 'Notifications'] },
-  { hash: '/settings/memory-data', markers: ['Memory', 'Data', 'Storage'] },
+  // The v1 memory data panel is gone; this slug redirects to the Memory
+  // page's Brain chip (/connections?tab=brain&brain=brain).
+  { hash: '/settings/memory-data', markers: ['Documents', 'Memory'] },
   { hash: '/settings/developer-options', markers: ['Developer', 'Debug', 'Advanced'] },
-  {
-    hash: '/settings/billing',
-    markers: ['Billing moved to the web', 'Open billing dashboard', 'credits'],
-  },
+  { hash: '/settings/account', markers: ['Account', 'Billing'] },
   // Home folded into the unified chat surface — /home redirects to /chat.
   { hash: '/home', markers: [] },
   // /chat is the Assistant surface (thread list + agent chat header).
   { hash: '/chat', markers: [] },
 ];
 
-async function waitForPanelLoad(page: Parameters<typeof test>[0]['page']) {
+async function waitForPanelLoad(page: Page) {
   await waitForAppReady(page);
   const chars = await page.locator('#root').innerText();
   expect(chars.trim().length).toBeGreaterThan(50);

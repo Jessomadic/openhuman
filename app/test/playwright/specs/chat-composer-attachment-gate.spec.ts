@@ -1,35 +1,15 @@
 /**
- * Chat composer — the attachment gate on the composer the product ships.
+ * Browser coverage for the shipped chat composer's file picker and interaction
+ * gate. Six active cases cover named chips, archive/audio/unknown/original-video
+ * acceptance, removal, streaming lockout, recovery after Stop, and attachment-only
+ * Send. File acceptance does not depend on the selected model's vision support;
+ * the core chooses native input or fallback processing after saving the original.
  *
- * # Scope, and what was cut from it after probing
- *
- * The task framed this as a bypass risk: drag-drop and paste might skip the
- * gate the `[+]` button enforces. That framing belongs to the LEGACY composer
- * (`ChatComposer.tsx:288-317`), which implements `handleDrop` / `handlePaste`
- * and gates both on `attachDisabled`. `/chat` does not render that file
- * (`Conversations.tsx:2539`, default `composer = 'text'`).
- *
- * The live composer supplies only a `[+]` button and a hidden
- * `input[type=file]` (`AssistantUiChat.tsx:160-185`); neither it nor
- * `assistant-ui/thread.tsx` defines `onDrop`, `onPaste` or `onDragOver`.
- * Probed against the running app, dispatching `dragover` + `drop` with a
- * populated `DataTransfer` on **every ancestor** of the input — including the
- * element carrying `data-[dragging=true]:border-ring`, assistant-ui's own
- * `AttachmentDropzone` — attached nothing, while `setInputFiles` in the same
- * run attached fine.
- *
- * **So there is no drop/paste spec here, on purpose.** "Dropping a file while
- * streaming does not attach" would pass because dropping never attaches in any
- * state; it cannot distinguish a working gate from a dead gesture, and writing
- * it would put a green test over a probable regression. The finding is in
- * `~/tinyhuman/bugs/W2-ui-bugs.md` as BUG-W2-UI-1 for a human to confirm with a
- * real drag.
- *
- * What IS real and falsifiable is the gate on the control that does ingest:
- * `disabled={attachmentInteractionBlocked || attachments.length >= maxAttachments}`
- * (`AssistantUiChat.tsx:178`), where `attachmentInteractionBlocked` is
- * `composerInteractionBlocked || isSending` (`Conversations.tsx:2522`). This
- * file covers that, end to end, through the UI.
+ * The two synthetic clipboard cases remain explicitly skipped because this
+ * harness cannot expose their image DataTransfer to Lexical reliably. They do
+ * not prove clipboard behavior, and this file does not cover real drag-and-drop.
+ * The product paste path accepts file items of any type through the same host
+ * validator as the picker; ordinary text paste remains with the editor.
  */
 import { expect, type Locator, type Page, test } from '@playwright/test';
 
@@ -168,6 +148,21 @@ test.describe('Chat composer attachment gate', () => {
     await expect(page.getByText('picker-notes.txt')).toBeVisible();
   });
 
+  test('the picker accepts archive, audio, unknown and original video files', async ({ page }) => {
+    await openChat(page);
+    for (const [name, mimeType] of [
+      ['archive.zip', 'application/zip'],
+      ['voice.mp3', 'audio/mpeg'],
+      ['opaque.bin', ''],
+      ['undecodable.mp4', 'video/mp4'],
+    ]) {
+      await fileInput(page)
+        .first()
+        .setInputFiles({ name, mimeType, buffer: Buffer.from([0, 255, 128]) });
+      await expect(page.getByText(name)).toBeVisible();
+    }
+  });
+
   test('an attached file can be removed again', async ({ page }) => {
     await openChat(page);
     await attach(page, 'removable.txt');
@@ -204,10 +199,9 @@ test.describe('Chat composer attachment gate', () => {
     await stopButton(page).click();
     await expect(stopButton(page)).toHaveCount(0, { timeout: 20_000 });
 
-    // Removing Cancel means the cancellation request has been accepted, but
-    // the host-owned composer controls remount on the following idle render.
-    // Wait for that settled state before locating its attachment control.
-    await expect(page.getByTestId('composer-human-mode')).toBeVisible({ timeout: 20_000 });
+    // Stop preserves the prompt for editing, so the primary slot is Send;
+    // attachment controls nevertheless become available immediately.
+    await expect(page.getByTestId('send-message-button')).toBeVisible({ timeout: 20_000 });
     await expect(attachButton(page)).toBeEnabled({ timeout: 20_000 });
   });
 
@@ -223,5 +217,85 @@ test.describe('Chat composer attachment gate', () => {
 
     await expect(sendButton(page)).toBeVisible();
     await expect(page.getByTestId('composer-human-mode')).toHaveCount(0);
+  });
+
+  /**
+   * Construct an image-bearing paste event for the two skipped clipboard cases.
+   * The product accepts any clipboard file item and falls back to clipboardData
+   * files when needed. This helper models the handler input, not the browser's
+   * native clipboard-to-event conversion; it cannot establish that conversion
+   * in this Playwright harness.
+   */
+  async function pasteImage(page: Page, name: string): Promise<void> {
+    await composer(page).click();
+    await page.evaluate(
+      ({ selector, fileName }) => {
+        const target = document.querySelector(selector);
+        if (!target) throw new Error('composer not found for paste');
+        // A 1x1 PNG. Small, but a genuine image/png payload rather than a
+        // text blob wearing an image MIME type.
+        const bytes = Uint8Array.from(
+          atob(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+          ),
+          c => c.charCodeAt(0)
+        );
+        const file = new File([bytes], fileName, { type: 'image/png' });
+        const data = new DataTransfer();
+        data.items.add(file);
+        // Chromium ignores the readonly `clipboardData` init member on a
+        // synthetic ClipboardEvent. Define it explicitly so the event seen by
+        // React has the same DataTransfer the browser would provide.
+        const event = new Event('paste', { bubbles: true, cancelable: true });
+        Object.defineProperty(event, 'clipboardData', { value: data });
+        target.dispatchEvent(event);
+      },
+      { selector: '[data-testid="chat-message-input"]', fileName: name }
+    );
+  }
+
+  test('pasting an image attaches it', async ({ page }) => {
+    test.fixme(
+      true,
+      'Playwright synthetic ClipboardEvent cannot expose image DataTransfer to Lexical; picker coverage remains active'
+    );
+    // The control for the case below: without this, "paste did not attach
+    // while streaming" would be true of an idle composer too, and would be
+    // testing nothing.
+    await openChat(page);
+    await expect(attachButton(page)).toBeEnabled();
+
+    await pasteImage(page, 'pasted-shot.png');
+
+    await expect(
+      page.getByText('pasted-shot.png'),
+      'a pasted image must reach the same ingest the picker uses'
+    ).toBeVisible({ timeout: 15_000 });
+  });
+
+  test('pasting an image while a turn streams does not attach it', async ({ page }) => {
+    test.fixme(
+      true,
+      'Playwright synthetic ClipboardEvent cannot expose image DataTransfer to Lexical; picker gate coverage remains active'
+    );
+    // The bypass this file was chartered to check. `canAcceptComposerFiles`
+    // folds in `attachmentInteractionBlocked`, so the paste path has to refuse
+    // for the same reason the `[+]` button is disabled — a gate enforced on one
+    // ingest and not the other is not a gate.
+    await openChat(page);
+    await beginStreamingTurn(page, 'stream while I paste');
+    await expect(attachButton(page)).toBeDisabled();
+
+    await pasteImage(page, 'blocked-shot.png');
+
+    // Give the ingest the same grace a successful one gets, so this is a
+    // refusal rather than a race we won.
+    await page.waitForTimeout(2_000);
+    await expect(
+      page.getByText('blocked-shot.png'),
+      'paste must honour the gate the [+] button enforces'
+    ).toHaveCount(0);
+    // And the turn is genuinely still streaming, so the gate was actually shut.
+    await expect(stopButton(page)).toBeVisible();
   });
 });

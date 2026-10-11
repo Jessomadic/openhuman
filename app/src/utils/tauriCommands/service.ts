@@ -31,66 +31,66 @@ export interface RestartStatus {
 }
 
 export async function openhumanServiceInstall(): Promise<CommandResponse<ServiceStatus>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   try {
     return await callCoreRpc<CommandResponse<ServiceStatus>>({
       method: 'openhuman.service_install',
     });
-  } catch {
+  } catch (err) {
+    // The direct CLI fallback is a Tauri shell command; outside the shell
+    // surface the core RPC error instead.
+    if (!isTauri()) throw err;
     const raw = await invoke<string>('service_install_direct');
     return parseServiceCliOutput<ServiceStatus>(raw);
   }
 }
 
 export async function openhumanServiceStart(): Promise<CommandResponse<ServiceStatus>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   try {
     return await callCoreRpc<CommandResponse<ServiceStatus>>({ method: 'openhuman.service_start' });
-  } catch {
+  } catch (err) {
+    // The direct CLI fallback is a Tauri shell command; outside the shell
+    // surface the core RPC error instead.
+    if (!isTauri()) throw err;
     const raw = await invoke<string>('service_start_direct');
     return parseServiceCliOutput<ServiceStatus>(raw);
   }
 }
 
 export async function openhumanServiceStop(): Promise<CommandResponse<ServiceStatus>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   try {
     return await callCoreRpc<CommandResponse<ServiceStatus>>({ method: 'openhuman.service_stop' });
-  } catch {
+  } catch (err) {
+    // The direct CLI fallback is a Tauri shell command; outside the shell
+    // surface the core RPC error instead.
+    if (!isTauri()) throw err;
     const raw = await invoke<string>('service_stop_direct');
     return parseServiceCliOutput<ServiceStatus>(raw);
   }
 }
 
 export async function openhumanServiceStatus(): Promise<CommandResponse<ServiceStatus>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   try {
     return await callCoreRpc<CommandResponse<ServiceStatus>>({
       method: 'openhuman.service_status',
     });
-  } catch {
+  } catch (err) {
+    // The direct CLI fallback is a Tauri shell command; outside the shell
+    // surface the core RPC error instead.
+    if (!isTauri()) throw err;
     const raw = await invoke<string>('service_status_direct');
     return parseServiceCliOutput<ServiceStatus>(raw);
   }
 }
 
 export async function openhumanServiceUninstall(): Promise<CommandResponse<ServiceStatus>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   try {
     return await callCoreRpc<CommandResponse<ServiceStatus>>({
       method: 'openhuman.service_uninstall',
     });
-  } catch {
+  } catch (err) {
+    // The direct CLI fallback is a Tauri shell command; outside the shell
+    // surface the core RPC error instead.
+    if (!isTauri()) throw err;
     const raw = await invoke<string>('service_uninstall_direct');
     return parseServiceCliOutput<ServiceStatus>(raw);
   }
@@ -100,9 +100,6 @@ export async function openhumanServiceRestart(
   source?: string,
   reason?: string
 ): Promise<CommandResponse<RestartStatus>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<RestartStatus>>({
     method: 'openhuman.service_restart',
     params: { source, reason },
@@ -110,18 +107,12 @@ export async function openhumanServiceRestart(
 }
 
 export async function openhumanAgentServerStatus(): Promise<CommandResponse<AgentServerStatus>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<AgentServerStatus>>({
     method: 'openhuman.agent_server_status',
   });
 }
 
 export async function openhumanGetDaemonHostConfig(): Promise<CommandResponse<DaemonHostConfig>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<DaemonHostConfig>>({
     method: 'openhuman.service_daemon_host_get',
   });
@@ -130,9 +121,6 @@ export async function openhumanGetDaemonHostConfig(): Promise<CommandResponse<Da
 export async function openhumanSetDaemonHostConfig(
   showTray: boolean
 ): Promise<CommandResponse<DaemonHostConfig>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<DaemonHostConfig>>({
     method: 'openhuman.service_daemon_host_set',
     params: { show_tray: showTray },

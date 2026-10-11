@@ -4,7 +4,7 @@ Self-update domain for the `openhuman-core` binary. Checks GitHub Releases (`tin
 
 ## Responsibilities
 - Query the GitHub Releases "latest" API and compare semver-ish tags against the compiled `CARGO_PKG_VERSION` (`is_newer`).
-- Select the release asset matching this platform's target triple (`openhuman-core-{triple}`, `.exe` on Windows).
+- Select the release asset matching this platform's target triple (`openhuman-core-{triple}`, `.exe` on Windows). Releases publish core archives for Linux only, so a newer release with no asset for this triple is reported as available with no `download_url` (logged at warn, not an error).
 - Download the asset to a temp file, set `0o755` on Unix, and atomically rename it into the staging dir (current-exe dir by default).
 - Orchestrate the full `check → apply → restart` flow (`update_run`), publishing a service restart for the `SelfReplace` strategy or staging-only for `Supervisor`.
 - Run a periodic background checker (default 1h, floor 10 min) that logs availability and emits health events.
@@ -23,25 +23,25 @@ Self-update domain for the `openhuman-core` binary. Checks GitHub Releases (`tin
 | `crates/openhuman-core/src/platform/update/*_tests.rs` | Sibling test suites (`core_tests`, `ops_tests`, `ops_tests_2_tests`, `scheduler_tests`, `schemas_tests`), included via `#[path]`. |
 
 ## Public surface
-- Types (`types.rs`): `UpdateInfo`, `VersionInfo`, `UpdateRunResult`, `UpdateApplyResult`, `GitHubRelease`, `GitHubAsset`.
-- Core fns (`core.rs`, re-exported via `core::*`): `current_version() -> &'static str`, `platform_triple() -> &'static str`, `check_available() -> Result<UpdateInfo, String>`, `download_and_stage(...)`, `download_and_stage_with_version(...)`.
-- `update::rpc` (alias of `ops`): `update_version`, `update_check`, `update_apply`, `update_run` — all returning `RpcOutcome<Value>`.
-- `update::scheduler::run(UpdateConfig)` — background loop entry point.
+- Types ([`types.rs`](./types.rs)): `UpdateInfo`, `VersionInfo`, `UpdateRunResult`, `UpdateApplyResult`, `GitHubRelease`, `GitHubAsset`.
+- Core fns ([`core.rs`](./core.rs), re-exported via `core::*`): `current_version() -> &'static str`, `platform_triple() -> &'static str`, `check_available() -> Result<UpdateInfo, String>`, `download_and_stage(...)`, `download_and_stage_with_version(...)`.
+- `update::rpc` (alias of `ops`): `update_version`, `update_check`, `update_apply`, `update_run`: all returning `Outcome<Value>`.
+- `update::scheduler::run(UpdateConfig)`: background loop entry point.
 - `all_update_controller_schemas()` / `all_update_registered_controllers()`.
 
 ## RPC / controllers
 All under namespace `update` (i.e. `openhuman.update_*`):
 | Method | Inputs | Output |
 | --- | --- | --- |
-| `update.version` | none | `version_info` (`VersionInfo`) — cheap, no network. |
+| `update.version` | none | `version_info` (`VersionInfo`): cheap, no network. |
 | `update.check` | none | `update_info` (`UpdateInfo`). |
-| `update.apply` | `download_url` (req), `asset_name` (req), `staging_dir` (optional, **ignored** — always default dir) | `apply_result` (`UpdateApplyResult`). |
-| `update.run` | none | `run_result` (`UpdateRunResult`) — orchestrated check→stage→restart. |
+| `update.apply` | `download_url` (req), `asset_name` (req), `staging_dir` (optional, **ignored**: always default dir) | `apply_result` (`UpdateApplyResult`). |
+| `update.run` | none | `run_result` (`UpdateRunResult`): orchestrated check→stage→restart. |
 
 `apply` and `run` are gated by `enforce_update_mutation_policy` (fail-closed if config can't load) and re-validate the URL (must be HTTPS GitHub host) and asset name (must start `openhuman-core-`, no path separators / `..`).
 
 ## Agent tools
-Not owned here — the domain has no `tools.rs`. Two cross-cutting system tools wrap it: `crates/openhuman-core/src/tools/impl/system/update_check.rs` (read-only, calls `update::rpc::update_check`) and `crates/openhuman-core/src/tools/impl/system/update_apply.rs` (calls `update::rpc::update_run`).
+Not owned here: the domain has no `tools.rs`. Two cross-cutting system tools wrap it: `crates/openhuman-core/src/tools/impl/system/update_check.rs` (read-only, calls `update::rpc::update_check`) and `crates/openhuman-core/src/tools/impl/system/update_apply.rs` (calls `update::rpc::update_run`).
 
 ## Events
 No `bus.rs`. The scheduler *publishes* (via `crate::core::bus::BUS.publish`):
@@ -51,30 +51,37 @@ No `bus.rs`. The scheduler *publishes* (via `crate::core::bus::BUS.publish`):
 It also calls `crate::core::bus::init()` (idempotent against an already-initialised bus) and `health::bus::register_health_subscriber()` on start.
 
 ## Persistence
-None. No `store.rs` — staged binaries are written to the filesystem (current-exe dir by default), but the domain holds no persisted state of its own. Configuration is read from `config.update`.
+None. No `store.rs`: staged binaries are written to the filesystem (current-exe dir by default), but the domain holds no persisted state of its own. Configuration is read from `config.update`.
 
 ## Dependencies
-- `crate::config` — reads `UpdateConfig` (`enabled`, `interval_minutes`, `rpc_mutations_enabled`, `restart_strategy`) and `UpdateRestartStrategy`; `ops` loads it via `config::rpc::load_config_with_timeout`.
-- `crate::platform::service` — `service::rpc::service_restart` to publish the self-restart for `SelfReplace`.
-- `crate::platform::health` — `health::bus::register_health_subscriber` in the scheduler.
-- `crate::util` — `utf8_safe_prefix_at_byte_boundary` for safe error-body truncation.
-- `crate::core::bus` — `BUS.publish`, `crate::core::events::DomainEvent`, and `bus::init()` to bring up the in-process broker.
-- `crate::core::observability` — Sentry reporting + transient-failure classifiers (`report_error`, `is_updater_transient_message`, `is_updater_transient_http_status`).
-- `crate::core::all` — `ControllerFuture`, `RegisteredController` (schemas wiring); `crate::core::{ControllerSchema, FieldSchema, TypeSchema}`.
-- `crate::rpc::RpcOutcome` — RPC return contract.
+- `crate::config`: reads `UpdateConfig` (`enabled`, `interval_minutes`, `rpc_mutations_enabled`, `restart_strategy`) and `UpdateRestartStrategy`; `ops` loads it via `config::rpc::load_config_with_timeout`.
+- `crate::platform::service`: `service::rpc::service_restart` to publish the self-restart for `SelfReplace`.
+- `crate::platform::health`: `health::bus::register_health_subscriber` in the scheduler.
+- `crate::util`: `utf8_safe_prefix_at_byte_boundary` for safe error-body truncation.
+- `crate::core::bus`: `BUS.publish`, `crate::core::events::DomainEvent`, and `bus::init()` to bring up the in-process broker.
+- `crate::core::observability`: Sentry reporting + transient-failure classifiers (`report_error`, `is_updater_transient_message`, `is_updater_transient_http_status`).
+- `crate::core::all`: `ControllerFuture`, `RegisteredController` (schemas wiring); `crate::core::{ControllerSchema, FieldSchema, TypeSchema}`.
+- `crate::core::Outcome`: RPC return contract.
 - External crates: `reqwest` (HTTP), `url` (URL validation), `serde`/`serde_json`, `tokio`.
 
 ## Used by
-- `crates/openhuman-core/src/core/all.rs` — registers `all_update_registered_controllers()` / `all_update_controller_schemas()` into the controller registry.
-- `crates/openhuman-core/src/core/runtime/services.rs` — spawns `update::scheduler::run(config.update)` as a background service at core start.
-- `crates/openhuman-core/src/tools/impl/system/update_check.rs` and `update_apply.rs` — agent tools wrapping the RPC layer.
+- `crates/openhuman-core/src/core/all.rs`: registers `all_update_registered_controllers()` / `all_update_controller_schemas()` into the controller registry.
+- `crates/openhuman-core/src/core/runtime/services.rs`: spawns `update::scheduler::run(config.update)` as a background service at core start when `ServiceSet::update_scheduler` is set (the desktop shell turns it off in `host::desktop_builder` because it updates through the Tauri updater; `ServiceSet::desktop()` itself leaves it on).
+- `crates/openhuman-core/src/tools/impl/system/update_check.rs` and `update_apply.rs`: agent tools wrapping the RPC layer.
 
 ## Notes / gotchas
-- **`staging_dir` is intentionally ignored** by `update_apply` — it always uses the safe default (current-exe parent dir) regardless of caller input, for security.
-- **Fail-closed policy**: if `config.update.rpc_mutations_enabled` is false (or config fails to load) `apply`/`run` are rejected; `check`/`version` remain available.
+- **`staging_dir` is intentionally ignored** by `update_apply`: it always uses the safe default (current-exe parent dir) regardless of caller input, for security.
+- Fail-closed policy: if `config.update.rpc_mutations_enabled` is false (or config fails to load) `apply`/`run` are rejected; `check`/`version` remain available.
 - **Restart strategies** (`UpdateRestartStrategy`): `SelfReplace` publishes a `service_restart` (process exits shortly after the RPC returns; `restart_requested` reflects whether the publish succeeded); `Supervisor` stages only and expects an external supervisor to restart.
-- **Scheduler interval floor**: requested `interval_minutes` is clamped up to `MIN_INTERVAL_MINUTES = 10` to avoid GitHub unauthenticated rate-limits; the first check runs immediately.
-- **Version compare** (`is_newer`) is dot-split numeric with `v`-prefix stripping — not full semver (no pre-release/build metadata handling).
-- **Sentry hygiene**: transport-level reqwest failures (`is_connect`/`is_timeout`/`is_request`) and transient HTTP statuses are logged at `warn` and skipped from `report_error`; a regression guard test hits an unroutable TEST-NET-1 host to lock the classifier.
-- **Test env locking**: tests touching `update_apply` take `config::TEST_ENV_LOCK` because the mutation policy is resolved through the process-global `OPENHUMAN_WORKSPACE` env var and would otherwise race.
+- Scheduler interval floor: requested `interval_minutes` is clamped up to `MIN_INTERVAL_MINUTES = 10` to avoid GitHub unauthenticated rate-limits; the first check runs immediately.
+- **Version compare** (`is_newer`) is dot-split numeric with `v`-prefix stripping: not full semver (no pre-release/build metadata handling).
+- Sentry hygiene: transport-level reqwest failures (`is_connect`/`is_timeout`/`is_request`) and transient HTTP statuses are logged at `warn` and skipped from `report_error`; a regression guard test hits an unroutable TEST-NET-1 host to lock the classifier.
+- Test env locking: tests touching `update_apply` take `config::TEST_ENV_LOCK` because the mutation policy is resolved through the process-global `OPENHUMAN_WORKSPACE` env var and would otherwise race.
 - Network-hitting paths (`update_check` success, `update_apply` success, scheduler `tick`) are deferred to integration tests, not unit-tested.
+
+## Further reading
+
+- [Parent module (`platform`)](../README.md)
+- [Auto-update](../../../../../gitbooks/overview/auto-update.md)
+- [Release policy](../../../../../gitbooks/developing/release-policy.md)
+- [Platform and availability](../../../../../gitbooks/features/platform.md)

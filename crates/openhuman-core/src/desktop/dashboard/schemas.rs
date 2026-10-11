@@ -3,8 +3,8 @@
 use serde_json::{Map, Value};
 
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 
 use super::ops;
 use super::types::ModelHealthResponse;
@@ -171,7 +171,7 @@ fn handle_dashboard_model_health(_params: Map<String, Value>) -> ControllerFutur
                 log::warn!("[dashboard] model_health failed to load config: {err}");
                 format!("config unavailable: {err}")
             })?;
-        let outcome: RpcOutcome<ModelHealthResponse> = ops::model_health(&cfg)?;
+        let outcome: Outcome<ModelHealthResponse> = ops::model_health(&cfg)?;
         outcome.into_cli_compatible_json()
     })
 }

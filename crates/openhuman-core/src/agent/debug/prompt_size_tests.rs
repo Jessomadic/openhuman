@@ -46,7 +46,6 @@ fn a_bare_hash_is_not_a_heading() {
 fn tools_are_ranked_by_cost_not_registration_order() {
     let dumped = DumpedPrompt {
         agent_id: "t".into(),
-        toolkit: None,
         mode: "session",
         model: "m".into(),
         workspace_dir: std::path::PathBuf::from("/tmp"),

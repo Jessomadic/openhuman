@@ -30,12 +30,16 @@ import {
   type RoutingMap,
 } from './aiPanelTypes';
 
+/** Providers with no `/models` endpoint, never re-probed at save time. */
+const SAVE_PROBE_EXEMPT_SLUGS = new Set(['openhuman', 'claude-code']);
+
 function toPanelProvider(p: CloudProviderView): CloudProvider {
   return {
     id: p.id,
     slug: p.slug,
     label: p.label,
     endpoint: p.endpoint,
+    caCertPem: p.ca_cert_pem ?? '',
     authStyle: p.auth_style,
     maskedKey: maskKeyLabel(p.has_api_key),
   };
@@ -52,9 +56,6 @@ function toPanelRoutingFromApi(api: ApiAISettings): { panel: AISettings } {
     coding: liftRef(api.routing.coding),
     vision: liftRef(api.routing.vision),
     memory: liftRef(api.routing.memory),
-    heartbeat: liftRef(api.routing.heartbeat),
-    learning: liftRef(api.routing.learning),
-    subconscious: liftRef(api.routing.subconscious),
   };
   return {
     panel: {
@@ -73,6 +74,7 @@ function toApiSettings(panel: AISettings): ApiAISettings {
       slug: p.slug,
       label: p.label,
       endpoint: p.endpoint,
+      ca_cert_pem: p.caCertPem ?? '',
       auth_style: p.authStyle,
       has_api_key: p.maskedKey.startsWith('••••'),
     })),
@@ -83,9 +85,6 @@ function toApiSettings(panel: AISettings): ApiAISettings {
       coding: panel.routing.coding,
       vision: panel.routing.vision,
       memory: panel.routing.memory,
-      heartbeat: panel.routing.heartbeat,
-      learning: panel.routing.learning,
-      subconscious: panel.routing.subconscious,
     },
     modelRegistry: panel.modelRegistry,
     defaultModel: panel.defaultModel ?? '',
@@ -142,6 +141,7 @@ export function useAISettings() {
       slug: p.slug,
       label: p.label,
       endpoint: p.endpoint,
+      ca_cert_pem: p.caCertPem ?? '',
       auth_style: p.authStyle,
     }));
     flushCloudProviders(wire).catch(err =>
@@ -175,10 +175,12 @@ export function useAISettings() {
       // unreachable between add-time and save-time, etc.) before they reach
       // the saved config and start routing chat traffic to a dead host.
       //
-      // OpenHuman is exempt (session JWT, no /models endpoint to hit).
+      // Exempt: OpenHuman (session JWT) and CLI-login providers such as
+      // `claude-code` (`cli://` endpoint) — neither has a /models endpoint to
+      // hit, matching the add-time `isCliLogin` skip in `useProviderConnect`.
       const savedById = new Map(saved.cloudProviders.map(p => [p.id, p]));
       const toProbe = draft.cloudProviders.filter(p => {
-        if (p.slug === 'openhuman') return false;
+        if (SAVE_PROBE_EXEMPT_SLUGS.has(p.slug)) return false;
         const prior = savedById.get(p.id);
         return !prior || prior.endpoint !== p.endpoint;
       });
@@ -211,14 +213,19 @@ export function useAISettings() {
  * UI expects. Extracted as a pure function so it can be unit-tested without
  * rendering the hook.
  *
+ * The local endpoint is user-run (Ollama / LM Studio / OpenAI-compatible); the
+ * app never installs, starts or downloads anything, so there is no
+ * starting / downloading / installing state to surface.
+ *
  * Priority order:
- *  1. `disabled` — config master switch is off.
- *  2. `degraded` — server alive but slow (ollama_status === 'degraded').
- *  3. `running`  — normal healthy state (ollama_running true, not degraded).
- *  4. `missing`  — daemon installed but not found on disk.
- *  5. `starting` / `downloading` — daemon is coming up.
- *  6. `error`    — daemon in error state.
- *  7. `stopped`  — catch-all / no snapshot.
+ *  1. `disabled`    — config master switch is off.
+ *  2. `degraded`    — server alive but slow (ollama_status === 'degraded').
+ *  3. `running`     — normal healthy state (ollama_running true, not degraded).
+ *  4. `unreachable` — the core could not reach the configured endpoint
+ *                     (status.state === 'unreachable'); treated as offline.
+ *  5. `degraded`    — the core reports the runtime degraded without a
+ *                     diagnostics verdict.
+ *  6. `stopped`     — catch-all / no snapshot.
  */
 export function deriveOllamaState(snapshot: LocalProviderSnapshot | null): OllamaState {
   if (!snapshot) return 'stopped';
@@ -226,9 +233,8 @@ export function deriveOllamaState(snapshot: LocalProviderSnapshot | null): Ollam
   if (stateStr === 'disabled') return 'disabled';
   if (snapshot.diagnostics?.ollama_status === 'degraded') return 'degraded';
   if (snapshot.diagnostics?.ollama_running) return 'running';
-  if (stateStr === 'missing') return 'missing';
-  if (stateStr === 'starting' || stateStr === 'downloading') return 'starting';
-  if (stateStr === 'error') return 'error';
+  if (stateStr === 'unreachable') return 'unreachable';
+  if (stateStr === 'degraded') return 'degraded';
   return 'stopped';
 }
 

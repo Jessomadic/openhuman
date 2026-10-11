@@ -1220,16 +1220,17 @@ const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyProps) =>
                           data-testid="skill-run-error"
                           className="rounded border border-coral-300 dark:border-coral-700 bg-coral-50 dark:bg-coral-950 p-3 text-sm">
                           {isGateFailure && (
-                            <div
+                            <Badge
+                              variant="warning"
                               data-testid="preflight-gate-pill"
-                              className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-200">
+                              className="mb-1.5">
                               {t('settings.skillsRunner.error.preflightGate')}
                               {parsed.tag ? (
                                 <code className="font-mono text-[10px] opacity-80">
                                   {parsed.tag}
                                 </code>
                               ) : null}
-                            </div>
+                            </Badge>
                           )}
                           <p className="text-coral-800 dark:text-coral-200">
                             {isGateFailure
@@ -1277,14 +1278,14 @@ const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyProps) =>
                   </div>
 
                   {scheduleSaved && (
-                    <p className="mt-2 inline-flex items-center rounded-full border border-sage-300 dark:border-sage-700 bg-sage-50 dark:bg-sage-900/40 px-2.5 py-1 text-xs font-medium text-sage-700 dark:text-sage-300">
+                    <Badge variant="success" className="mt-2">
                       {t('settings.skillsRunner.schedule.saved')}
-                    </p>
+                    </Badge>
                   )}
                   {scheduleError && (
-                    <p className="mt-2 inline-flex items-center rounded-full border border-coral-300 dark:border-coral-700 bg-coral-50 dark:bg-coral-900/40 px-2.5 py-1 text-xs font-medium text-coral-700 dark:text-coral-300">
+                    <Badge variant="danger" className="mt-2">
                       {t('settings.skillsRunner.schedule.error')} {scheduleError}
-                    </p>
+                    </Badge>
                   )}
                 </div>
               </div>
@@ -1492,7 +1493,7 @@ const WorkflowRunnerBody = ({ headerText, className }: SkillsRunnerBodyProps) =>
                   ? 'primary'
                   : r.status === 'DONE'
                     ? 'success'
-                    : r.status === 'DEGENERATE'
+                    : r.status === 'DEGENERATE' || r.status === 'STOPPED'
                       ? 'warning'
                       : 'danger';
               const dur = r.duration_ms !== null ? `${Math.round(r.duration_ms / 1000)}s` : '—';

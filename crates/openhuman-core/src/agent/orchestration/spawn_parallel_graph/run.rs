@@ -29,6 +29,7 @@ pub(crate) async fn run_spawn_parallel_tasks_with_cancellation_and_workspace(
     live_parent: &tinyagents_harness::context::RunContext<
         crate::agent::tinyagents::host::OpenHumanRunContext,
     >,
+    parent_call_id: Option<String>,
 ) -> Result<SpawnParallelGraphOutcome, String> {
     let parent = match run_context.parent.clone() {
         Some(parent) => parent,
@@ -46,7 +47,7 @@ pub(crate) async fn run_spawn_parallel_tasks_with_cancellation_and_workspace(
         max_parallel,
         "[spawn_parallel_agents] validated_parent_context"
     );
-    let registry = match AgentDefinitionRegistry::global() {
+    let registry = match AgentDefinitionRegistry::current() {
         Some(registry) => registry,
         None => {
             tracing::debug!("[spawn_parallel_agents] registry_unavailable");
@@ -61,7 +62,7 @@ pub(crate) async fn run_spawn_parallel_tasks_with_cancellation_and_workspace(
     let progress_sink = parent.on_progress.clone();
     let action_root =
         resolve_spawn_parallel_action_root(parent_workspace_descriptor.as_ref()).await;
-    let definitions = snapshot_agent_definitions(registry);
+    let definitions = snapshot_agent_definitions(&registry);
     if cancel.is_cancelled() {
         return Ok(SpawnParallelGraphOutcome::Cancelled(
             "spawn_parallel_agents cancelled at validate".to_string(),
@@ -87,6 +88,7 @@ pub(crate) async fn run_spawn_parallel_tasks_with_cancellation_and_workspace(
         &parent,
         action_root.as_deref(),
         parent_workspace_descriptor.as_ref(),
+        parent_call_id.as_deref(),
     )
     .await;
     if cancel.is_cancelled() {

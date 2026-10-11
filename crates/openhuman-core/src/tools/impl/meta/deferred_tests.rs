@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use serde_json::json;
 use tinytools::{Tool, ToolExposure, ToolResult};
 
-use super::{deferred_tool_names, strip_deferred_from_visible};
+use super::{deferred_set, deferred_tool_names, strip_deferred_from_visible};
 
 struct Fake(&'static str, ToolExposure);
 
@@ -60,4 +60,39 @@ fn deferred_tool_names_lists_every_deferred_registration() {
         deferred_tool_names(&tools()),
         HashSet::from(["deferred".to_string(), "unlisted_deferred".to_string()])
     );
+}
+
+/// An agent definition's `deferred_tools` adds its `Direct` tools to the
+/// deferred set, on top of every `Deferred` registration in both sets. A
+/// requested name that is not registered, or is `Hidden`, is ignored: deferral
+/// only subtracts, so it can neither invent a tool nor make a hidden one
+/// searchable.
+#[test]
+fn deferred_set_adds_requested_direct_tools_and_nothing_else() {
+    let durable = tools();
+    let synthesized: Vec<Box<dyn Tool>> = vec![
+        Box::new(Fake("synth_direct", ToolExposure::Direct)),
+        Box::new(Fake("synth_deferred", ToolExposure::Deferred)),
+    ];
+    let requested: Vec<String> = ["direct", "synth_direct", "hidden", "not_registered"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let set = deferred_set(&durable, &synthesized, &requested);
+    let expected: HashSet<String> = [
+        "direct",
+        "synth_direct",
+        "deferred",
+        "unlisted_deferred",
+        "synth_deferred",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    assert_eq!(set, expected);
+
+    // Nothing requested: exactly the exposure-derived set.
+    let plain = deferred_set(&durable, &synthesized, &[]);
+    assert!(!plain.contains("direct") && !plain.contains("synth_direct"));
+    assert!(plain.contains("synth_deferred") && plain.contains("deferred"));
 }

@@ -167,9 +167,13 @@ describe('AutonomyRateLimitSection', () => {
     const unlimitedBtn = screen.getByRole('button', { name: /unlimited/i });
     fireEvent.click(unlimitedBtn);
 
-    // The input value should be set to the UNLIMITED sentinel (4294967295)
+    // The UNLIMITED sentinel (4294967295) renders as an empty field with an
+    // ∞ placeholder, not the raw number — see AutonomyPanel.tsx:
+    // `value={draft === String(UNLIMITED) ? '' : draft}`.
     const input = screen.getByRole('spinbutton') as HTMLInputElement;
-    await waitFor(() => expect(Number(input.value)).toBe(4_294_967_295));
+    await waitFor(() => expect(input.value).toBe(''));
+    expect(input.placeholder).toBe('∞');
+    await screen.findByText(/Unlimited: rate limiting disabled\./i);
     // Save button enabled because value changed
     expect(screen.getByRole('button', { name: /^Save$/ })).not.toBeDisabled();
   });

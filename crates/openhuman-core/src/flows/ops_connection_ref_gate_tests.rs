@@ -335,7 +335,7 @@ async fn mock_opaque_tool_call_upstream_ref_matches_native_and_composio_upstream
             { "id": "code_up", "kind": "code", "name": "Code",
               "config": { "language": "javascript", "source": "return {};" } },
             { "id": "agent_up", "kind": "agent", "name": "Agent",
-              "config": { "agent_ref": "researcher", "prompt": "x" } },
+              "config": { "agent_ref": "planner", "prompt": "x" } },
             { "id": "native_up", "kind": "tool_call", "name": "Link",
               "config": { "slug": "oh:storage_get_link", "args": { "file_id": "f" } } },
             { "id": "composio_up", "kind": "tool_call", "name": "Profile",

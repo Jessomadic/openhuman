@@ -4,7 +4,7 @@
 use serde::Serialize;
 use serde_json::json;
 
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 pub(crate) fn env_flag_enabled(key: &str) -> bool {
     matches!(
@@ -29,8 +29,8 @@ pub(crate) const BROWSER_ALLOW_ALL_ENV: &str = "OPENHUMAN_BROWSER_ALLOW_ALL";
 pub(crate) const BROWSER_ALLOW_ALL_RPC_ENABLE_ENV: &str = "OPENHUMAN_BROWSER_ALLOW_ALL_RPC_ENABLE";
 
 /// Returns the current state of runtime-only flags.
-pub fn get_runtime_flags() -> RpcOutcome<RuntimeFlagsOut> {
-    RpcOutcome::single_log(runtime_flags(), "runtime flags read")
+pub fn get_runtime_flags() -> Outcome<RuntimeFlagsOut> {
+    Outcome::single_log(runtime_flags(), "runtime flags read")
 }
 
 pub(crate) fn runtime_flags() -> RuntimeFlagsOut {
@@ -50,7 +50,7 @@ pub(crate) fn runtime_flags() -> RuntimeFlagsOut {
 ///
 /// `is_private_host` checks still apply to the resolved IP, so this
 /// flag does not unlock loopback / RFC1918 destinations.
-pub fn set_browser_allow_all(enabled: bool) -> Result<RpcOutcome<RuntimeFlagsOut>, String> {
+pub fn set_browser_allow_all(enabled: bool) -> Result<Outcome<RuntimeFlagsOut>, String> {
     if enabled && !env_flag_enabled(BROWSER_ALLOW_ALL_RPC_ENABLE_ENV) {
         tracing::warn!(
             "[SECURITY] refused browser allow-all enable via RPC: \
@@ -97,16 +97,16 @@ pub fn set_browser_allow_all(enabled: bool) -> Result<RpcOutcome<RuntimeFlagsOut
     } else {
         "[SECURITY] browser allow-all flag set to disabled"
     };
-    Ok(RpcOutcome::single_log(flags, log_msg))
+    Ok(Outcome::single_log(flags, log_msg))
 }
 
 /// Returns the operational status of the agent server.
-pub fn agent_server_status() -> RpcOutcome<serde_json::Value> {
+pub fn agent_server_status() -> Outcome<serde_json::Value> {
     let running = crate::platform::service::mock::mock_agent_running().unwrap_or(true);
     log::info!("[config] agent_server_status requested: running={running}");
     let payload = json!({
         "running": running,
         "url": core_rpc_url_from_env(),
     });
-    RpcOutcome::single_log(payload, "agent server status checked")
+    Outcome::single_log(payload, "agent server status checked")
 }

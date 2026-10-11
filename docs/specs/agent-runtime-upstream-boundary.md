@@ -1,5 +1,14 @@
 # Agent runtime upstream boundary
 
+> **Status, verified 2026-10-07.** The migration this spec governs is mostly
+> executed. Its audit matrix is the original work-list, so several rows name
+> paths that have since been deleted and several "Delete" rows are already
+> done; one Package A target, `crates/openhuman-core/src/agent/registry/tools.rs`,
+> is still present. Read
+> [`../plans/README.md`](../plans/README.md) for the per-plan status and the
+> commands that re-check it, and treat the matrix below as the record of intent
+> rather than a to-do list.
+
 **Status:** migration specification
 **Scope:** `crates/openhuman-core/src/agent/` and the vendored `tinyagents`,
 `tinytools`, and `tinyinference` repositories
@@ -40,10 +49,13 @@ transition period in which both paths compile.
 
 ### Keep in OpenHuman
 
-- `ChatMessage`, `ConversationMessage`, and other durable OpenHuman transcript
-  wire types. Conversion to/from `tinyinference_llm::message::Message` occurs
-  only at legacy disk/import/export boundaries; live turns use crate-native
-  messages.
+- The `{role, content}` wire adapter for the two host-owned files that embed
+  message rows (`agent::messages::history_wire`: the durable sub-agent session
+  store and the sub-agent pause checkpoint). There is no host message type: the
+  row is `tinyagents_session::transcript::TranscriptMessage`, typed dialect
+  entries are `tinytools_agent::dialect::TranscriptEntry`, and conversion to/from
+  `tinyinference_llm::message::Message` stays at the transcript codec boundary;
+  live turns use crate-native messages.
 - Security policy, approval, origin/taint rules, action-directory enforcement,
   workspace guards, credential handling, and sandbox selection.
 - OpenHuman configuration, tier selection, provider credentials, provider
@@ -265,7 +277,6 @@ all consumers import the owner directly, not that behavior is dropped.
 | `file_state/` | Keep | OpenHuman parallel-write safety policy; pass explicit context rather than task-local scope. |
 | `git_attribution/` | Delete | Obsolete host feature; removed independently before this migration. |
 | `harness/` | Split then shrink | Move generic definitions, recursion, parsing, filtering, graph and loop helpers to TinyAgents; keep public OpenHuman session facade only until live callers use the crate harness, then replace it with host construction/routing. |
-| `harness_init/` | Keep | Product dependency provisioning/startup service. |
 | `learning/` | Keep | Product learning/profile policy behind `LearningSink`. Generic post-turn callback timing moves to harness. |
 | `library/` | Keep | Product-facing safe definition projection/RPC DTO. |
 | `orchestration/` | Split | Move generic graph lifecycle/delegation/selection; keep worktrees, workflow business rules, delivery, RPC, ledgers, and host tools. |
@@ -313,7 +324,7 @@ all consumers import the owner directly, not that behavior is dropped.
 | `artifact_offload/` | Split | Move size/chunk/handoff policy mechanics to harness; keep action-dir authorization and OpenHuman artifact store callbacks. |
 | `run_queue/` | `tinyagents-harness::run_queue` | Delete the OpenHuman copy/facade after parity tests and direct imports. |
 | `tool_result_artifacts/` | Keep host store | OpenHuman action-dir artifact persistence implementing the upstream artifact callback/store seam. |
-| `credentials.rs`, `memory_context.rs`, `memory_context_safety.rs` | Keep host policy/adapters | Feed explicit context/capability requests; move only host-free formatting/traversal helpers. |
+| `credentials.rs`, `memory_context_safety.rs` | Keep host policy/adapters | Feed explicit context/capability requests; move only host-free formatting/traversal helpers. |
 | `fork_context.rs`, `sandbox_context.rs`, `spawn_depth_context.rs`, `task_recency_context.rs` | explicit `RunContext`/child context | Delete task-local shells. |
 | `subagent_runner/` | Delete | The complete legacy tree is replaced by direct `agent/subagent_host` adapters over `tinyagents-orchestration::subagent`; generic lifecycle ordering, coalescing and mutually exclusive persistence are upstream. |
 | `subagent_host/` | Keep host adapter | OpenHuman implements `SubagentPlanner`, `SubagentExecutor` and `SubagentPersistence`: definitions, policy, provider/model selection, tool narrowing, workspace/security, progress, artifacts and durable product checkpoint/session projection remain host-owned. |

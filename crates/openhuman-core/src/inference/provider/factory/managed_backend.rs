@@ -3,14 +3,6 @@
 
 use super::*;
 
-/// The managed summarization model. Historically a dedicated
-/// `hint:summarization` tier; now the managed default like every other role.
-/// Kept as a named seam because the memory tree, the chat-turn payload
-/// summarizer and the `extract` sub-agent all read it.
-pub(crate) fn summarization_tier_model() -> &'static str {
-    crate::config::MODEL_MANAGED_DEFAULT
-}
-
 /// Resolve the managed OpenHuman backend for `role` — the model id (tier /
 /// summarization / default, with `hint:<tier>` translation) plus a configured
 /// [`OpenHumanBackendModel`]. Shared by both the `Provider` path
@@ -54,6 +46,10 @@ pub(super) fn resolve_managed_backend_with_model_override(
     config: &Config,
     model_override: Option<&str>,
 ) -> anyhow::Result<(OpenHumanBackendModel, String)> {
+    // Managed construction shares the same privacy gate as local and BYOK
+    // factories, before constructing a client or announcing any egress.
+    enforce_local_only_inference(role, PROVIDER_OPENHUMAN)?;
+
     // Every managed role runs on one concrete model: the pinned default, else
     // `MODEL_MANAGED_DEFAULT`. Roles still matter — they picked the *route*
     // that led here — but there are no per-role tier endpoints any more.

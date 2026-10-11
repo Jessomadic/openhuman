@@ -4,7 +4,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 pub(super) fn read_required<T: DeserializeOwned>(
     params: &Map<String, Value>,
@@ -44,6 +44,6 @@ pub(super) fn read_optional<T: DeserializeOwned>(
     }
 }
 
-pub(super) fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+pub(super) fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     outcome.into_cli_compatible_json()
 }

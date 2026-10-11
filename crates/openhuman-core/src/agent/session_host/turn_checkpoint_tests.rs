@@ -180,48 +180,27 @@ fn the_final_summary_quotes_each_failure_message() {
     assert!(!out.contains("tool-call limit"), "not a capped turn: {out}");
 }
 
-/// Issue #6279: when the breaker halted the run, the fallback says the turn
-/// stopped early and keeps the stop note as a quoted reason, beside the
-/// records, instead of standing in for the whole reply.
+/// Issue #6279, revised: a halted turn says it stopped early and why, in
+/// plain language derived from the stop note, and lists each tool with its
+/// short error line instead of quoting the note (written for the model) or the
+/// raw records. The detailed cases live in `stop_summary_tests.rs`.
 #[test]
-fn the_final_summary_of_a_halted_turn_keeps_the_stop_note_and_the_records() {
+fn the_final_summary_of_a_halted_turn_gives_a_reason_and_names_the_tools() {
     let out = build_deterministic_final_summary(
         &[result("install_item", false, "no direct download")],
         Some(STOP_NOTE),
     );
     assert!(
-        out.starts_with("I stopped this turn early"),
+        out.starts_with("I stopped this turn early because the same step kept failing."),
         "lead missing: {out}"
     );
     assert!(
-        out.contains("**Why I stopped**\n> Stopping:"),
-        "stop note must be quoted: {out}"
+        !out.contains("Stopping:"),
+        "the stop note is not quoted: {out}"
     );
     assert!(
-        out.contains("  > no direct download"),
-        "records must follow: {out}"
-    );
-}
-
-/// The breaker also halts a run whose identical calls keep succeeding
-/// (`RepeatProgressMiddleware`). The fallback must not call those calls failed
-/// when its own records show them `ok` (Codex review on #6289).
-#[test]
-fn the_final_summary_of_a_successful_repeat_halt_does_not_claim_failure() {
-    let out = build_deterministic_final_summary(
-        &[result("list_items", true, "3 items")],
-        Some(
-            "Stopping: the same successful tool-call batch was issued 3 times in a row with \
-             identical arguments and no new information.",
-        ),
-    );
-    assert!(
-        !out.to_lowercase().contains("fail"),
-        "a halt over successful calls must not be described as failing: {out}"
-    );
-    assert!(
-        out.contains("`list_items` — ok"),
-        "records keep their status: {out}"
+        out.contains("- `install_item` failed: no direct download"),
+        "the tool and its error line follow: {out}"
     );
 }
 
@@ -234,12 +213,12 @@ fn the_final_answer_instruction_carries_the_records_and_the_stop_note() {
         1_000,
     );
 
-    let plain = final_answer_instruction(None, &records);
+    let plain = final_answer_instruction(None, false, &records);
     assert!(plain.contains("<tool_records>") && plain.contains("  > no direct download"));
     assert!(!plain.contains("<stop_note>"));
     assert!(plain.contains("do not describe steps you are about to take"));
 
-    let halted = final_answer_instruction(Some(STOP_NOTE), &records);
+    let halted = final_answer_instruction(Some(STOP_NOTE), false, &records);
     assert!(halted.contains(&format!("<stop_note>\n{STOP_NOTE}\n</stop_note>")));
     assert!(halted.contains("  > no direct download"));
 }
@@ -277,7 +256,7 @@ fn the_close_verification_prompt_holds_request_records_and_reply() {
 /// is grounded in, and names the three shapes that reached a user's screen.
 #[test]
 fn the_final_answer_instruction_is_framed_and_forbids_quoting_tools_and_deliberation() {
-    let out = final_answer_instruction(None, "\n- `read_file` — ok\n  > config found\n");
+    let out = final_answer_instruction(None, false, "\n- `read_file` — ok\n  > config found\n");
 
     let frame_end = out
         .find("</harness_instruction>")
@@ -423,7 +402,8 @@ fn the_close_verification_prompt_rejects_deliberation_and_recited_toolsets() {
 /// carries the original instruction so the retry still has the records.
 #[test]
 fn the_repair_re_ask_names_the_violation_and_repeats_the_instruction() {
-    let instruction = final_answer_instruction(None, "\n- `read_file` — ok\n  > config found\n");
+    let instruction =
+        final_answer_instruction(None, false, "\n- `read_file` — ok\n  > config found\n");
 
     let quoted = close_repair_instruction(&instruction, CloseViolation::QuotedHarnessText);
     assert!(quoted.contains("repeated these directions"), "{quoted}");
@@ -439,4 +419,93 @@ fn the_repair_re_ask_names_the_violation_and_repeats_the_instruction() {
     );
     let empty = close_repair_instruction(&instruction, CloseViolation::NoReply);
     assert!(empty.contains("empty or tried to call a tool"), "{empty}");
+}
+
+/// #6951: a turn whose last reply ran out of output tokens while reasoning
+/// did not "finish using tools". The close must say what actually happened so
+/// the model reports unfinished work honestly instead of a tidy summary.
+#[test]
+fn a_truncated_close_names_the_output_budget_instead_of_finished_tools() {
+    let records = "\n- `read_file` — ok\n  > config found\n";
+    let out = final_answer_instruction(None, true, records);
+    assert!(out.contains("ran out of output tokens"), "{out}");
+    assert!(!out.contains("You have finished using tools"), "{out}");
+    assert!(out.contains("do not call any tools"), "{out}");
+    assert!(out.contains("  > config found"), "{out}");
+
+    let plain = final_answer_instruction(None, false, records);
+    assert!(plain.contains("You have finished using tools"), "{plain}");
+    assert!(!plain.contains("ran out of output tokens"), "{plain}");
+}
+
+/// A breaker halt explains the stop more precisely than truncation does, so
+/// its stop note still leads when both apply.
+#[test]
+fn a_breaker_halt_keeps_its_stop_note_on_a_truncated_turn() {
+    let out = final_answer_instruction(Some(STOP_NOTE), true, "");
+    assert!(out.contains("<stop_note>"), "{out}");
+}
+
+/// The truncated wording is harness text too: a reply quoting it is caught.
+#[test]
+fn quoting_the_truncated_close_instruction_is_caught() {
+    let out = final_answer_instruction(None, true, "");
+    let lead = out
+        .lines()
+        .nth(1)
+        .and_then(|line| line.split('.').next())
+        .expect("the directive opens with a sentence");
+    assert!(
+        quotes_harness_instruction(&format!("{lead}. Here is my summary."), None),
+        "lead span should be a needle: {lead}"
+    );
+}
+
+/// #6958: at the 200-call cap a DeepSWE run with no source edits answered this
+/// round by writing `ROLLING_WINDOW_IMPLEMENTATION_NOTES.md` into the user's
+/// repo, because the instruction said an incomplete file "is worth far more
+/// than no file at all". For a code change the deliverable is the edits, so
+/// the round must steer at `apply_patch`/`file_write` on source files and
+/// forbid notes or plan files in the project.
+#[test]
+fn the_final_write_instruction_steers_code_tasks_to_real_edits() {
+    let text = FINAL_WRITE_INSTRUCTION;
+    let lower = text.to_lowercase();
+    assert!(
+        text.contains("apply_patch") && text.contains("file_write"),
+        "names the tools that make the edits: {text}"
+    );
+    assert!(
+        lower.contains("source files"),
+        "a code task's deliverable is its source edits: {text}"
+    );
+    for forbidden in ["notes", "plan", "summary"] {
+        assert!(
+            lower.contains(forbidden),
+            "must explicitly rule out a `{forbidden}` file in the project: {text}"
+        );
+    }
+    assert!(
+        lower.contains("partial set of real edits"),
+        "a partial change beats a document about it: {text}"
+    );
+    assert!(
+        !lower.contains("incomplete file") && !lower.contains("worth far more than no file"),
+        "the wording that produced the notes file must be gone: {text}"
+    );
+}
+
+/// The round still exists for the case it was built for (#6548): a task whose
+/// requested product *is* a file must still be told to write it.
+#[test]
+fn the_final_write_instruction_still_asks_for_a_requested_file() {
+    let lower = FINAL_WRITE_INSTRUCTION.to_lowercase();
+    assert!(
+        lower.contains("asked you to produce a file"),
+        "{FINAL_WRITE_INSTRUCTION}"
+    );
+    assert!(
+        lower.contains("do not call a tool"),
+        "nothing to write still means answer instead: {FINAL_WRITE_INSTRUCTION}"
+    );
 }

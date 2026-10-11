@@ -19,6 +19,7 @@ import {
   startMockServer,
   stopMockServer,
 } from '../../../scripts/mock-api-core.mjs';
+import { resetRememberedDisclosures } from '../components/assistant-ui/lib/useDisclosure';
 
 // The full Vitest run is executed under v8 coverage instrumentation with a
 // single worker (see test/vitest.config.ts), which makes individual renders
@@ -36,8 +37,13 @@ const DEFAULT_TEST_MOCK_API_PORT = 5005;
 
 function readMockApiPort() {
   const rawPort = process.env.VITEST_MOCK_API_PORT ?? process.env.MOCK_API_PORT;
-  const port = rawPort ? Number(rawPort) : DEFAULT_TEST_MOCK_API_PORT;
-  return Number.isInteger(port) && port > 0 ? port : DEFAULT_TEST_MOCK_API_PORT;
+  const base = rawPort ? Number(rawPort) : DEFAULT_TEST_MOCK_API_PORT;
+  const port = Number.isInteger(base) && base > 0 ? base : DEFAULT_TEST_MOCK_API_PORT;
+  // One port per vitest worker (VITEST_POOL_ID is 1..maxWorkers). Every test
+  // file starts its own server, so parallel workers sharing one preferred
+  // port sent all but one of them through the EADDRINUSE retry loop.
+  const poolId = Number(process.env.VITEST_POOL_ID);
+  return Number.isInteger(poolId) && poolId > 1 ? port + poolId - 1 : port;
 }
 
 const mockApiServer = await startMockServer(readMockApiPort(), { retryIfInUse: true });
@@ -246,7 +252,6 @@ vi.mock('../utils/tauriCommands', () => ({
   getSessionToken: vi.fn().mockResolvedValue(null),
   getAuthState: vi.fn().mockResolvedValue({ is_authenticated: false }),
   logout: vi.fn().mockResolvedValue(undefined),
-  syncMemoryClientToken: vi.fn().mockResolvedValue(undefined),
   openhumanServiceInstall: vi.fn().mockResolvedValue({ result: { state: 'Running' }, logs: [] }),
   openhumanServiceStart: vi.fn().mockResolvedValue({ result: { state: 'Running' }, logs: [] }),
   openhumanServiceStop: vi.fn().mockResolvedValue({ result: { state: 'Stopped' }, logs: [] }),
@@ -255,6 +260,10 @@ vi.mock('../utils/tauriCommands', () => ({
     .fn()
     .mockResolvedValue({ result: { state: 'NotInstalled' }, logs: [] }),
   openhumanAgentServerStatus: vi.fn().mockResolvedValue({ result: { running: true }, logs: [] }),
+  openhumanGetUserTimezone: vi
+    .fn()
+    .mockResolvedValue({ result: { timezone: null, device: 'UTC', effective: 'UTC' }, logs: [] }),
+  openhumanUpdateUserTimezone: vi.fn().mockResolvedValue({ result: {}, logs: [] }),
   openhumanUpdateMeetSettings: vi
     .fn()
     .mockResolvedValue({
@@ -287,6 +296,7 @@ vi.mock('../utils/config', () => ({
   E2E_DEFAULT_CORE_MODE: '',
   E2E_RESTART_APP_AS_RELOAD: false,
   DEV_FORCE_ONBOARDING: false,
+  DEV_SKIP_ONBOARDING: false,
   CHAT_ATTACHMENTS_ENABLED: true,
   DERIVED_TRANSCRIPT_ENABLED: true,
   SKILLS_GITHUB_REPO: 'test/skills',
@@ -311,7 +321,6 @@ vi.mock('../utils/config', () => ({
   MASCOT_VOICE_MODEL_ID: 'eleven_multilingual_v2',
   MASCOT_MANIFEST_URL:
     'https://raw.githubusercontent.com/tinyhumansai/mascots/main/dist/mascots.json',
-  VOICE_MODE_FLAG_ENABLED: false,
   // Production defaults, so a test that does not care about the voice entry
   // point sees what a shipped build sees.
   HUMAN_VOICE_REALTIME_ENABLED: true,
@@ -390,6 +399,9 @@ if (!process.env.DEBUG_TESTS) {
 // Shared mock API server lifecycle for unit tests (default)
 afterEach(async () => {
   clearRequestLog();
+  // Disclosure choices are module-scoped (they outlive a remount by design);
+  // a card toggled in one test must not start open in the next.
+  resetRememberedDisclosures();
   // Radix schedules focus restoration with setTimeout(0) during unmount.
   // Keep its Event constructor in the jsdom realm and let that task drain
   // before Vitest tears the environment down.

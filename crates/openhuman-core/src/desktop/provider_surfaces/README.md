@@ -13,25 +13,25 @@ Local assistive surfaces for third-party provider apps. This domain owns a norma
 
 | File | Role |
 | --- | --- |
-| `crates/openhuman-core/src/desktop/provider_surfaces/mod.rs` | Export-only: declares submodules; re-exports `all_provider_surfaces_controller_schemas` / `all_provider_surfaces_registered_controllers`. |
-| `crates/openhuman-core/src/desktop/provider_surfaces/types.rs` | Serde domain types: `ProviderEvent`, `RespondQueueItem`, `RespondQueueListResponse`. Snake_case contract shared by request and response. |
-| `crates/openhuman-core/src/desktop/provider_surfaces/ops.rs` | Business logic / entry points: `ingest_event`, `list_queue`. Wrap results in `ApiEnvelope` + `RpcOutcome`. Tests in sibling `ops_tests.rs`. |
-| `crates/openhuman-core/src/desktop/provider_surfaces/store.rs` | In-memory persistence: process-global `RESPOND_QUEUE` (`OnceLock<Mutex<Vec<…>>>`), `upsert_queue_item`, `list_queue_items`, `clear_queue` (test-only). |
-| `crates/openhuman-core/src/desktop/provider_surfaces/schemas.rs` | Controller registry: `ControllerSchema`s + `handle_*` fns delegating to `ops.rs`. Tests in sibling `schemas_tests.rs`. |
-| `crates/openhuman-core/src/desktop/provider_surfaces/rpc.rs` | Docstring-only placeholder; no code. The handler delegation lives in `schemas.rs`, not here. |
+| [`crates/openhuman-core/src/desktop/provider_surfaces/mod.rs`](./mod.rs) | Export-only: declares submodules; re-exports `all_provider_surfaces_controller_schemas` / `all_provider_surfaces_registered_controllers`. |
+| [`crates/openhuman-core/src/desktop/provider_surfaces/types.rs`](./types.rs) | Serde domain types: `ProviderEvent`, `RespondQueueItem`, `RespondQueueListResponse`. Snake_case contract shared by request and response. |
+| [`crates/openhuman-core/src/desktop/provider_surfaces/ops.rs`](./ops.rs) | Business logic / entry points: `ingest_event`, `list_queue`. Wrap results in `ApiEnvelope` + `Outcome`. Tests in sibling [`ops_tests.rs`](./ops_tests.rs). |
+| [`crates/openhuman-core/src/desktop/provider_surfaces/store.rs`](./store.rs) | In-memory persistence: process-global `RESPOND_QUEUE` (`OnceLock<Mutex<Vec<…>>>`), `upsert_queue_item`, `list_queue_items`, `clear_queue` (test-only). |
+| [`crates/openhuman-core/src/desktop/provider_surfaces/schemas.rs`](./schemas.rs) | Controller registry: `ControllerSchema`s + `handle_*` fns delegating to `ops.rs`. Tests in sibling [`schemas_tests.rs`](./schemas_tests.rs). |
+| [`crates/openhuman-core/src/desktop/provider_surfaces/rpc.rs`](./rpc.rs) | Docstring-only placeholder; no code. The handler delegation lives in `schemas.rs`, not here. |
 
 ## Public surface
 
-- `types::ProviderEvent` — inbound normalized provider event (`#[serde(deny_unknown_fields)]`).
-- `types::RespondQueueItem` — queue entry (adds `id` and `status`, default `"pending"`).
-- `types::RespondQueueListResponse` — `{ items, count }`.
-- `ops::ingest_event(ProviderEvent)` / `ops::list_queue(EmptyRequest)` — async handlers returning `RpcOutcome<ApiEnvelope<T>>`.
-- `store::{upsert_queue_item, list_queue_items}` — internal to `ops.rs`; no external caller reads the store directly today.
+- `types::ProviderEvent`: inbound normalized provider event (`#[serde(deny_unknown_fields)]`).
+- `types::RespondQueueItem`: queue entry (adds `id` and `status`, default `"pending"`).
+- `types::RespondQueueListResponse`: `{ items, count }`.
+- `ops::ingest_event(ProviderEvent)` / `ops::list_queue(EmptyRequest)`: async handlers returning `Outcome<ApiEnvelope<T>>`.
+- `store::{upsert_queue_item, list_queue_items}`: internal to `ops.rs`; no external caller reads the store directly today.
 - Re-exported from `mod.rs`: `all_provider_surfaces_controller_schemas`, `all_provider_surfaces_registered_controllers`.
 
 ## RPC / controllers
 
-Namespace `provider_surfaces` (two controllers, registered via `crates/openhuman-core/src/core/all.rs`):
+Namespace `provider_surfaces` (two controllers, registered via [`crates/openhuman-core/src/core/all.rs`](../../core/all.rs)):
 
 | Method | Inputs | Output |
 | --- | --- | --- |
@@ -42,27 +42,27 @@ Namespace `provider_surfaces` (two controllers, registered via `crates/openhuman
 
 ## Agent tools
 
-None — no `tools.rs`; this domain owns no agent tools.
+None, no `tools.rs`; this domain owns no agent tools.
 
 ## Events
 
-None — no `bus.rs`; no `DomainEvent`s published or subscribed.
+None, no `bus.rs`; no `DomainEvent`s published or subscribed.
 
 ## Persistence
 
-In-memory only. State lives in a process-global `RESPOND_QUEUE` (`static OnceLock<Mutex<Vec<RespondQueueItem>>>`) in `store.rs`, prepend-ordered (newest-first), soft-capped at `MAX_QUEUE_ITEMS = 500` (oldest dropped from the tail). Upsert dedupes by composite id `provider:account_id:event_kind:entity_id`. Module docstrings flag SQLite-backed persistence for normalized events, queue state, and local drafts as follow-up work — not yet present.
+In-memory only. State lives in a process-global `RESPOND_QUEUE` (`static OnceLock<Mutex<Vec<RespondQueueItem>>>`) in `store.rs`, prepend-ordered (newest-first), soft-capped at `MAX_QUEUE_ITEMS = 500` (oldest dropped from the tail). Upsert dedupes by composite id `provider:account_id:event_kind:entity_id`. Module docstrings flag SQLite-backed persistence for normalized events, queue state, and local drafts as follow-up work, not yet present.
 
 ## Dependencies
 
-- `crate::memory` — `ApiEnvelope`, `ApiMeta`, `EmptyRequest` (response envelope shape + empty-request type).
-- `crate::rpc::RpcOutcome` — RPC return contract.
-- `crate::core::all` — `RegisteredController`, `ControllerFuture` (controller registry wiring).
-- `crate::core::{ControllerSchema, FieldSchema, TypeSchema}` — controller schema types.
+- `crate::memory`: `ApiEnvelope`, `ApiMeta`, `EmptyRequest` (response envelope shape + empty-request type).
+- `crate::core::Outcome`: RPC return contract.
+- `crate::core::all`: `RegisteredController`, `ControllerFuture` (controller registry wiring).
+- `crate::core::{ControllerSchema, FieldSchema, TypeSchema}`: controller schema types.
 - External crates: `serde` / `serde_json`, `uuid` (request ids), `tracing` (debug logging with `[provider-surfaces]` prefix).
 
 ## Used by
 
-- `crates/openhuman-core/src/core/all.rs` — pushes `all_provider_surfaces_registered_controllers()` into the registry under `DomainGroup::Desktop` (schemas are read off each registered controller, so `all_provider_surfaces_controller_schemas` has no external caller) and carries a `"provider_surfaces"` arm in the namespace-description match. No other in-tree caller.
+- `crates/openhuman-core/src/core/all.rs`: pushes `all_provider_surfaces_registered_controllers()` into the registry under `DomainGroup::Desktop` (schemas are read off each registered controller, so `all_provider_surfaces_controller_schemas` has no external caller) and carries a `"provider_surfaces"` arm in the namespace-description match. No other in-tree caller.
 
 ## Notes / gotchas
 
@@ -71,3 +71,9 @@ In-memory only. State lives in a process-global `RESPOND_QUEUE` (`static OnceLoc
 - **Queue id is deterministic** (`provider:account_id:event_kind:entity_id`), so re-ingesting the same entity upserts (removes + re-prepends) rather than duplicating.
 - **Process-global mutable state** means tests must serialize around `RESPOND_QUEUE`; `ops_tests.rs` uses a `TEST_MUTEX` + `store::clear_queue()` to avoid interleaving under cargo's parallel runner. Mutex poisoning is recovered via `into_inner()`.
 - **Snake_case contract is intentional and shared** between request (`ProviderEvent`) and response (`RespondQueueItem`) so callers see one consistent shape.
+
+## Further reading
+
+- [Parent module README](../README.md)
+- [Tauri shell](../../../../../gitbooks/developing/architecture/tauri-shell.md)
+- [Connections](../../../../../gitbooks/features/connections.md)

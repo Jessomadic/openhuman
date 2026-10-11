@@ -4,8 +4,8 @@ use serde_json::{Map, Value};
 
 use crate::config::rpc as config_rpc;
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 
 /// Params for `agent.chat` and `agent.chat_simple`.
 ///
@@ -38,6 +38,7 @@ pub fn all_controller_schemas() -> Vec<ControllerSchema> {
         schemas("triage_evaluate"),
         schemas("graph_topologies"),
         schemas("registry_snapshot"),
+        schemas("context_breakdown"),
     ]
 }
 
@@ -78,6 +79,10 @@ pub fn all_registered_controllers() -> Vec<RegisteredController> {
         RegisteredController {
             schema: schemas("registry_snapshot"),
             handler: handle_registry_snapshot,
+        },
+        RegisteredController {
+            schema: schemas("context_breakdown"),
+            handler: handle_context_breakdown,
         },
     ]
 }
@@ -213,6 +218,32 @@ pub fn schemas(function: &str) -> ControllerSchema {
                  not fully projected outside a turn).",
             )],
         },
+        "context_breakdown" => ControllerSchema {
+            namespace: "agent",
+            function: "context_breakdown",
+            description: "Where an agent turn's fixed prompt budget goes: rendered system-prompt \
+                          sections, advertised tool-schema bytes, and (with a thread_id) that \
+                          thread's persisted history spend, as {label, bytes, est_tokens} rows \
+                          the composer's context-usage indicator can render as a stacked bar. \
+                          Expensive (rebuilds the agent and fetches live Composio connections); \
+                          cached per agent id and invalidated only when config content changes.",
+            inputs: vec![
+                optional_string(
+                    "agent_id",
+                    "Agent whose prompt to measure. Defaults to 'orchestrator'.",
+                ),
+                optional_string(
+                    "thread_id",
+                    "When given, adds a 'history' section sized from this thread's persisted \
+                     usage.",
+                ),
+            ],
+            outputs: vec![json_output(
+                "breakdown",
+                "{agent_id, model, sections: [{label, bytes, est_tokens}], tools_bytes, \
+                 total_est_tokens, context_window}.",
+            )],
+        },
         _ => ControllerSchema {
             namespace: "agent",
             function: "unknown",
@@ -287,7 +318,7 @@ struct GetDefinitionParams {
 fn handle_get_definition(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let p = deserialize_params::<GetDefinitionParams>(params)?;
-        let registry = crate::agent::harness::AgentDefinitionRegistry::global()
+        let registry = crate::agent::harness::AgentDefinitionRegistry::current()
             .ok_or_else(|| "AgentDefinitionRegistry not initialised".to_string())?;
         match registry.get(p.id.trim()) {
             Some(def) => Ok(serde_json::json!({ "definition": def })),
@@ -436,6 +467,12 @@ fn handle_triage_evaluate(params: Map<String, Value>) -> ControllerFuture {
                     "dry_run": dry_run,
                 }))
             }
+            crate::agent::triage::TriageOutcome::Terminal { reason } => Ok(serde_json::json!({
+                "decision": "terminal",
+                "resolution_path": "terminal",
+                "reason": reason,
+                "dry_run": dry_run,
+            })),
         }
     })
 }
@@ -652,6 +689,14 @@ fn handle_registry_snapshot(_params: Map<String, Value>) -> ControllerFuture {
     })
 }
 
+fn handle_context_breakdown(params: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move {
+        let p =
+            deserialize_params::<crate::agent::context_breakdown::ContextBreakdownParams>(params)?;
+        to_json(crate::agent::context_breakdown::context_breakdown(p).await?)
+    })
+}
+
 fn deserialize_params<T: DeserializeOwned>(params: Map<String, Value>) -> Result<T, String> {
     serde_json::from_value(Value::Object(params)).map_err(|e| format!("invalid params: {e}"))
 }
@@ -692,7 +737,7 @@ fn json_output(name: &'static str, comment: &'static str) -> FieldSchema {
     }
 }
 
-fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     outcome.into_cli_compatible_json()
 }
 

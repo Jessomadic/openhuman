@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub use tinyagents_graph::orchestration::OrchestrationTaskStatus;
+pub use tinyagents_tasks::OrchestrationTaskStatus;
 
 /// Request to spawn a child agent from the current parent agent turn.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -18,8 +18,6 @@ pub struct SpawnAgentRequest {
     pub prompt: String,
     #[serde(default)]
     pub context: Option<String>,
-    #[serde(default)]
-    pub toolkit: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]

@@ -16,8 +16,8 @@ import {
  * `color-scheme` are only meaningful in a real engine, and "the theme visibly
  * applied" means all three moved together.
  *
- * `/settings/appearance` hosts the theme studio (the standalone
- * `/settings/theme` route redirects here). Its two controls are separate and
+ * `/settings/theme` hosts the theme studio. `/settings/appearance` is the
+ * appearance preferences page. Its two controls are separate and
  * compose: a VARIANT toggle (Light / Dark / Auto) and a FAMILY grid (Classic,
  * Ocean, Sepia, Matrix, HAL 9000 — `lib/theme/presets.ts:342`). Choosing
  * "Dark" is the variant toggle; choosing "HAL 9000" is a family. An earlier
@@ -46,22 +46,20 @@ function documentTheme(page: Page) {
   });
 }
 
-async function openAppearance(page: Page) {
+async function openThemeStudio(page: Page) {
   // Navigate explicitly even though beforeEach booted here: on a cold first
   // test the '/home' -> '/chat' redirect can still be in flight and win the
   // race, leaving the chat surface behind. Re-navigating settles it.
-  await page.goto('/#/settings/appearance');
+  await page.goto('/#/settings/theme');
   await waitForAppReady(page);
   await dismissWalkthroughIfPresent(page);
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Appearance', {
-    timeout: 30_000,
-  });
+  await expect(page.getByTestId('theme-studio-panel')).toBeVisible({ timeout: 30_000 });
 }
 
 test.describe('Appearance — theme switching', () => {
   test.beforeEach(async ({ page }) => {
-    await bootAuthenticatedPage(page, 'pw-w1-theme', '/settings/appearance');
-    await openAppearance(page);
+    await bootAuthenticatedPage(page, 'pw-w1-theme', '/settings/theme');
+    await openThemeStudio(page);
   });
 
   test('choosing Dark sets the dark class and color-scheme on <html>', async ({ page }) => {

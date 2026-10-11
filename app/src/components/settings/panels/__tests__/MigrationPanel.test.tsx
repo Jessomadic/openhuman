@@ -58,11 +58,12 @@ describe('MigrationPanel (#1440)', () => {
 
   it('renders OpenClaw as the default vendor and Hermes as selectable', () => {
     renderWithProviders(<MigrationPanel />);
-    const select = screen.getByTestId('migration-vendor-select') as HTMLSelectElement;
-    expect(select.value).toBe('openclaw');
-    const hermesOption = Array.from(select.options).find(o => o.value === 'hermes');
-    expect(hermesOption).toBeDefined();
-    expect(hermesOption?.disabled).toBe(false);
+    expect(screen.getByTestId('migration-vendor-select')).toHaveAttribute('role', 'radiogroup');
+    const openclawOption = screen.getByTestId('migration-vendor-option-openclaw');
+    const hermesOption = screen.getByTestId('migration-vendor-option-hermes');
+    expect(openclawOption).toHaveAttribute('aria-checked', 'true');
+    expect(hermesOption).toHaveAttribute('aria-checked', 'false');
+    expect(hermesOption).not.toBeDisabled();
     expect(screen.getByTestId('migration-apply-button')).toBeDisabled();
   });
 
@@ -76,8 +77,7 @@ describe('MigrationPanel (#1440)', () => {
     });
 
     renderWithProviders(<MigrationPanel />);
-    const select = screen.getByTestId('migration-vendor-select') as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: 'hermes' } });
+    fireEvent.click(screen.getByTestId('migration-vendor-option-hermes'));
     fireEvent.click(screen.getByTestId('migration-preview-button'));
 
     await waitFor(() => expect(screen.getByTestId('migration-report-preview')).toBeInTheDocument());
@@ -117,7 +117,7 @@ describe('MigrationPanel (#1440)', () => {
     );
   });
 
-  it('requires window.confirm before Apply and calls the RPC with dry_run=false on yes', async () => {
+  it('requires confirmation dialog before Apply and calls the RPC with dry_run=false on confirm', async () => {
     vi.mocked(openhumanMigrateOpenclaw)
       .mockResolvedValueOnce({ result: makeReport(), logs: [] })
       .mockResolvedValueOnce({
@@ -125,33 +125,36 @@ describe('MigrationPanel (#1440)', () => {
         logs: [],
       });
 
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
     renderWithProviders(<MigrationPanel />);
     fireEvent.click(screen.getByTestId('migration-preview-button'));
     await waitFor(() => expect(screen.getByTestId('migration-apply-button')).not.toBeDisabled());
 
+    // Clicking Apply only opens the confirmation dialog — it must not call
+    // the RPC by itself.
     fireEvent.click(screen.getByTestId('migration-apply-button'));
+    const confirmButton = await screen.findByTestId('migration-confirm-button');
+    expect(openhumanMigrateOpenclaw).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(confirmButton);
     await waitFor(() =>
       expect(openhumanMigrateOpenclaw).toHaveBeenNthCalledWith(2, undefined, false)
     );
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.getByTestId('migration-report-applied')).toBeInTheDocument());
-    confirmSpy.mockRestore();
   });
 
   it('skips Apply when the user cancels the confirm dialog', async () => {
     vi.mocked(openhumanMigrateOpenclaw).mockResolvedValueOnce({ result: makeReport(), logs: [] });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValueOnce(false);
     renderWithProviders(<MigrationPanel />);
     fireEvent.click(screen.getByTestId('migration-preview-button'));
     await waitFor(() => expect(screen.getByTestId('migration-apply-button')).not.toBeDisabled());
 
     fireEvent.click(screen.getByTestId('migration-apply-button'));
+    const cancelButton = await screen.findByRole('button', { name: /cancel/i });
+    fireEvent.click(cancelButton);
     // Only the Preview call should have fired — Apply must not call the RPC
-    // when the operator says no.
+    // when the operator cancels the confirmation dialog.
     expect(openhumanMigrateOpenclaw).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('migration-report-applied')).toBeNull();
-    confirmSpy.mockRestore();
   });
 
   it('re-disables Apply when the source path is edited after a preview', async () => {
@@ -181,8 +184,7 @@ describe('MigrationPanel (#1440)', () => {
     fireEvent.click(screen.getByTestId('migration-preview-button'));
     await waitFor(() => expect(apply).not.toBeDisabled());
 
-    const select = screen.getByTestId('migration-vendor-select') as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: 'hermes' } });
+    fireEvent.click(screen.getByTestId('migration-vendor-option-hermes'));
     expect(apply).toBeDisabled();
   });
 

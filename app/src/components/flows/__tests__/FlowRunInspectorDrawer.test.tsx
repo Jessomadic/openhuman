@@ -12,7 +12,7 @@
  * `hooks/__tests__/useFlowRunPoller.test.ts` and
  * `hooks/__tests__/useFlowPendingApprovals.test.ts`.
  */
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -273,7 +273,11 @@ describe('FlowRunInspectorDrawer', () => {
     expect(screen.queryByTestId('flow-run-pending-approvals')).not.toBeInTheDocument();
   });
 
-  it("routes Approve once / Approve always / Deny to the hook's decide() with the request id", () => {
+  it.each([
+    { button: 'Approve', decision: 'approve_once' },
+    { button: 'Always allow', decision: 'approve_always_for_flow' },
+    { button: 'Deny', decision: 'deny' },
+  ])('routes $button to the hook with the request id', ({ button, decision }) => {
     const decide = vi.fn().mockResolvedValue(undefined);
     useFlowRunPoller.mockReturnValue({
       run: makeRun({ status: 'pending_approval' }),
@@ -287,15 +291,9 @@ describe('FlowRunInspectorDrawer', () => {
       decide,
     });
     renderDrawer('thread-1', vi.fn());
-
-    fireEvent.click(screen.getByTestId('flow-run-pending-approval-approve-req-a'));
-    expect(decide).toHaveBeenCalledWith('req-a', 'approve_once');
-
-    fireEvent.click(screen.getByTestId('flow-run-pending-approval-always-req-a'));
-    expect(decide).toHaveBeenCalledWith('req-a', 'approve_always_for_flow');
-
-    fireEvent.click(screen.getByTestId('flow-run-pending-approval-deny-req-a'));
-    expect(decide).toHaveBeenCalledWith('req-a', 'deny');
+    const card = screen.getByTestId('flow-run-pending-approval-req-a');
+    fireEvent.click(within(card).getByRole('button', { name: button }));
+    expect(decide).toHaveBeenCalledWith('req-a', decision);
   });
 
   it('shows the polling error message when useFlowPendingApprovals reports one', () => {
@@ -393,5 +391,51 @@ describe('FlowRunInspectorDrawer', () => {
     expect(onFixWithAgent).toHaveBeenCalledWith(
       expect.objectContaining({ flowId: 'flow-42', runId: 'run-9', error: 'HTTP 500' })
     );
+  });
+
+  // ── `variant="panel"` (host side panel, no overlay/backdrop/Escape) ───────
+  describe('variant="panel"', () => {
+    function renderPanel(runId: string | null, onClose: () => void) {
+      return render(
+        <Provider store={store}>
+          <FlowRunInspectorDrawer runId={runId} onClose={onClose} variant="panel" />
+        </Provider>
+      );
+    }
+
+    it('renders inline as flow-run-inspector-panel instead of the drawer/backdrop', () => {
+      useFlowRunPoller.mockReturnValue({ run: makeRun(), loading: false, error: null });
+      renderPanel('thread-1', vi.fn());
+
+      expect(screen.getByTestId('flow-run-inspector-panel')).toBeInTheDocument();
+      expect(screen.queryByTestId('flow-run-inspector-drawer')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('flow-run-inspector-backdrop')).not.toBeInTheDocument();
+      // The same content still renders (header, steps, etc).
+      expect(screen.getByTestId('flow-run-status-pill')).toBeInTheDocument();
+    });
+
+    it('does not close on Escape in panel mode', () => {
+      useFlowRunPoller.mockReturnValue({ run: makeRun(), loading: false, error: null });
+      const onClose = vi.fn();
+      renderPanel('thread-1', onClose);
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('still calls onClose via its own close button', () => {
+      useFlowRunPoller.mockReturnValue({ run: makeRun(), loading: false, error: null });
+      const onClose = vi.fn();
+      renderPanel('thread-1', onClose);
+
+      fireEvent.click(screen.getByTestId('flow-run-inspector-close'));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders null when runId is null, same as drawer mode', () => {
+      useFlowRunPoller.mockReturnValue({ run: null, loading: false, error: null });
+      const { container } = renderPanel(null, vi.fn());
+      expect(container).toBeEmptyDOMElement();
+    });
   });
 });

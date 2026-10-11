@@ -45,14 +45,11 @@ mod worker_mirror;
 // unaffected by the responsibility split.
 #[cfg(test)]
 pub(super) use dispatch::inherited_thread_id;
-pub(crate) use dispatch::run_agent_turn_request_via_default_graph;
 pub(super) use dispatch::{run_subagent_via_graph, AggregatedUsage};
 
 // Only what `graph_tests.rs`'s `use super::*` still needs directly (the rest
 // of the original flat imports now live with the code that uses them, in
 // `dispatch.rs` / `transcript.rs` / `worker_mirror.rs`).
-#[cfg(test)]
-use crate::agent::messages::{ChatMessage, ConversationMessage};
 #[cfg(test)]
 use crate::agent::progress::AgentProgress;
 #[cfg(test)]
@@ -61,6 +58,8 @@ use crate::inference::tokenjuice::AgentTokenjuiceCompression;
 use std::collections::HashSet;
 #[cfg(test)]
 use std::sync::Arc;
+#[cfg(test)]
+use tinyagents_session::transcript::TranscriptMessage;
 #[cfg(test)]
 #[cfg(test)]
 use worker_mirror::{mirror_worker_thread, mirror_worker_thread_from_history};

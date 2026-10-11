@@ -1,7 +1,8 @@
 /**
- * SuggestedWorkflows — the "Suggested for you" section on the Flows page.
+ * SuggestedWorkflows — the body of the Workflows → Discoveries page.
  *
- * Surfaces the read-only Flow Scout's workflow suggestions as friendly cards.
+ * Surfaces the read-only Flow Scout's workflow suggestions as a filterable
+ * grid of discovery cards ({@link SuggestionCard}).
  * A "Discover" button runs the `flow_discovery` agent
  * (`openhuman.flows_discover`), which reasons over the user's
  * memory/threads/connections/existing flows and records concrete, buildable
@@ -33,9 +34,11 @@
  * is the only thing that ever persists a built graph.
  */
 import createDebug from 'debug';
-import { useCallback, useEffect, useState } from 'react';
+import { RefreshCw, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import { cn } from '../../lib/cn';
 import { createBlankWorkflowGraph, deriveWorkflowName } from '../../lib/flows/newFlow';
 import { useT } from '../../lib/i18n/I18nContext';
 import {
@@ -45,95 +48,19 @@ import {
   type FlowSuggestion,
   listSuggestions,
 } from '../../services/api/flowsApi';
-import { Button } from '../ui';
+import { Alert, AlertDescription, Button, Spinner } from '../ui';
+import SuggestionCard, {
+  type SuggestionTrigger,
+  suggestionTrigger,
+  triggerLabelKey,
+} from './SuggestionCard';
+
+type TriggerFilter = 'all' | SuggestionTrigger;
+
+/** Filter chips, in display order. `other` never gets its own chip. */
+const FILTERS: TriggerFilter[] = ['all', 'schedule', 'app_event', 'manual'];
 
 const log = createDebug('app:flows:suggested');
-
-/** Maps a `trigger_hint` to a short, translated badge label. */
-function triggerLabelKey(hint?: string | null): string | null {
-  switch (hint) {
-    case 'schedule':
-      return 'flows.suggest.trigger.schedule';
-    case 'app_event':
-      return 'flows.suggest.trigger.app_event';
-    case 'manual':
-      return 'flows.suggest.trigger.manual';
-    default:
-      return null;
-  }
-}
-
-interface SuggestionCardProps {
-  suggestion: FlowSuggestion;
-  /** True while THIS suggestion's blank flow is being created + navigated to. */
-  opening: boolean;
-  /**
-   * True while ANY suggestion's blank flow is being created + navigated to —
-   * disables every card's "Build this" (not just the active one) so a click
-   * on a different card can't silently no-op against `onBuild`'s
-   * `if (openingId) return` re-entry guard while a build is already in
-   * flight.
-   */
-  buildInProgress: boolean;
-  onBuild: () => void;
-  onDismiss: () => void;
-}
-
-function SuggestionCard({
-  suggestion,
-  opening,
-  buildInProgress,
-  onBuild,
-  onDismiss,
-}: SuggestionCardProps) {
-  const { t } = useT();
-  const triggerKey = triggerLabelKey(suggestion.trigger_hint);
-
-  return (
-    <div
-      data-testid="flow-suggestion-card"
-      className="rounded-xl border border-line bg-surface p-3 text-sm">
-      <div className="flex items-start justify-between gap-2">
-        <p className="font-semibold text-content">{suggestion.title}</p>
-        {triggerKey && (
-          <span className="shrink-0 rounded-full bg-primary-50 px-2 py-0.5 text-xs text-primary-700 dark:bg-primary-500/10 dark:text-primary-200">
-            {t(triggerKey)}
-          </span>
-        )}
-      </div>
-      <p className="mt-1 text-content-secondary">{suggestion.one_liner}</p>
-      <p className="mt-2 text-xs text-content-muted">
-        <span className="font-medium">{t('flows.suggest.why')}:</span> {suggestion.rationale}
-      </p>
-
-      {suggestion.suggested_connections.length > 0 && (
-        <p className="mt-1 text-xs text-content-faint">
-          {t('flows.suggest.uses')}: {suggestion.suggested_connections.join(', ')}
-        </p>
-      )}
-
-      <div className="mt-3 flex items-center gap-2">
-        <Button
-          type="button"
-          variant="primary"
-          size="sm"
-          data-testid="flow-suggestion-build"
-          disabled={buildInProgress}
-          onClick={onBuild}>
-          {opening ? t('flows.suggest.opening') : t('flows.suggest.build')}
-        </Button>
-        <Button
-          type="button"
-          variant="tertiary"
-          size="sm"
-          data-testid="flow-suggestion-dismiss"
-          onClick={onDismiss}>
-          {t('flows.suggest.dismiss')}
-        </Button>
-      </div>
-    </div>
-  );
-}
 
 export default function SuggestedWorkflows() {
   const { t } = useT();
@@ -143,6 +70,7 @@ export default function SuggestedWorkflows() {
   const [error, setError] = useState<string | null>(null);
   /** The suggestion whose blank flow is currently being created, or `null`. */
   const [openingId, setOpeningId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<TriggerFilter>('all');
 
   // Load any previously-discovered active suggestions on mount.
   useEffect(() => {
@@ -245,50 +173,145 @@ export default function SuggestedWorkflows() {
 
   const hasSuggestions = suggestions.length > 0;
 
-  return (
-    <section
-      data-testid="suggested-workflows"
-      className="rounded-xl border border-line bg-surface/50 p-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="flex items-center gap-1.5 text-sm font-semibold text-content">
-            <span aria-hidden>✨</span>
-            {t('flows.suggest.title')}
-          </h3>
-          <p className="text-xs text-content-muted">{t('flows.suggest.subtitle')}</p>
-        </div>
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          data-testid="flow-suggestions-discover"
-          disabled={discovering}
-          onClick={() => void discover()}>
-          {discovering
-            ? t('flows.suggest.discovering')
-            : hasSuggestions
-              ? t('flows.suggest.rediscover')
-              : t('flows.suggest.discover')}
-        </Button>
-      </div>
+  const counts = useMemo(() => {
+    const byTrigger: Record<TriggerFilter, number> = {
+      all: suggestions.length,
+      schedule: 0,
+      app_event: 0,
+      manual: 0,
+      other: 0,
+    };
+    for (const s of suggestions) byTrigger[suggestionTrigger(s.trigger_hint)] += 1;
+    return byTrigger;
+  }, [suggestions]);
 
-      {error && (
-        <p
-          className="mt-2 text-xs text-coral-600 dark:text-coral-400"
-          data-testid="flow-suggestions-error">
-          {error}
-        </p>
+  // A filter whose last card was built/dismissed falls back to "All" rather
+  // than leaving an empty grid behind a chip that no longer renders.
+  const activeFilter = filter !== 'all' && counts[filter] === 0 ? 'all' : filter;
+  const visible =
+    activeFilter === 'all'
+      ? suggestions
+      : suggestions.filter(s => suggestionTrigger(s.trigger_hint) === activeFilter);
+
+  const discoverButton = (
+    <Button
+      type="button"
+      variant={hasSuggestions ? 'secondary' : 'primary'}
+      size="sm"
+      data-testid="flow-suggestions-discover"
+      disabled={discovering}
+      leadingIcon={
+        discovering ? (
+          <Spinner />
+        ) : hasSuggestions ? (
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+        ) : (
+          <Sparkles className="h-3.5 w-3.5" aria-hidden />
+        )
+      }
+      onClick={() => void discover()}>
+      {discovering
+        ? t('flows.suggest.discovering')
+        : hasSuggestions
+          ? t('flows.suggest.rediscover')
+          : t('flows.suggest.discover')}
+    </Button>
+  );
+
+  return (
+    <section data-testid="suggested-workflows" className="space-y-4">
+      {/* ── Toolbar: trigger filters on the left, discovery on the right ── */}
+      {hasSuggestions && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div
+            role="group"
+            aria-label={t('flows.suggest.filterAria')}
+            className="flex flex-wrap items-center gap-1.5">
+            {FILTERS.filter(f => f === 'all' || counts[f] > 0).map(f => {
+              const active = activeFilter === f;
+              const labelKey = f === 'all' ? 'flows.suggest.filterAll' : triggerLabelKey(f);
+              return (
+                <button
+                  key={f}
+                  type="button"
+                  aria-pressed={active}
+                  data-testid={`flow-suggestions-filter-${f}`}
+                  onClick={() => setFilter(f)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                    active
+                      ? 'border-transparent bg-content text-surface'
+                      : 'border-line bg-surface text-content-secondary hover:bg-surface-hover'
+                  )}>
+                  {labelKey ? t(labelKey) : f}
+                  <span
+                    className={cn(
+                      'tabular-nums',
+                      active ? 'text-surface/70' : 'text-content-faint'
+                    )}>
+                    {counts[f]}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {discoverButton}
+        </div>
       )}
 
+      {error && (
+        <Alert variant="destructive" density="compact" data-testid="flow-suggestions-error">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* ── Scanning: a status strip, plus placeholder cards on a first run ── */}
+      {discovering && (
+        <div
+          role="status"
+          className="flex items-center gap-3 rounded-xl border border-primary-500/30 bg-primary-500/5 px-4 py-3 text-sm text-content-secondary">
+          <Spinner />
+          {t('flows.suggest.scanning')}
+        </div>
+      )}
+
+      {!hasSuggestions && discovering && (
+        <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3" aria-hidden>
+          {[0, 1, 2, 3].map(i => (
+            <div key={i} className="space-y-3 rounded-xl border border-line bg-surface p-4">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 animate-pulse rounded-lg bg-surface-muted" />
+                <div className="h-4 w-1/2 animate-pulse rounded bg-surface-muted" />
+              </div>
+              <div className="h-3 w-full animate-pulse rounded bg-surface-muted" />
+              <div className="h-3 w-4/5 animate-pulse rounded bg-surface-muted" />
+              <div className="h-3 w-2/3 animate-pulse rounded bg-surface-muted" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Empty: explain what discovery does and offer to run it ── */}
       {!hasSuggestions && !discovering && (
-        <p className="mt-3 text-xs text-content-faint" data-testid="flow-suggestions-empty">
-          {t('flows.suggest.empty')}
-        </p>
+        <div
+          data-testid="flow-suggestions-empty"
+          className="flex flex-col items-center rounded-xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
+          <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary-500/10 text-primary-600 dark:text-primary-300">
+            <Sparkles className="h-6 w-6" aria-hidden />
+          </span>
+          <h3 className="mt-4 text-sm font-semibold text-content">
+            {t('flows.suggest.emptyTitle')}
+          </h3>
+          <p className="mt-1 max-w-md text-xs leading-relaxed text-content-muted">
+            {t('flows.suggest.empty')}
+          </p>
+          <div className="mt-5">{discoverButton}</div>
+        </div>
       )}
 
       {hasSuggestions && (
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {suggestions.map(suggestion => (
+        <div className="grid items-stretch gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+          {visible.map(suggestion => (
             <SuggestionCard
               key={suggestion.id}
               suggestion={suggestion}

@@ -24,7 +24,6 @@ struct AsyncSpawnArgs {
     prompt: String,
     context: Option<String>,
     model_override: Option<String>,
-    toolkit_override: Option<String>,
     task_title: String,
     task_key: String,
     force_fresh: bool,
@@ -52,11 +51,6 @@ fn decode_async_spawn_args(args: &serde_json::Value) -> AsyncSpawnArgs {
         .and_then(|v| v.as_str())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    let toolkit_override = args
-        .get("toolkit")
-        .and_then(|v| v.as_str())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
     let task_title = args
         .get("task_title")
         .and_then(|v| v.as_str())
@@ -72,7 +66,6 @@ fn decode_async_spawn_args(args: &serde_json::Value) -> AsyncSpawnArgs {
         prompt,
         context,
         model_override,
-        toolkit_override,
         task_title,
         task_key,
         force_fresh,

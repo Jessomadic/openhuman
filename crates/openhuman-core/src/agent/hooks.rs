@@ -4,6 +4,10 @@
 //! what happened (user message, assistant response, tool calls with outcomes).
 //! The agent does not wait for hooks — they run in the background via `tokio::spawn`.
 
+#[path = "hooks_scope.rs"]
+mod scope;
+pub use scope::{turn_post_turn_hooks, turn_tool_hooks, HookScope};
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -36,10 +40,14 @@ pub fn replace_embedder_post_turn_hook(name: &str, hook: Option<Arc<dyn PostTurn
 
 /// Snapshot hooks supplied by the embedding host.
 pub fn embedder_post_turn_hooks() -> Vec<Arc<dyn PostTurnHook>> {
-    EMBEDDER_POST_TURN_HOOKS
+    let mut hooks = EMBEDDER_POST_TURN_HOOKS
         .lock()
         .expect("embedder post-turn hooks poisoned")
-        .clone()
+        .clone();
+    if let Some(local) = crate::core::runtime::CoreContext::current_host_overrides() {
+        hooks.extend(local.post_turn_hooks());
+    }
+    hooks
 }
 
 /// Snapshot of a completed agent turn, passed to every registered hook.
@@ -171,6 +179,9 @@ pub struct ToolHookContext {
     /// Canonical agent definition id, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// Working root of this tool dispatch, including a per-turn cwd override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<std::path::PathBuf>,
 }
 
 /// What a pre-tool hook decided about a call.
@@ -266,10 +277,14 @@ pub fn replace_embedder_tool_hook(name: &str, hook: Option<Arc<dyn ToolHook>>) {
 
 /// Snapshot tool hooks supplied by the embedding host.
 pub fn embedder_tool_hooks() -> Vec<Arc<dyn ToolHook>> {
-    EMBEDDER_TOOL_HOOKS
+    let mut hooks = EMBEDDER_TOOL_HOOKS
         .lock()
         .expect("embedder tool hooks poisoned")
-        .clone()
+        .clone();
+    if let Some(local) = crate::core::runtime::CoreContext::current_host_overrides() {
+        hooks.extend(local.tool_hooks());
+    }
+    hooks
 }
 
 #[cfg(test)]
@@ -287,8 +302,8 @@ pub fn fire_hooks(hooks: &[Arc<dyn PostTurnHook>], ctx: TurnContext) {
     // Capture the ambient CoreContext before detaching: a bare `tokio::spawn`
     // does not inherit the `CURRENT_CONTEXT` task-local, so under a scoped
     // multi-tenant dispatch a detached hook would fall back to the process
-    // default context — and anything context-derived inside the hook (the
-    // archivist's `active_memory_guard`, goals enrichment) would read and
+    // default context — and anything context-derived inside the hook (for
+    // example a workspace-scoped store) would read and
     // write another tenant's workspace. Re-entering the scope inside the task
     // keeps the hook on the dispatch it belongs to; when there is no scoped
     // context (the desktop's single-tenant path), `current()` already answers

@@ -9,7 +9,6 @@ export type CustomStepKey =
   | 'search'
   | 'embeddings'
   | 'memory'
-  | 'activity'
   | 'vault';
 export type CustomStepChoice = 'default' | 'configure';
 

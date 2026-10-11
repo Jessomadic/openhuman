@@ -68,6 +68,12 @@ pub const BUILTINS: &[BuiltinAgent] = &[
         prompt_fn: super::orchestrator::prompt::build,
         graph_fn: None,
     },
+    // `planner` and `critic` are not delegable from chat (the orchestrator does
+    // not list them): they exist for the `parallel_research_cross_check`
+    // workflow-run template (`orchestration/workflow_runs/ops.rs`), whose
+    // read-only safety tier admits only read-only agents. Planning and
+    // code review in chat are the orchestrator's own `## Plans` rules and
+    // skill `coding`.
     BuiltinAgent {
         id: "planner",
         toml: include_str!("planner/agent.toml"),
@@ -75,46 +81,9 @@ pub const BUILTINS: &[BuiltinAgent] = &[
         graph_fn: None,
     },
     BuiltinAgent {
-        id: "code_executor",
-        toml: include_str!("code_executor/agent.toml"),
-        prompt_fn: super::code_executor::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "integrations_agent",
-        toml: include_str!("integrations_agent/agent.toml"),
-        prompt_fn: super::integrations_agent::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "crypto_agent",
-        toml: include_str!("crypto_agent/agent.toml"),
-        prompt_fn: super::crypto_agent::prompt::build,
-        graph_fn: None,
-    },
-    // General-purpose read-only context/memory retrieval specialist for
-    // automation flows. A flow `agent` node routes here via `config.agent_ref`
-    // for ANY context/style/history/people need — not a fixed list of
-    // cases — looping across several retrievals in one turn when the step
-    // needs it. Strictly read-only (see agent.toml); `context_scout` remains
-    // the right choice only for its structured `[context_bundle]` output.
-    // `#[cfg(feature = "flows")]`: this agent exists only to be routed to from
-    // a flow `agent` node's `config.agent_ref`. With flows compiled out there
-    // is no engine, no `workflow_builder`, and no agent_ref path — it would be
-    // dead registry surface — so gate it like the other flow agents
-    // (`workflow_builder`, `flow_discovery`) and let a slim build drop the
-    // whole flow-specific surface (AGENTS.md compile-time-gate convention).
-    #[cfg(feature = "flows")]
-    BuiltinAgent {
-        id: "flow_memory_agent",
-        toml: include_str!("flow_memory_agent/agent.toml"),
-        prompt_fn: super::flow_memory_agent::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "tools_agent",
-        toml: include_str!("tools_agent/agent.toml"),
-        prompt_fn: super::tools_agent::prompt::build,
+        id: "critic",
+        toml: include_str!("critic/agent.toml"),
+        prompt_fn: super::critic::prompt::build,
         graph_fn: None,
     },
     BuiltinAgent {
@@ -124,57 +93,9 @@ pub const BUILTINS: &[BuiltinAgent] = &[
         graph_fn: None,
     },
     BuiltinAgent {
-        id: "settings_agent",
-        toml: include_str!("settings_agent/agent.toml"),
-        prompt_fn: super::settings_agent::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "profile_memory_agent",
-        toml: include_str!("profile_memory_agent/agent.toml"),
-        prompt_fn: super::profile_memory_agent::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "scheduler_agent",
-        toml: include_str!("scheduler_agent/agent.toml"),
-        prompt_fn: super::scheduler_agent::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
         id: "presentation_agent",
         toml: include_str!("presentation_agent/agent.toml"),
         prompt_fn: super::presentation_agent::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "tool_maker",
-        toml: include_str!("tool_maker/agent.toml"),
-        prompt_fn: super::tool_maker::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "skill_creator",
-        toml: include_str!("skill_creator/agent.toml"),
-        prompt_fn: super::skill_creator::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "researcher",
-        toml: include_str!("researcher/agent.toml"),
-        prompt_fn: super::researcher::prompt::build,
-        graph_fn: Some(super::researcher::graph::graph),
-    },
-    BuiltinAgent {
-        id: "context_scout",
-        toml: include_str!("context_scout/agent.toml"),
-        prompt_fn: super::context_scout::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "critic",
-        toml: include_str!("critic/agent.toml"),
-        prompt_fn: super::critic::prompt::build,
         graph_fn: None,
     },
     BuiltinAgent {
@@ -193,18 +114,6 @@ pub const BUILTINS: &[BuiltinAgent] = &[
         id: "video_agent",
         toml: include_str!("video_agent/agent.toml"),
         prompt_fn: super::video_agent::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "archivist",
-        toml: include_str!("archivist/agent.toml"),
-        prompt_fn: super::archivist::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "goals_agent",
-        toml: include_str!("goals_agent/agent.toml"),
-        prompt_fn: super::goals_agent::prompt::build,
         graph_fn: None,
     },
     BuiltinAgent {
@@ -231,32 +140,6 @@ pub const BUILTINS: &[BuiltinAgent] = &[
         prompt_fn: super::summarizer::prompt::build,
         graph_fn: None,
     },
-    BuiltinAgent {
-        id: "help",
-        toml: include_str!("help/agent.toml"),
-        prompt_fn: super::help::prompt::build,
-        graph_fn: None,
-    },
-    // Connected-server execution specialist. Compiled out with the `mcp`
-    // feature, which drops the `delegate_use_mcp_server` tool from the
-    // orchestrator's synthesised belt.
-    //
-    // The orchestrator's `agent.toml` still lists `mcp_agent` in `subagents`
-    // (TOML is data — it cannot be `cfg`'d, and forking it per-feature would
-    // invite exactly the data drift this gate is meant to avoid). That
-    // dangling reference is SAFE and already handled: `collect_orchestrator_tools`
-    // logs a warn and skips subagent ids that are not in the registry, and
-    // `validate_tier_hierarchy` explicitly `continue`s past unknown ids rather
-    // than failing the boot. `orchestrator_tolerates_absent_mcp_agent` in the
-    // test module below pins that contract so a future "strict unknown
-    // subagent" change cannot silently break the slim build's boot.
-    #[cfg(feature = "mcp")]
-    BuiltinAgent {
-        id: "mcp_agent",
-        toml: include_str!("mcp_agent/agent.toml"),
-        prompt_fn: super::mcp_agent::prompt::build,
-        graph_fn: None,
-    },
     // Skill agents — `#[cfg]` rather than stub: `include_str!` embeds the
     // agent TOML from disk regardless of module gating, so the entry itself
     // must disappear when the `skills` feature is off.
@@ -265,19 +148,6 @@ pub const BUILTINS: &[BuiltinAgent] = &[
         id: "skill_setup",
         toml: include_str!("../../../skills/catalog/agent/skill_setup/agent.toml"),
         prompt_fn: crate::skills::catalog::agent::skill_setup::prompt::build,
-        graph_fn: None,
-    },
-    #[cfg(feature = "skills")]
-    BuiltinAgent {
-        id: "skill_executor",
-        toml: include_str!("../../../skills/runtime/agent/skill_executor/agent.toml"),
-        prompt_fn: crate::skills::runtime::agent::skill_executor::prompt::build,
-        graph_fn: None,
-    },
-    BuiltinAgent {
-        id: "agent_memory",
-        toml: include_str!("../../../memory/agent/agent/agent.toml"),
-        prompt_fn: crate::memory::agent::agent::prompt::build,
         graph_fn: None,
     },
     // Workflow-authoring specialist (Phase 5a): builds tinyflows automation

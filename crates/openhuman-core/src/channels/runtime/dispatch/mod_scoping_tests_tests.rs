@@ -54,14 +54,14 @@ fn def_with_scope(scope: ToolScope) -> AgentDefinition {
         omit_identity: true,
         omit_memory_context: true,
         omit_safety_preamble: true,
-        omit_profile: true,
-        omit_memory_md: true,
         model: ModelSpec::Inherit,
         temperature: 0.4,
         tools: scope,
         disallowed_tools: vec![],
         skill_filter: None,
         extra_tools: vec![],
+        deferred_tools: Vec::new(),
+        tool_rules: None,
         max_iterations: 8,
         iteration_policy: Default::default(),
         max_result_chars: None,
@@ -69,11 +69,11 @@ fn def_with_scope(scope: ToolScope) -> AgentDefinition {
         timeout_secs: None,
         sandbox_mode: SandboxMode::None,
         background: false,
-        trigger_memory_agent: Default::default(),
         tokenjuice_compression: crate::inference::tokenjuice::AgentTokenjuiceCompression::Auto,
         subagents: vec![],
         delegate_name: None,
         agent_tier: crate::agent::harness::definition::AgentTier::Worker,
+        searches_connected_mcp: false,
         source: DefinitionSource::Builtin,
         graph: Default::default(),
     }
@@ -81,8 +81,8 @@ fn def_with_scope(scope: ToolScope) -> AgentDefinition {
 
 /// `ToolScope::Wildcard` must yield `None` — the prompt builder
 /// treats `None` as "no filter, every tool visible", which is the
-/// correct behaviour for agents like `integrations_agent` that want the
-/// full skill-category catalogue. Even when extras are present, a
+/// correct behaviour for agents that want the full skill-category
+/// catalogue. Even when extras are present, a
 /// wildcard agent should not start filtering.
 #[test]
 fn wildcard_scope_yields_none_filter() {

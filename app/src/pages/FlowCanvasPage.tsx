@@ -19,6 +19,7 @@
  */
 import type { Viewport } from '@xyflow/react';
 import createDebug from 'debug';
+import { Blocks, ChevronLeft, History, PanelRightClose, Sparkles } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 
@@ -27,7 +28,9 @@ import type {
   EditorSaveMeta,
 } from '../components/flows/canvas/EditableFlowCanvas';
 import FlowCanvas from '../components/flows/canvas/FlowCanvas';
+import NodePalette from '../components/flows/canvas/NodePalette';
 import { FlowPreauthorizationOverlay } from '../components/flows/FlowPreauthorizationCard';
+import { FlowRunInspectorDrawer } from '../components/flows/FlowRunInspectorDrawer';
 import FlowRunsSidebar from '../components/flows/FlowRunsSidebar';
 import WorkflowCopilotPanel, {
   type RepairPromptContext,
@@ -47,6 +50,7 @@ import {
   CenteredLoadingState,
   ConfirmDialog,
   ErrorBanner,
+  Spinner,
   ToggleGroupItem,
   ToggleGroupRoot,
 } from '../components/ui';
@@ -171,7 +175,7 @@ const log = createDebug('app:flows:canvas');
 const RUN_ERROR_AUTO_DISMISS_MS = 12_000;
 
 /** Which panel (if any) the canvas side rail shows. Driven by the header toggle. */
-type SidePanel = 'copilot' | 'legend' | null;
+type SidePanel = 'copilot' | 'legend' | 'run' | null;
 
 type LoadState =
   | { status: 'loading' }
@@ -299,6 +303,7 @@ function CanvasStatePage({ onBack, children }: { onBack: () => void; children: R
   return (
     <div className="h-full p-4" data-testid="flow-canvas-page">
       <SettingsTabbedPage
+        fullWidth
         title={t('flows.canvas.title')}
         description={t('flows.canvas.description')}
         leading={<CanvasBackButton onBack={onBack} />}
@@ -452,6 +457,8 @@ function FlowEditor({
   // Copilot is shown by DEFAULT (and any build/prefill/repair seed also targets
   // it); the user can switch to the Legend or collapse the rail entirely.
   const [sidePanel, setSidePanel] = useState<SidePanel>('copilot');
+  /** The run picked in the sidebar's run list, shown in the side panel's Run tab. */
+  const [inspectRunId, setInspectRunId] = useState<string | null>(null);
   const copilotOpen = sidePanel === 'copilot';
   // Issue B22: a repair seed can also arrive WITHOUT a `FlowEditor` remount —
   // "Fix with agent" clicked from `FlowRunsSidebar` stays on this same
@@ -1072,8 +1079,6 @@ function FlowEditor({
     goBack();
   }, [dirty, goBack]);
 
-  const backButton = <CanvasBackButton onBack={handleBack} />;
-
   // A draft has nothing persisted to run yet — the canvas's Save (which creates
   // the flow) is the only gate, so no Run affordance until it's saved.
   const runButton = isDraft ? undefined : (
@@ -1082,37 +1087,53 @@ function FlowEditor({
       variant="primary"
       size="sm"
       analyticsId="flow-canvas-run"
-      iconOnly
       data-testid="flow-canvas-run"
       aria-label={running ? t('flows.editor.running') : t('flows.editor.run')}
-      title={running ? t('flows.editor.running') : t('flows.editor.run')}
+      leadingIcon={running ? <Spinner /> : <PlayIcon />}
       disabled={running}
       onClick={() => setConfirmAction('run')}>
-      <PlayIcon />
+      {running ? t('flows.editor.running') : t('flows.editor.run')}
     </Button>
   );
 
-  // Segmented toggle for the side rail: Copilot | Legend. Clicking the active
-  // segment again collapses the rail (full-width graph). Replaces the old
-  // single copilot on/off button.
+  // Side panel tabs: Copilot | Manual (the node palette). They head the side
+  // panel card itself rather than the page header, so the control sits on the
+  // surface it switches. Collapsing goes through the card's close button; the
+  // canvas toolbar offers the way back while it is closed.
   const sidePanelToggle = (
     <ToggleGroupRoot
       type="single"
       variant="secondary"
       size="sm"
       value={sidePanel ?? ''}
-      onValueChange={next => setSidePanel(next === 'copilot' || next === 'legend' ? next : null)}
+      onValueChange={next => {
+        if (next === 'copilot' || next === 'legend' || next === 'run') setSidePanel(next);
+      }}
       aria-label={t('flows.canvas.sidePanelToggle')}
-      className="rounded-lg border border-line bg-surface p-0.5">
+      className="rounded-lg border border-line bg-surface-muted/50 p-0.5">
       <ToggleGroupItem
         value="copilot"
         data-testid="flow-canvas-copilot-toggle"
-        className="border-0">
+        className="gap-1.5 border-0 bg-transparent data-[state=on]:bg-primary-500/10 data-[state=on]:text-primary-600 dark:data-[state=on]:text-primary-300">
+        <Sparkles className="h-3.5 w-3.5" aria-hidden />
         {t('flows.copilot.open')}
       </ToggleGroupItem>
-      <ToggleGroupItem value="legend" data-testid="flow-canvas-legend-toggle" className="border-0">
+      <ToggleGroupItem
+        value="legend"
+        data-testid="flow-canvas-legend-toggle"
+        className="gap-1.5 border-0 bg-transparent data-[state=on]:bg-primary-500/10 data-[state=on]:text-primary-600 dark:data-[state=on]:text-primary-300">
+        <Blocks className="h-3.5 w-3.5" aria-hidden />
         {t('flows.canvas.legendTab')}
       </ToggleGroupItem>
+      {inspectRunId && (
+        <ToggleGroupItem
+          value="run"
+          data-testid="flow-canvas-run-toggle"
+          className="gap-1.5 border-0 bg-transparent data-[state=on]:bg-primary-500/10 data-[state=on]:text-primary-600 dark:data-[state=on]:text-primary-300">
+          <History className="h-3.5 w-3.5" aria-hidden />
+          {t('flows.canvas.runTab')}
+        </ToggleGroupItem>
+      )}
     </ToggleGroupRoot>
   );
 
@@ -1129,33 +1150,30 @@ function FlowEditor({
   const saveActions = (
     <div className="flex items-center gap-1.5">
       {saveMeta.dirty && (
-        <Badge variant="warning" className="rounded-full" data-testid="flow-editor-dirty">
+        <Badge variant="warning" data-testid="flow-editor-dirty">
           {t('flows.editor.unsaved')}
         </Badge>
       )}
       <Button
         type="button"
-        variant="primary"
+        variant="secondary"
         size="sm"
-        iconOnly
         data-testid="flow-editor-save"
         aria-label={saveMeta.saving ? t('flows.editor.saving') : t('flows.editor.save')}
         title={saveMeta.hasErrors ? t('flows.editor.saveBlocked') : t('flows.editor.save')}
+        leadingIcon={saveMeta.saving ? <Spinner /> : <SaveIcon />}
         disabled={!saveMeta.dirty || saveMeta.hasErrors || saveMeta.saving || preview !== null}
         onClick={() => setConfirmAction('save')}>
-        <SaveIcon />
+        {saveMeta.saving ? t('flows.editor.saving') : t('flows.editor.save')}
       </Button>
     </div>
   );
 
-  // Keep the save actions and Run button adjacent; the panel toggle sits apart.
+  // Header actions: the unsaved chip, Save, then Run — the primary action last.
   const headerActions = (
     <div className="flex items-center gap-2">
-      {sidePanelToggle}
-      <div className="flex items-center gap-1.5">
-        {saveActions}
-        {runButton}
-      </div>
+      {saveActions}
+      {runButton}
     </div>
   );
 
@@ -1214,26 +1232,51 @@ function FlowEditor({
           in the space the real one would have occupied, and it only existed at
           `lg` and up. Drafts have no runs yet, so they project nothing and the
           region stays empty. */}
-      {!isDraft && flowId && (
-        <SidebarContent>
-          <div className="h-full overflow-hidden">
-            <FlowRunsSidebar flowId={flowId} />
+      {/* The sidebar region carries the way back to the list (so the page title
+          sits on the same left edge as every other page's, instead of being
+          pushed in by a leading back button) and, for a saved flow, its runs.
+          Picking a run loads it into the side panel's Run tab. */}
+      <SidebarContent>
+        <div className="flex h-full flex-col overflow-hidden">
+          <div className="shrink-0 px-3 pb-2">
+            <Button
+              type="button"
+              variant="tertiary"
+              data-testid="flow-canvas-back"
+              aria-label={t('flows.canvas.backToList')}
+              leadingIcon={<ChevronLeft className="h-4 w-4" aria-hidden />}
+              className="h-auto w-full justify-start gap-2 rounded-md px-2.5 py-1.5 text-[13px] font-normal text-content-muted hover:bg-surface/40 hover:text-content-secondary"
+              onClick={handleBack}>
+              {t('flows.canvas.backToList')}
+            </Button>
           </div>
-        </SidebarContent>
-      )}
+          {!isDraft && flowId && (
+            <div className="min-h-0 flex-1">
+              <FlowRunsSidebar
+                flowId={flowId}
+                selectedRunId={sidePanel === 'run' ? inspectRunId : null}
+                onSelectRun={runId => {
+                  log('runs sidebar: inspecting run=%s in side panel', runId);
+                  setInspectRunId(runId);
+                  setSidePanel('run');
+                }}
+              />
+            </div>
+          )}
+        </div>
+      </SidebarContent>
       <SettingsTabbedPage
+        fullWidth
         title={titleNode}
         description={t('flows.canvas.description')}
-        leading={backButton}
         headerAction={headerActions}
         scrollable={false}
-        // The canvas is a single full-bleed surface, so it runs to the content
-        // card's edges instead of floating as an inset rectangle inside it.
-        // The header keeps the gutter, so the title still lines up with every
-        // other page's.
-        bodyFullBleed>
-        <div className="flex h-full w-full">
-          <div className={`relative h-full flex-1 ${hideGraph ? 'hidden' : ''}`}>
+        // No full-bleed: the canvas and the side panel are two framed cards in
+        // the page gutter, like every other page's content.
+      >
+        <div className="flex h-full w-full gap-4">
+          <div
+            className={`relative h-full min-w-0 flex-1 overflow-hidden rounded-xl border border-line-strong ${hideGraph ? 'hidden' : ''}`}>
             <FlowCanvas
               key={`canvas-${canvasVersion}`}
               ref={canvasRef}
@@ -1250,7 +1293,8 @@ function FlowEditor({
               removedNodeIds={preview?.removedNodeIds}
               saveDisabled={preview !== null}
               initialDirty={initialDirty}
-              showPalette={sidePanel === 'legend'}
+              showPalette={false}
+              onOpenPanel={sidePanel === null ? () => setSidePanel('copilot') : undefined}
               savedViewport={viewportRef.current}
               onViewportChange={handleViewportChange}
             />
@@ -1303,30 +1347,90 @@ function FlowEditor({
             )}
           </div>
 
-          {copilotOpen && (
-            <WorkflowCopilotPanel
-              // Stable ('copilot') across manual open/close and build-seed
-              // navigations (unaffected — those always land on a fresh
-              // `FlowEditor` mount already, see `locationKey`'s doc comment).
-              // Repair seeds fold in `locationKey` so a same-route "Fix with
-              // agent" click (no `FlowEditor` remount) still forces a fresh
-              // panel mount, resetting the once-per-mount `repairSentRef` guard
-              // so the repair turn actually (re)fires (issue B22).
-              key={initialCopilotSeed ? `copilot-repair-${locationKey}` : 'copilot'}
-              graph={preview?.base ?? draftGraph}
-              flowId={flowId}
-              onProposal={handleProposal}
-              onAccept={handleAcceptProposal}
-              onReject={handleRejectProposal}
-              repairSeed={copilotRepairSeed}
-              buildSeed={initialBuildSeed}
-              onBuildSeedConsumed={onBuildSeedConsumed}
-              prefillSeed={initialPrefillSeed}
-              onPrefillSeedConsumed={onPrefillSeedConsumed}
-              seedThreadId={copilotThreadId}
-              onThreadIdChange={handleCopilotThreadId}
-              fullWidth={hideGraph}
-            />
+          {/* Side panel card: Copilot or the node palette ("Manual"), headed by
+              its own tabs and a collapse button. While the copilot builds a
+              brand-new flow (`hideGraph`) it takes the whole body. */}
+          {sidePanel !== null && (
+            <section
+              data-testid="flow-canvas-side-panel"
+              className={`flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-surface ${
+                hideGraph ? 'flex-1' : 'w-[22rem] shrink-0 xl:w-[26rem]'
+              }`}>
+              <header className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
+                {sidePanelToggle}
+                {!hideGraph && (
+                  <Button
+                    type="button"
+                    variant="tertiary"
+                    size="sm"
+                    iconOnly
+                    data-testid="flow-canvas-close-panel"
+                    aria-label={t('flows.canvas.closePanel')}
+                    title={t('flows.canvas.closePanel')}
+                    onClick={() => setSidePanel(null)}>
+                    <PanelRightClose className="h-4 w-4" aria-hidden />
+                  </Button>
+                )}
+              </header>
+              <div className="min-h-0 flex-1">
+                {sidePanel === 'run' && inspectRunId && (
+                  <FlowRunInspectorDrawer
+                    variant="panel"
+                    runId={inspectRunId}
+                    onClose={() => {
+                      setInspectRunId(null);
+                      setSidePanel('copilot');
+                    }}
+                    onFixWithAgent={request => {
+                      log('fix with agent from run panel: run=%s', request.runId);
+                      setInspectRunId(null);
+                      navigate(`/flows/${request.flowId}`, {
+                        replace: true,
+                        state: {
+                          copilotRepair: {
+                            runId: request.runId,
+                            error: request.error,
+                            failingNodeIds: request.failingNodeIds,
+                          },
+                        },
+                      });
+                    }}
+                  />
+                )}
+                {sidePanel === 'legend' && (
+                  <NodePalette
+                    variant="panel"
+                    onAdd={entry => canvasRef.current?.addPaletteEntry(entry)}
+                  />
+                )}
+                {copilotOpen && (
+                  <WorkflowCopilotPanel
+                    framed
+                    // Stable ('copilot') across manual open/close and build-seed
+                    // navigations (unaffected — those always land on a fresh
+                    // `FlowEditor` mount already, see `locationKey`'s doc comment).
+                    // Repair seeds fold in `locationKey` so a same-route "Fix with
+                    // agent" click (no `FlowEditor` remount) still forces a fresh
+                    // panel mount, resetting the once-per-mount `repairSentRef` guard
+                    // so the repair turn actually (re)fires (issue B22).
+                    key={initialCopilotSeed ? `copilot-repair-${locationKey}` : 'copilot'}
+                    graph={preview?.base ?? draftGraph}
+                    flowId={flowId}
+                    onProposal={handleProposal}
+                    onAccept={handleAcceptProposal}
+                    onReject={handleRejectProposal}
+                    repairSeed={copilotRepairSeed}
+                    buildSeed={initialBuildSeed}
+                    onBuildSeedConsumed={onBuildSeedConsumed}
+                    prefillSeed={initialPrefillSeed}
+                    onPrefillSeedConsumed={onPrefillSeedConsumed}
+                    seedThreadId={copilotThreadId}
+                    onThreadIdChange={handleCopilotThreadId}
+                    fullWidth={hideGraph}
+                  />
+                )}
+              </div>
+            </section>
           )}
 
           {/* Both confirms are `ConfirmDialog` now. They were two hand-rolled

@@ -1,13 +1,13 @@
 use super::*;
 
 #[tokio::test]
-async fn intercept_with_trusted_subconscious_origin_allows_without_prompt() {
-    // Subconscious ticks on internal-only memory are trusted automation
-    // and run unprompted (preserves pre-PR behavior for the safe case).
+async fn intercept_with_trusted_background_origin_allows_without_prompt() {
+    // Internal background jobs over local data are trusted automation and
+    // run unprompted.
     let (gate, _dir) = test_gate();
     let origin = AgentTurnOrigin::TrustedAutomation {
-        job_id: "subconscious-tick".into(),
-        source: TrustedAutomationSource::Subconscious,
+        job_id: "memory_goals:enrich:1".into(),
+        source: TrustedAutomationSource::Background,
     };
     let outcome = turn_origin::with_origin(
         origin,
@@ -15,29 +15,6 @@ async fn intercept_with_trusted_subconscious_origin_allows_without_prompt() {
     )
     .await;
     assert!(matches!(outcome, GateOutcome::Allow));
-}
-
-#[tokio::test]
-async fn intercept_with_subconscious_tainted_origin_denies() {
-    // A subconscious tick whose memory context contains external-sync
-    // chunks is rejected for external_effect tools — external text in
-    // memory could otherwise steer the tick into a tool call.
-    let (gate, _dir) = test_gate();
-    let origin = AgentTurnOrigin::TrustedAutomation {
-        job_id: "subconscious-tainted".into(),
-        source: TrustedAutomationSource::SubconsciousTainted,
-    };
-    let outcome = turn_origin::with_origin(
-        origin,
-        gate.intercept("send_email", "send", serde_json::json!({})),
-    )
-    .await;
-    match outcome {
-        GateOutcome::Deny { reason } => {
-            assert!(reason.contains("external-sync"), "reason was: {reason}")
-        }
-        other => panic!("expected deny, got {other:?}"),
-    }
 }
 
 #[tokio::test]
@@ -136,13 +113,15 @@ async fn intercept_with_external_channel_origin_persists_and_ttl_denies() {
     // Non-web channel inbound (Telegram / Discord / Slack / etc.):
     // persist an audit row but TTL-deny — there is no channel-routed
     // approval surface yet, and the input is remote-attacker text.
-    let (gate, _dir, env) = expiry_gate();
+    let (gate, _dir, env) = expiry_gate().await;
     let gate = Arc::new(gate);
     let origin = AgentTurnOrigin::ExternalChannel {
+        sender_name: None,
         channel: "telegram".into(),
         sender: Some("tg-user-1".into()),
         reply_target: "tg-chat-1".into(),
         message_id: "msg-1".into(),
+        history_key: None,
     };
 
     let g = gate.clone();
@@ -386,7 +365,7 @@ async fn flow_tool_trust_auto_allows_before_parking() {
     //
     // The second half of this test *does* wait a park out, so it needs the
     // short window even though it never inspects the "timed out" reason.
-    let (gate, _dir, env) = expiry_gate();
+    let (gate, _dir, env) = expiry_gate().await;
     let gate = Arc::new(gate);
     store::insert_flow_trust(&gate.config, "flow-trusted", "composio").unwrap();
 
@@ -504,7 +483,7 @@ async fn flow_origin_park_publishes_flow_approval_request_and_notification() {
     // no chat thread/client, so the generic `ApprovalRequested` event's
     // web-channel bridge silently drops it. This test asserts the two new
     // surfaces fire instead — the `flow_approval_request` DomainEvent
-    // (bridged to a broadcast Socket.IO event by `core::socketio`) and
+    // (bridged to a broadcast Socket.IO event by `openhuman_rpc::server::socketio`) and
     // the `flow-gate-approval` CoreNotification with its three actions.
     crate::core::bus::init().await.expect("bus init");
     let mut event_rx = crate::core::bus::BUS

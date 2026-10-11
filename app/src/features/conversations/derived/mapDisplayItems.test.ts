@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { DerivedDisplayItem } from '../../../types/derivedTranscript';
+import { formatTimelineEntry } from '../../../utils/toolTimelineFormatting';
 import { mapDisplayItems } from './mapDisplayItems';
 
 /**
@@ -188,7 +189,7 @@ describe('mapDisplayItems', () => {
     expect(timelines['req-1'][0].failure?.causePlain).toBe('raw error text');
   });
 
-  it('derives displayName/detail for a tool row (parity with turn_state rows)', () => {
+  it('derives the detail for a tool row but leaves displayName to the server', () => {
     const chronological: DerivedDisplayItem[] = [
       { kind: 'turnBoundary', requestId: 'req-1' },
       {
@@ -204,8 +205,11 @@ describe('mapDisplayItems', () => {
     const { timelines } = mapDisplayItems(newestFirst(chronological));
     const row = timelines['req-1'][0];
 
-    expect(typeof row.displayName).toBe('string');
-    expect(row.displayName?.length ?? 0).toBeGreaterThan(0);
+    // A baked client title froze its tense ("Running command" on a finished
+    // row); surfaces resolve the title at render time instead.
+    expect(row.displayName).toBeUndefined();
+    expect(row.detail).toBe('ls -la');
+    expect(formatTimelineEntry(row).title).toBe('Ran command');
   });
 
   it('anchors a subagent to its own requestId, not the current turn cursor', () => {
@@ -349,5 +353,194 @@ describe('mapDisplayItems', () => {
       expect.objectContaining({ kind: 'narration', round: 2 })
     );
     expect(timelines['req-1'][0].round).toBe(2);
+  });
+
+  /**
+   * The core projects a step's reasoning *before* its message. The round used
+   * to be taken only from the following assistantMessage, so each step's
+   * reasoning was filed under the previous step.
+   */
+  it('files reasoning under the step it precedes, from its own iteration', () => {
+    const chronological: DerivedDisplayItem[] = [
+      { kind: 'turnBoundary', requestId: 'req-1' },
+      { kind: 'reasoning', text: 'think one', iteration: 1 },
+      {
+        kind: 'assistantMessage',
+        content: 'Let me check.',
+        interim: true,
+        iteration: 1,
+        requestId: 'req-1',
+      },
+      { kind: 'toolCall', callId: 'c1', name: 'shell', status: 'success', iteration: 1 },
+      { kind: 'reasoning', text: 'think two', iteration: 2 },
+      // Step 2 has no narration: only its tool call says which step it is.
+      { kind: 'toolCall', callId: 'c2', name: 'shell', status: 'success', iteration: 2 },
+      { kind: 'reasoning', text: 'think three', iteration: 3 },
+      { kind: 'assistantMessage', content: 'Done.', iteration: 3, requestId: 'req-1' },
+    ];
+
+    const { transcripts, timelines } = mapDisplayItems(newestFirst(chronological));
+
+    const thinking = transcripts['req-1']
+      .filter(item => item.kind === 'thinking')
+      .map(item => ('text' in item ? [item.text, item.round] : []));
+    expect(thinking).toEqual([
+      ['think one', 1],
+      ['think two', 2],
+      ['think three', 3],
+    ]);
+    expect(timelines['req-1'].map(entry => [entry.id, entry.round])).toEqual([
+      ['c1', 1],
+      ['c2', 2],
+    ]);
+  });
+
+  it('keys sub-agent rows by their unique run id and maps their terminal status', () => {
+    const chronological: DerivedDisplayItem[] = [
+      { kind: 'turnBoundary', requestId: 'req-1' },
+      { kind: 'toolCall', callId: 'c1', name: 'research', status: 'success', iteration: 1 },
+      {
+        kind: 'subagent',
+        id: 'sub-aaa',
+        agentId: 'researcher',
+        taskId: 'sub-aaa',
+        callId: 'c1',
+        status: 'completed',
+        requestId: 'req-1',
+        items: [],
+      },
+      { kind: 'toolCall', callId: 'c2', name: 'research', status: 'error', iteration: 2 },
+      {
+        kind: 'subagent',
+        id: 'sub-bbb',
+        agentId: 'researcher',
+        taskId: 'sub-bbb',
+        callId: 'c2',
+        status: 'failed',
+        requestId: 'req-1',
+        items: [],
+      },
+    ];
+
+    const rows = mapDisplayItems(newestFirst(chronological)).timelines['req-1'];
+
+    // Each run follows its spawning call, and two runs of one agent no longer
+    // share `subagent:researcher` as their id.
+    expect(rows.map(row => row.id)).toEqual(['c1', 'subagent:sub-aaa', 'c2', 'subagent:sub-bbb']);
+    const [, first, , second] = rows;
+    expect(first.name).toBe('subagent:researcher');
+    expect(first.status).toBe('success');
+    expect(first.subagent).toEqual(
+      expect.objectContaining({ taskId: 'sub-aaa', agentId: 'researcher', status: 'completed' })
+    );
+    expect(second.status).toBe('error');
+    expect(second.subagent?.status).toBe('failed');
+  });
+
+  it('settles an incomplete sub-agent as a non-success partial state', () => {
+    const rows = mapDisplayItems(
+      newestFirst([
+        { kind: 'turnBoundary', requestId: 'req-i' },
+        { kind: 'toolCall', callId: 'ci', name: 'research', status: 'success', iteration: 1 },
+        {
+          kind: 'subagent',
+          id: 'sub-inc',
+          agentId: 'researcher',
+          taskId: 'sub-inc',
+          callId: 'ci',
+          status: 'incomplete',
+          requestId: 'req-i',
+          items: [],
+        },
+      ])
+    ).timelines['req-i'];
+
+    const sub = rows.find(row => row.id === 'subagent:sub-inc');
+    expect(sub?.status).not.toBe('success');
+    expect(sub?.status).toBe('cancelled');
+    expect(sub?.subagent?.status).toBe('incomplete');
+  });
+
+  describe('sub-agent placement (live parity)', () => {
+    /**
+     * Live, `subagentSpawned` turns the `spawn_subagent` row into the
+     * delegation card IN ITS SLOT. The projection nests sub-agents after every
+     * root item, so a reopened turn used to show the spawn call as a plain
+     * tool card and the delegation card at the bottom — a different turn from
+     * the one the user watched stream.
+     */
+    it('puts the sub-agent in the slot of the call that spawned it', () => {
+      const { timelines, transcripts } = mapDisplayItems(
+        newestFirst([
+          { kind: 'turnBoundary', requestId: 'req-1' },
+          { kind: 'toolCall', callId: 'call-a', name: 'shell', status: 'success' },
+          {
+            kind: 'toolCall',
+            callId: 'call-spawn',
+            name: 'spawn_subagent',
+            args: { prompt: 'dig in' },
+            status: 'success',
+          },
+          { kind: 'toolCall', callId: 'call-b', name: 'shell', status: 'success' },
+          { kind: 'subagent', id: 'researcher', requestId: 'req-1', items: [] },
+        ])
+      );
+      const rows = timelines['req-1'] ?? [];
+      expect(rows.map(row => row.id)).toEqual(['call-a', 'subagent:researcher', 'call-b']);
+      expect(rows[1]?.seq).toBeLessThan(rows[2]?.seq ?? -1);
+      expect(rows[1]?.sourceToolName).toBe('spawn_subagent');
+      // The transcript pointer follows the row, so the card renders in place.
+      const pointers = (transcripts['req-1'] ?? []).flatMap(item =>
+        item.kind === 'toolCall' ? [item.callId] : []
+      );
+      expect(pointers).toEqual(['call-a', 'subagent:researcher', 'call-b']);
+    });
+
+    it('pairs several sub-agents with their spawn calls in order', () => {
+      const { timelines } = mapDisplayItems(
+        newestFirst([
+          { kind: 'turnBoundary', requestId: 'req-1' },
+          { kind: 'toolCall', callId: 's1', name: 'spawn_subagent', status: 'success' },
+          { kind: 'toolCall', callId: 's2', name: 'delegate_coder', status: 'success' },
+          { kind: 'subagent', id: 'researcher', requestId: 'req-1', items: [] },
+          { kind: 'subagent', id: 'researcher', requestId: 'req-1', items: [] },
+        ])
+      );
+      expect((timelines['req-1'] ?? []).map(row => row.id)).toEqual([
+        'subagent:researcher',
+        'subagent:researcher#2',
+      ]);
+    });
+
+    it('appends a sub-agent with no spawn call to pair with, as before', () => {
+      const { timelines } = mapDisplayItems(
+        newestFirst([
+          { kind: 'turnBoundary', requestId: 'req-1' },
+          { kind: 'toolCall', callId: 'call-a', name: 'shell', status: 'success' },
+          { kind: 'subagent', id: 'coder', requestId: 'req-1', items: [] },
+        ])
+      );
+      expect((timelines['req-1'] ?? []).map(row => row.id)).toEqual(['call-a', 'subagent:coder']);
+    });
+
+    it('folds a delegation the core names by callId into that call’s slot', () => {
+      const { timelines } = mapDisplayItems(
+        newestFirst([
+          { kind: 'turnBoundary', requestId: 'req-1' },
+          { kind: 'toolCall', callId: 'call-spawn', name: 'spawn_subagent', status: 'success' },
+          {
+            kind: 'subagent',
+            id: 'sub-1',
+            agentId: 'researcher',
+            callId: 'call-spawn',
+            status: 'completed',
+            requestId: 'req-1',
+            items: [],
+          },
+          { kind: 'toolCall', callId: 'call-b', name: 'shell', status: 'success' },
+        ])
+      );
+      expect((timelines['req-1'] ?? []).map(row => row.id)).toEqual(['subagent:sub-1', 'call-b']);
+    });
   });
 });

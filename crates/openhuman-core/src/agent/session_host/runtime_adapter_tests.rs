@@ -56,6 +56,7 @@ impl SessionDriver<OpenHumanRunContext> for RecordingDriver {
             output: Some("done".into()),
             partial: None,
             interrupted: false,
+            outcome: None,
         })
     }
 }
@@ -111,8 +112,13 @@ fn codec_attaches_only_this_agents_own_sidecar_usage_to_atomic_append() {
         sidecar.input_tokens = 13;
         sidecar.output_tokens = 8;
         sidecar.cached_input_tokens = 3;
-        sidecar.cost_usd = 0.004;
+        sidecar.cost = crate::agent::cost::CostTally {
+            known_usd: 0.004,
+            source: crate::agent::cost::CostSource::Charged,
+        };
         sidecar.context_window = 128_000;
+        sidecar.last_call_input_tokens = 9;
+        sidecar.last_call_output_tokens = 2;
         sidecar
             .tool_outcomes
             .push(crate::agent::tinyagents::ToolCallOutcome {
@@ -132,6 +138,7 @@ fn codec_attaches_only_this_agents_own_sidecar_usage_to_atomic_append() {
             output_tokens: 2,
             cached_input_tokens: 1,
             charged_amount_usd: 0.001,
+            cost_source: crate::agent::cost::CostSource::Charged,
         },
     });
     // `OpenHumanRunContext` is `Clone` and its child ledger is an `Arc`, so this
@@ -163,6 +170,12 @@ fn codec_attaches_only_this_agents_own_sidecar_usage_to_atomic_append() {
         "the parent's own cache reads, NOT 4"
     );
     assert_eq!(usage.usage.context_window, 128_000);
+    // The final call's size is persisted beside the summed spend, so a thread
+    // reopened later can still fill the context gauge correctly.
+    assert_eq!(
+        (usage.usage.last_call_input, usage.usage.last_call_output),
+        (9, 2)
+    );
     assert!(
         (usage.usage.cost_usd - 0.004).abs() < f64::EPSILON,
         "the parent's own cost, NOT 0.005"
@@ -175,9 +188,13 @@ fn codec_attaches_only_this_agents_own_sidecar_usage_to_atomic_append() {
         "the child entry survives on the ledger for the live projection"
     );
     assert_eq!(usage.iteration, 2);
-    assert_eq!(usage.tool_calls.len(), 1);
-    assert_eq!(usage.tool_calls[0].id, "call-usage");
-    assert_eq!(usage.tool_calls[0].arguments, r#"{"path":"Cargo.toml"}"#);
+    // The turn's tool outcomes are NOT copied onto the usage record: it lands
+    // on the final answer row, and every call is already recorded once in the
+    // envelope of the assistant row that issued it.
+    assert!(
+        usage.tool_calls.is_empty(),
+        "usage must not duplicate the turn's tool calls onto the answer row"
+    );
 }
 
 #[test]
@@ -186,8 +203,13 @@ fn last_turn_usage_reports_the_same_holistic_totals_as_transcript_billing() {
         input_tokens: 13,
         output_tokens: 8,
         cached_input_tokens: 3,
-        cost_usd: 0.004,
+        cost: crate::agent::cost::CostTally {
+            known_usd: 0.004,
+            source: crate::agent::cost::CostSource::Charged,
+        },
         context_window: 128_000,
+        last_call_input_tokens: 9,
+        last_call_output_tokens: 2,
         ..Default::default()
     };
     sidecar
@@ -200,6 +222,7 @@ fn last_turn_usage_reports_the_same_holistic_totals_as_transcript_billing() {
                 output_tokens: 2,
                 cached_input_tokens: 1,
                 charged_amount_usd: 0.001,
+                cost_source: crate::agent::cost::CostSource::Charged,
             },
         });
 
@@ -207,8 +230,11 @@ fn last_turn_usage_reports_the_same_holistic_totals_as_transcript_billing() {
     assert_eq!(usage.input_tokens, 18);
     assert_eq!(usage.output_tokens, 10);
     assert_eq!(usage.cached_input_tokens, 4);
-    assert!((usage.cost_usd - 0.005).abs() < f64::EPSILON);
+    assert!((usage.cost_usd.expect("all calls charged") - 0.005).abs() < f64::EPSILON);
     assert_eq!(usage.context_window, 128_000);
+    // The gauge numerator is the root's final call alone: neither the turn's
+    // summed spend nor the child's tokens, which ran in their own window.
+    assert_eq!(usage.context_tokens, 11);
     assert_eq!(usage.subagents.len(), 1, "detail breakdown is retained");
 }
 
@@ -324,6 +350,7 @@ fn meta() -> TranscriptMeta {
         created: chrono::Utc::now().to_rfc3339(),
         updated: chrono::Utc::now().to_rfc3339(),
         turn_count: 0,
+        prefix_message_count: None,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,
@@ -438,8 +465,9 @@ fn availability_notes_are_status_not_instructions() {
     }
     assert!(notes[0].contains("tool_search") && notes[0].contains("gmail"));
     assert!(!notes[0].contains("delegate_to_integrations_agent"));
-    assert!(notes[1].contains("use_mcp_server") && notes[1].contains("filesystem, github"));
-    assert!(notes[2].contains("run_skill") && notes[2].contains("deploy"));
+    assert!(notes[1].contains("tool_search") && notes[1].contains("filesystem, github"));
+    assert!(!notes[1].contains("use_mcp_server"));
+    assert!(notes[2].contains("run_workflow") && notes[2].contains("deploy"));
     assert!(integration_announcement_note(&[]).is_none());
     assert!(mcp_announcement_note(&[]).is_none());
     assert!(skill_announcement_note(&[]).is_none());
@@ -482,8 +510,54 @@ fn a_subagent_thread_binding_claims_no_session_identity() {
     assert_eq!(child.session_id(), None);
 }
 
-/// The PRODUCTION turn path must wire an artifact store, rooted where the READ
-/// path will look for it (#6408).
+/// The resume hook and builder must name the same transcript locator instance.
+/// A distinct locator for the same directory lets a new thread commit, then
+/// rejects a cold resumed thread before inference with InvalidSessionState (#6608).
+#[test]
+fn a_cold_resumed_thread_can_send_again() {
+    std::thread::Builder::new()
+        .stack_size(crate::core::runtime::AGENT_WORKER_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime")
+                .block_on(cold_resumed_thread_can_send_again());
+        })
+        .expect("test thread")
+        .join()
+        .expect("test thread panicked");
+}
+
+async fn cold_resumed_thread_can_send_again() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let model: Arc<dyn tinyinference_llm::model::ChatModel<()>> =
+        Arc::new(tinyagents_harness::testkit::ScriptedModel::new(vec![
+            tinyinference_llm::model::ModelResponse::assistant("first reply"),
+            tinyinference_llm::model::ModelResponse::assistant("second reply"),
+        ]));
+    let new_host = || {
+        crate::agent::SessionHostBuilder::new()
+            .chat_model(model.clone())
+            .tools(Vec::new())
+            .workspace_dir(root.path().join("workspace"))
+            .action_dir(root.path().to_path_buf())
+            .tool_dispatcher(Box::new(tinytools_agent::dialect::XmlDialect))
+            .build()
+            .expect("session build")
+    };
+    let mut host = new_host();
+    host.set_thread_id(Some("thread-resume-regression"));
+
+    assert_eq!(host.turn("first message").await.unwrap(), "first reply");
+    drop(host);
+    let mut host = new_host();
+    host.set_thread_id(Some("thread-resume-regression"));
+    assert_eq!(host.turn("second message").await.unwrap(), "second reply");
+}
+
+/// The PRODUCTION turn path must wire an artifact store, rooted outside the
+/// project the agent works in (#6408).
 ///
 /// Two assertions, and both were dead code before this PR. The existing artifact
 /// tests construct `TurnContextMiddleware` with `artifact_store: Some(..)`
@@ -491,16 +565,16 @@ fn a_subagent_thread_binding_claims_no_session_identity() {
 /// whether production ever reaches it — and it did not: the production
 /// constructor hard-coded `None`, which is how a whole feature shipped dead.
 ///
-/// The root matters as much as the wiring. The store hands the model a RELATIVE
-/// pointer, resolved later by `file_read` through `security_for_tool_context`,
-/// which overwrites `action_dir` with `ctx.workspace().root` when the turn
-/// carries a descriptor. Rooting the store at `action_dir` regardless would
-/// write artifacts the model cannot dereference — strictly worse than the
-/// truncation it replaces. So this drives a real host with a descriptor whose
-/// root is NOT `action_dir`, and pins that the store followed the descriptor.
-///
+/// The root matters as much as the wiring, and it is the workspace's
+/// `artifacts/tool-results`, never a directory the agent works in. Rooted at
+/// `action_dir` (or a descriptor's root) every oversized output was a stray file
+/// in the user's project, swept into its diff. The pointer is absolute, so it
+/// no longer has to match whichever root `file_read` resolves relative paths
+/// against (#6483). This drives a real host with a descriptor whose root is not
+/// `action_dir`, and pins that the store followed neither.
 #[tokio::test]
-async fn production_turn_path_wires_an_artifact_store_at_the_read_path_root() {
+async fn production_turn_path_wires_an_artifact_store_outside_the_project() {
+    let workspace = tempfile::tempdir().expect("workspace");
     let action_dir = tempfile::tempdir().expect("tempdir");
     let turn_root = tempfile::tempdir().expect("turn root");
     assert_ne!(
@@ -514,8 +588,8 @@ async fn production_turn_path_wires_an_artifact_store_at_the_read_path_root() {
     let mut host = crate::agent::SessionHostBuilder::new()
         .chat_model(model)
         .tools(Vec::new())
+        .workspace_dir(workspace.path().to_path_buf())
         .action_dir(action_dir.path().to_path_buf())
-        .memory(crate::memory::test_support::noop_memory())
         .tool_dispatcher(Box::new(tinytools_agent::dialect::XmlDialect))
         .workspace_descriptor(Some(
             tinytools::WorkspaceDescriptor::new(turn_root.path().to_path_buf())
@@ -539,28 +613,30 @@ async fn production_turn_path_wires_an_artifact_store_at_the_read_path_root() {
         "the production turn path must wire an artifact store, or oversized \
          tool results are truncated with their tail discarded (#6408)",
     );
+    assert!(store.is_detached(), "the pointer must be absolute");
     assert_eq!(
         store.root(),
-        turn_root.path(),
-        "the store must be rooted at the turn workspace the read path resolves \
-         against, not at action_dir — otherwise the pointer handed to the model \
-         dereferences to nothing (#6483)"
+        crate::security::policy::tool_result_artifacts_dir(workspace.path()),
+        "the store must live under the workspace, not in the project the agent edits"
     );
+    assert!(!store.root().starts_with(action_dir.path()));
+    assert!(!store.root().starts_with(turn_root.path()));
 }
 
-/// With no workspace descriptor the read path keeps the policy's own
-/// `action_dir`, so the store must too. The mirror of the test above: pinning
-/// only one branch would let the other regress silently.
+/// Without a descriptor the answer is the same: the workspace, not
+/// `action_dir`. The mirror of the test above, so neither branch can regress
+/// back into the project.
 #[tokio::test]
-async fn artifact_store_falls_back_to_action_dir_without_a_descriptor() {
+async fn artifact_store_stays_in_the_workspace_without_a_descriptor() {
+    let workspace = tempfile::tempdir().expect("workspace");
     let action_dir = tempfile::tempdir().expect("tempdir");
     let model: Arc<dyn tinyinference_llm::model::ChatModel<()>> =
         Arc::new(tinyagents_harness::testkit::ScriptedModel::new(Vec::new()));
     let mut host = crate::agent::SessionHostBuilder::new()
         .chat_model(model)
         .tools(Vec::new())
+        .workspace_dir(workspace.path().to_path_buf())
         .action_dir(action_dir.path().to_path_buf())
-        .memory(crate::memory::test_support::noop_memory())
         .tool_dispatcher(Box::new(tinytools_agent::dialect::XmlDialect))
         .build()
         .expect("session build");
@@ -579,5 +655,90 @@ async fn artifact_store_falls_back_to_action_dir_without_a_descriptor() {
         .artifact_store
         .as_ref()
         .expect("artifact store");
-    assert_eq!(store.root(), action_dir.path());
+    assert_eq!(
+        store.root(),
+        crate::security::policy::tool_result_artifacts_dir(workspace.path())
+    );
+}
+
+/// The reply-language instruction reaches the MODEL, on the user message next
+/// to the clock line, and clearing it removes it from the next turn. Before
+/// this, the web channel computed the directive, logged "injecting", and
+/// dropped it: no request ever carried it.
+#[test]
+fn reply_language_directive_rides_each_user_message_until_cleared() {
+    std::thread::Builder::new()
+        .stack_size(crate::core::runtime::AGENT_WORKER_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime")
+                .block_on(reply_language_directive_rides_each_user_message_until_cleared_body());
+        })
+        .expect("test thread")
+        .join()
+        .expect("test thread panicked");
+}
+
+async fn reply_language_directive_rides_each_user_message_until_cleared_body() {
+    const DIRECTIVE: &str = "User language: respond in Spanish (test directive).";
+    let root = tempfile::tempdir().expect("tempdir");
+    let model = Arc::new(tinyagents_harness::testkit::ScriptedModel::new(vec![
+        tinyinference_llm::model::ModelResponse::assistant("hola"),
+        tinyinference_llm::model::ModelResponse::assistant("hello"),
+    ]));
+    let mut host = crate::agent::SessionHostBuilder::new()
+        .chat_model(model.clone() as Arc<dyn tinyinference_llm::model::ChatModel<()>>)
+        .tools(Vec::new())
+        .workspace_dir(root.path().join("workspace"))
+        .action_dir(root.path().to_path_buf())
+        .tool_dispatcher(Box::new(tinytools_agent::dialect::XmlDialect))
+        .build()
+        .expect("session build");
+    host.set_thread_id(Some("thread-reply-language"));
+    let last_user_text = |request: &tinyinference_llm::model::ModelRequest| {
+        request
+            .messages
+            .iter()
+            .rev()
+            .find(|m| matches!(m, Message::User(_)))
+            .map(|m| m.text())
+            .expect("a user message reached the model")
+    };
+
+    host.set_reply_language_directive(Some(DIRECTIVE.to_string()));
+    host.set_time_zone(Some("Pacific/Chatham".to_string()));
+    assert_eq!(host.turn("¿qué tal?").await.unwrap(), "hola");
+    host.set_reply_language_directive(None);
+    assert_eq!(host.turn("and now?").await.unwrap(), "hello");
+
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2, "one model call per turn");
+    let first = last_user_text(&requests[0]);
+    assert!(
+        first.contains("Current Date & Time:"),
+        "fixture: the clock line is there: {first}"
+    );
+    assert!(
+        first.contains(DIRECTIVE),
+        "the directive must reach the model: {first}"
+    );
+    assert!(
+        first.contains(" Pacific/Chatham ("),
+        "the clock reads in the user's zone: {first}"
+    );
+    assert!(
+        first.find(DIRECTIVE) < first.find("¿qué tal?"),
+        "the directive leads the user's own words: {first}"
+    );
+    let second = last_user_text(&requests[1]);
+    assert!(
+        second.contains("and now?"),
+        "fixture: the second turn's text: {second}"
+    );
+    assert!(
+        !second.contains(DIRECTIVE),
+        "a cleared directive is gone next turn: {second}"
+    );
 }

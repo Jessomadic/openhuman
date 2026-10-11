@@ -164,10 +164,15 @@ pub(crate) fn migrate_cloud_provider_slugs(config: &mut Config) {
     rewrite(&mut config.coding_provider);
     rewrite(&mut config.vision_provider);
     rewrite(&mut config.memory_provider);
-    rewrite(&mut config.embeddings_provider);
-    rewrite(&mut config.heartbeat_provider);
-    rewrite(&mut config.learning_provider);
-    rewrite(&mut config.subconscious_provider);
+    // Embeddings have a deliberate opt-out, not a cloud-provider slug.
+    // Preserve it on every load, including whitespace the settings RPC trims.
+    if config
+        .embeddings_provider
+        .as_deref()
+        .is_none_or(|provider| provider.trim() != "none")
+    {
+        rewrite(&mut config.embeddings_provider);
+    }
 
     fn normalize_provider_endpoint(url: &str) -> String {
         url.trim().trim_end_matches('/').to_ascii_lowercase()
@@ -193,4 +198,74 @@ pub(crate) fn migrate_cloud_provider_slugs(config: &mut Config) {
             || matches!(entry.auth_style, AuthStyle::OpenhumanJwt)
             || looks_like_openhuman_provider_endpoint(&entry.endpoint)
     }
+}
+
+/// Convert the single-engine `[search]` format into providers, routes and
+/// roles. In-memory and idempotent like the other load migrations: the legacy
+/// fields are never serialized, so the next save writes the new format.
+pub(crate) fn migrate_search_settings(config: &mut Config) {
+    if !config.search.needs_migration() {
+        return;
+    }
+    let legacy = super::super::LegacySearchInputs {
+        tinyfish_active: config.integrations.tinyfish.is_active(),
+        seltz_active: config.seltz.enabled
+            && config
+                .seltz
+                .api_key
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty()),
+        searxng_active: config.searxng.enabled,
+        tinyfish_api_key: config.integrations.tinyfish.api_key.clone(),
+    };
+    config.search.migrate_legacy(legacy);
+}
+
+/// Migrates legacy v1 `[[memory_sources]]` into `[[memory.sources]]`, once:
+/// only when no v2 source exists yet. Kinds without a v2 equivalent
+/// (`twitter_query`, `conversation`, and the removed `composio`) and disabled entries are dropped. The
+/// legacy list is cleared either way, so it is never written back.
+pub(crate) fn migrate_legacy_memory_sources(config: &mut Config) {
+    let legacy = std::mem::take(&mut config.legacy_memory_sources);
+    if legacy.is_empty() || !config.memory.sources.is_empty() {
+        return;
+    }
+    let migrated: Vec<_> = legacy
+        .iter()
+        .filter_map(super::super::memory::migrate_legacy_source)
+        .collect();
+    tracing::info!(
+        legacy = legacy.len(),
+        migrated = migrated.len(),
+        "[config] migrated legacy memory sources"
+    );
+    config.memory.sources = migrated;
+}
+
+/// Disables the removed v1 memory backend and records a durable diagnostic.
+pub(crate) fn migrate_legacy_memory_backend(config: &mut Config, raw: &str) {
+    let Ok(value) = toml::from_str::<toml::Value>(raw) else {
+        return;
+    };
+    let Some(memory) = value.get("memory").and_then(toml::Value::as_table) else {
+        return;
+    };
+    let has_backend = memory
+        .get("backend")
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|backend| !backend.is_empty())
+        .is_some();
+    if !has_backend {
+        return;
+    }
+    if memory.contains_key("engine") {
+        return;
+    }
+
+    config.memory.engine.clear();
+    config.memory.legacy_backend_unsupported = true;
+    tracing::warn!(
+        "[config] legacy memory backend is unsupported; select an explicit v2 memory engine"
+    );
 }

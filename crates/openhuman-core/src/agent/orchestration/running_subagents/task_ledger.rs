@@ -12,17 +12,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use tinyagents_graph::orchestration::{
-    open_jsonl_task_store_or_memory, reconcile_orphaned_tasks, InMemoryTaskStore,
-    OrchestrationTaskFilter, OrchestrationTaskKind, OrchestrationTaskRecord,
-    OrchestrationTaskResult, OrchestrationTaskSpec, OrchestrationTaskStatus, TaskStore,
-    TaskStoreRegistry,
+use tinyagents_orchestration::subagent::{
+    list_subagent_records, orphaned_subagent_reason, record_agent_id,
+    record_cancelled as ledger_cancelled, record_parent_session, record_spawned as ledger_spawned,
+    subagent_record_for_task, task_status_label, SpawnedSubagent, WaitError,
 };
-use tinyagents_harness::ids::TaskId;
-
-use super::registry::DETACHED_LEDGER_TIMEOUT_MS;
-use super::wait::{WaitError, WaitOutcome};
-use super::SubagentStatus;
+use tinyagents_tasks::{
+    open_jsonl_task_store_or_memory, reconcile_orphaned_tasks, InMemoryTaskStore,
+    OrchestrationTaskFilter, OrchestrationTaskRecord, TaskStore, TaskStoreRegistry,
+};
 
 /// Where a workspace's detached-task ledger lives.
 ///
@@ -41,16 +39,51 @@ fn default_task_store_workspace() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from(".openhuman").join("workspace"))
 }
 
-/// Process-wide typed lifecycle ledger for detached sub-agents (issue #4249),
-/// one durable store per workspace.
-static TASK_STORES: OnceLock<TaskStoreRegistry<PathBuf>> = OnceLock::new();
+/// One cached ledger: a workspace, and under a storage backend the storage
+/// scope it was opened for (`None` for the workspace's JSONL file).
+type LedgerKey = (PathBuf, Option<String>);
 
-fn task_stores() -> &'static TaskStoreRegistry<PathBuf> {
+/// Process-wide typed lifecycle ledger for detached sub-agents (issue #4249),
+/// one durable store per workspace (and per storage scope when the host
+/// configured a storage backend, where it is a document collection instead of
+/// the JSONL file).
+static TASK_STORES: OnceLock<TaskStoreRegistry<LedgerKey>> = OnceLock::new();
+
+fn task_stores() -> &'static TaskStoreRegistry<LedgerKey> {
     TASK_STORES.get_or_init(|| {
-        TaskStoreRegistry::new(|workspace_dir: &PathBuf| {
+        TaskStoreRegistry::new(|(workspace_dir, scope): &LedgerKey| {
+            if scope.is_some() {
+                match super::task_ledger_documents::current() {
+                    Ok(Some(repo)) => return super::task_ledger_documents::open_or_memory(repo),
+                    Ok(None) => {}
+                    Err(error) => {
+                        log::warn!("[running_subagents] task ledger scope unavailable; using memory: {error:#}");
+                        return Arc::new(InMemoryTaskStore::new());
+                    }
+                }
+            }
             open_jsonl_task_store_or_memory(&task_store_path(workspace_dir))
         })
     })
+}
+
+/// The cache key for this call: the storage scope joins it when a backend is
+/// installed, so two agents on one workspace never share a ledger.
+fn ledger_key(workspace_dir: &Path) -> Option<LedgerKey> {
+    #[cfg(test)]
+    let pinned = super::task_ledger_documents::overridden();
+    #[cfg(not(test))]
+    let pinned = false;
+    if crate::storage::installed().is_none() && !pinned {
+        return Some((workspace_dir.to_path_buf(), None));
+    }
+    match crate::storage::current_scope() {
+        Ok(scope) => Some((workspace_dir.to_path_buf(), Some(scope.to_string()))),
+        Err(error) => {
+            log::warn!("[running_subagents] task ledger has no storage scope: {error}");
+            None
+        }
+    }
 }
 
 /// The ledger for `workspace_dir`, opening it on first use.
@@ -60,7 +93,9 @@ fn task_stores() -> &'static TaskStoreRegistry<PathBuf> {
 /// panic in an unrelated task must not turn sub-agent spawning into a second
 /// panic.
 pub(crate) fn task_store_for_workspace(workspace_dir: &Path) -> Arc<dyn TaskStore> {
-    let key = workspace_dir.to_path_buf();
+    let Some(key) = ledger_key(workspace_dir) else {
+        return Arc::new(InMemoryTaskStore::new());
+    };
     match task_stores().get_or_open(&key) {
         Ok(store) => store,
         Err(err) => {
@@ -80,8 +115,8 @@ fn task_store() -> Arc<dyn TaskStore> {
     task_store_for_workspace(&workspace)
 }
 
-/// Record a freshly-spawned sub-agent in the store (`Pending` → `Running`).
-/// Insert errors (e.g. a re-used task id across tests) are intentionally ignored.
+/// Record a freshly-spawned sub-agent in the workspace's store (`Pending` →
+/// `Running`). Insert errors (e.g. a re-used task id across tests) are ignored.
 pub(crate) fn record_spawned(
     task_id: &str,
     agent_id: &str,
@@ -91,82 +126,41 @@ pub(crate) fn record_spawned(
     workspace_dir: &Path,
     parent_thread_id: Option<&str>,
 ) {
-    let store = task_store_for_workspace(workspace_dir);
-    let root_run_id = session_parent_prefix
-        .and_then(|prefix| prefix.split("__").next())
-        .filter(|root| !root.is_empty())
-        .unwrap_or(parent_session);
-    let mut spec = OrchestrationTaskSpec::new(
-        task_id.to_string(),
-        OrchestrationTaskKind::SubAgent {
-            agent: agent_id.to_string(),
+    let workspace = workspace_dir.display().to_string();
+    if let Err(err) = ledger_spawned(
+        task_store_for_workspace(workspace_dir).as_ref(),
+        &SpawnedSubagent {
+            task_id,
+            agent_id,
+            parent_session,
+            session_parent_prefix,
+            subagent_session_id,
+            workspace_dir: &workspace,
+            parent_thread_id,
         },
-    )
-    .with_lineage(parent_session.to_string(), root_run_id.to_string())
-    .with_timeout_ms(DETACHED_LEDGER_TIMEOUT_MS)
-    .with_metadata("parentSession", parent_session.to_string())
-    .with_metadata("rootSession", root_run_id.to_string())
-    .with_metadata(
-        "defaultWaitTimeoutMs",
-        DETACHED_LEDGER_TIMEOUT_MS.to_string(),
-    )
-    .with_metadata("workspaceDir", workspace_dir.display().to_string());
-    if let Some(session_parent_prefix) = session_parent_prefix {
-        spec = spec.with_metadata("sessionParentPrefix", session_parent_prefix.to_string());
-    }
-    if let Some(parent_thread_id) = parent_thread_id {
-        spec = spec
-            .with_thread(parent_thread_id.to_string())
-            .with_metadata("parentThreadId", parent_thread_id.to_string());
-    }
-    if let Some(subagent_session_id) = subagent_session_id {
-        spec = spec.with_metadata("subagentSessionId", subagent_session_id.to_string());
-    }
-    let _ = store.insert(spec);
-    let _ = store.mark_running(&TaskId::new(task_id));
-}
-
-/// Mirror a child's published [`SubagentStatus`] into the typed store. Transition
-/// errors (already terminal / cancelled) are ignored — first writer wins.
-pub(crate) fn record_status(workspace_dir: &Path, task_id: &str, status: &SubagentStatus) {
-    let store = task_store_for_workspace(workspace_dir);
-    let id = TaskId::new(task_id);
-    log::debug!(
-        "[running_subagents] recording task status task_id={} workspace_dir={} terminal={}",
-        task_id,
-        workspace_dir.display(),
-        status.is_terminal()
-    );
-    match status {
-        SubagentStatus::Completed { output, .. } => {
-            let _ = store.complete(&id, OrchestrationTaskResult::text(output.clone()));
-        }
-        SubagentStatus::Failed { error } => {
-            let _ = store.fail(&id, error.clone());
-        }
-        SubagentStatus::AwaitingUser { .. } => {
-            let _ = store.mark_awaiting(&id);
-        }
-        SubagentStatus::Running => {}
+    ) {
+        log::debug!(
+            "[running_subagents] spawn ledger insert ignored task_id={task_id} error={err}"
+        );
     }
 }
 
 /// Record a cancellation (`CancelRequested` → `Cancelled`) for `task_id`.
 pub(crate) fn record_cancelled(workspace_dir: &Path, task_id: &str) {
-    let store = task_store_for_workspace(workspace_dir);
-    let id = TaskId::new(task_id);
     log::debug!(
         "[running_subagents] recording task cancellation task_id={} workspace_dir={}",
         task_id,
         workspace_dir.display()
     );
-    let _ = store.request_cancel(&id);
-    let _ = store.mark_cancelled(&id);
+    if let Err(err) = ledger_cancelled(task_store_for_workspace(workspace_dir).as_ref(), task_id) {
+        log::debug!(
+            "[running_subagents] cancel ledger update ignored task_id={task_id} error={err}"
+        );
+    }
 }
 
 pub(crate) fn list_task_records(workspace_dir: &Path) -> Vec<OrchestrationTaskRecord> {
-    let store = task_store_for_workspace(workspace_dir);
-    store.list(OrchestrationTaskFilter::default().with_kind("sub_agent"))
+    list_subagent_records(task_store_for_workspace(workspace_dir).as_ref())
 }
 
 /// Restart/resume reconciliation for detached sub-agents (issue #4249 / 07.2
@@ -190,6 +184,17 @@ pub(crate) fn list_task_records(workspace_dir: &Path) -> Vec<OrchestrationTaskRe
 /// errors (e.g. a record that raced to terminal) are logged and skipped, and a
 /// store-open failure simply reconciles nothing. Returns the count reconciled.
 pub(crate) fn reconcile_orphaned_tasks_on_boot(workspace_dir: &Path) -> usize {
+    // On a backend several cores share, a non-terminal task in the ledger may
+    // belong to another live process, not to a dead one of ours; settling it
+    // would fail work that is still running. Only a backend this process owns
+    // (files, SQLite, memory) can be swept.
+    if crate::storage::installed_is_shared() {
+        log::debug!(
+            "[running_subagents] skipping orphan reconcile: storage backend is shared workspace_dir={}",
+            workspace_dir.display()
+        );
+        return 0;
+    }
     let store = task_store_for_workspace(workspace_dir);
 
     // The sweep itself — which statuses are live, and which terminal state each
@@ -242,112 +247,16 @@ pub(crate) fn reconcile_orphaned_tasks_on_boot(workspace_dir: &Path) -> usize {
     reconciled
 }
 
-/// The reason an orphaned sub-agent record is settled with.
-///
-/// Built in one place because it is written twice — into the store by the
-/// reconciler, and into the lifecycle event the run ledger reads. If those two
-/// ever disagreed, the ledger would explain a failure differently from the
-/// record behind it.
-fn orphaned_subagent_reason(prior_status: OrchestrationTaskStatus) -> String {
-    format!(
-        "sub-agent orphaned by core restart (was `{}`)",
-        task_status_label(prior_status)
-    )
-}
-
-pub(crate) fn record_parent_session(record: &OrchestrationTaskRecord) -> Option<&str> {
-    record
-        .spec
-        .metadata
-        .get("parentSession")
-        .map(String::as_str)
-}
-
-pub(crate) fn record_subagent_session_id(record: &OrchestrationTaskRecord) -> Option<&str> {
-    record
-        .spec
-        .metadata
-        .get("subagentSessionId")
-        .map(String::as_str)
-}
-
-pub(crate) fn record_agent_id(record: &OrchestrationTaskRecord) -> String {
-    match &record.spec.kind {
-        OrchestrationTaskKind::SubAgent { agent } => agent.clone(),
-        _ => "subagent".to_string(),
-    }
-}
-
 pub(crate) fn task_record_for_task_in_workspace(
     workspace_dir: &Path,
     task_id: &str,
     parent_session: &str,
 ) -> Result<OrchestrationTaskRecord, WaitError> {
-    let id = TaskId::new(task_id);
-    let Some(record) = task_store_for_workspace(workspace_dir).get(&id) else {
-        return Err(WaitError::Unknown);
-    };
-    if !matches!(record.spec.kind, OrchestrationTaskKind::SubAgent { .. }) {
-        return Err(WaitError::Unknown);
-    }
-    if record_parent_session(&record) != Some(parent_session) {
-        return Err(WaitError::NotOwned);
-    }
-    Ok(record)
-}
-
-pub(crate) fn record_to_status(record: OrchestrationTaskRecord) -> WaitOutcome {
-    match record.status {
-        OrchestrationTaskStatus::Completed => {
-            let output = record
-                .result
-                .and_then(|result| {
-                    result
-                        .text
-                        .or_else(|| result.output.map(|output| output.to_string()))
-                })
-                .unwrap_or_default();
-            WaitOutcome::Terminal(SubagentStatus::Completed {
-                output,
-                iterations: 0,
-            })
-        }
-        OrchestrationTaskStatus::Awaiting => WaitOutcome::Terminal(SubagentStatus::AwaitingUser {
-            question: record.error.unwrap_or_else(|| {
-                "sub-agent is awaiting user input; no clarification text was available from the durable task store".to_string()
-            }),
-        }),
-        OrchestrationTaskStatus::Failed
-        | OrchestrationTaskStatus::TimedOut
-        | OrchestrationTaskStatus::Abandoned => WaitOutcome::Terminal(SubagentStatus::Failed {
-            error: record.error.unwrap_or_else(|| {
-                format!(
-                    "sub-agent reached durable task status `{}`",
-                    task_status_label(record.status)
-                )
-            }),
-        }),
-        OrchestrationTaskStatus::Cancelled => WaitOutcome::Terminal(SubagentStatus::Failed {
-            error: "sub-agent was cancelled".to_string(),
-        }),
-        OrchestrationTaskStatus::Pending
-        | OrchestrationTaskStatus::Running
-        | OrchestrationTaskStatus::CancelRequested => WaitOutcome::TimedOut(SubagentStatus::Running),
-    }
-}
-
-pub(crate) fn task_status_label(status: OrchestrationTaskStatus) -> &'static str {
-    match status {
-        OrchestrationTaskStatus::Pending => "pending",
-        OrchestrationTaskStatus::Running => "running",
-        OrchestrationTaskStatus::Awaiting => "awaiting",
-        OrchestrationTaskStatus::Completed => "completed",
-        OrchestrationTaskStatus::Failed => "failed",
-        OrchestrationTaskStatus::CancelRequested => "cancel_requested",
-        OrchestrationTaskStatus::Cancelled => "cancelled",
-        OrchestrationTaskStatus::TimedOut => "timed_out",
-        OrchestrationTaskStatus::Abandoned => "abandoned",
-    }
+    subagent_record_for_task(
+        task_store_for_workspace(workspace_dir).as_ref(),
+        task_id,
+        parent_session,
+    )
 }
 
 /// Snapshot the typed lifecycle records, optionally scoped to a `parent_session`.

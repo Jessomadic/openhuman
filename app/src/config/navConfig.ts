@@ -26,7 +26,7 @@ export interface NavTab {
 
 /**
  * Ordered list of sidebar nav entries:
- *   chat → brain → flows → connections
+ *   chat → flows → connections
  *
  * Human has no primary tab: `/human` is reached from the chat composer, whose
  * primary button becomes the mascot when there is nothing to send (see
@@ -47,7 +47,6 @@ export interface NavTab {
  */
 export const NAV_TABS: NavTab[] = [
   { id: 'chat', labelKey: 'nav.chat', path: '/chat', walkthroughAttr: 'tab-chat' },
-  { id: 'brain', labelKey: 'nav.brain', path: '/brain', walkthroughAttr: 'tab-brain' },
   { id: 'flows', labelKey: 'nav.flows', path: '/flows', walkthroughAttr: 'tab-flows' },
   {
     id: 'connections',
@@ -87,7 +86,7 @@ interface AvatarMenuItem {
 
 /**
  * Avatar dropdown menu items.
- * Order: Account → Billing → Invites → Wallet.
+ * Order: Account → Invites → Wallet.
  *
  * Rewards is not here: it is a primary `NAV_TABS` destination now, and one
  * door per surface is the point of moving it.
@@ -98,13 +97,6 @@ export const AVATAR_MENU_ITEMS: AvatarMenuItem[] = [
     labelKey: 'nav.avatarMenu.account',
     target: '/settings/account',
     kind: 'navigate',
-  },
-  {
-    id: 'billing',
-    labelKey: 'nav.avatarMenu.billing',
-    target: '/settings/billing',
-    kind: 'navigate',
-    cloudOnly: true,
   },
   {
     id: 'invites',

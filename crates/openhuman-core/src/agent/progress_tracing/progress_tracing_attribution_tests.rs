@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::agent::progress_tracing::types::SpanKind;
+use tinyagents_harness::observability::trace_export::SpanKind;
 // ── identity / attribution / content capture ───────────────────────────────
 
 #[test]
@@ -89,6 +89,9 @@ fn tool_io_is_captured_when_capture_content_is_on() {
             elapsed_ms: 4,
             iteration: 1,
             failure: None,
+            display_label: None,
+            display_detail: None,
+            structured: None,
         },
         4,
     );
@@ -138,6 +141,9 @@ fn tool_io_is_never_recorded_when_capture_content_is_off() {
                 elapsed_ms: 4,
                 iteration: 1,
                 failure: None,
+                display_label: None,
+                display_detail: None,
+                structured: None,
             },
             4,
         ),
@@ -191,12 +197,12 @@ fn model_call_completed_emits_generation_span_with_usage_cost_and_pricing() {
             },
             1_010,
         ),
-        (model_call("agentic-v1", 0, 0), 1_500),
+        (model_call("claude-sonnet-4-6", 0, 0), 1_500),
     ]);
     c.finish(2_000);
     let spans = c.spans();
 
-    let generation = find(spans, "llm.agentic-v1");
+    let generation = find(spans, "llm.claude-sonnet-4-6");
     assert_eq!(generation.kind, SpanKind::Generation);
     // Parented under the live iteration; starts at the iteration start
     // (ModelStarted) and ends when the usage record was observed.
@@ -213,7 +219,7 @@ fn model_call_completed_emits_generation_span_with_usage_cost_and_pricing() {
     // Provider-labeled model: `{provider_id}.{model}`.
     assert_eq!(
         a["gen_ai.request.model"],
-        serde_json::json!("managed.agentic-v1")
+        serde_json::json!("managed.claude-sonnet-4-6")
     );
     assert_eq!(a["gen_ai.usage.input_tokens"], serde_json::json!(1_000));
     assert_eq!(a["gen_ai.usage.output_tokens"], serde_json::json!(200));
@@ -228,12 +234,18 @@ fn model_call_completed_emits_generation_span_with_usage_cost_and_pricing() {
     // Pricing basis is auditable.
     assert_eq!(
         a["gen_ai.pricing.input_per_mtok_usd"],
-        serde_json::json!(0.0886)
+        serde_json::json!(3.0)
     );
-    assert!(a.get("gen_ai.pricing.output_per_mtok_usd").is_some());
-    // Zero reasoning / cache-write tokens are omitted on the generation.
-    assert!(a.get("gen_ai.usage.reasoning_tokens").is_none());
-    assert!(a.get("gen_ai.usage.cache_creation_tokens").is_none());
+    assert!(a.contains_key("gen_ai.pricing.output_per_mtok_usd"));
+    // Zero reasoning tokens are omitted; cache writes always flow (even 0)
+    // so every route reports the same usage dimensions.
+    assert!(!a.contains_key("gen_ai.usage.reasoning_tokens"));
+    assert_eq!(
+        a["gen_ai.usage.cache_creation_tokens"],
+        serde_json::json!(0)
+    );
+    assert_eq!(a["gen_ai.usage.total_tokens"], serde_json::json!(1_200));
+    assert_eq!(a["gen_ai.cost.source"], serde_json::json!("priced"));
 }
 
 #[test]
@@ -252,7 +264,7 @@ fn custom_model_generation_is_stamped_custom_provenance() {
         cached_input_tokens: 0,
         cache_creation_tokens: 0,
         reasoning_tokens: 0,
-        cost_usd: 0.0001,
+        cost_usd: Some(0.0001),
     };
     let mut c = collect(&[(AgentProgress::TurnStarted, 0), (event, 10)]);
     c.finish(20);
@@ -323,14 +335,12 @@ fn zero_reasoning_turn_leaves_root_without_reasoning_attr() {
     ]);
     c.finish(20);
     let turn = find(c.spans(), "agent.turn");
-    assert!(turn
+    assert!(!turn
         .attributes
-        .get("gen_ai.usage.reasoning_tokens")
-        .is_none());
-    assert!(turn
+        .contains_key("gen_ai.usage.reasoning_tokens"));
+    assert!(!turn
         .attributes
-        .get("gen_ai.usage.cache_creation_tokens")
-        .is_none());
+        .contains_key("gen_ai.usage.cache_creation_tokens"));
 }
 
 // ── run-type classification ─────────────────────────────────────────────────
@@ -413,6 +423,9 @@ fn failed_tool_records_classified_cause_only_when_capture_on() {
             next_action: "Try again".to_string(),
             recoverable: true,
         }),
+        display_label: None,
+        display_detail: None,
+        structured: None,
     };
 
     // Capture ON → plain-language cause lands as error.message.
@@ -434,7 +447,7 @@ fn failed_tool_records_classified_cause_only_when_capture_on() {
     off.record(&failed, 2);
     let tool = find(off.spans(), "tool.shell");
     assert_eq!(tool.status, SpanStatus::Error);
-    assert!(tool.attributes.get("error.message").is_none());
+    assert!(!tool.attributes.contains_key("error.message"));
 }
 
 #[test]
@@ -456,7 +469,7 @@ fn subagent_error_text_stays_out_without_capture() {
     ]);
     c.finish(50);
     let sub = find(c.spans(), "subagent.Coder");
-    assert!(sub.attributes.get("error.message").is_none());
+    assert!(!sub.attributes.contains_key("error.message"));
 }
 
 #[test]
@@ -509,10 +522,10 @@ fn generation_withholds_content_when_capture_off() {
 fn subagent_model_call_nests_generation_and_stamps_model_on_subagent_span() {
     let mut c = collect_with_capture(&[
         (AgentProgress::TurnStarted, 0),
-        (spawn("task-9", "Context Scout"), 5),
+        (spawn("task-9", "Critic"), 5),
         (
             AgentProgress::SubagentIterationStarted {
-                agent_id: "context_scout".to_string(),
+                agent_id: "critic".to_string(),
                 task_id: "task-9".to_string(),
                 iteration: 1,
                 max_iterations: 8,
@@ -535,7 +548,7 @@ fn subagent_model_call_nests_generation_and_stamps_model_on_subagent_span() {
     assert!(generation.input.is_some(), "child generation carries input");
 
     // The subagent span itself surfaces the provider-labeled model + usage.
-    let sub = find(spans, "subagent.Context Scout");
+    let sub = find(spans, "subagent.Critic");
     assert_eq!(
         sub.attributes["gen_ai.request.model"],
         serde_json::json!("managed.chat-v1")
@@ -551,7 +564,7 @@ fn subagent_model_call_nests_generation_and_stamps_model_on_subagent_span() {
 
     // The parent turn's rollup is NOT polluted by the child call.
     let turn = find(spans, "agent.turn");
-    assert!(turn.attributes.get("gen_ai.request.model").is_none());
+    assert!(!turn.attributes.contains_key("gen_ai.request.model"));
 }
 
 #[test]
@@ -581,6 +594,9 @@ fn parent_tool_completion_backfills_arguments_and_records_output() {
                 elapsed_ms: 40,
                 iteration: 1,
                 failure: None,
+                display_label: None,
+                display_detail: None,
+                structured: None,
             },
             45,
         ),
@@ -613,11 +629,12 @@ fn subagent_span_records_prompt_and_final_output_when_capture_on() {
                 elapsed_ms: 100,
                 iterations: 2,
                 output_chars: 12,
+                usage: None,
                 output: "final answer".to_string(),
                 worktree_path: None,
                 changed_files: vec![],
                 dirty_status: None,
-                usage: None,
+                stop: None,
             },
             105,
         ),

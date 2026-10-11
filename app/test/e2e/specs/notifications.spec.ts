@@ -96,7 +96,7 @@ describe('Notifications', () => {
     });
     stepLog('notification_ingest result', { ok: result.ok, result: result.result });
     expect(result.ok).toBe(true);
-    // handle_ingest returns RpcOutcome::new(..., vec![]) → bare value (no extra .result wrapper)
+    // handle_ingest returns Outcome::new(..., vec![]) → bare value (no extra .result wrapper)
     const payload = (result.result as any) ?? {};
     expect(payload.skipped).not.toBe(true);
     expect(typeof payload.id).toBe('string');

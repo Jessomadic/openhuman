@@ -3,9 +3,9 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::super::reply_speech::ReplySpeechResult;
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
+use tinyinference_voice::reply::ReplySpeech as ReplySpeechResult;
 
 // ---------------------------------------------------------------------------
 // Shared result type
@@ -45,7 +45,7 @@ pub trait SttProvider: Send + Sync {
         mime_type: Option<&str>,
         file_name: Option<&str>,
         language: Option<&str>,
-    ) -> Result<RpcOutcome<SttResult>, String>;
+    ) -> Result<Outcome<SttResult>, String>;
 
     /// The model selected when the provider was constructed.
     ///
@@ -73,7 +73,7 @@ pub trait TtsProvider: Send + Sync {
         config: &Config,
         text: &str,
         voice: Option<&str>,
-    ) -> Result<RpcOutcome<ReplySpeechResult>, String>;
+    ) -> Result<Outcome<ReplySpeechResult>, String>;
 
     /// The voice this provider was constructed with, or `None` when it defers
     /// to a downstream default (cloud omits `voice_id` so the backend picks).

@@ -29,14 +29,181 @@
 
 use std::path::Path;
 
+/// Which shell family [`build_tokio_command`] / [`build_std_command`] spawn.
+///
+/// A value rather than a bare `cfg!(windows)` so what is *told* to the model
+/// about the shell (the `shell` tool's description) can be built and tested for
+/// either platform on any host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellFlavor {
+    /// `cmd.exe /C <command>` (Windows).
+    Cmd,
+    /// `bash -lc` / `sh -lc` (everything else).
+    Posix,
+}
+
+impl ShellFlavor {
+    /// The flavor this host spawns.
+    pub fn current() -> Self {
+        if cfg!(windows) {
+            Self::Cmd
+        } else {
+            Self::Posix
+        }
+    }
+}
+
+/// Environment variables a Windows child process needs before it can run at
+/// all, beyond the functional allow-list each launcher already forwards.
+///
+/// Every sanitized spawn path in the core calls `env_clear()` and re-forwards
+/// only what it names, so this list is what makes a cleared Windows environment
+/// bootable. These are forwarded from the parent environment, never synthesised
+/// or hard-coded: a name the parent does not have is simply not set.
+///
+/// Measured consequences of omitting them (Windows 11, `SystemRoot` absent from
+/// an otherwise-valid child environment):
+///
+/// - `node.exe` aborts during startup with
+///   `Assertion failed: ncrypto::CSPRNG(nullptr, 0)` (exit 134), because the
+///   OS random provider cannot initialise without a system directory.
+/// - `powershell.exe` exits with `Internal Windows PowerShell error. Loading
+///   managed Windows PowerShell failed with error 8009001d.`
+/// - `cmd.exe` leaves `%SystemRoot%`/`%TEMP%`/`%USERPROFILE%` unexpanded. It
+///   does *not* repair them for its own children, so a wrapper shell cannot
+///   rescue a stripped environment.
+///
+/// `COMSPEC` and `PATHEXT` are here because `cmd.exe` needs `PATHEXT` to resolve
+/// the `.cmd`/`.bat` shims that npm, npx and the Git toolchain are installed
+/// as; `TEMP`/`TMP`/`USERPROFILE`/`APPDATA`/`LOCALAPPDATA` because tooling
+/// writes scratch and reads config from them; the `ProgramFiles*` trio because
+/// installers and SDK locators probe them.
+///
+/// Single source of truth: keep every launcher's allow-list a superset of this
+/// (enforced by the launcher unit tests), and add a launcher to those tests
+/// rather than inventing a sixth list.
+pub const WINDOWS_PROCESS_ENV_VARS: &[&str] = &[
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+];
+
+/// Assert that a launcher's environment allow-list covers every Windows
+/// process-bootstrap variable.
+///
+/// Each launcher guards its own list with this, so a new launcher cannot
+/// silently ship a `env_clear()` that produces an unbootable Windows child.
+/// The failure this prevents is not a clean error: the child aborts inside the
+/// OS crypto provider (`node` → `ncrypto::CSPRNG` assertion, `powershell` →
+/// `8009001d`), and the harness reports it as a mysterious exit code rather
+/// than a missing environment variable.
+#[track_caller]
+pub fn assert_forwards_windows_bootstrap(allowlist: &[&str], launcher: &str) {
+    for var in WINDOWS_PROCESS_ENV_VARS {
+        assert!(
+            allowlist.contains(var),
+            "{launcher} clears the child environment but does not forward \
+             `{var}`; a Windows child spawned without it aborts during crypto \
+             init. Add it to the allow-list."
+        );
+    }
+}
+
+/// Add Windows bootstrap variables to a host child. Keep these out of the
+/// sandbox policy because that policy is also forwarded into Linux containers.
+#[cfg(windows)]
+pub fn forward_windows_bootstrap_env(cmd: &mut tokio::process::Command) -> anyhow::Result<()> {
+    for var in WINDOWS_PROCESS_ENV_VARS {
+        if let Ok(val) = std::env::var(var) {
+            if val.is_empty() {
+                anyhow::bail!("Windows bootstrap environment variable {var} is empty");
+            }
+            cmd.env(var, val);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn forward_windows_bootstrap_env(_cmd: &mut tokio::process::Command) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn forward_windows_bootstrap_env_std(cmd: &mut std::process::Command) -> anyhow::Result<()> {
+    for var in WINDOWS_PROCESS_ENV_VARS {
+        if let Ok(val) = std::env::var(var) {
+            if val.is_empty() {
+                anyhow::bail!("Windows bootstrap environment variable {var} is empty");
+            }
+            cmd.env(var, val);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn forward_windows_bootstrap_env_std(_cmd: &mut std::process::Command) -> anyhow::Result<()> {
+    Ok(())
+}
+
+/// Whether the Unix arm prefixes `set -o pipefail`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PipeFail {
+    /// Surface a masked pipe-stage failure, so `curl … | sh` failing in the
+    /// first stage is not reported as a success.
+    Surface,
+    /// Leave a pipeline's exit status as the shell's own default.
+    ///
+    /// For a caller whose exit status is a contract with something outside this
+    /// process. `pipefail` makes `false | true` fail where a plain `sh -lc`
+    /// succeeded, so switching an existing surface onto the `Surface` arm
+    /// silently re-statuses every command with a pipeline in it.
+    AsShellDefault,
+}
+
 /// Build a [`tokio::process::Command`] that runs `command` under the
 /// platform's default shell. Callers are responsible for setting
 /// `current_dir`, environment, and stdio.
 pub fn build_tokio_command(command: &str) -> tokio::process::Command {
+    build_tokio_command_with(command, PipeFail::Surface)
+}
+
+/// [`build_tokio_command`] without the `set -o pipefail` prefix.
+///
+/// For a caller that records its command's exit status and acts on it —
+/// [`crate::cron`]'s shell jobs report `success`/`failure` per run and spend a
+/// retry budget on it. Turning `pipefail` on for those would flip an existing
+/// job whose command ends in a tolerated pipe stage from success to failure,
+/// which is a behaviour change to somebody's schedule rather than a lint.
+///
+/// Everything else about the platform matrix is shared with
+/// [`build_tokio_command`], so a caller here still gets `cmd /C` on Windows
+/// rather than a shell that does not exist there.
+pub fn build_tokio_command_preserving_pipe_status(command: &str) -> tokio::process::Command {
+    build_tokio_command_with(command, PipeFail::AsShellDefault)
+}
+
+fn build_tokio_command_with(command: &str, pipefail: PipeFail) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(shell_program());
     // `as_std_mut()` so the Windows arm can reach `raw_arg` (only defined on
     // `std::process::Command`); the tokio wrapper forwards the raw arg.
-    configure_shell_args(cmd.as_std_mut(), command);
+    configure_shell_args(cmd.as_std_mut(), command, pipefail);
+    // Every shell-family child leads its own process group and dies with the
+    // handle that owns it, so a deadline (see
+    // `crate::tools::timeout::output_or_kill`) or a cancelled future cannot
+    // leave a pipeline running behind the tool that reported it finished.
+    cmd.kill_on_drop(true);
+    crate::tools::timeout::own_process_group(cmd.as_std_mut());
     cmd
 }
 
@@ -45,7 +212,11 @@ pub fn build_tokio_command(command: &str) -> tokio::process::Command {
 /// `std::process::Command` (not the tokio variant).
 pub fn build_std_command(command: &str) -> std::process::Command {
     let mut cmd = std::process::Command::new(shell_program());
-    configure_shell_args(&mut cmd, command);
+    configure_shell_args(&mut cmd, command, PipeFail::Surface);
+    // Same contract as the tokio builder: the child leads its own process
+    // group so a deadline can reach the whole pipeline (see
+    // `crate::tools::timeout::kill_process_group`).
+    crate::tools::timeout::own_process_group(&mut cmd);
     cmd
 }
 
@@ -54,10 +225,9 @@ pub fn build_std_command(command: &str) -> std::process::Command {
 /// platform matrix (adding pwsh, changing pipefail semantics) belong here plus
 /// [`configure_shell_args`], so both `Command` flavours stay in lockstep.
 fn shell_program() -> &'static str {
-    if cfg!(windows) {
-        "cmd"
-    } else {
-        bash_path().unwrap_or("sh")
+    match ShellFlavor::current() {
+        ShellFlavor::Cmd => "cmd",
+        ShellFlavor::Posix => bash_path().unwrap_or("sh"),
     }
 }
 
@@ -68,21 +238,23 @@ fn shell_program() -> &'static str {
 /// `\"`. But `cmd.exe` does not understand `\"` — it only toggles quote state
 /// on a bare `"`. Handed to `cmd /C` via `arg`, the `>` / `2>` operators in a
 /// redirect wrap (see [`wrap_with_output_redirection`]) land inside a cmd
-/// quote-span, so no redirection happens and the `.sandbox_stdout` /
-/// `.sandbox_stderr` capture files are never written. `raw_arg` passes the
+/// quote-span, so no redirection happens and the sandbox's `stdout` /
+/// `stderr` capture files are never written. `raw_arg` passes the
 /// string to cmd verbatim, which is exactly the byte-transparent contract this
 /// module promises. `/C` itself has no special characters.
 #[cfg(windows)]
-fn configure_shell_args(cmd: &mut std::process::Command, command: &str) {
+fn configure_shell_args(cmd: &mut std::process::Command, command: &str, _pipefail: PipeFail) {
     use std::os::windows::process::CommandExt;
+    // `cmd.exe` has no `pipefail` equivalent, so the flag cannot be honoured
+    // here: a Windows pipeline's exit status is its last stage either way.
     cmd.arg("/C").raw_arg(command);
 }
 
-/// Unix arm: `bash -lc "set -o pipefail\n<command>"` when bash is present
-/// (so a masked pipe-stage failure still surfaces), else plain `sh -lc`.
+/// Unix arm: `bash -lc "set -o pipefail\n<command>"` when bash is present **and**
+/// the caller asked to surface pipe-stage failures, else a plain `-lc`.
 #[cfg(not(windows))]
-fn configure_shell_args(cmd: &mut std::process::Command, command: &str) {
-    if bash_path().is_some() {
+fn configure_shell_args(cmd: &mut std::process::Command, command: &str, pipefail: PipeFail) {
+    if bash_path().is_some() && pipefail == PipeFail::Surface {
         cmd.arg("-lc").arg(format!("set -o pipefail\n{command}"));
     } else {
         cmd.arg("-lc").arg(command);

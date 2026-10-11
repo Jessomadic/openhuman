@@ -16,7 +16,7 @@ use serde_json::{Map, Value};
 
 use crate::core::all::RegisteredController;
 use crate::core::ControllerSchema;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 pub use catalog::schemas;
 use claude_code_handlers::*;
@@ -42,9 +42,6 @@ pub fn all_controller_schemas() -> Vec<ControllerSchema> {
         schemas("update_local_settings"),
         schemas("list_models"),
         schemas("provider_auth_errors"),
-        schemas("device_profile"),
-        schemas("presets"),
-        schemas("apply_preset"),
         schemas("diagnostics"),
         schemas("openai_oauth_start"),
         schemas("openai_oauth_complete"),
@@ -55,7 +52,6 @@ pub fn all_controller_schemas() -> Vec<ControllerSchema> {
         schemas("prompt"),
         schemas("vision_prompt"),
         schemas("test_provider_model"),
-        schemas("should_react"),
         schemas("analyze_sentiment"),
         schemas("claude_code_status"),
         schemas("claude_code_auth_status"),
@@ -93,18 +89,6 @@ pub fn all_registered_controllers() -> Vec<RegisteredController> {
         RegisteredController {
             schema: schemas("provider_auth_errors"),
             handler: handle_inference_provider_auth_errors,
-        },
-        RegisteredController {
-            schema: schemas("device_profile"),
-            handler: handle_inference_device_profile,
-        },
-        RegisteredController {
-            schema: schemas("presets"),
-            handler: handle_inference_presets,
-        },
-        RegisteredController {
-            schema: schemas("apply_preset"),
-            handler: handle_inference_apply_preset,
         },
         RegisteredController {
             schema: schemas("diagnostics"),
@@ -147,10 +131,6 @@ pub fn all_registered_controllers() -> Vec<RegisteredController> {
             handler: handle_inference_test_provider_model,
         },
         RegisteredController {
-            schema: schemas("should_react"),
-            handler: handle_inference_should_react,
-        },
-        RegisteredController {
             schema: schemas("analyze_sentiment"),
             handler: handle_inference_analyze_sentiment,
         },
@@ -177,6 +157,6 @@ fn deserialize_params<T: DeserializeOwned>(params: Map<String, Value>) -> Result
     serde_json::from_value(Value::Object(params)).map_err(|e| format!("invalid params: {e}"))
 }
 
-fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     outcome.into_cli_compatible_json()
 }

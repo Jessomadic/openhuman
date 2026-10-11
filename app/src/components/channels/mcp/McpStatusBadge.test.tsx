@@ -45,8 +45,9 @@ describe('McpStatusBadge', () => {
     const badge = screen.getByRole('status');
     expect(badge.className).toContain('my-custom-class');
     expect(badge.className).toContain('ml-2');
-    // Built-in look-and-feel preserved.
-    expect(badge.className).toContain('rounded-full');
-    expect(badge.className).toContain('bg-sage-500/10');
+    // Built-in look-and-feel preserved: shared outline chip shape, with the
+    // connected/success tone carried by the status dot, not the fill.
+    expect(badge.className).toContain('rounded-md');
+    expect(badge.querySelector('[data-slot="badge-dot"]')?.className).toContain('bg-sage-500');
   });
 });

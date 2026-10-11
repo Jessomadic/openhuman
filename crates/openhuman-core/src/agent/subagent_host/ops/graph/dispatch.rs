@@ -6,15 +6,15 @@ use crate::agent::subagent_host::ops::checkpoint;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::agent::harness::agent_graph::{AgentTurnRequest, AgentTurnResult, AgentTurnUsage};
-use crate::agent::messages::{ChatMessage, ConversationMessage};
 use crate::agent::progress::AgentProgress;
 use crate::agent::subagent_host::types::SubagentRunError;
 use crate::agent::tinyagents::{run_turn_via_tinyagents_shared, SubagentScope};
 use crate::inference::tokenjuice::AgentTokenjuiceCompression;
 use tinyagents_harness::run_queue::RunQueue;
+use tinyagents_session::transcript::TranscriptMessage;
 use tinytools::WorkspaceDescriptor;
 use tinytools::{Tool, ToolSpec};
+use tinytools_agent::dialect::TranscriptEntry;
 
 use super::transcript::persist_subagent_transcript;
 use super::worker_mirror::mirror_worker_thread;
@@ -25,91 +25,8 @@ pub(in super::super) struct AggregatedUsage {
     pub(in super::super) input_tokens: u64,
     pub(in super::super) output_tokens: u64,
     pub(in super::super) cached_input_tokens: u64,
-    pub(in super::super) charged_amount_usd: f64,
-}
-
-/// Run an assembled custom per-agent turn through the shared default sub-agent
-/// leaf. Bespoke `AgentGraph::Custom` graphs use this after their own routing
-/// nodes so transcript persistence, worker-thread mirroring, progress events,
-/// handoff middleware, cap summaries, and usage aggregation stay byte-for-byte
-/// on the default path.
-pub(crate) async fn run_agent_turn_request_via_default_graph(
-    req: AgentTurnRequest,
-) -> Result<AgentTurnResult, SubagentRunError> {
-    let AgentTurnRequest {
-        turn_model_source,
-        model,
-        temperature,
-        mut history,
-        parent_tools,
-        dynamic_tools,
-        specs,
-        allowed_names,
-        max_iterations,
-        run_queue,
-        on_progress,
-        agent_id,
-        task_id,
-        extended_policy,
-        thread_id,
-        run_context,
-        worker_thread_id,
-        workspace_dir,
-        workspace_descriptor,
-        max_output_tokens,
-        model_vision,
-        transcript_stem,
-        provider_label,
-        handoff_cache,
-        tokenjuice_compression,
-        config,
-    } = req;
-
-    let (output, iterations, usage, early_exit_tool, hit_cap, breaker_halt) =
-        run_subagent_via_graph(
-            turn_model_source,
-            &model,
-            temperature,
-            &mut history,
-            parent_tools,
-            dynamic_tools,
-            specs,
-            allowed_names,
-            max_iterations,
-            run_queue,
-            on_progress,
-            &agent_id,
-            &task_id,
-            extended_policy,
-            thread_id,
-            run_context,
-            worker_thread_id,
-            workspace_dir,
-            workspace_descriptor,
-            max_output_tokens,
-            model_vision,
-            &transcript_stem,
-            &provider_label,
-            handoff_cache,
-            tokenjuice_compression,
-            config.as_deref(),
-        )
-        .await?;
-
-    Ok(AgentTurnResult {
-        history,
-        output,
-        iterations,
-        usage: AgentTurnUsage {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cached_input_tokens: usage.cached_input_tokens,
-            charged_amount_usd: usage.charged_amount_usd,
-        },
-        early_exit_tool,
-        hit_cap,
-        breaker_halt,
-    })
+    /// Cost of the run's calls: reported charge, catalog estimate, or unknown.
+    pub(in super::super) cost: crate::agent::cost::CostTally,
 }
 
 /// Drive a sub-agent turn on the tinyagents harness. Returns
@@ -121,7 +38,7 @@ pub(in super::super) async fn run_subagent_via_graph(
     source: crate::agent::tinyagents::TurnModelSource,
     model: &str,
     temperature: f64,
-    history: &mut Vec<ChatMessage>,
+    history: &mut Vec<TranscriptMessage>,
     parent_tools: Arc<Vec<Box<dyn Tool>>>,
     dynamic_tools: Vec<Box<dyn Tool>>,
     specs: Vec<ToolSpec>,
@@ -146,10 +63,6 @@ pub(in super::super) async fn run_subagent_via_graph(
     // `SubagentObserver::persist_transcript`.
     transcript_stem: &str,
     provider_label: &str,
-    // Progressive-disclosure handoff cache (integrations_agent with a resolved
-    // toolkit); `Some` installs the `HandoffMiddleware` that stashes oversized
-    // tool results and shares the cache with the `extract_from_result` tool.
-    handoff_cache: Option<std::sync::Arc<crate::agent::subagent_host::ResultHandoffCache>>,
     // Agent-level TokenJuice profile (`definition.effective_tokenjuice_compression()`,
     // #4466). Threaded into the sub-agent `TurnContextMiddleware` so sub-agent
     // tool outputs get the same content-aware compaction the chat path applies
@@ -179,6 +92,7 @@ pub(in super::super) async fn run_subagent_via_graph(
     // otherwise a child remains in its parent's conversation. Do this before
     // constructing *any* model so managed requests, transcript metadata, and
     // the child carrier cannot disagree.
+    let trace_session_group = run_context.thread_id.clone().or_else(|| thread_id.clone());
     let thread_id = inherited_thread_id(run_context.thread_id.clone(), thread_id);
     tracing::info!(
         model,
@@ -200,10 +114,12 @@ pub(in super::super) async fn run_subagent_via_graph(
     // seam this is a sub-agent turn, so the unknown-tool recovery uses the
     // sub-agent wording. With no progress sink the scoped events simply have
     // nowhere to go, which is harmless.
+    let child_journal_run_id = std::sync::Arc::new(std::sync::Mutex::new(None));
     let subagent_scope = Some(SubagentScope {
         agent_id: agent_id.to_string(),
         task_id: task_id.to_string(),
         extended_policy,
+        journal_run_id: Some(child_journal_run_id.clone()),
     });
 
     // A standalone summarizer model for the cap-hit checkpoint call below (the
@@ -229,9 +145,7 @@ pub(in super::super) async fn run_subagent_via_graph(
     // advertises vision or the sub-agent model is user-flagged as vision-capable
     // (BYOK/custom). The expanded copy is provider-only — the persisted `history`
     // written back below keeps the original markers.
-    let dispatch_history = if (turn_models.supports_vision() || model_vision)
-        && crate::agent::multimodal::has_image_placeholders(history)
-    {
+    let dispatch_history = if crate::agent::multimodal::has_image_placeholders(history) {
         crate::agent::multimodal::rehydrate_image_placeholders(history)
     } else {
         history.clone()
@@ -270,6 +184,7 @@ pub(in super::super) async fn run_subagent_via_graph(
     // (and the telemetry id) before `turn_models` is moved into the runner.
     let native_tools = turn_models.native_tools();
     let provider_id = turn_models.provider_id().to_string();
+    let usage_provider_id = provider_id.clone();
     // `SubagentRunOptions` already carries the child context built at the tool
     // dispatch boundary. Reusing that owned value preserves its immediate
     // parent-ledger link; forking again here would hide nested child usage in a
@@ -316,17 +231,9 @@ pub(in super::super) async fn run_subagent_via_graph(
         Some(max_output_tokens),
         // Context middlewares (#4466): config-sourced TokenJuice compaction +
         // tool-result byte cap + microcompact + summarization opt-outs (built
-        // above), plus the progressive-disclosure handoff when a cache is
-        // attached, plus the live transcript-snapshot sink for error recovery.
+        // above), plus the live transcript-snapshot sink for error recovery.
         {
             let mut mw = context_mw;
-            if let Some(cache) = handoff_cache {
-                mw.handoff = Some(crate::agent::tinyagents::HandoffConfig {
-                    cache,
-                    agent_id: agent_id.to_string(),
-                    task_id: task_id.to_string(),
-                });
-            }
             mw.transcript_snapshot = Some(transcript_snapshot.clone());
             mw
         },
@@ -342,6 +249,29 @@ pub(in super::super) async fn run_subagent_via_graph(
         false,
     ))
     .await;
+
+    if let Some(config) = config.filter(|config| config.observability.share_usage_data) {
+        let journal_run_id = child_journal_run_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(journal_run_id) = journal_run_id {
+            let config = config.clone();
+            let thread_id = trace_session_group.clone();
+            let agent_id = agent_id.to_string();
+            let task_id = task_id.to_string();
+            tokio::spawn(async move {
+                crate::agent::progress_tracing::export_subagent_journal_trace(
+                    &config,
+                    &journal_run_id,
+                    thread_id.as_deref(),
+                    &agent_id,
+                    &task_id,
+                )
+                .await;
+            });
+        }
+    }
 
     let mut outcome = match run_result {
         Ok(outcome) => outcome,
@@ -369,12 +299,8 @@ pub(in super::super) async fn run_subagent_via_graph(
                     input_tokens: snapshot.input_tokens,
                     output_tokens: snapshot.output_tokens,
                     cached_input_tokens: snapshot.cached_input_tokens,
-                    charged_amount_usd: crate::platform::cost::catalog::estimate_cost_usd(
-                        model,
-                        snapshot.input_tokens,
-                        snapshot.output_tokens,
-                        snapshot.cached_input_tokens,
-                    ),
+                    // Each answered call was priced as it arrived.
+                    cost: snapshot.cost,
                 };
                 (recovered, unanswered, usage, snapshot.model_calls)
             };
@@ -436,7 +362,7 @@ pub(in super::super) async fn run_subagent_via_graph(
         // outcome now reports both) so sub-agent spend rolls into the parent
         // instead of being recorded as uncached and $0.
         cached_input_tokens: outcome.cached_input_tokens,
-        charged_amount_usd: outcome.charged_amount_usd,
+        cost: outcome.cost,
     };
 
     // Cap hit with work still pending: summarize the run-so-far into a resumable
@@ -467,37 +393,38 @@ pub(in super::super) async fn run_subagent_via_graph(
                     // transcript meta / cost dashboard.
                     usage.input_tokens += u.input_tokens;
                     usage.output_tokens += u.output_tokens;
-                    usage.cached_input_tokens += u.cached_input_tokens;
-                    let call_cost =
-                        if u.charged_amount_usd.is_finite() && u.charged_amount_usd > 0.0 {
-                            u.charged_amount_usd
-                        } else {
-                            crate::platform::cost::catalog::estimate_cost_usd(
-                                model,
-                                u.input_tokens,
-                                u.output_tokens,
-                                u.cached_input_tokens,
-                            )
-                        };
-                    usage.charged_amount_usd += call_cost;
-                    crate::platform::cost::record_provider_usage(
+                    usage.cached_input_tokens += u.cached_input_tokens();
+                    let call_cost = crate::agent::cost::call_cost(model, &u);
+                    usage.cost.add(call_cost);
+                    let billed = crate::inference::provider::BilledUsage::from_counts(
+                        u.input_tokens,
+                        u.output_tokens,
+                    )
+                    .with_context_window(u.context_window())
+                    .with_cached_input_tokens(u.cached_input_tokens())
+                    .with_cache_creation_tokens(u.cache_creation_tokens)
+                    .with_reasoning_tokens(u.reasoning_tokens);
+                    let billed = match call_cost {
+                        crate::agent::cost::CallCost::Charged(usd) => billed.with_charged_usd(usd),
+                        crate::agent::cost::CallCost::Estimated(usd) => {
+                            billed.with_estimated_usd(usd)
+                        }
+                        crate::agent::cost::CallCost::Unknown => billed,
+                    };
+                    crate::platform::cost::record_provider_usage_scoped(
                         model,
-                        &crate::inference::provider::UsageInfo {
-                            input_tokens: u.input_tokens,
-                            output_tokens: u.output_tokens,
-                            context_window: u.context_window,
-                            cached_input_tokens: u.cached_input_tokens,
-                            cache_creation_tokens: u.cache_creation_tokens,
-                            reasoning_tokens: u.reasoning_tokens,
-                            charged_amount_usd: call_cost,
-                        },
+                        &billed,
+                        crate::platform::cost::UsageScope::ambient(
+                            Some(&usage_provider_id),
+                            Some((agent_id, task_id)),
+                        ),
                     );
                     tracing::debug!(
                         agent_id,
                         input_tokens = u.input_tokens,
                         output_tokens = u.output_tokens,
-                        cached_input_tokens = u.cached_input_tokens,
-                        call_cost,
+                        cached_input_tokens = u.cached_input_tokens(),
+                        ?call_cost,
                         "[subagent] cap-hit summary call folded + priced + recorded into cost tracker (#4467, item 2)"
                     );
                 }
@@ -517,13 +444,13 @@ pub(in super::super) async fn run_subagent_via_graph(
     // persisted transcript reflects the actual final state, not the pre-checkpoint
     // history. `history` already carries this turn's typed suffix.
     let transcript_history;
-    let history_for_transcript: &[ChatMessage] = if (outcome.hit_cap
+    let history_for_transcript: &[TranscriptMessage] = if (outcome.hit_cap
         || outcome.early_exit_tool.is_some())
         && !outcome.text.trim().is_empty()
     {
         transcript_history = {
             let mut messages = history.clone();
-            messages.push(ChatMessage::assistant(outcome.text.clone()));
+            messages.push(TranscriptMessage::assistant(outcome.text.clone()));
             messages
         };
         &transcript_history
@@ -623,6 +550,7 @@ fn build_subagent_context_mw(
             // Summarization step honors the `[context].enabled` + autocompact
             // opt-outs, same as `ContextManager::autocompact_enabled`.
             mw.autocompact_enabled = ctx.enabled && ctx.autocompact_enabled;
+            mw.compaction = ctx.compaction_settings();
             tracing::debug!(
                 tokenjuice_compaction_enabled = mw.tokenjuice_compaction_enabled,
                 compression = ?mw.tokenjuice_compression,
@@ -657,7 +585,7 @@ fn map_tinyagents_subagent_error(err: anyhow::Error) -> SubagentRunError {
 /// `after_tool` — is marked `failed`, so the summary no longer tells the model
 /// every call succeeded.
 fn build_cap_digest(
-    conversation: &[ConversationMessage],
+    conversation: &[TranscriptEntry],
     tool_outcomes: &[crate::agent::tinyagents::ToolCallOutcome],
 ) -> String {
     use std::collections::HashMap;
@@ -666,7 +594,7 @@ fn build_cap_digest(
     // call_id -> tool name, from this turn's assistant tool-call rounds.
     let mut names: HashMap<&str, &str> = HashMap::new();
     for msg in conversation {
-        if let ConversationMessage::AssistantToolCalls { tool_calls, .. } = msg {
+        if let TranscriptEntry::AssistantToolCalls { tool_calls, .. } = msg {
             for call in tool_calls {
                 names.insert(call.id.as_str(), call.name.as_str());
             }
@@ -681,7 +609,7 @@ fn build_cap_digest(
 
     let mut out = String::new();
     for msg in conversation {
-        if let ConversationMessage::ToolResults(results) = msg {
+        if let TranscriptEntry::ToolResults(results) = msg {
             for r in results {
                 let name = names
                     .get(r.tool_call_id.as_str())

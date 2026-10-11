@@ -14,13 +14,14 @@ struct MlHost;
 
 #[tinybus::interface(name = "ai.tinyhumans.tinyjuice.MlHost")]
 impl MlHost {
-    async fn compress(
+    /// One tool-less model call for the module's summary stage, run under the
+    /// turn its `context_token` names. `None` declines — the token is unknown
+    /// or already used, and the module falls back to its own compressors.
+    async fn generate(
         &self,
-        text: String,
-        options: serde_json::Value,
+        request: crate::inference::tokenjuice::types::GenerateRequest,
     ) -> tinybus::Result<Option<String>> {
-        let options = serde_json::from_value(options).map_err(method_error)?;
-        crate::inference::tokenjuice::ml::compress(&text, &options)
+        crate::inference::tokenjuice::generate::serve(request)
             .await
             .map_err(method_error)
     }

@@ -32,6 +32,7 @@ import {
 import { useT } from '../../lib/i18n/I18nContext';
 import { truncateText } from '../../utils/truncateText';
 import {
+  Badge,
   Table,
   TableBody,
   TableCell,
@@ -66,16 +67,13 @@ function BinaryChips({ binary, testId }: BinaryChipsProps) {
   return (
     <div className="flex flex-wrap gap-1" data-testid={testId}>
       {binary.map(ref => (
-        <span
-          key={ref.key}
-          className="inline-flex items-center gap-1 rounded-md border border-line bg-surface px-1.5 py-0.5 text-[10px] font-medium text-content-muted"
-          title={ref.mimeType ?? undefined}>
+        <Badge key={ref.key} dot={false} title={ref.mimeType ?? undefined}>
           <span aria-hidden>📎</span>
           <span className="font-mono">{ref.fileName ?? ref.key}</span>
           <span className="rounded bg-surface-muted px-1 text-[9px] uppercase text-content-faint">
             {ref.mimeType ?? t('flowRuns.inspector.binaryLabel')}
           </span>
-        </span>
+        </Badge>
       ))}
     </div>
   );

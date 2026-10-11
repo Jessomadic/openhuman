@@ -96,97 +96,6 @@ const C9A_BODY: &str = "kiro API error (500 Internal Server Error): \
     reached the limit.\\\",\\\"reason\\\":\\\"MONTHLY_REQUEST_COUNT\\\"}\",\
     \"type\":\"server_error\"}}";
 
-/// Verbatim TAURI-RUST-AFE Responses-API body — the Codex/ChatGPT OAuth
-/// `/responses` endpoint refuses with `usage_limit_reached` once the Plus
-/// plan cap is hit. It carries no "monthly"/"quota" co-marker, so the C9A
-/// phrase set missed it; couple the test to the exact string so a wording
-/// drift fails CI rather than silently leaking events back to Sentry.
-const AFE_BODY: &str = "openai Responses API error: {\"error\":{\"type\":\
-    \"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\
-    \"plan_type\":\"plus\",\"resets_at\":1750000000}}";
-
-#[test]
-fn quota_exhausted_matches_verbatim_c9a_body() {
-    // Status-agnostic: the verbatim 500-wrapped body must match even though
-    // the transport status is 500, not 402.
-    assert!(is_provider_quota_exhausted(C9A_BODY));
-    assert!(body_indicates_quota_exhausted(C9A_BODY));
-}
-
-#[test]
-fn rate_cap_exceeded_matches_verbatim_hxf_body_but_not_transient_or_context() {
-    // TAURI-RUST-HXF: verbatim groq `on_demand` free-tier 413 — a single
-    // request over the per-minute token cap. Status-agnostic; anchored on
-    // BOTH "request too large" (single-request permanence) and a
-    // tokens-per-minute marker.
-    assert!(is_provider_rate_cap_exceeded_message(
-        "groq API error (413 Payload Too Large): {\"error\":{\"message\":\"Request too large \
-         for model `openai/gpt-oss-120b` in organization `org_x` service tier `on_demand` on \
-         tokens per minute (TPM): Limit 8000, Requested 42084.\",\"code\":\"rate_limit_exceeded\"}}"
-    ));
-    // Transient burst ("try again in Ns") lacks "request too large" → stays
-    // retryable + Sentry-visible.
-    assert!(!is_provider_rate_cap_exceeded_message(
-        "groq API error (429 Too Many Requests): Rate limit reached. Please try again in 2.5s."
-    ));
-    // Context-window overflow is a different bucket (model size, not a rate
-    // cap) — no tokens-per-minute marker.
-    assert!(!is_provider_rate_cap_exceeded_message(
-        "openai API error (400): This model's maximum context length is 8192 tokens"
-    ));
-    // A bare 413 with no TPM marker must not match.
-    assert!(!is_provider_rate_cap_exceeded_message(
-        "openai API error (413 Payload Too Large): request entity too large"
-    ));
-}
-
-#[test]
-fn quota_exhausted_matches_verbatim_afe_body() {
-    // Coverage gap closed (TAURI-RUST-AFE): the Responses `usage_limit_reached`
-    // body must demote through the same #4076 quota machinery even though it
-    // lacks a "monthly"/"quota" co-marker.
-    assert!(is_provider_quota_exhausted(AFE_BODY));
-    assert!(body_indicates_quota_exhausted(AFE_BODY));
-    // Bare phrasings (no surrounding envelope) must also match.
-    assert!(body_indicates_quota_exhausted("usage_limit_reached"));
-    assert!(body_indicates_quota_exhausted(
-        "The usage limit has been reached"
-    ));
-}
-
-#[test]
-fn quota_exhausted_matches_common_phrasings() {
-    for body in [
-        "{\"reason\":\"MONTHLY_REQUEST_COUNT\"}",
-        "You have reached the limit on your monthly requests",
-        "monthly request quota reached",
-        "monthly limit reached",
-        "plan quota exceeded",
-        "usage limit exceeded for this period",
-    ] {
-        assert!(is_provider_quota_exhausted(body), "should match: {body:?}");
-    }
-}
-
-#[test]
-fn quota_exhausted_ignores_unrelated_500_and_rate_limit() {
-    // A generic 500 outage and a 429 rate-limit are NOT plan-quota
-    // exhaustion and must stay reportable / retryable respectively — the
-    // quota guard must not swallow them.
-    for body in [
-        "kiro API error (500 Internal Server Error): {\"error\":\
-         {\"message\":\"upstream connection reset\",\"type\":\"server_error\"}}",
-        "rate_limit_exceeded: too many requests, retry after 12s",
-        "429 Too Many Requests",
-        "context length exceeded: reduce the number of tokens",
-    ] {
-        assert!(
-            !is_provider_quota_exhausted(body),
-            "should NOT match: {body:?}"
-        );
-    }
-}
-
 #[test]
 fn quota_and_credits_matchers_do_not_overlap_on_c9a() {
     // The 402-gated credits matcher must keep ignoring the 500-wrapped
@@ -198,7 +107,9 @@ fn quota_and_credits_matchers_do_not_overlap_on_c9a() {
         StatusCode::INTERNAL_SERVER_ERROR,
         C9A_BODY
     ));
-    assert!(is_provider_quota_exhausted(C9A_BODY));
+    assert!(tinyinference_llm::failure::body_indicates_quota_exhausted(
+        C9A_BODY
+    ));
 }
 
 /// Verbatim TAURI-RUST-8FQ Responses-API body. The matcher keys on this

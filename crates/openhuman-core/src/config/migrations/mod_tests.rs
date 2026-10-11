@@ -1,17 +1,14 @@
 use super::*;
-use crate::agent::messages::ChatMessage;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
+use tinyagents_session::transcript::TranscriptMessage;
 use tinyagents_session::transcript::{read_transcript, write_transcript, TranscriptMeta};
 
 fn durable_messages(
-    messages: impl IntoIterator<Item = ChatMessage>,
+    messages: impl IntoIterator<Item = TranscriptMessage>,
 ) -> Vec<tinyagents_session::transcript::TranscriptMessage> {
-    messages
-        .into_iter()
-        .map(|message| crate::agent::messages::transcript_message_from_chat(&message))
-        .collect()
+    messages.into_iter().collect()
 }
 
 /// Simulate a v3 user config: narrow allowed_commands, narrow auto_approve,
@@ -63,6 +60,7 @@ fn meta() -> TranscriptMeta {
         created: "2026-05-01T00:00:00Z".into(),
         updated: "2026-05-01T00:00:00Z".into(),
         turn_count: 1,
+        prefix_message_count: None,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,
@@ -86,8 +84,8 @@ fn seed_tainted_transcript(workspace_dir: &Path) -> std::path::PathBuf {
     fs::create_dir_all(&raw_dir).unwrap();
     let path = raw_dir.join("1700000000_main.jsonl");
     let messages = vec![
-        ChatMessage::system(tainted_prompt()),
-        ChatMessage::user("hello"),
+        TranscriptMessage::system(tainted_prompt()),
+        TranscriptMessage::user("hello"),
     ];
     write_transcript(&path, &durable_messages(messages), &meta(), None).unwrap();
     path
@@ -147,29 +145,31 @@ async fn run_pending_bumps_version_on_fresh_install() {
 }
 
 #[tokio::test]
-async fn run_pending_retires_medulla_engine_from_v11_config() {
+async fn run_pending_rewrites_v11_config() {
     let tmp = TempDir::new().unwrap();
     fs::create_dir_all(tmp.path().join("workspace")).unwrap();
 
-    let mut config = config_in(&tmp);
-    config.schema_version = 11;
-    config.subconscious.engine = crate::config::schema::SubconsciousEngine::Medulla;
+    let config = config_in(&tmp);
+    let config_path = config.config_path.clone();
+    let mut legacy_toml = toml::to_string(&Config {
+        schema_version: 11,
+        ..config
+    })
+    .unwrap();
+    legacy_toml.push_str("\n[subconscious]\nenabled = true\n\n[heartbeat]\nenabled = true\n");
+    fs::write(&config_path, &legacy_toml).unwrap();
+    let mut config: Config = toml::from_str(&legacy_toml).unwrap();
+    config.config_path = config_path;
 
     run_pending(&mut config).await;
 
     assert_eq!(config.schema_version, CURRENT_SCHEMA_VERSION);
-    assert_eq!(
-        config.subconscious.engine,
-        crate::config::schema::SubconsciousEngine::Local
-    );
 
     let on_disk = fs::read_to_string(&config.config_path).unwrap();
     let persisted: Config = toml::from_str(&on_disk).unwrap();
     assert_eq!(persisted.schema_version, CURRENT_SCHEMA_VERSION);
-    assert_eq!(
-        persisted.subconscious.engine,
-        crate::config::schema::SubconsciousEngine::Local
-    );
+    assert!(!on_disk.contains("[subconscious]"), "{on_disk}");
+    assert!(!on_disk.contains("[heartbeat]"), "{on_disk}");
 }
 
 #[tokio::test]

@@ -1,10 +1,11 @@
 /**
  * The composer-adjacent surfaces on the ASSISTANT-UI chat panel.
  *
- * `Conversations` picks exactly one main panel — `legacyMainPanel` for the
+ * `Conversations` used to pick one of two main panels — a legacy panel for the
  * mic-cloud voice embed, `assistantUiMainPanel` for everything else — so every
  * card that was written inline inside the legacy panel stopped rendering on
- * `/chat` when the text chat moved to the assistant-ui `Thread`. These are the
+ * `/chat` when the text chat moved to the assistant-ui `Thread`. (Voice mode
+ * now renders the assistant-ui panel too, with only the composer swapped.) These are the
  * collateral losses from that switch, each asserted on the surface a real user
  * looks at (the default `composer="text"` render, i.e. the assistant-ui panel):
  *
@@ -13,30 +14,37 @@
  * - the flow-approval banner, the only Approve/Reject affordance for a paused
  *   tinyflows run;
  * - the in-flight / failed artifact deck;
- * - the background-processes button and the panel it opens.
  *
  * Each test fails against the pre-fix component with "unable to find" on the
  * element it names — that is the regression, not a styling detail.
  */
 import { combineReducers, configureStore } from '@reduxjs/toolkit';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SidebarSlotOutlet, SidebarSlotProvider } from '../../components/layout/shell/SidebarSlot';
+import Conversations from '../../features/conversations/Conversations';
 // Type-only: erased at runtime, so it does not defeat `vi.hoisted`.
 import type { FlowApprovalRequest } from '../../hooks/useFlowApprovalRequests';
 import { chatSend } from '../../services/chatService';
+import { callCoreRpc } from '../../services/coreRpcClient';
 import chatRuntimeReducer, {
   type ArtifactSnapshot,
-  setToolTimelineForThread,
   type ToolTimelineEntry,
 } from '../../store/chatRuntimeSlice';
 import layoutReducer from '../../store/layoutSlice';
+import runModeReducer from '../../store/runModeSlice';
 import socketReducer from '../../store/socketSlice';
 import themeReducer from '../../store/themeSlice';
-import threadReducer from '../../store/threadSlice';
+import threadGoalReducer from '../../store/threadGoalSlice';
+import threadReducer, {
+  addMessageLocal,
+  clearThreadInferenceActive,
+  markThreadInferenceActive,
+} from '../../store/threadSlice';
+import threadTodosReducer, { setThreadTodos } from '../../store/threadTodosSlice';
 import type { Thread, ThreadMessage } from '../../types/thread';
 
 // ── Hoisted mock state ─────────────────────────────────────────────────────
@@ -71,7 +79,7 @@ const { mockGetThreads, mockGetThreadMessages, mockUseUsageState, mockFlowApprov
 // ── Module mocks ───────────────────────────────────────────────────────────
 
 vi.mock('../../services/chatService', () => ({
-  chatCancel: vi.fn().mockResolvedValue(true),
+  chatCancel: vi.fn().mockResolvedValue({ accepted: true, turnCancelled: true }),
   chatClearQueue: vi.fn().mockResolvedValue(0),
   chatSend: vi.fn().mockResolvedValue(undefined),
   aiRegenerate: vi.fn().mockResolvedValue(undefined),
@@ -114,15 +122,9 @@ vi.mock('../../hooks/useFlowApprovalRequests', () => ({
   useFlowApprovalRequests: () => mockFlowApprovalRequests(),
 }));
 
-vi.mock('../../components/chat/ChatNewWindowHero', () => ({ default: () => null }));
-
 vi.mock('../../store/socketSelectors', () => ({
   selectSocketStatus: (state: { socket?: { byUser?: Record<string, { status: string }> } }) =>
     state.socket?.byUser?.__pending__?.status ?? 'disconnected',
-}));
-
-vi.mock('../../hooks/useStickToBottom', () => ({
-  useStickToBottom: vi.fn(() => ({ containerRef: { current: null }, endRef: { current: null } })),
 }));
 
 vi.mock('../../utils/openUrl', () => ({ openUrl: vi.fn() }));
@@ -132,7 +134,7 @@ vi.mock('../../utils/openUrl', () => ({ openUrl: vi.fn() }));
 vi.mock('../../services/artifactDownloadService', () => ({
   listArtifactsForThread: vi.fn().mockResolvedValue({ ok: true, artifacts: [] }),
   saveArtifactViaDialog: vi.fn(),
-  revealArtifactInFileManager: vi.fn(),
+  revealArtifact: vi.fn(),
 }));
 
 vi.mock('../../services/coreRpcClient', async orig => {
@@ -170,7 +172,10 @@ function buildStore(preload: Record<string, unknown> = {}) {
       layout: layoutReducer,
       socket: socketReducer,
       chatRuntime: chatRuntimeReducer,
+      runMode: runModeReducer,
       theme: themeReducer,
+      threadGoal: threadGoalReducer,
+      threadTodos: threadTodosReducer,
     }),
     preloadedState: preload as never,
   });
@@ -204,6 +209,14 @@ function threadState(extra: Record<string, unknown> = {}) {
   };
 }
 
+vi.mock('../../store/userScopedStorage', () => ({
+  userScopedStorage: {
+    getItem: vi.fn().mockResolvedValue(null),
+    setItem: vi.fn().mockResolvedValue(undefined),
+    removeItem: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 const connectedSocket = { byUser: { __pending__: { status: 'connected', socketId: 'socket-1' } } };
 
 /**
@@ -227,7 +240,6 @@ async function renderChat(
       ...(preload.chatRuntime ?? {}),
     },
   });
-  const { default: Conversations } = await import('../../features/conversations/Conversations');
 
   await act(async () => {
     render(
@@ -293,6 +305,95 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     vi.mocked(chatSend).mockResolvedValue(undefined);
   });
 
+  it('docks active task cards and leaves completed cards with their original turn', async () => {
+    const store = await renderChat();
+    await act(async () => {
+      for (const [id, sender] of [
+        ['user-first', 'user'],
+        ['agent-first', 'agent'],
+      ] as const) {
+        store.dispatch({
+          type: addMessageLocal.fulfilled.type,
+          payload: {
+            threadId: THREAD_ID,
+            message: {
+              id,
+              sender,
+              content: 'Task turn',
+              type: 'text',
+              extraMetadata: {},
+              createdAt: '2026-01-01T00:00:00Z',
+            },
+          },
+        });
+      }
+    });
+    await act(async () =>
+      store.dispatch(
+        setThreadTodos({
+          threadId: THREAD_ID,
+          todos: [
+            { content: 'Inspect the current UI', status: 'completed' },
+            { content: 'Verify overlay geometry', status: 'in_progress' },
+          ],
+        })
+      )
+    );
+    const plan = await screen.findByTestId('todo-checklist');
+    const overlay = plan.closest('[data-slot="composer-overlays"]');
+    expect(overlay).toBeNull();
+    expect(plan.closest('[data-slot="task-card-dock"]')).not.toBeNull();
+    expect(plan).toHaveAttribute('data-slot', 'task-card');
+    expect(plan).toHaveAttribute('data-state', 'waiting');
+    expect(plan.querySelector('.animate-spin')).toBeNull();
+    await act(async () => store.dispatch(markThreadInferenceActive(THREAD_ID)));
+    expect(screen.getByTestId('todo-checklist')).toHaveAttribute('data-state', 'working');
+    await act(async () => store.dispatch(clearThreadInferenceActive(THREAD_ID)));
+    expect(screen.getByTestId('todo-checklist')).toHaveAttribute('data-state', 'waiting');
+    expect(screen.getByTestId('todo-checklist').querySelector('.animate-spin')).toBeNull();
+
+    await act(async () =>
+      store.dispatch(
+        setThreadTodos({
+          threadId: THREAD_ID,
+          todos: [
+            { content: 'Inspect the current UI', status: 'completed' },
+            { content: 'Verify overlay geometry', status: 'completed' },
+          ],
+        })
+      )
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('todo-checklist')).toHaveAttribute('data-state', 'done')
+    );
+    await act(async () => {
+      for (const [id, sender] of [
+        ['user-next', 'user'],
+        ['agent-next', 'agent'],
+      ] as const) {
+        store.dispatch({
+          type: addMessageLocal.fulfilled.type,
+          payload: {
+            threadId: THREAD_ID,
+            message: {
+              id,
+              sender,
+              content: 'Next conversation turn',
+              type: 'text',
+              extraMetadata: {},
+              createdAt: '2026-01-01T00:01:00Z',
+            },
+          },
+        });
+      }
+    });
+    const completed = screen.getByTestId('todo-checklist');
+    expect(completed.closest('[data-slot="task-card-dock"]')).toBeNull();
+    const owningMessage = completed.closest('[data-slot="aui_assistant-message-root"]');
+    expect(owningMessage).toHaveTextContent('Task turn');
+    expect(owningMessage).not.toHaveTextContent('Next conversation turn');
+  });
+
   it('shows the send error when a send is rejected', async () => {
     // A rejected send writes nothing to the transcript, so this banner is the
     // ONLY feedback the user gets. Without it the message just disappears.
@@ -344,7 +445,7 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     await renderChat();
 
     expect(await screen.findByText('POST https://example.test/orders')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Approve once' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument();
   });
 
@@ -354,23 +455,18 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     expect(await screen.findByText('Quarterly summary')).toBeInTheDocument();
   });
 
-  it('opens the background-processes panel from the composer toolbar', async () => {
+  it('hides the background-processes and run-mode controls for now', async () => {
     await renderChat({
       chatRuntime: { toolTimelineByThread: { [THREAD_ID]: [asyncSubagentRow()] } },
     });
 
-    const toggle = await screen.findByTestId('background-processes-toggle');
-    await act(async () => {
-      fireEvent.click(toggle);
-    });
-
-    // The panel is the only route to the sub-agent drawer on this surface.
-    expect(await screen.findByText('Researcher')).toBeInTheDocument();
+    expect(screen.queryByTestId('background-processes-toggle')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('run-mode-toggle')).not.toBeInTheDocument();
   });
 
   it('shows the prompt-injection advisory when the send is risky', async () => {
     // The advisory is the composer's only warning that a message will likely
-    // be refused server-side. It shared `legacyMainPanel`'s fate with the send
+    // be refused server-side. It shared the legacy panel's fate with the send
     // error, and unlike the error nothing else on the page hints at it.
     await renderChat();
 
@@ -397,30 +493,42 @@ describe('assistant-ui chat surface — composer-adjacent cards', () => {
     );
   });
 
+  it('switches the run mode for a typed /plan instead of sending it to the model', async () => {
+    const store = await renderChat();
+
+    const input = await screen.findByRole('textbox', { name: 'Message input' });
+    await act(async () => {
+      input.textContent = '/plan';
+      fireEvent.input(input, { data: '/plan', inputType: 'insertText' });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Send message' })).not.toBeDisabled()
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    });
+
+    await waitFor(() =>
+      expect(callCoreRpc).toHaveBeenCalledWith({
+        method: 'openhuman.agent_set_run_mode',
+        params: { thread_id: THREAD_ID, mode: 'plan' },
+      })
+    );
+    expect(store.getState().runMode.byThread[THREAD_ID]).toBe('plan');
+    expect(chatSend).not.toHaveBeenCalled();
+  });
+
   it('lists the thread files chip beside the model pill', async () => {
     await renderChat({ chatRuntime: { artifactsByThread: { [THREAD_ID]: [readyArtifact()] } } });
 
     expect(await screen.findByTestId('chat-files-chip')).toBeInTheDocument();
   });
 
-  it('keeps the composer toolbar live after mount, not frozen at first render', async () => {
-    // The toolbar controls reach the composer through `ComposerExtras`, which
-    // assistant-ui renders BY TYPE — so a slot that closes over the host node
-    // instead of reading it through a ref keeps whatever the first render
-    // produced. The badge would then never leave the state it mounted in: a
-    // sub-agent spawned mid-turn would be invisible for the rest of the turn.
-    const store = await renderChat();
-    const toggle = await screen.findByTestId('background-processes-toggle');
-    expect(within(toggle).queryByText('1')).toBeNull();
-
-    await act(async () => {
-      store.dispatch(
-        setToolTimelineForThread({ threadId: THREAD_ID, entries: [asyncSubagentRow()] })
-      );
-    });
-
-    expect(
-      within(await screen.findByTestId('background-processes-toggle')).getByText('1')
-    ).toBeInTheDocument();
+  it('places context usage in the right action cluster immediately before voice mode', async () => {
+    await renderChat();
+    const context = await screen.findByTestId('composer-context-usage');
+    const voice = screen.getByRole('button', { name: 'Voice mode' });
+    expect(context.parentElement).toBe(voice.parentElement);
+    expect(context.compareDocumentPosition(voice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

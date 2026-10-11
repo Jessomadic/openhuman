@@ -1,3 +1,5 @@
+import { type ReactNode } from 'react';
+
 import { cn } from '../../lib/cn';
 import Input from './Input';
 
@@ -13,6 +15,10 @@ export interface NumberFieldProps {
   max?: number;
   /** Step granularity; default 1. Pass a fraction for decimal fields. */
   step?: number;
+  /** Shown while the field is empty (e.g. "∞" when empty means no limit). */
+  placeholder?: string;
+  /** Replaces the "{min}–{max}" hint, e.g. when `max` is a sentinel. */
+  rangeLabel?: ReactNode;
   disabled?: boolean;
   invalid?: boolean;
   'aria-label': string;
@@ -29,12 +35,14 @@ const NumberField = ({
   min,
   max,
   step = 1,
+  placeholder,
+  rangeLabel,
   disabled = false,
   invalid = false,
   'aria-label': ariaLabel,
   'data-testid': testId,
 }: NumberFieldProps) => {
-  const hasRange = min !== undefined && max !== undefined;
+  const hasRange = rangeLabel != null || (min !== undefined && max !== undefined);
 
   return (
     <div
@@ -51,6 +59,7 @@ const NumberField = ({
         min={min}
         max={max}
         step={step}
+        placeholder={placeholder}
         disabled={disabled}
         invalid={invalid}
         aria-label={ariaLabel}
@@ -71,8 +80,12 @@ const NumberField = ({
             </span>
           )}
           {hasRange && (
-            <span className="text-[11px] text-content-faint">
-              {min}&#x2013;{max}
+            <span className="inline-flex items-center text-[11px] text-content-faint">
+              {rangeLabel ?? (
+                <>
+                  {min}&#x2013;{max}
+                </>
+              )}
             </span>
           )}
         </div>

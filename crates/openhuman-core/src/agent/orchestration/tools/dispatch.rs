@@ -13,6 +13,7 @@ use tinytools::ToolRunContext;
 use tinytools::{ToolCallOptions, ToolResult};
 
 mod dispatch_outcomes;
+mod tool_call_text;
 pub(crate) use dispatch_outcomes::*;
 
 /// Typed dispatch for the delegation tools synthesised from the active agent.
@@ -47,7 +48,7 @@ impl DelegationDispatch {
             // `delegate_graph` is a concrete durable graph tool with its own
             // typed dispatcher, and arbitrary `delegate_*` tools must not be
             // mistaken for an agent target merely because of their spelling.
-            name if AgentDefinitionRegistry::global().is_some_and(|registry| {
+            name if AgentDefinitionRegistry::current().is_some_and(|registry| {
                 registry.list().into_iter().any(|definition| {
                     definition
                         .delegate_name
@@ -101,7 +102,7 @@ impl ToolDispatch<(), crate::agent::tinyagents::host::OpenHumanRunContext> for D
                 .await
             }
             DelegationDispatchKind::Archetype => {
-                let Some(agent_id) = AgentDefinitionRegistry::global().and_then(|registry| {
+                let Some(agent_id) = AgentDefinitionRegistry::current().and_then(|registry| {
                     registry.list().into_iter().find_map(|definition| {
                         let name = definition
                             .delegate_name
@@ -146,30 +147,6 @@ pub(crate) enum DispatchMode {
     Blocking,
 }
 
-pub(crate) async fn dispatch_subagent(
-    agent_id: &str,
-    tool_name: &str,
-    prompt: &str,
-    skill_filter: Option<&str>,
-    model_override: Option<&str>,
-    tool_context: Option<&dyn ToolRunContext>,
-    mode: DispatchMode,
-    run_context: crate::agent::tinyagents::host::OpenHumanRunContext,
-) -> anyhow::Result<ToolResult> {
-    dispatch_subagent_with_live_parent(
-        agent_id,
-        tool_name,
-        prompt,
-        skill_filter,
-        model_override,
-        tool_context,
-        mode,
-        run_context,
-        None,
-    )
-    .await
-}
-
 /// Dispatch one inline child against the caller's actual TinyAgents parent
 /// when the typed tool boundary has one. Standalone callers retain the
 /// explicit-carrier fallback above because no live parent exists for them.
@@ -177,7 +154,6 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
     agent_id: &str,
     tool_name: &str,
     prompt: &str,
-    skill_filter: Option<&str>,
     model_override: Option<&str>,
     tool_context: Option<&dyn ToolRunContext>,
     mode: DispatchMode,
@@ -187,7 +163,7 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
     let parent_workspace_descriptor = tool_context
         .and_then(|ctx| ctx.workspace().cloned())
         .or_else(|| run_context.workspace.clone());
-    let registry = match AgentDefinitionRegistry::global() {
+    let registry = match AgentDefinitionRegistry::current() {
         Some(reg) => reg,
         None => {
             return Ok(ToolResult::error(
@@ -252,8 +228,10 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
                 definition.model.resolve(parent_model)
             }
         };
-        if !images.is_empty()
-            && crate::inference::provider::factory::oh_tier_supports_vision(&subagent_model)
+        if crate::agent::attachments::should_forward_parent_images(prompt)
+            && !images.is_empty()
+            && (agent_id == "vision_agent"
+                || crate::inference::provider::factory::oh_tier_supports_vision(&subagent_model))
         {
             log::info!(
                 "[agent] forwarding {} image placeholder(s) to vision sub-agent '{}'",
@@ -266,6 +244,28 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
             prompt
         }
     };
+
+    if agent_id == "vision_agent" {
+        match crate::agent::attachments::has_resolvable_image(
+            prompt,
+            parent_workspace_descriptor.as_ref(),
+            run_context.origin.as_ref(),
+        )
+        .await
+        {
+            Ok(true) => (),
+            Ok(false) => {
+                return Ok(ToolResult::error(
+                    "vision_agent requires a resolvable image attachment or image_paths.",
+                ));
+            }
+            Err(error) => {
+                return Ok(ToolResult::error(format!(
+                    "vision image unavailable: {error}"
+                )));
+            }
+        }
+    }
 
     // ── Async-by-default delegation (#continuity) ─────────────────────────
     // Interactive delegations route through the durable async sub-agent
@@ -296,12 +296,6 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
                 obj.insert(
                     "model".to_string(),
                     serde_json::Value::String(model.to_string()),
-                );
-            }
-            if let (Some(obj), Some(toolkit)) = (async_args.as_object_mut(), skill_filter) {
-                obj.insert(
-                    "toolkit".to_string(),
-                    serde_json::Value::String(toolkit.to_string()),
                 );
             }
             log::info!(
@@ -376,23 +370,18 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
                 prompt: prompt.to_string(),
                 worker_thread_id: None,
                 display_name: Some(definition.display_name().to_string()),
+                parent_call_id: crate::tools::host_extensions::tool_call_id(tool_context),
             })
             .await;
     }
 
     log::info!(
-        "[agent] delegating to {} via {} (skill_filter={}) prompt_chars={}",
+        "[agent] delegating to {} via {} prompt_chars={}",
         agent_id,
         tool_name,
-        skill_filter.unwrap_or("<none>"),
         prompt.chars().count()
     );
 
-    // Propagate a per-call toolkit scope into the subagent runner as
-    // `toolkit_override` (the `{TOOLKIT}_` prefix check on skill-category
-    // tools), never as `skill_filter_override` (which matches `{skill}__`
-    // QuickJS-style names and would exclude every Composio action). The
-    // delegation tools synthesised today all pass `None` here.
     let worktree_action_dir = parent_workspace_descriptor
         .as_ref()
         .map(|descriptor| descriptor.root.clone());
@@ -407,7 +396,6 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
     }
     let options = SubagentRunOptions {
         skill_filter_override: None,
-        toolkit_override: skill_filter.map(str::to_string),
         context: None,
         model_override: model_override.map(str::to_string),
         task_id: Some(task_id.clone()),
@@ -515,6 +503,7 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
                                     worktree_path: None,
                                     changed_files: Vec::new(),
                                     dirty_status: None,
+                                    stop: None,
                                 })
                                 .await;
                         }
@@ -583,6 +572,7 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
                                     worktree_path: None,
                                     changed_files: Vec::new(),
                                     dirty_status: None,
+                                    stop: incomplete_stop(reason),
                                 })
                                 .await;
                         }
@@ -595,12 +585,13 @@ pub(crate) async fn dispatch_subagent_with_live_parent(
                         outcome.task_id,
                         outcome.iterations,
                     );
-                    Ok(ToolResult::success(incomplete_envelope(
+                    Ok(stopped_subagent_result(
                         tool_name,
+                        &outcome.agent_id,
+                        &outcome.task_id,
                         reason,
-                        &outcome.output,
-                        mode,
-                    )))
+                        incomplete_envelope(tool_name, reason, &outcome.output, mode),
+                    ))
                 }
                 SubagentRunStatus::Cancelled => {
                     log::info!(

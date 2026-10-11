@@ -164,6 +164,12 @@ mod attestation_guard {
     fn the_attested_linux_release_library_is_accepted() {
         assert!(digest_is_pinned(
             record(),
+            "d2e663e465c6c245cbf9b37c037ae655db7df0f93a0df9b7fa17a28027ebaa9d"
+        ));
+        // The v0.5.1 library this constant used to name is no longer the
+        // pinned release, so it must not be sent a key.
+        assert!(!digest_is_pinned(
+            record(),
             "2bd70433707c44dbfe6b3cc3b4cc835299fe951fcb375b49c940d8d3fc1d4061"
         ));
     }

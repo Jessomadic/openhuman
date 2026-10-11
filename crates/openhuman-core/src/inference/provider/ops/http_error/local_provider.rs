@@ -13,7 +13,7 @@
 /// (`embeddings/rpc.rs`, PR #3688 / TAURI-RUST-4P4); this is the chat sibling.
 pub fn is_local_provider_no_model_loaded(status: reqwest::StatusCode, body: &str) -> bool {
     status == reqwest::StatusCode::BAD_REQUEST
-        && body.to_ascii_lowercase().contains("no models loaded")
+        && tinyinference_llm::failure::body_indicates_no_model_loaded(body)
 }
 
 /// Actionable user-facing guidance for a local inference server with no model
@@ -80,9 +80,7 @@ pub fn is_ollama_cloud_internal_500(
 ) -> bool {
     provider == "ollama"
         && status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
-        && body
-            .to_ascii_lowercase()
-            .contains("internal server error (ref:")
+        && tinyinference_llm::failure::body_indicates_ollama_cloud_internal_error(body)
 }
 
 /// Message-level half of [`is_ollama_cloud_internal_500`]: matches the actionable

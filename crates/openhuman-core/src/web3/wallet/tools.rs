@@ -1,9 +1,8 @@
-mod chain_status;
-mod prepare_transfer;
-mod status;
-mod tx_query;
+//! The wallet agent tools.
+//!
+//! The tools live in `tinywallet_web3::tools::wallet`; they are re-exported here
+//! so `tools/mod.rs` keeps exposing them under their historical path. Each is
+//! built over the process-wide wallet engine
+//! ([`crate::web3::seams::engine`]) at registration in `tools/ops.rs`.
 
-pub use chain_status::WalletChainStatusTool;
-pub use prepare_transfer::WalletPrepareTransferTool;
-pub use status::WalletStatusTool;
-pub use tx_query::{WalletLookupTxTool, WalletTxReceiptTool, WalletTxStatusTool};
+pub use tinywallet_web3::tools::wallet::*;

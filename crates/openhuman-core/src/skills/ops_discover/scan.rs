@@ -2,12 +2,11 @@
 //! into `Workflow` entries, and the shared multi-root scan engine that both
 //! the full discovery surface and the automations-only view share.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::skills::ops_types::{Workflow, WorkflowScope};
+use tinyskills::{resolve_collisions_with, CollisionPolicy, TieBreak};
 
-use super::collision::absorb;
+use crate::skills::ops_types::{Workflow, WorkflowScope};
 
 /// Which on-disk root category a bundle was discovered under.
 ///
@@ -45,9 +44,10 @@ pub(super) fn discover_filtered(
         include_workflows = kinds.contains(&RootKind::Workflow),
         "[workflows] discover:enter"
     );
-    // Scan order matters for collision resolution: the last scope to register
-    // a name wins, so we scan user first, then project, then legacy.
-    let mut discovered = HashMap::new();
+    // Scan order matters for collision resolution: among equal-precedence
+    // scopes the last root to register a name wins (`TieBreak::LastWins`), so
+    // we scan builtin first, then user, then project, then legacy.
+    let mut discovered: Vec<Workflow> = Vec::new();
 
     // Builtin skills (`<workspace>/.openhuman/builtin-skills/`) are a skill
     // root scanned FIRST and at the lowest precedence, so every other scope
@@ -63,10 +63,7 @@ pub(super) fn discover_filtered(
                 scope = ?WorkflowScope::Builtin,
                 "[workflows] discover:branch:builtin"
             );
-            absorb(
-                &mut discovered,
-                scan_bundled_root(&root, WorkflowScope::Builtin),
-            );
+            discovered.extend(scan_bundled_root(&root, WorkflowScope::Builtin));
         }
     }
 
@@ -79,7 +76,22 @@ pub(super) fn discover_filtered(
                     scope = ?WorkflowScope::User,
                     "[workflows] discover:branch:user"
                 );
-                absorb(&mut discovered, scan_root(&root, WorkflowScope::User));
+                discovered.extend(scan_root(&root, WorkflowScope::User));
+            }
+        }
+    }
+
+    if let Some(agent_home) = workspace_dir.and_then(crate::skills::write_root::agent_skill_home) {
+        let [skills, workflows] = crate::skills::write_root::agent_user_roots(&agent_home);
+        for (root, kind) in [(skills, RootKind::Skill), (workflows, RootKind::Workflow)] {
+            if kinds.contains(&kind) {
+                tracing::trace!(
+                    root = %root.display(),
+                    ?kind,
+                    scope = ?WorkflowScope::User,
+                    "[workflows] discover:branch:agent"
+                );
+                discovered.extend(scan_root(&root, WorkflowScope::User));
             }
         }
     }
@@ -94,7 +106,7 @@ pub(super) fn discover_filtered(
                         scope = ?WorkflowScope::Project,
                         "[workflows] discover:branch:project"
                     );
-                    absorb(&mut discovered, scan_root(&root, WorkflowScope::Project));
+                    discovered.extend(scan_root(&root, WorkflowScope::Project));
                 }
             }
         }
@@ -109,15 +121,20 @@ pub(super) fn discover_filtered(
                 scope = ?WorkflowScope::Legacy,
                 "[workflows] discover:branch:legacy"
             );
-            absorb(
-                &mut discovered,
-                scan_root(&legacy_root, WorkflowScope::Legacy),
-            );
+            discovered.extend(scan_root(&legacy_root, WorkflowScope::Legacy));
         }
     }
 
-    let mut out: Vec<_> = discovered.into_values().collect();
-    out.sort_by(|left, right| left.name.cmp(&right.name));
+    // Cross-scope precedence and shadowing warnings are owned by tinyskills;
+    // `Profile` bundles are not a filesystem scope OpenHuman scans.
+    let out = resolve_collisions_with(
+        discovered,
+        &CollisionPolicy {
+            tie_break: TieBreak::LastWins,
+            excluded_scopes: vec![WorkflowScope::Profile],
+            id_noun: "workflow".into(),
+        },
+    );
     tracing::debug!(discovered_count = out.len(), "[workflows] discover:exit");
     out
 }

@@ -23,8 +23,11 @@
   isolation: isolate;
 }
 
+/* The canvas sits in a framed card beside the side panel, so it takes the
+   app's card surface rather than `--surface-canvas` (pure black on the dark
+   theme, which read as a hole in the page). */
 .flow-canvas .react-flow__background {
-  background-color: rgb(var(--surface-canvas));
+  background-color: rgb(var(--surface));
 }
 
 .flow-canvas .react-flow__background pattern circle {

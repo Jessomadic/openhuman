@@ -6,11 +6,22 @@ use tempfile::TempDir;
 
 fn test_config() -> (Config, TempDir) {
     let dir = TempDir::new().unwrap();
-    let config = Config {
+    let mut config = Config {
         workspace_dir: dir.path().to_path_buf(),
         ..Config::default()
     };
+    // These tests exercise the legacy SQLite tables themselves.
+    config.storage.url = Some("classic".into());
     (config, dir)
+}
+
+#[test]
+fn schema_migration_surfaces_non_duplicate_alter_errors() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE VIEW pending_approvals AS SELECT 1 AS id")
+        .unwrap();
+    let error = migrate_columns(&conn).expect_err("a view cannot be migrated as a table");
+    assert!(error.to_string().contains("add column executed_at"));
 }
 
 /// Build a sample `PendingApproval`. The `_session_id` parameter
@@ -39,6 +50,8 @@ fn sample_with_expiry(
         created_at: Utc::now(),
         expires_at,
         source_context: None,
+        tool_call_id: None,
+        agent_id: None,
     }
 }
 

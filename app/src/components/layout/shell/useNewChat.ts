@@ -48,7 +48,7 @@ import { chatThreadPath } from '../../../utils/chatRoutes';
  *
  * Only **General**-tab threads are reuse candidates (same
  * `isThreadVisibleInTab(..., GENERAL_TAB_VALUE)` filter the `/chat` landing
- * uses), so New Chat never lands on a hidden task/subconscious/parented
+ * uses), so New Chat never lands on a hidden task/parented
  * session.
  */
 export function useNewChat(): () => void {

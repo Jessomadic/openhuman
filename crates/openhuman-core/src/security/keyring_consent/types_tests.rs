@@ -18,7 +18,7 @@ fn storage_mode_serialization_roundtrip() {
 }
 
 /// `Display` and the serde representation must agree: `activeMode` reaches the
-/// frontend as the serialized string, while logs and `RpcOutcome` messages use
+/// frontend as the serialized string, while logs and `Outcome` messages use
 /// `Display`, and `SecurityPanel` keys its badge variant + i18n lookup off the
 /// serialized form. A variant whose two spellings diverge renders as an unstyled
 /// unknown mode.

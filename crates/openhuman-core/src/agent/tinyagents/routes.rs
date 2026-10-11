@@ -26,9 +26,9 @@ pub(super) const ROUTE_VISION: &str = "hint:vision";
 /// The workload routes projected into the registry, keyed by role alias.
 ///
 /// This is the canonical workload inventory (`chat`, `reasoning`, `agentic`,
-/// `coding`, `burst`, `summarization`, `vision`). `subconscious`/`memory` are
-/// intentionally absent — they are role aliases that ride the chat route rather
-/// than distinct router entries.
+/// `coding`, `burst`, `summarization`, `vision`). `memory` is
+/// intentionally absent — it is a role alias that rides the chat route rather
+/// than a distinct router entry.
 pub(super) const WORKLOAD_ROUTE_TIERS: &[&str] = &[
     ROUTE_CHAT,
     ROUTE_REASONING,
@@ -227,7 +227,7 @@ impl ModelMiddleware<(), crate::agent::tinyagents::host::OpenHumanRunContext>
 }
 
 /// Around-model middleware that feeds the cost event bridge (issue #4249,
-/// Phase 5): after the real model call, it reads the full host [`UsageInfo`] off
+/// Phase 5): after the real model call, it reads the full host [`BilledUsage`] off
 /// the returned [`ModelResponse`] — token breakdowns from the crate `Usage`,
 /// backend-charged USD + context window from the G1 `raw` passthrough
 /// ([`usage_info_from_response`](super::model::usage_info_from_response)) — and

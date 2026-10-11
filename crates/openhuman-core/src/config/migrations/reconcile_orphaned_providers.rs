@@ -108,7 +108,9 @@ pub fn run(config: &mut Config) -> anyhow::Result<MigrationStats> {
         // lmstudio:, mlx:, omlx:, local-openai:) resolve without a
         // cloud_providers entry — leave them alone. Keep this in sync with the
         // local provider prefixes the factory accepts.
-        if s.is_empty()
+        // Only embeddings accept `none` as an explicit opt-out.
+        if (workload == "embeddings" && s == "none")
+            || s.is_empty()
             || s == "cloud"
             || s == PROVIDER_OPENHUMAN
             || s.starts_with(OLLAMA_PROVIDER_PREFIX)
@@ -180,7 +182,7 @@ pub fn run(config: &mut Config) -> anyhow::Result<MigrationStats> {
 /// can't enforce this at compile time without a field-reflection macro, and a
 /// serde-based count guard doesn't work because the `Option<String>` fields
 /// default to `None` and are omitted from the serialized table.
-fn workload_fields(config: &mut Config) -> [(&'static str, &mut Option<String>); 10] {
+fn workload_fields(config: &mut Config) -> [(&'static str, &mut Option<String>); 7] {
     [
         ("chat", &mut config.chat_provider),
         ("reasoning", &mut config.reasoning_provider),
@@ -189,9 +191,6 @@ fn workload_fields(config: &mut Config) -> [(&'static str, &mut Option<String>);
         ("vision", &mut config.vision_provider),
         ("memory", &mut config.memory_provider),
         ("embeddings", &mut config.embeddings_provider),
-        ("heartbeat", &mut config.heartbeat_provider),
-        ("learning", &mut config.learning_provider),
-        ("subconscious", &mut config.subconscious_provider),
     ]
 }
 

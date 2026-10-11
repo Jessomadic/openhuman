@@ -1,7 +1,7 @@
 /**
  * Cross-platform WebView element helpers for E2E tests.
  *
- * Two backends are supported:
+ * Desktop backends and the Playwright web harness are supported:
  *
  * ## Appium Mac2 (macOS)
  * The mac2 driver exposes WKWebView content through the macOS accessibility
@@ -17,6 +17,7 @@
  * - `browser.execute()` runs JS inside the WebView
  * - `browser.getPageSource()` returns HTML (not accessibility XML)
  */
+import type { Page } from '@playwright/test';
 import type { ChainablePromiseElement } from 'webdriverio';
 
 import { isTauriDriver } from './platform';
@@ -66,17 +67,17 @@ function xpathContainsText(text: string): string {
  * is only called from the Mac2 code path.
  */
 async function clickAtElement(el: ChainablePromiseElement): Promise<void> {
+  try {
+    await browser.execute(
+      (element: HTMLElement) => element.scrollIntoView({ block: 'center', behavior: 'instant' }),
+      el as unknown as HTMLElement
+    );
+    await browser.pause(200);
+  } catch {
+    // The element may have been detached while the click was being prepared.
+  }
+
   if (isTauriDriver()) {
-    // Scroll element into view first — webkit2gtk may not auto-scroll
-    try {
-      await browser.execute(
-        (e: HTMLElement) => e.scrollIntoView({ block: 'center', behavior: 'instant' }),
-        el as unknown as HTMLElement
-      );
-      await browser.pause(200);
-    } catch {
-      // scrollIntoView may fail if element is detached
-    }
     // Use JS click directly on tauri-driver — bypasses "element not interactable"
     // and "element click intercepted" errors that WebDriver click triggers
     // (WDIO retries WebDriver clicks 3 times internally before reaching catch,
@@ -95,20 +96,28 @@ async function clickAtElement(el: ChainablePromiseElement): Promise<void> {
   const centerX = Math.round(location.x + size.width / 2);
   const centerY = Math.round(location.y + size.height / 2);
 
-  await browser.performActions([
-    {
-      type: 'pointer',
-      id: 'mouse1',
-      parameters: { pointerType: 'mouse' },
-      actions: [
-        { type: 'pointerMove', duration: 10, x: centerX, y: centerY },
-        { type: 'pointerDown', button: 0 },
-        { type: 'pause', duration: 50 },
-        { type: 'pointerUp', button: 0 },
-      ],
-    },
-  ]);
-  await browser.releaseActions();
+  try {
+    await browser.performActions([
+      {
+        type: 'pointer',
+        id: 'mouse1',
+        parameters: { pointerType: 'mouse' },
+        actions: [
+          { type: 'pointerMove', duration: 10, x: centerX, y: centerY },
+          { type: 'pointerDown', button: 0 },
+          { type: 'pause', duration: 50 },
+          { type: 'pointerUp', button: 0 },
+        ],
+      },
+    ]);
+  } finally {
+    await browser.releaseActions();
+  }
+}
+
+/** Click an existing element through the shared cross-platform click path. */
+export async function clickElement(el: ChainablePromiseElement): Promise<void> {
+  await clickAtElement(el);
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +365,10 @@ function testIdSelector(testId: string): string {
   return `[data-testid="${testId}"]`;
 }
 
+function dataSlotSelector(slot: string): string {
+  return `[data-slot="${slot}"]`;
+}
+
 /**
  * Wait for an element by stable `data-testid`.
  *
@@ -381,6 +394,122 @@ export async function waitForTestId(
   return el;
 }
 
+/** Wait until a selector is absent from the DOM. */
+export async function waitForElementAbsence(
+  selector: string,
+  timeout: number = 15_000
+): Promise<void> {
+  const activeSelector =
+    !isTauriDriver() && selector.startsWith('[data-testid="')
+      ? `//*[@data-testid=${xpathStringLiteral(selector.slice('[data-testid="'.length, -2))}]`
+      : selector;
+  await browser.waitUntil(async () => !(await browser.$(activeSelector).isExisting()), {
+    timeout,
+    timeoutMsg: `Element ${activeSelector} remained present after ${timeout}ms`,
+  });
+}
+
+/** Read the checked state of a settings switch by its accessible label. */
+export async function getSwitchCheckedByLabel(
+  testId: string,
+  label: string,
+  timeout: number = 15_000
+): Promise<boolean> {
+  const literal = xpathStringLiteral(label);
+  const selector = isTauriDriver()
+    ? `[data-testid="${testId}"]`
+    : `//XCUIElementTypeSwitch[contains(@label, ${literal}) or contains(@title, ${literal})]`;
+  const element = await browser.$(selector);
+  await element.waitForExist({ timeout, timeoutMsg: `Switch "${label}" was not found` });
+  if (isTauriDriver()) return (await element.getAttribute('aria-checked')) === 'true';
+  const value = await element.getAttribute('value');
+  return value === '1' || value === 'true' || (await element.isSelected());
+}
+
+/** Toggle a settings switch through its accessible label. */
+export async function toggleSwitchByLabel(
+  testId: string,
+  label: string,
+  timeout: number = 15_000
+): Promise<void> {
+  const literal = xpathStringLiteral(label);
+  const selector = isTauriDriver()
+    ? `[data-testid="${testId}"]`
+    : `//XCUIElementTypeSwitch[contains(@label, ${literal}) or contains(@title, ${literal})]`;
+  const element = await browser.$(selector);
+  await element.waitForExist({ timeout, timeoutMsg: `Switch "${label}" was not found` });
+  await clickAtElement(element);
+}
+
+/** Read an attribute from a stable test id. */
+export async function getAttributeByTestId(
+  testId: string,
+  attribute: string,
+  timeout: number = 15_000
+): Promise<string | null> {
+  const element = await waitForTestId(testId, timeout);
+  return element.getAttribute(attribute);
+}
+
+/**
+ * Wait for an element by its stable assistant-ui data slot.
+ *
+ * Like test IDs, data slots are exposed by the DOM-backed tauri driver only.
+ */
+export async function waitForDataSlot(
+  slot: string,
+  timeout: number = 15_000
+): Promise<ChainablePromiseElement> {
+  if (!isTauriDriver()) {
+    throw new Error(`waitForDataSlot is only supported on tauri-driver: ${slot}`);
+  }
+
+  const selector = dataSlotSelector(slot);
+  const el = await browser.$(selector);
+  await el.waitForExist({
+    timeout,
+    timeoutMsg: `data-slot="${slot}" not found within ${timeout}ms`,
+  });
+  return el;
+}
+
+/**
+ * Dispatch a browser file drag sequence against an element.
+ *
+ * WebDriver cannot hand the desktop webview an operating-system drag source,
+ * but constructing a `DataTransfer` in the renderer gives the application the
+ * same `FileList` and `DataTransferItemList` shape its HTML drag handlers
+ * consume. Keep this here so specs do not reach around the cross-platform
+ * element helper boundary with raw DOM queries.
+ */
+export async function dispatchFileDrop(
+  target: ChainablePromiseElement,
+  file: { name: string; type: string; contents: string }
+): Promise<{ dragOverPrevented: boolean; dropPrevented: boolean; fileCount: number }> {
+  return browser.execute(
+    (element: HTMLElement, droppedFile: { name: string; type: string; contents: string }) => {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(
+        new File([droppedFile.contents], droppedFile.name, { type: droppedFile.type })
+      );
+
+      const dispatch = (type: 'dragover' | 'drop') => {
+        const event = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer });
+        element.dispatchEvent(event);
+        return event.defaultPrevented;
+      };
+
+      return {
+        dragOverPrevented: dispatch('dragover'),
+        dropPrevented: dispatch('drop'),
+        fileCount: dataTransfer.files.length,
+      };
+    },
+    target as unknown as HTMLElement,
+    file
+  );
+}
+
 /**
  * Wait for an element by stable `data-testid`, then click it.
  */
@@ -390,6 +519,101 @@ export async function clickTestId(
 ): Promise<ChainablePromiseElement> {
   const el = await waitForTestId(testId, timeout);
   await clickAtElement(el);
+  return el;
+}
+
+/** Set an input value through a stable test id in DOM-backed E2E runs. */
+export async function setValueByTestId(
+  testId: string,
+  value: string,
+  timeout: number = 15_000
+): Promise<ChainablePromiseElement> {
+  const el = await waitForTestId(testId, timeout);
+  await el.setValue(value);
+  return el;
+}
+
+/** Click a test id in DOM-backed runs or its visible text on Mac2. */
+export async function clickTestIdOrText(
+  testId: string,
+  text: string,
+  timeout: number = 15_000
+): Promise<ChainablePromiseElement> {
+  return isTauriDriver() ? clickTestId(testId, timeout) : clickText(text, timeout);
+}
+
+/** Click a tool activity group trigger by its visible count label and position. */
+export async function clickToolGroupTrigger(
+  index: number,
+  label: string,
+  timeout: number = 15_000
+): Promise<void> {
+  const literal = xpathStringLiteral(label);
+  const matches = `//XCUIElementTypeButton[contains(@label, ${literal}) or contains(@value, ${literal}) or contains(@title, ${literal})]`;
+  let trigger: ChainablePromiseElement;
+  if (isTauriDriver()) {
+    const selector = '[data-slot="tool-group-root"] [data-slot="tool-group-trigger"]';
+    let matchingTriggers: ChainablePromiseElement[] = [];
+    await browser.waitUntil(
+      async () => {
+        matchingTriggers = [];
+        // Index rather than iterate: the element array's index signature is typed
+        // `ChainablePromiseElement`, its iterator `WebdriverIO.Element` (same objects).
+        const candidates = await browser.$$(selector);
+        const count = await candidates.length;
+        for (let i = 0; i < count; i++) {
+          const candidate = candidates[i]!;
+          if ((await candidate.getText()).includes(label)) matchingTriggers.push(candidate);
+        }
+        return matchingTriggers.length > index;
+      },
+      { timeout, timeoutMsg: `Tool group trigger ${index + 1} (${label}) was not found` }
+    );
+    trigger = matchingTriggers[index]!;
+  } else {
+    trigger = await browser.$(`(${matches})[${index + 1}]`);
+  }
+  await trigger.waitForExist({ timeout, timeoutMsg: `Tool group trigger "${label}" not found` });
+  await clickAtElement(trigger);
+}
+
+/** Click a test id with a physical pointer sequence. Use for controls, such as
+ * Radix menu triggers, that listen for pointerdown instead of a synthetic click.
+ */
+export async function clickTestIdWithPointer(
+  testId: string,
+  timeout: number = 15_000
+): Promise<ChainablePromiseElement> {
+  const el = await waitForTestId(testId, timeout);
+  await browser.execute(
+    (element: HTMLElement) => element.scrollIntoView({ block: 'center', behavior: 'instant' }),
+    el as unknown as HTMLElement
+  );
+  await browser.pause(200);
+  const location = await el.getLocation();
+  const size = await el.getSize();
+  try {
+    await browser.performActions([
+      {
+        type: 'pointer',
+        id: 'mouse1',
+        parameters: { pointerType: 'mouse' },
+        actions: [
+          {
+            type: 'pointerMove',
+            duration: 10,
+            x: Math.round(location.x + size.width / 2),
+            y: Math.round(location.y + size.height / 2),
+          },
+          { type: 'pointerDown', button: 0 },
+          { type: 'pause', duration: 50 },
+          { type: 'pointerUp', button: 0 },
+        ],
+      },
+    ]);
+  } finally {
+    await browser.releaseActions();
+  }
   return el;
 }
 
@@ -470,4 +694,40 @@ export async function dumpAccessibilityTree(): Promise<string> {
   } catch (err: unknown) {
     return `[dumpAccessibilityTree] Failed: ${err}`;
   }
+}
+
+// Playwright web-lane adapter. Keep platform locator types and locale-storage
+// decoding here so web specs use the same shared element-helper boundary.
+export type BrowserPage = Page;
+
+export function browserElements(page: BrowserPage) {
+  const language = (name: string) => page.getByRole('combobox', { name, exact: true });
+  return {
+    textbox: (name: string) => page.getByRole('textbox', { name, exact: true }),
+    button: (name: string) => page.getByRole('button', { name, exact: true }),
+    testId: (id: string) => page.getByTestId(id),
+    slot: (slot: string) => page.locator(`[data-slot="${slot}"]`),
+    language,
+    selectLanguage: (name: string, value: string | { label: string }) =>
+      language(name).selectOption(value),
+    document: page.locator('html'),
+    chatTab: page.locator('[data-walkthrough="tab-chat"]'),
+    text: (value: string) => page.getByText(value, { exact: true }),
+  };
+}
+
+export async function persistedBrowserLocale(page: BrowserPage): Promise<string | null> {
+  return page.evaluate(() => {
+    const raw = localStorage.getItem('persist:locale');
+    if (!raw) return null;
+    try {
+      // Redux Persist JSON-encodes each reducer property inside its outer JSON.
+      const persisted = JSON.parse(raw) as { current?: string };
+      if (!persisted.current) return null;
+      const locale = JSON.parse(persisted.current);
+      return typeof locale === 'string' ? locale : null;
+    } catch {
+      return null;
+    }
+  });
 }

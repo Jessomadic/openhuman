@@ -52,8 +52,7 @@ pub fn local_trigger_origin() -> AgentTurnOrigin {
 /// openhuman#5746.
 ///
 /// Explicitly not [`AgentTurnOrigin::Cli`]: that would hand a full trust root,
-/// with no audit row, to attacker-influenceable content — the posture
-/// [`TrustedAutomationSource::SubconsciousTainted`] exists to prevent.
+/// with no audit row, to attacker-influenceable content.
 ///
 /// `job_id` is the envelope's kind slug and correlation id, which is what an
 /// operator reading a pending row needs to find the trigger. Both are

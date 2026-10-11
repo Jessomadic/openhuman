@@ -52,7 +52,7 @@ const TOOL_FAMILIES: &[ToolFamily] = &[
     },
     ToolFamily {
         id: "file_write",
-        rust_names: &["file_write", "update_memory_md"],
+        rust_names: &["file_write"],
         default_enabled: true,
     },
     ToolFamily {
@@ -77,22 +77,12 @@ const TOOL_FAMILIES: &[ToolFamily] = &[
     },
     ToolFamily {
         id: "web_search",
-        rust_names: &["web_search_tool"],
+        rust_names: &["web_search_tool", "web_answer_tool", "web_contents_tool"],
         default_enabled: true,
     },
     ToolFamily {
-        id: "memory_store",
-        rust_names: &["memory_store"],
-        default_enabled: true,
-    },
-    ToolFamily {
-        id: "memory_recall",
-        rust_names: &["memory_recall"],
-        default_enabled: true,
-    },
-    ToolFamily {
-        id: "memory_forget",
-        rust_names: &["memory_forget"],
+        id: "memory",
+        rust_names: &["memory"],
         default_enabled: true,
     },
     ToolFamily {
@@ -167,20 +157,6 @@ const TOOL_FAMILIES: &[ToolFamily] = &[
             "workspace_update_persona",
             "workspace_reset_persona",
             "workspace_init",
-        ],
-        default_enabled: false,
-    },
-    ToolFamily {
-        id: "learning_manage",
-        rust_names: &[
-            "learning_update_facet",
-            "learning_pin_facet",
-            "learning_unpin_facet",
-            "learning_forget_facet",
-            "learning_rebuild_cache",
-            "learning_reset_cache",
-            "learning_save_profile",
-            "learning_enrich_profile",
         ],
         default_enabled: false,
     },

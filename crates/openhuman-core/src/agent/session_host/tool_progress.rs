@@ -122,7 +122,8 @@ impl ProgressReporter for TurnProgress {
                 input_tokens: cost.input_tokens,
                 output_tokens: cost.output_tokens,
                 cached_input_tokens: cost.cached_input_tokens,
-                total_usd: cost.total_usd(),
+                // Known spend so far; an unpriced call adds nothing to it.
+                total_usd: cost.cost.known_usd,
             };
             emit(sink, event);
         }
@@ -130,7 +131,13 @@ impl ProgressReporter for TurnProgress {
 
     async fn turn_completed(&self, iterations: u32) {
         if let Some(ref sink) = self.sink {
-            emit(sink, AgentProgress::TurnCompleted { iterations });
+            emit(
+                sink,
+                AgentProgress::TurnCompleted {
+                    iterations,
+                    stop: None,
+                },
+            );
         }
     }
 
@@ -183,6 +190,12 @@ impl ProgressReporter for TurnProgress {
                     elapsed_ms,
                     iteration,
                     failure: None,
+                    // The legacy reporter path has no live tool registry or
+                    // captured `ToolResult` to recompute a label or read
+                    // structured metadata from.
+                    display_label: None,
+                    display_detail: None,
+                    structured: None,
                 },
             );
         }

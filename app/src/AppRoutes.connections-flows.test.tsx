@@ -2,18 +2,16 @@
  * Route-table coverage for the connections / channels / flows / automation
  * surfaces.
  *
- * WHY THIS FILE EXISTS, given `pages/__tests__/Connections.redirects.test.tsx`
- * already claims to cover two of these redirects:
- *
- * That file declares its **own** local `<TestRoutes>` copy of three routes and
- * renders that, so it asserts React Router's `<Navigate>` works rather than
- * asserting anything about this app's route table. Deleting `/skills` from
- * `AppRoutes.tsx` leaves it green. It also never inspects the landing URL,
- * which is the entire payload of the `/channels` redirect.
- *
  * This file mounts the REAL `AppRoutes` (same mocking pattern as
  * `AppRoutes.auth.test.tsx`) and asserts the landing `pathname + search`, so a
  * change to the route table is what makes it fail.
+ *
+ * It replaced a suite that declared its own local `<TestRoutes>` copy of three
+ * routes and rendered that, which asserted React Router's `<Navigate>` works
+ * rather than anything about this app's table: deleting `/skills` or
+ * `/channels` from `AppRoutes.tsx` left it green (#5915). Assert against the
+ * real table, and assert the landing URL rather than only that a page
+ * rendered — the URL is the entire payload of the `/channels` redirect.
  */
 import { render, screen } from '@testing-library/react';
 import type React from 'react';
@@ -35,7 +33,7 @@ vi.mock('./components/DefaultRedirect', () => ({
 vi.mock('./AppRoutesIOS', () => ({ default: () => <div /> }));
 vi.mock('./features/human/HumanPage', () => ({ default: () => <div /> }));
 vi.mock('./pages/Accounts', () => ({ default: () => <div /> }));
-vi.mock('./pages/Brain', () => ({ default: () => <div /> }));
+vi.mock('./pages/Memory', () => ({ default: () => <div /> }));
 vi.mock('./pages/dev/AgentInsightsPreview', () => ({ default: () => <div /> }));
 vi.mock('./pages/dev/assistant-ui-demo', () => ({ default: () => <div /> }));
 vi.mock('./pages/dev/UiGallery', () => ({ default: () => <div /> }));
@@ -103,9 +101,8 @@ describe('connections / channels back-compat redirects (real route table)', () =
   it('/channels lands on /connections?tab=messaging, preserving the tab selector', () => {
     // The whole point of this redirect: `/channels` was an orphaned standalone
     // page, and the messaging tab of Connections replaced it. Landing on bare
-    // `/connections` would drop the user on the Welcome tab instead — which is
-    // exactly what `Connections.redirects.test.tsx` cannot distinguish, because
-    // it only asserts that the page rendered.
+    // `/connections` would drop the user on the Welcome tab instead — which a
+    // test that only asserts the page rendered cannot distinguish.
     const at = renderAt('/channels');
     expect(at.href()).toBe('/connections?tab=messaging');
     expect(at.page()).toBe('connections');

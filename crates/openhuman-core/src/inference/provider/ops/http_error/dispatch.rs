@@ -74,7 +74,7 @@ pub async fn api_error(provider: &str, response: reqwest::Response) -> anyhow::E
     // wraps its 402 inside a 500 envelope (TAURI-RUST-C9A), so match the body
     // directly rather than gating on a 402 status (which the credits matcher
     // below does). The user's third-party plan quota is spent — no local lever.
-    let is_quota_exhausted = is_provider_quota_exhausted(&body);
+    let is_quota_exhausted = body_indicates_quota_exhausted(&body);
     // F4/F2: any managed-backend response carrying a stable `errorCode` is
     // backend-owned — it already paged or is expected user-state — so the FE
     // must not double-report. The one exception (malformed `BAD_REQUEST`) is

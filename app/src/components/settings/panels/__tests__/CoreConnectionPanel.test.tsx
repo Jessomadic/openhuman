@@ -12,6 +12,7 @@ import { renderWithProviders } from '../../../../test/test-utils';
 
 const hoisted = vi.hoisted(() => ({
   testCoreRpcConnection: vi.fn(),
+  probeCoreRealtime: vi.fn(),
   clearCoreRpcUrlCache: vi.fn(),
   clearCoreRpcTokenCache: vi.fn(),
   restartApp: vi.fn(),
@@ -23,6 +24,7 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock('../../../../services/coreRpcClient', () => ({
   testCoreRpcConnection: hoisted.testCoreRpcConnection,
+  probeCoreRealtime: hoisted.probeCoreRealtime,
   clearCoreRpcUrlCache: hoisted.clearCoreRpcUrlCache,
   clearCoreRpcTokenCache: hoisted.clearCoreRpcTokenCache,
 }));
@@ -60,6 +62,8 @@ describe('CoreConnectionPanel', () => {
   beforeEach(() => {
     vi.resetModules();
     hoisted.testCoreRpcConnection.mockReset();
+    hoisted.probeCoreRealtime.mockReset();
+    hoisted.probeCoreRealtime.mockResolvedValue('ok');
     hoisted.clearCoreRpcUrlCache.mockReset();
     hoisted.clearCoreRpcTokenCache.mockReset();
     hoisted.restartApp.mockReset();
@@ -78,7 +82,7 @@ describe('CoreConnectionPanel', () => {
 
     await waitFor(() => expect(screen.getByText('Connected to local core')).toBeInTheDocument());
     // Remote toggle is off in local mode → no URL field.
-    expect(screen.queryByLabelText(/Runtime URL/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Address/i)).not.toBeInTheDocument();
   });
 
   test('cloud mode surfaces the remote URL and remote connected status', async () => {
@@ -117,12 +121,10 @@ describe('CoreConnectionPanel', () => {
     // Flip the remote toggle on to reveal the form.
     fireEvent.click(screen.getByTestId('core-use-remote-toggle'));
 
-    fireEvent.change(screen.getByLabelText(/Runtime URL/i), {
+    fireEvent.change(screen.getByLabelText(/Address/i), {
       target: { value: 'https://core.example.com/rpc' },
     });
-    fireEvent.change(screen.getByLabelText(/Auth Token/i), {
-      target: { value: 'remote-token-xyz' },
-    });
+    fireEvent.change(screen.getByLabelText(/^Token/i), { target: { value: 'remote-token-xyz' } });
 
     fireEvent.click(screen.getByTestId('core-save-btn'));
 
@@ -174,6 +176,21 @@ describe('CoreConnectionPanel', () => {
     await waitFor(() => expect(screen.getByTestId('core-test-ok')).toBeInTheDocument());
   });
 
+  test('Test connection flags a core that has realtime (Socket.IO) disabled', async () => {
+    hoisted.testCoreRpcConnection.mockResolvedValue(okResponse());
+    hoisted.probeCoreRealtime.mockResolvedValue('disabled');
+    const Panel = await importPanel();
+    renderWithProviders(<Panel />, { preloadedState: CLOUD_STATE });
+
+    await waitFor(() => expect(screen.getByText('Connected to remote core')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Test Connection'));
+    await waitFor(() =>
+      expect(screen.getByTestId('core-test-socket-disabled')).toHaveTextContent('--jsonrpc-only')
+    );
+    expect(screen.queryByTestId('core-test-ok')).not.toBeInTheDocument();
+  });
+
   test('Test connection reports an auth failure', async () => {
     hoisted.testCoreRpcConnection.mockResolvedValue(statusResponse(403));
     const Panel = await importPanel();
@@ -203,10 +220,10 @@ describe('CoreConnectionPanel', () => {
 
     // Empty URL → invalid-URL error.
     fireEvent.click(screen.getByText('Test Connection'));
-    await waitFor(() => expect(screen.getByText(/enter a runtime URL/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/enter an address/i)).toBeInTheDocument());
 
     // Valid URL but empty token → token-required error.
-    fireEvent.change(screen.getByLabelText(/Runtime URL/i), {
+    fireEvent.change(screen.getByLabelText(/Address/i), {
       target: { value: 'https://core.example.com/rpc' },
     });
     fireEvent.click(screen.getByText('Test Connection'));

@@ -1,7 +1,7 @@
 // [settings] Developer & Diagnostics panel — debug-only entries only.
 // User-facing routes (agents, autonomy, agent-access, sandbox-settings,
 // activity-level, tools, voice, embeddings,
-// heartbeat, ledger-usage, cost-dashboard, task-sources, composio-routing,
+// ledger-usage, cost-dashboard, task-sources, composio-routing,
 // webhooks-triggers, migration, security) have been moved to their canonical
 // section pages. Only genuine diagnostics remain here.
 import { type ReactNode, useEffect, useState } from 'react';
@@ -52,7 +52,7 @@ interface DevGroup {
 //   → Settings → Agents
 //   tools
 //   → Settings → Features
-//   voice, embeddings, heartbeat, ledger-usage, cost-dashboard
+//   voice, embeddings, ledger-usage, cost-dashboard
 //   → Settings → AI & Models
 //   task-sources, composio-routing, webhooks-triggers
 //   → Settings → Integrations
@@ -160,22 +160,6 @@ const diagnosticsLogsGroup: DevGroup = {
             strokeLinejoin="round"
             strokeWidth={2}
             d="M4 6h16M4 10h16M4 14h16M4 18h16"
-          />
-        </svg>
-      ),
-    },
-    {
-      id: 'build-info',
-      titleKey: 'settings.buildInfo.title',
-      descriptionKey: 'settings.buildInfo.menuDesc',
-      route: 'about',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
           />
         </svg>
       ),

@@ -21,13 +21,10 @@
  * VoicePanel.
  *
  */
+import { Keyboard, X } from 'lucide-react';
 import { useCallback, useState } from 'react';
 
-import {
-  SettingsRow,
-  SettingsSection,
-  SettingsSwitch,
-} from '../../../components/settings/controls';
+import { Button, Card, Field, Switch } from '../../../components/ui';
 import { useT } from '../../../lib/i18n/I18nContext';
 import { useAppDispatch, useAppSelector } from '../../../store/hooks';
 import {
@@ -169,22 +166,24 @@ const PttSettingsPanel = () => {
   }, [dispatch, showOverlay]);
 
   return (
-    <section className="space-y-3" data-testid="ptt-settings-panel">
-      <SettingsSection>
-        <SettingsRow
-          stacked
-          label={t('pttSettings.title')}
-          description={t('pttSettings.description')}
-          control={null}
-        />
-
-        {/* Hotkey capture */}
-        <SettingsRow
-          stacked
-          label={t('pttSettings.shortcutLabel')}
-          control={
-            <div className="space-y-1">
+    <Card
+      title={t('pttSettings.title')}
+      description={t('pttSettings.description')}
+      data-testid="ptt-settings-panel">
+      {/* Hotkey capture: focus the field and press the key combination. */}
+      <div className="space-y-2 px-4 py-3">
+        <div className="flex items-center justify-between gap-4">
+          <label htmlFor="ptt-shortcut-input" className="text-sm font-medium text-content">
+            {t('pttSettings.shortcutLabel')}
+          </label>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Keyboard
+                className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-content-faint"
+                aria-hidden
+              />
               <input
+                id="ptt-shortcut-input"
                 data-testid="ptt-shortcut-input"
                 type="text"
                 readOnly
@@ -193,65 +192,75 @@ const PttSettingsPanel = () => {
                 aria-label={t('pttSettings.shortcutLabel')}
                 onKeyDown={handleShortcutKeyDown}
                 onFocus={() => setCaptureError(null)}
-                className="w-full rounded-md border border-line-strong bg-surface px-3 py-2 text-sm text-content placeholder:text-content-faint focus:outline-hidden focus:ring-1 focus:ring-primary-400"
+                className="h-8 w-56 rounded-md border border-line-strong bg-surface pl-8 pr-3 font-mono text-sm text-content placeholder:font-sans placeholder:text-content-faint focus:outline-hidden focus:ring-2 focus:ring-primary-500/25"
               />
-              {!shortcut && !captureError && (
-                <p
-                  className="text-[11px] text-content-muted mt-0.5"
-                  data-testid="ptt-shortcut-unset-hint">
-                  {t('pttSettings.shortcutUnsetHint')}
-                </p>
-              )}
-              {captureError && (
-                <p
-                  className="text-[11px] text-red-600 dark:text-red-300 mt-0.5"
-                  data-testid="ptt-shortcut-error">
-                  {captureError}
-                </p>
-              )}
-              {!captureError && registrationError && (
-                <p
-                  role="alert"
-                  className="mt-1 text-xs text-red-600 dark:text-red-400"
-                  data-testid="ptt-registration-error">
-                  {localizedRegistrationError(registrationError, t)}
-                </p>
-              )}
             </div>
-          }
-        />
+            {shortcut && (
+              <Button
+                type="button"
+                variant="tertiary"
+                size="sm"
+                aria-label={t('pttSettings.clearShortcut')}
+                leadingIcon={<X className="h-3.5 w-3.5" aria-hidden />}
+                onClick={() => {
+                  setCaptureError(null);
+                  dispatch(setPttShortcut(null));
+                }}>
+                {t('pttSettings.clearShortcut')}
+              </Button>
+            )}
+          </div>
+        </div>
+        {!shortcut && !captureError && (
+          <p className="text-xs text-content-muted" data-testid="ptt-shortcut-unset-hint">
+            {t('pttSettings.shortcutUnsetHint')}
+          </p>
+        )}
+        {captureError && (
+          <p
+            className="text-xs text-coral-600 dark:text-coral-300"
+            data-testid="ptt-shortcut-error">
+            {captureError}
+          </p>
+        )}
+        {!captureError && registrationError && (
+          <p
+            role="alert"
+            className="text-xs text-coral-600 dark:text-coral-300"
+            data-testid="ptt-registration-error">
+            {localizedRegistrationError(registrationError, t)}
+          </p>
+        )}
+      </div>
 
-        {/* Speak replies switch */}
-        <SettingsRow
-          htmlFor="switch-speak-replies"
-          label={t('pttSettings.speakRepliesLabel')}
-          control={
-            <SettingsSwitch
-              id="switch-speak-replies"
-              checked={speakReplies}
-              onCheckedChange={toggleSpeakReplies}
-              aria-label={t('pttSettings.speakRepliesLabel')}
-              data-testid="ptt-speak-replies-switch"
-            />
-          }
-        />
+      <Field
+        htmlFor="switch-speak-replies"
+        label={t('pttSettings.speakRepliesLabel')}
+        control={
+          <Switch
+            id="switch-speak-replies"
+            checked={speakReplies}
+            onCheckedChange={toggleSpeakReplies}
+            aria-label={t('pttSettings.speakRepliesLabel')}
+            data-testid="ptt-speak-replies-switch"
+          />
+        }
+      />
 
-        {/* Show overlay switch */}
-        <SettingsRow
-          htmlFor="switch-show-overlay"
-          label={t('pttSettings.showOverlayLabel')}
-          control={
-            <SettingsSwitch
-              id="switch-show-overlay"
-              checked={showOverlay}
-              onCheckedChange={toggleShowOverlay}
-              aria-label={t('pttSettings.showOverlayLabel')}
-              data-testid="ptt-show-overlay-switch"
-            />
-          }
-        />
-      </SettingsSection>
-    </section>
+      <Field
+        htmlFor="switch-show-overlay"
+        label={t('pttSettings.showOverlayLabel')}
+        control={
+          <Switch
+            id="switch-show-overlay"
+            checked={showOverlay}
+            onCheckedChange={toggleShowOverlay}
+            aria-label={t('pttSettings.showOverlayLabel')}
+            data-testid="ptt-show-overlay-switch"
+          />
+        }
+      />
+    </Card>
   );
 };
 

@@ -12,6 +12,14 @@ const themeState = {
   customThemes: [],
 };
 
+/** Colour/section cards are always rendered (no accordion) — find one by group id. */
+function colorInputIn(cardTestId: string): HTMLInputElement {
+  const card = screen.getByTestId(cardTestId);
+  const input = card.querySelector('input[type="color"]');
+  expect(input).not.toBeNull();
+  return input as HTMLInputElement;
+}
+
 describe('<ThemeStudioPanel />', () => {
   it('renders the family gallery', () => {
     renderWithProviders(<ThemeStudioPanel />, {
@@ -25,6 +33,18 @@ describe('<ThemeStudioPanel />', () => {
     expect(screen.getByText('HAL 9000')).toBeInTheDocument();
   });
 
+  it('renders the gallery and the customizer together — no separate embedded parts', () => {
+    // The gallery/customizer split into `embedded`/`part` props (for hosting
+    // just one half elsewhere) was removed with Theme Studio's move to its
+    // own standalone route: both always render together now.
+    renderWithProviders(<ThemeStudioPanel />, {
+      preloadedState: { theme: themeState },
+      initialEntries: ['/settings/theme'],
+    });
+    expect(screen.getByTestId('theme-gallery')).toBeInTheDocument();
+    expect(screen.getByTestId('theme-customize')).toBeInTheDocument();
+  });
+
   it('auto-forks a custom theme when a preset colour is edited', () => {
     const { store } = renderWithProviders(<ThemeStudioPanel />, {
       preloadedState: { theme: themeState },
@@ -33,8 +53,7 @@ describe('<ThemeStudioPanel />', () => {
 
     expect(store.getState().theme.customThemes).toHaveLength(0);
     // Editing a colour on a preset transparently forks a custom theme.
-    const colorInput = document.querySelector('input[type="color"]') as HTMLInputElement;
-    expect(colorInput).not.toBeNull();
+    const colorInput = colorInputIn('theme-card-surfaces');
     fireEvent.input(colorInput, { target: { value: '#ff0000' } });
 
     const { customThemes, activeThemeId } = store.getState().theme;
@@ -48,9 +67,10 @@ describe('<ThemeStudioPanel />', () => {
       preloadedState: { theme: themeState },
       initialEntries: ['/settings/theme'],
     });
+    const card = screen.getByTestId('theme-card-surfaces');
     // No disabled colour inputs — editing is always available.
-    expect(document.querySelector('input[type="color"]:not([disabled])')).not.toBeNull();
-    expect(document.querySelector('input[type="color"][disabled]')).toBeNull();
+    expect(card.querySelector('input[type="color"]:not([disabled])')).not.toBeNull();
+    expect(card.querySelector('input[type="color"][disabled]')).toBeNull();
   });
 
   it('preserves gradient and backdrop settings from imported themes', () => {
@@ -68,7 +88,7 @@ describe('<ThemeStudioPanel />', () => {
       backdrop: { kind: 'image', imageUrl: 'https://example.com/bg.jpg' },
     };
 
-    fireEvent.change(screen.getByLabelText('Import theme'), {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import theme' }), {
       target: { value: JSON.stringify(imported) },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Import' }));
@@ -103,7 +123,7 @@ describe('<ThemeStudioPanel />', () => {
       initialEntries: ['/settings/theme'],
     });
 
-    fireEvent.change(screen.getByLabelText('Import theme'), {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import theme' }), {
       target: { value: JSON.stringify({ name: 'Malformed', isDark: false, colors }) },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Import' }));
@@ -118,7 +138,7 @@ describe('<ThemeStudioPanel />', () => {
       initialEntries: ['/settings/theme'],
     });
 
-    fireEvent.change(screen.getByLabelText('Import theme'), {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import theme' }), {
       target: {
         value: JSON.stringify({ name: 'Minimal', isDark: false, colors: { surface: '1 2 3' } }),
       },
@@ -143,7 +163,7 @@ describe('<ThemeStudioPanel />', () => {
       initialEntries: ['/settings/theme'],
     });
 
-    fireEvent.change(screen.getByLabelText('Import theme'), {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Import theme' }), {
       target: {
         value: JSON.stringify({ name: 'Inherits base', isDark: true, colors: {}, fonts: {} }),
       },

@@ -1,13 +1,10 @@
 import debug from 'debug';
+import { ArrowRight, AudioLines } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { cn } from '../../../lib/cn';
 import { useT } from '../../../lib/i18n/I18nContext';
 import PttSettingsPanel from '../../../pages/settings/voice/PttSettingsPanel';
-import {
-  installPiper,
-  piperInstallStatus,
-  type VoiceInstallStatus,
-} from '../../../services/api/voiceInstallApi';
 import {
   clearVoiceProviderKey,
   loadVoiceSettings,
@@ -27,9 +24,8 @@ import {
   type VoiceStatus,
 } from '../../../utils/tauriCommands';
 import PanelPage from '../../layout/PanelPage';
-import { Button } from '../../ui';
+import { Button, Card, Field, StatusLine, Switch } from '../../ui';
 import SettingsBackButton from '../components/SettingsBackButton';
-import { SettingsRow, SettingsSection, SettingsStatusLine, SettingsSwitch } from '../controls';
 import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
 import VoicePanelKeyModal from './VoicePanelKeyModal';
 import VoicePanelProviderChips, { BUILTIN_VOICE_PROVIDER_META } from './VoicePanelProviderChips';
@@ -52,7 +48,6 @@ const PIPER_VOICE_PRESET_IDS = [
   'en_GB-northern_english_male-medium',
 ] as const;
 
-const LOCAL_INSTALL_STATUS_POLL_MS = 2_000;
 const log = debug('voice:settings');
 
 interface VoicePanelProps {
@@ -80,8 +75,7 @@ const VoicePanel = ({ embedded = false, scrollable = true }: VoicePanelProps = {
   const [ttsVoice, setTtsVoice] = useState<string>('');
   const [elevenlabsVoiceId, setElevenlabsVoiceId] = useState<string>('JBFqnCBsd6RMkjVDRZzb');
   const [isSavingProviders, setIsSavingProviders] = useState(false);
-  const [piperInstall, setPiperInstall] = useState<VoiceInstallStatus | null>(null);
-  const [isInstallingPiper, setIsInstallingPiper] = useState(false);
+  const [isCheckingPiper, setIsCheckingPiper] = useState(false);
   const [, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -117,18 +111,10 @@ const VoicePanel = ({ embedded = false, scrollable = true }: VoicePanelProps = {
 
   const loadData = async (forceSettings = false) => {
     try {
-      const [settingsResponse, voiceResponse, piperStatusResponse] = await Promise.all([
+      const [settingsResponse, voiceResponse] = await Promise.all([
         openhumanGetVoiceServerSettings(),
         openhumanVoiceStatus(),
-        piperInstallStatus().catch(err => {
-          // Status polls happen on a 2s loop; a single transient error
-          // shouldn't blow up the entire settings panel. Log + keep the
-          // previous snapshot.
-          log('[voice-install:piper] status poll failed %o', err);
-          return null;
-        }),
       ]);
-      if (piperStatusResponse) setPiperInstall(piperStatusResponse);
       const currentSettings = settingsRef.current;
       const currentSavedSettings = savedSettingsRef.current;
       if (
@@ -205,40 +191,6 @@ const VoicePanel = ({ embedded = false, scrollable = true }: VoicePanelProps = {
   useEffect(() => {
     void loadData(true);
   }, []);
-
-  const shouldPollPiperInstall = piperInstall?.state === 'installing';
-
-  useEffect(() => {
-    if (!shouldPollPiperInstall) return;
-
-    let cancelled = false;
-    let inFlight = false;
-    const pollInstallStatus = async () => {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const nextPiperStatus = await piperInstallStatus().catch(err => {
-          log('[voice-install:piper] status poll failed %o', err);
-          return null;
-        });
-
-        if (cancelled) return;
-        if (nextPiperStatus) setPiperInstall(nextPiperStatus);
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    void pollInstallStatus();
-    const intervalId = window.setInterval(() => {
-      void pollInstallStatus();
-    }, LOCAL_INSTALL_STATUS_POLL_MS);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [shouldPollPiperInstall]);
 
   const persistProviders = async (
     update: Partial<VoiceProvidersSnapshot> & {
@@ -427,39 +379,29 @@ const VoicePanel = ({ embedded = false, scrollable = true }: VoicePanelProps = {
   // gender, and locale-default toggle all live in `mascotSlice`; this
   // panel only handles Piper / dictation now.
 
-  const handleInstallPiper = async () => {
-    setIsInstallingPiper(true);
+  // Piper is user-supplied: OpenHuman never downloads the binary or its
+  // voices. Readiness is whatever `voice_status` resolves — a `piper` binary
+  // (PATH or PIPER_BIN) plus the selected voice's .onnx file. After the user
+  // installs Piper themselves, "Check again" re-reads that status.
+  const handleRecheckPiper = async () => {
+    setIsCheckingPiper(true);
     setError(null);
     setNotice(null);
+    log('[voice:piper] re-checking user-supplied piper binary and voice');
     try {
-      const force = piperInstall?.state === 'installed';
-      log('[voice-install:piper] install click force=%s', force);
-      const result = await installPiper({ voiceId: ttsVoice || undefined, force });
-      setPiperInstall(result);
-      setNotice(
-        result.state === 'installed'
-          ? t('voice.providers.piperReady')
-          : `${t('voice.providers.piperInstallStarted')} (${result.stage ?? t('voice.providers.queued')})`
-      );
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : t('voice.providers.failedToInstallPiper');
-      setError(message);
-    } finally {
-      setIsInstallingPiper(false);
       await loadData(false);
+    } finally {
+      setIsCheckingPiper(false);
     }
   };
 
-  const piperReady =
-    piperInstall?.state !== 'installing' &&
-    (piperInstall?.state === 'installed' || Boolean(voiceStatus?.tts_available));
+  const piperReady = Boolean(voiceStatus?.tts_available);
   const pendingLocalProviderReady = pendingKeySlug === 'piper' ? piperReady : true;
 
-  // Piper must finish downloading before its Test button does anything useful
-  // — exercising an un-installed engine just errors out on a missing binary or
-  // voice file. STT has no local artifact at all now (every engine is a hosted
-  // HTTP call), so its Test button is never gated on an install.
+  // Piper's Test button is useless until the user-supplied binary and voice
+  // file resolve — exercising it just errors out on a missing binary or voice
+  // file. STT has no local artifact at all (every engine is a hosted HTTP
+  // call), so its Test button is never gated.
   const ttsTestBlockedByInstall = ttsProvider === 'piper' && !piperReady;
 
   return (
@@ -470,23 +412,34 @@ const VoicePanel = ({ embedded = false, scrollable = true }: VoicePanelProps = {
       leading={embedded ? undefined : <SettingsBackButton onBack={navigateBack} />}
       scrollable={scrollable}>
       <div className={embedded ? 'space-y-5' : 'p-4 space-y-5'}>
-        <SettingsSection title={t('voice.debug.alwaysOn')}>
-          <SettingsRow
-            htmlFor="voice-always-on"
-            label={t('voice.debug.alwaysOn')}
-            description={t('voice.debug.alwaysOnDesc')}
-            control={
-              <SettingsSwitch
-                id="voice-always-on"
-                data-testid="voice-always-on-toggle"
-                checked={settings?.always_on_enabled ?? false}
-                disabled={!settings || isUpdatingAlwaysOn}
-                onCheckedChange={next => void toggleAlwaysOn(next)}
-                aria-label={t('voice.debug.alwaysOn')}
-              />
-            }
-          />
-        </SettingsSection>
+        {/* Always-on listening: the one switch that changes how you talk to it. */}
+        <Card data-testid="voice-always-on-card">
+          <div className="flex items-center gap-3 p-4">
+            <span
+              className={cn(
+                'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg',
+                settings?.always_on_enabled
+                  ? 'bg-primary-500 text-content-inverted'
+                  : 'bg-surface-muted text-content-secondary'
+              )}>
+              <AudioLines className="h-5 w-5" aria-hidden />
+            </span>
+            <div className="min-w-0 flex-1">
+              <label htmlFor="voice-always-on" className="block text-sm font-semibold text-content">
+                {t('voice.debug.alwaysOn')}
+              </label>
+              <p className="mt-0.5 text-xs text-content-muted">{t('voice.debug.alwaysOnDesc')}</p>
+            </div>
+            <Switch
+              id="voice-always-on"
+              data-testid="voice-always-on-toggle"
+              checked={settings?.always_on_enabled ?? false}
+              disabled={!settings || isUpdatingAlwaysOn}
+              onCheckedChange={next => void toggleAlwaysOn(next)}
+              aria-label={t('voice.debug.alwaysOn')}
+            />
+          </div>
+        </Card>
 
         {/* Realtime voice is always on now — its controls live on the Human tab,
             so the former flag-gated toggle here was removed. */}
@@ -499,8 +452,6 @@ const VoicePanel = ({ embedded = false, scrollable = true }: VoicePanelProps = {
           onSttProviderChange={onSttProviderChange}
           onTtsProviderChange={onTtsProviderChange}
           voiceSettings={voiceSettings}
-          isInstallingPiper={isInstallingPiper}
-          piperInstall={piperInstall}
           isSavingPendingKey={isSavingPendingKey}
           setPendingKeySlug={setPendingKeySlug}
           setPendingKeyValue={setPendingKeyValue}
@@ -521,9 +472,8 @@ const VoicePanel = ({ embedded = false, scrollable = true }: VoicePanelProps = {
             setTtsVoice={setTtsVoice}
             piperVoicePresets={piperVoicePresets}
             piperVoicePresetIds={PIPER_VOICE_PRESET_IDS}
-            piperInstall={piperInstall}
-            isInstallingPiper={isInstallingPiper}
-            handleInstallPiper={handleInstallPiper}
+            isCheckingPiper={isCheckingPiper}
+            handleRecheckPiper={handleRecheckPiper}
             piperReady={piperReady}
             pendingLocalProviderReady={pendingLocalProviderReady}
             isSavingProviders={isSavingProviders}
@@ -570,32 +520,26 @@ const VoicePanel = ({ embedded = false, scrollable = true }: VoicePanelProps = {
         {/* Mascot voice picker now lives in Mascot settings. Link
             kept here so users hunting in Voice settings can find it. */}
         {ttsProvider !== 'piper' && (
-          <section data-testid="mascot-voice-link">
-            <SettingsSection>
-              <SettingsRow
-                stacked
-                label={t('voice.providers.mascotVoice')}
-                control={
-                  <p className="text-xs text-content-muted">
-                    {t('voice.providers.mascotVoiceDescPrefix')}{' '}
-                    <Button
-                      type="button"
-                      variant="tertiary"
-                      size="xs"
-                      className="h-auto px-0 py-0 underline text-primary-600 dark:text-primary-300 hover:bg-transparent hover:text-primary-700 dark:hover:text-primary-200"
-                      onClick={() => navigateToSettings('personality#face')}>
-                      {t('voice.providers.mascotSettings')}
-                    </Button>
-                    {t('voice.providers.mascotVoiceDescSuffix')}
-                  </p>
-                }
-              />
-            </SettingsSection>
-          </section>
+          <Card data-testid="mascot-voice-link">
+            <Field
+              label={t('voice.providers.mascotVoice')}
+              description={t('voice.providers.mascotVoiceCardDesc')}
+              control={
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  trailingIcon={<ArrowRight className="h-3.5 w-3.5" aria-hidden />}
+                  onClick={() => navigateToSettings('face')}>
+                  {t('voice.providers.mascotSettings')}
+                </Button>
+              }
+            />
+          </Card>
         )}
 
         {/* Status line */}
-        <SettingsStatusLine
+        <StatusLine
           saving={isSavingProviders || isSavingRouting || isUpdatingAlwaysOn}
           savedNote={notice}
           error={error}

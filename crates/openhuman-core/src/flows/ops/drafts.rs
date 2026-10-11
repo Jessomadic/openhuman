@@ -11,21 +11,21 @@ pub fn flows_draft_create(
     name: String,
     graph: Value,
     origin: crate::flows::DraftOrigin,
-) -> Result<RpcOutcome<crate::flows::FlowDraft>, String> {
+) -> Result<Outcome<crate::flows::FlowDraft>, String> {
     let draft = draft_store::create_draft(config, flow_id, name, graph, origin)
         .map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::single_log(draft, "draft created"))
+    Ok(Outcome::single_log(draft, "draft created"))
 }
 
 /// Reads a draft by id (errors if it does not exist).
 pub fn flows_draft_get(
     config: &Config,
     id: &str,
-) -> Result<RpcOutcome<crate::flows::FlowDraft>, String> {
+) -> Result<Outcome<crate::flows::FlowDraft>, String> {
     let draft = draft_store::get_draft(config, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("draft '{id}' not found"))?;
-    Ok(RpcOutcome::single_log(draft, format!("draft loaded: {id}")))
+    Ok(Outcome::single_log(draft, format!("draft loaded: {id}")))
 }
 
 /// Patches a draft's `name`/`graph`/`flow_id` (any `Some` applied) and bumps
@@ -36,24 +36,22 @@ pub fn flows_draft_update(
     name: Option<String>,
     graph: Option<Value>,
     flow_id: Option<Option<String>>,
-) -> Result<RpcOutcome<crate::flows::FlowDraft>, String> {
+) -> Result<Outcome<crate::flows::FlowDraft>, String> {
     let draft =
         draft_store::update_draft(config, id, name, graph, flow_id).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::single_log(draft, "draft updated"))
+    Ok(Outcome::single_log(draft, "draft updated"))
 }
 
 /// Lists all drafts, newest-updated first.
-pub fn flows_draft_list(
-    config: &Config,
-) -> Result<RpcOutcome<Vec<crate::flows::FlowDraft>>, String> {
+pub fn flows_draft_list(config: &Config) -> Result<Outcome<Vec<crate::flows::FlowDraft>>, String> {
     let drafts = draft_store::list_drafts(config).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::single_log(drafts, "drafts listed"))
+    Ok(Outcome::single_log(drafts, "drafts listed"))
 }
 
 /// Deletes a draft by id (idempotent — reports whether a file was removed).
-pub fn flows_draft_delete(config: &Config, id: &str) -> Result<RpcOutcome<Value>, String> {
+pub fn flows_draft_delete(config: &Config, id: &str) -> Result<Outcome<Value>, String> {
     let deleted = draft_store::delete_draft(config, id).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({ "id": id, "deleted": deleted }),
         "draft deleted",
     ))
@@ -70,7 +68,7 @@ pub async fn flows_draft_promote(
     config: &Config,
     id: &str,
     require_approval: Option<bool>,
-) -> Result<RpcOutcome<Flow>, String> {
+) -> Result<Outcome<Flow>, String> {
     let draft = draft_store::get_draft(config, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("draft '{id}' not found"))?;

@@ -7,7 +7,7 @@
 //! idle in most conversations.
 //!
 //! A pack keeps its tools constructed and executable but unadvertised. The
-//! agent sees one small tool instead: [`tools::UseSkillTool`] renders a pack's
+//! agent sees one small tool instead: `tinyagents_harness::tool::packs::UseSkillTool` renders a pack's
 //! schemas into the conversation when called with a `skill` alone, and executes
 //! one of them when also given a `tool`, forwarding permission level and
 //! execution context to the real tool so nothing is laundered through the
@@ -25,8 +25,6 @@
 pub mod groups;
 pub mod ops;
 pub mod registry;
-pub mod tools;
-pub mod types;
 
 pub use groups::{set_process_default, GroupMode, ToolGroups, GROUP_COUNT};
 pub use ops::{
@@ -35,13 +33,8 @@ pub use ops::{
 };
 pub use registry::{
     all_packed_tool_names, callable_pack_ids, pack, pack_for_tool, pack_index_markdown_filtered,
-    PACKS,
+    CATALOG, PACKS,
 };
-pub use tools::{
-    named_tool, render_pack_filtered, route_sentence, scope_use_skill_spec, NoSuchPackTool,
-    PackRegistryHandle, USE_SKILL,
-};
-pub use types::ToolPack;
 
 #[cfg(test)]
 #[path = "toolpacks_tests.rs"]

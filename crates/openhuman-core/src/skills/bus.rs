@@ -21,67 +21,16 @@ use tinybus::SubscriptionHandle;
 
 // ── Trigger pattern ───────────────────────────────────────────────────────────
 
-/// A parsed trigger pattern from a skill's `triggers:` frontmatter list.
+/// Pattern grammar (`domain` or `domain/event_slug`) is owned by `tinyskills`.
 ///
-/// Patterns take the form `"domain"` or `"domain/event_slug"`.  A bare domain
-/// (no `/`) matches **any** event in that domain; with a slug only events whose
-/// discriminant name (lower-kebab-cased) equals the slug are matched.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TriggerPattern {
-    /// The event domain, e.g. `"composio"`, `"cron"`, `"channel"`.
-    pub domain: String,
-    /// Optional event slug; `None` means match the entire domain.
-    pub event_slug: Option<String>,
-}
+/// [`DomainEvent`] exposes no stable slug yet, so matching passes an empty
+/// slug: bare-domain patterns match every event in the domain and
+/// slug-qualified patterns stay inert rather than firing for the whole domain.
+pub use tinyskills::TriggerPattern;
 
-impl TriggerPattern {
-    /// Parse a raw trigger string like `"composio/trigger_received"` or `"cron"`.
-    pub fn parse(raw: &str) -> Option<Self> {
-        let raw = raw.trim();
-        if raw.is_empty() {
-            return None;
-        }
-        match raw.split_once('/') {
-            Some((domain, slug)) => {
-                let domain = domain.trim().to_ascii_lowercase();
-                let slug = slug.trim().to_ascii_lowercase();
-                if domain.is_empty() {
-                    return None;
-                }
-                Some(Self {
-                    domain,
-                    event_slug: if slug.is_empty() || slug == "*" {
-                        None
-                    } else {
-                        Some(slug)
-                    },
-                })
-            }
-            None => Some(Self {
-                domain: raw.to_ascii_lowercase(),
-                event_slug: None,
-            }),
-        }
-    }
-
-    /// Returns true when this pattern matches the given event.
-    ///
-    /// Slug-qualified patterns (e.g. `"agent/task_complete"`) are rejected
-    /// until [`DomainEvent`] exposes a stable `slug()` method — returning
-    /// `true` here would silently match the entire domain, firing for every
-    /// event regardless of the declared slug.
-    pub fn matches(&self, event: &DomainEvent) -> bool {
-        if event.domain() != self.domain {
-            return false;
-        }
-        // Slug-qualified patterns cannot be matched precisely yet.
-        // TODO(#skills-triggers): replace with `event.slug() == slug` once
-        // DomainEvent exposes slug().
-        if self.event_slug.is_some() {
-            return false;
-        }
-        true
-    }
+fn pattern_matches_event(pattern: &TriggerPattern, event: &DomainEvent) -> bool {
+    // TODO(#skills-triggers): pass the real slug once DomainEvent exposes one.
+    pattern.matches(event.domain(), "")
 }
 
 // ── Triggered skill index ─────────────────────────────────────────────────────
@@ -156,7 +105,7 @@ impl TriggeredWorkflowIndex {
     pub fn matching_workflows<'a>(&'a self, event: &DomainEvent) -> Vec<&'a str> {
         self.entries
             .iter()
-            .filter(|(_, patterns)| patterns.iter().any(|p| p.matches(event)))
+            .filter(|(_, patterns)| patterns.iter().any(|p| pattern_matches_event(p, event)))
             .map(|(name, _)| name.as_str())
             .collect()
     }
@@ -239,7 +188,7 @@ static TRIGGERED_WORKFLOW_HANDLE: OnceLock<Option<SubscriptionHandle>> = OnceLoc
 /// from every startup path.
 ///
 /// Both [`crate::channels::start_channels`] (messaging cores) and
-/// [`crate::core::jsonrpc::bootstrap_core_runtime`] (always-run serve boot)
+/// `crate::core::runtime::bootstrap::bootstrap_core_runtime` (always-run serve boot)
 /// invoke this. `start_channels` is skipped for web-chat-only desktop installs
 /// (no messaging integration connected) and when
 /// `OPENHUMAN_DISABLE_CHANNEL_LISTENERS=1`; registering from

@@ -14,10 +14,8 @@ import debug from 'debug';
 //   'home'      → top-level home menu entry (Settings breadcrumb only)
 //   'account'   → Settings → Account
 //   'ai'        → Settings → AI & Models
-//   'agents'    → Settings → Agents
 //   'features'  → Settings → Features
 //   'crypto'    → Settings → Crypto
-//   'notifications' → Settings → Notifications
 //   'developer' → Settings → Developer & Diagnostics (devOnly entries)
 //
 // debug logging: [settings] registry loaded N entries
@@ -30,7 +28,6 @@ export type SettingsSection =
   | 'agents'
   | 'features'
   | 'crypto'
-  | 'notifications'
   | 'developer';
 
 /**
@@ -40,9 +37,9 @@ export type SettingsSection =
  */
 type SettingsNavGroup =
   | 'general'
-  | 'assistant'
+  | 'appearance'
+  | 'security'
   | 'data'
-  | 'connections'
   | 'knowledgeMemory'
   | 'agentsAutonomy'
   | 'automationIntegrations'
@@ -50,11 +47,15 @@ type SettingsNavGroup =
 
 const NAV_GROUP_ORDER: SettingsNavGroup[] = [
   'general',
-  'assistant',
-  'data',
-  'connections',
-  'knowledgeMemory',
+  'appearance',
+  // Everything agentic in one category: agents, their tools, approvals and the
+  // skills runner. Was split across Assistant, Connections and Agents & Autonomy.
   'agentsAutonomy',
+  // Everything about what the assistant may touch: the credential store,
+  // agent OS access (tiers, approvals, rate limits) and sandboxing.
+  'security',
+  'data',
+  'knowledgeMemory',
   'automationIntegrations',
   'diagnosticsLogs',
 ];
@@ -62,9 +63,10 @@ const NAV_GROUP_ORDER: SettingsNavGroup[] = [
 /** i18n keys for the sidebar group labels. */
 export const NAV_GROUP_LABEL_KEY: Record<SettingsNavGroup, string> = {
   general: 'settings.navGroups.general',
-  assistant: 'settings.navGroups.assistant',
+  appearance: 'settings.navGroups.appearance',
+  // Reuses the Security page's title key, which is already translated.
+  security: 'pages.settings.account.security',
   data: 'settings.navGroups.data',
-  connections: 'settings.navGroups.connections',
   // Promoted from the old Developer & Diagnostics sub-sections.
   knowledgeMemory: 'settings.devGroups.knowledgeMemory',
   agentsAutonomy: 'settings.devGroups.agentsAutonomy',
@@ -143,7 +145,19 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
     titleKey: 'pages.settings.accountSection.title',
     descriptionKey: 'pages.settings.accountSection.description',
     section: 'home',
-    searchKeywords: ['profile', 'sign out', 'logout'],
+    searchKeywords: [
+      'language',
+      'locale',
+      'translation',
+      'profile',
+      'sign out',
+      'logout',
+      'billing',
+      'subscription',
+      'payment',
+      'plan',
+      'invoice',
+    ],
     navGroup: 'general',
     navOrder: 0,
   },
@@ -166,46 +180,57 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
       'palette',
       'background',
       'backdrop',
-      'language',
-      'locale',
-      'translation',
     ],
-    navGroup: 'general',
-    navOrder: 1,
+    navGroup: 'appearance',
+    navOrder: 0,
   },
   {
-    // devices: real pairing panel (the old "Coming Soon" stub was removed).
-    id: 'devices',
-    titleKey: 'settings.account.devices',
-    descriptionKey: 'settings.account.devicesDesc',
+    // theme: Theme Studio — per-token colours, fonts, background and theme
+    // import/export for the active theme. Was a tab of Appearance; the
+    // Appearance gallery's "Custom" tile links here.
+    id: 'theme',
+    titleKey: 'settings.theme.title',
+    descriptionKey: 'settings.theme.menuDesc',
     section: 'home',
-    searchKeywords: ['mobile', 'phone', 'ios', 'android', 'pair'],
-    navGroup: 'general',
-    navOrder: 3,
+    searchKeywords: [
+      'theme studio',
+      'custom theme',
+      'palette',
+      'colour',
+      'color',
+      'font',
+      'import',
+    ],
+    navGroup: 'appearance',
+    navOrder: 1,
   },
+  // language: now a card on Account; devices: pairing page removed. Both
+  // slugs redirect to /settings/account.
 
   // --- Assistant group ---
   // The old 'ai' and 'agents-settings' hub pages are retired — their slugs
-  // redirect to /settings/llm and /settings/agents.
+  // redirect to /settings/llm and the Connections → Tools tab.
   {
-    // personality: merged Personality & Face page (formerly persona and
-    // mascot — those slugs redirect here).
+    // personality and face: how the assistant presents itself, so they sit in
+    // the Appearance group next to the app's own look. They were one page with
+    // two tabs; `/settings/persona` redirects to personality, and
+    // `/settings/mascot` and the old `personality#face` link to face.
     id: 'personality',
-    titleKey: 'settings.personalityFace.title',
-    descriptionKey: 'settings.personalityFace.menuDesc',
+    titleKey: 'settings.assistant.personality',
+    descriptionKey: 'settings.personality.menuDesc',
     section: 'home',
-    searchKeywords: [
-      'personality',
-      'tone',
-      'character',
-      'persona',
-      'face',
-      'avatar',
-      'mascot',
-      'tiny',
-    ],
-    navGroup: 'assistant',
+    searchKeywords: ['personality', 'tone', 'character', 'persona', 'name'],
+    navGroup: 'appearance',
     navOrder: 2,
+  },
+  {
+    id: 'face',
+    titleKey: 'settings.face.title',
+    descriptionKey: 'settings.face.menuDesc',
+    section: 'home',
+    searchKeywords: ['face', 'avatar', 'mascot', 'tiny', 'colour', 'color'],
+    navGroup: 'appearance',
+    navOrder: 3,
   },
 
   // --- Connections group ---
@@ -215,7 +240,7 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
   // Connections page's Desktop group; their slugs redirect there.
 
   // Notifications-hub and crypto hub pages are retired — their slugs redirect
-  // to /settings/notifications and /settings/wallet-balances.
+  // to /settings/account and /settings/wallet-balances.
 
   // --- About ---
   {
@@ -227,6 +252,7 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
     descriptionKey: 'settings.core.menuDesc',
     section: 'home',
     searchKeywords: [
+      'gateway',
       'core',
       'remote',
       'rpc',
@@ -286,13 +312,15 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
     navOrder: 5,
   },
   {
+    // Titled "Keychain": the page is secret storage and keychain status, and
+    // "Security" is now the name of the category it sits in.
     id: 'security',
-    titleKey: 'pages.settings.account.security',
+    titleKey: 'settings.keychain.title',
     descriptionKey: 'pages.settings.account.securityDesc',
     section: 'account',
-    searchKeywords: ['keychain', 'secret', 'password', 'encryption', 'credentials'],
-    navGroup: 'general',
-    navOrder: 6,
+    searchKeywords: ['keychain', 'secret', 'password', 'encryption', 'credentials', 'security'],
+    navGroup: 'security',
+    navOrder: 0,
   },
   {
     id: 'migration',
@@ -336,9 +364,9 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
   {
     // usage: merged Usage & Limits surface — cost dashboard, Tokenjuice token
     // savings (formerly the standalone token-usage page), and background loops
-    // (formerly heartbeat / ledger-usage). Surfaced on the Connections page
+    // (formerly ledger-usage). Surfaced on the Connections page
     // (API-keys group); the route redirects there and it's no longer in the
-    // settings sidebar. Legacy heartbeat / ledger-usage / cost-dashboard /
+    // settings sidebar. Legacy ledger-usage / cost-dashboard /
     // token-usage slugs redirect here.
     id: 'usage',
     titleKey: 'settings.usage.title',
@@ -352,9 +380,6 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
       'ledger',
       'cost',
       'spend',
-      'billing',
-      'budget',
-      'heartbeat',
       'loops',
       'background',
     ],
@@ -363,15 +388,6 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
   // =========================================================================
   // AGENTS section leaf panels
   // =========================================================================
-  {
-    id: 'agents',
-    titleKey: 'settings.agents.title',
-    descriptionKey: 'settings.agents.subtitle',
-    section: 'agents',
-    searchKeywords: ['agent', 'profiles'],
-    navGroup: 'assistant',
-    navOrder: 4,
-  },
   {
     // agent-access also hosts the autonomy rate-limit section (formerly the
     // standalone /settings/autonomy page — that slug redirects here).
@@ -393,15 +409,9 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
       'full autonomy',
       'bypass approval',
     ],
-    navParent: 'agents',
-  },
-  {
-    id: 'activity-level',
-    titleKey: 'activityLevel.title',
-    descriptionKey: 'activityLevel.description',
-    section: 'agents',
-    searchKeywords: ['background', 'activity', 'subconscious'],
-    navParent: 'agents',
+    // Was a sub-nav pill under Agents; now a page of the Security category.
+    navGroup: 'security',
+    navOrder: 1,
   },
   {
     id: 'sandbox-settings',
@@ -409,21 +419,13 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
     descriptionKey: 'settings.sandbox.menuDesc',
     section: 'agents',
     searchKeywords: ['sandbox', 'jail', 'isolation', 'docker'],
-    navParent: 'agents',
+    navGroup: 'security',
+    navOrder: 2,
   },
 
   // =========================================================================
   // FEATURES section leaf panels
   // =========================================================================
-  {
-    id: 'tools',
-    titleKey: 'pages.settings.features.tools',
-    descriptionKey: 'pages.settings.features.toolsDesc',
-    section: 'features',
-    searchKeywords: ['tools', 'capabilities', 'functions'],
-    navGroup: 'connections',
-    navOrder: 3,
-  },
   {
     // meetings: Meeting Assistant settings (issue #3511 / epic #3505 PR-5).
     // Surfaced on the Connections page (meetings tab, below the meetings list);
@@ -445,20 +447,10 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
     ],
   },
 
-  // =========================================================================
-  // NOTIFICATIONS section leaf panels
-  // =========================================================================
-  // alerts is an external link (→ /notifications) handled inline in Settings.tsx
-  {
-    id: 'notifications',
-    route: 'notifications',
-    titleKey: 'settings.notifications.menuTitle',
-    descriptionKey: 'settings.notifications.menuDesc',
-    section: 'notifications',
-    searchKeywords: ['alerts', 'push', 'preferences', 'routing'],
-    navGroup: 'general',
-    navOrder: 2,
-  },
+  // The Notifications settings page (preferences toggles) was removed
+  // entirely; `/settings/notifications` now redirects to Account
+  // (`settingsRouteElements`). Alerts remain reachable as the external
+  // `/notifications` notification-center page, handled inline in Settings.tsx.
 
   // =========================================================================
   // CRYPTO section leaf panels
@@ -486,7 +478,7 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
   // These live ONLY under Settings → Developer & Diagnostics.
   // Items removed from this list compared to the old DeveloperOptionsPanel:
   //   agents, autonomy, agent-access, sandbox-settings, activity-level,
-  //   tools, voice, embeddings, heartbeat,
+  //   tools, voice, embeddings,
   //   ledger-usage, cost-dashboard, task-sources, composio-routing,
   //   webhooks-triggers, migration, security
   //   (all moved to their canonical section pages).
@@ -502,8 +494,10 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
     devOnly: true,
     searchKeywords: ['developer', 'diagnostics', 'debug'],
   },
+  // memory-engine / memory-data / memory-debug are redirects to the Memory
+  // page's chips (Connections → Memory); they have no settings panel.
   // Knowledge & Memory group retired entirely — memory surfaces live on the
-  // Brain page (graph / goals / sources / sync / subconscious).
+  // Memory page (engine / ask / learnings / conversations / documents / context).
   // voice-debug retired from the settings UI.
   {
     id: 'event-log',
@@ -524,39 +518,18 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
     navGroup: 'diagnosticsLogs',
   },
   // Automation & Integrations (debug)
-  {
-    id: 'mcp-server',
-    titleKey: 'settings.developerMenu.mcpServer.title',
-    descriptionKey: 'settings.developerMenu.mcpServer.desc',
-    section: 'developer',
-    devOnly: true,
-    navGroup: 'automationIntegrations',
-    searchKeywords: ['mcp', 'server'],
-  },
+  // mcp-server moved to Connections → MCP → Clients; the slug redirects.
   // dev-workflow (the cron-based GitHub dev-automation panel) was retired —
   // superseded by first-level Workflows (/flows) and the skills workflow runner.
   // Composio trigger-triage config merged into the Connections Composio page.
-  // Agent Chat + Local Model Debug are now chips on the Connections → LLM page.
-  {
-    id: 'skills-runner',
-    titleKey: 'settings.developerMenu.skillsRunner.title',
-    descriptionKey: 'settings.developerMenu.skillsRunner.desc',
-    section: 'developer',
-    devOnly: true,
-    navGroup: 'agentsAutonomy',
-  },
-  // Build Info (about page alias in dev menu)
-  {
-    id: 'build-info',
-    route: 'about',
-    titleKey: 'settings.buildInfo.title',
-    descriptionKey: 'settings.buildInfo.menuDesc',
-    section: 'developer',
-    devOnly: true,
-    navGroup: 'diagnosticsLogs',
-  },
+  // Agent Chat is a chip on the Connections → LLM page; the retired
+  // local-model-debug slug redirects there (settingsRouteElements.tsx).
+  // skills-runner moved to Connections → Skills → Runner; the slug redirects.
+  // The dev-only "Build / version info" alias was removed: it opened the same
+  // About page, so dev builds listed two sidebar entries for one page. About's
+  // search keywords already cover "build" and "version".
 
-  // Token & Cost (TokenJuice compression settings + savings) is now the
+  // Token savings (TokenJuice compression settings + savings) is now the
   // "Token savings" tab of the merged Usage & limits surface on Connections —
   // the standalone token-usage entry was retired (route redirects there).
 
@@ -564,24 +537,26 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
   // INTENTIONALLY HIDDEN / DEEP-LINK ONLY (not surfaced in any menu)
   // =========================================================================
   {
-    // billing: surfaced in the General group (also opened from the avatar menu).
-    id: 'billing',
-    titleKey: 'nav.avatarMenu.billing',
-    section: 'home',
-    searchKeywords: ['billing', 'subscription', 'payment', 'plan', 'invoice'],
-    navGroup: 'general',
-    navOrder: 4,
-    highlight: true,
-  },
-  {
-    // search: web search engine settings (Brave / Google / Tavily provider).
+    // search: web search providers (managed Exa and Gemini, plus bring-your-own-key
+    // providers), the per-role provider order, and the allowed-websites list.
     // Surfaced on the Connections page (Intelligence group); route kept for
     // deep-link compatibility but no longer in the settings sidebar.
     id: 'search',
     titleKey: 'settings.search.title',
     section: 'developer',
     devOnly: true,
-    searchKeywords: ['search', 'engine', 'web', 'brave', 'google', 'tavily', 'provider'],
+    searchKeywords: [
+      'search',
+      'web',
+      'provider',
+      'exa',
+      'gemini',
+      'brave',
+      'tavily',
+      'searxng',
+      'answer',
+      'research',
+    ],
   },
   {
     // permissions: moved to developer options, not a standalone home entry.
@@ -597,7 +572,8 @@ export const SETTINGS_ROUTE_REGISTRY: SettingsRegistryEntry[] = [
     titleKey: 'settings.approvalHistory.title',
     section: 'agents',
     searchKeywords: ['approval', 'history', 'permission', 'audit'],
-    navGroup: 'agentsAutonomy',
+    navGroup: 'security',
+    navOrder: 3,
   },
 ];
 

@@ -26,6 +26,10 @@ impl SecurityPolicyInfoTool {
 
 #[async_trait]
 impl Tool for SecurityPolicyInfoTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         "security_policy_info"
     }

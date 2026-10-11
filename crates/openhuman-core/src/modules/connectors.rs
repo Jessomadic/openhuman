@@ -70,13 +70,23 @@ pub fn module_config(config: &Config) -> Result<serde_json::Value, String> {
         // Empty is the default, for hand-edited configs that omit the field.
         "" | COMPOSIO_MODE_BACKEND => {
             let client = crate::integrations::build_client(config).ok_or_else(|| {
-                "composio backend mode is unavailable: no backend session token. Sign in first."
+                "composio backend mode is unavailable: no backend session token. Sign in or set a TinyHumans API key."
                     .to_string()
             })?;
+            // The backend renders Composio results (Gmail timestamps) for the
+            // model; with the user's zone it prints local time beside UTC. A
+            // module before contract 1.9 ignores the field. It is part of the
+            // route fingerprint, so a zone change reconfigures on the next call.
+            let timezone =
+                crate::integrations::composio::googlecalendar_args::current_iana_timezone();
             Ok(serde_json::json!({
                 "route": "proxy",
                 "base_url": client.backend_url,
+                // The session JWT or the TinyHumans API key. The proxy route
+                // sends it as `Authorization: Bearer`; the backend recognises
+                // a key there by its `tiny_` prefix, so no scheme flag is needed.
                 "auth_token": client.auth_token,
+                "timezone": timezone,
                 "state_dir": state_dir,
             }))
         }
@@ -121,8 +131,20 @@ pub fn module_config(config: &Config) -> Result<serde_json::Value, String> {
                 "base_url": std::env::var("OPENHUMAN_COMPOSIO_DIRECT_BASE_V3").ok(),
                 "state_dir": state_dir,
             });
-            if let Some(base) = direct_base {
-                payload["base_url"] = serde_json::Value::String(base);
+            if let Some(base) = &direct_base {
+                payload["base_url"] = serde_json::Value::String(base.clone());
+            }
+            // The host's proxy and TLS policy for Composio, resolved for the
+            // destination the module will dial. Part of the route description,
+            // so a change in the proxy settings reconfigures the module on the
+            // next call. Omitted when it is the module's default (contract 1.10).
+            let destination = direct_base
+                .as_deref()
+                .unwrap_or("https://backend.composio.dev/api/v3");
+            if let Some(transport) =
+                crate::integrations::composio::client::module_transport(destination)
+            {
+                payload["transport"] = serde_json::json!(transport);
             }
             Ok(payload)
         }
@@ -298,19 +320,19 @@ where
         .map_err(|error| format!("{member}: {error}"))
 }
 
-/// Call a long-running member with a deadline sized for it.
+/// Call a member that carries its own credential, without touching the route.
 ///
-/// The default bus deadline (30s) fits request-shaped members. `Sync` is not
-/// one: the module pages a whole connected account through inside the call —
-/// "a full sync is minutes of paging" is its own documentation — and a 30s
-/// deadline made the host report failure while the module went on to finish
-/// (observed live: timeout at 30s, `run finished … ingested=200` at 38s, and
-/// a Sync button that spun forever on a run that had actually succeeded).
+/// `ListConnectionsDirect` and `ListToolsDirect` read as the credential on the
+/// request, so the module's configured route is neither used nor replaced. That
+/// is why this does not reconcile the route first: a host serving several
+/// credentials from one module must not have one caller's configuration
+/// overwrite another's mid-call, and a config that names no route here would
+/// otherwise send the module `{"route": "none"}` in the middle of a read.
 ///
 /// # Errors
 ///
 /// As [`call`].
-pub async fn call_slow<Request, Reply>(
+pub async fn call_stateless<Request, Reply>(
     config: &Config,
     member: &str,
     request: Request,
@@ -319,8 +341,11 @@ where
     Request: Serialize + Send,
     Reply: DeserializeOwned,
 {
-    const SLOW_MEMBER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
-    let proxy = proxy(config).await?.with_timeout(SLOW_MEMBER_TIMEOUT);
+    // The module's own HTTP deadline is 30s; give the bus a little longer so a
+    // slow Composio surfaces as the module's message, not a bus timeout.
+    const STATELESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
+    ops::ensure_loaded(config, MODULE_ID).await?;
+    let proxy = proxy_to_serving().await?.with_timeout(STATELESS_TIMEOUT);
     proxy
         .call::<Reply>(member, (request,))
         .await

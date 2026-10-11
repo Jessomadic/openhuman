@@ -1,6 +1,6 @@
 //! RPC-facing operations for the `task_sources` domain.
 //!
-//! Each function returns an [`RpcOutcome`] so the controller layer can
+//! Each function returns an [`Outcome`] so the controller layer can
 //! surface logs alongside the value. Errors are `String` to match the
 //! `ControllerFuture` boundary. Business logic stays here; `schemas.rs`
 //! only parses params and delegates.
@@ -8,8 +8,8 @@
 use serde_json::{json, Value};
 
 use crate::config::Config;
+use crate::core::Outcome;
 use crate::integrations::composio::providers::{NormalizedTask, TaskContainer};
-use crate::rpc::RpcOutcome;
 
 use super::types::{
     FetchReason, FilterSpec, ProviderSlug, SourceTarget, TaskSource, TaskSourcePatch,
@@ -17,16 +17,16 @@ use super::types::{
 use super::{filter, pipeline, store};
 
 /// List all configured task sources.
-pub async fn list(config: &Config) -> Result<RpcOutcome<Vec<TaskSource>>, String> {
+pub async fn list(config: &Config) -> Result<Outcome<Vec<TaskSource>>, String> {
     let sources = store::list_sources(config).map_err(|e| e.to_string())?;
     tracing::debug!(count = sources.len(), "[task_sources:ops] list");
-    Ok(RpcOutcome::new(sources, vec![]))
+    Ok(Outcome::new(sources, vec![]))
 }
 
 /// Fetch a single source by id.
-pub async fn get(config: &Config, id: &str) -> Result<RpcOutcome<TaskSource>, String> {
+pub async fn get(config: &Config, id: &str) -> Result<Outcome<TaskSource>, String> {
     let source = store::get_source(config, id).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::new(source, vec![]))
+    Ok(Outcome::new(source, vec![]))
 }
 
 /// Create a new source. Missing schedule / target / cap fields fall back
@@ -40,7 +40,7 @@ pub async fn add(
     interval_secs: Option<u64>,
     target: Option<SourceTarget>,
     max_tasks_per_fetch: Option<u32>,
-) -> Result<RpcOutcome<TaskSource>, String> {
+) -> Result<Outcome<TaskSource>, String> {
     let defaults = &config.task_sources;
     let interval_secs = interval_secs.unwrap_or(defaults.default_interval_secs);
     let max = max_tasks_per_fetch.unwrap_or(defaults.max_tasks_per_fetch);
@@ -67,7 +67,7 @@ pub async fn add(
         provider = %source.provider.as_str(),
         "[task_sources:ops] add created source"
     );
-    Ok(RpcOutcome::new(source, vec![]))
+    Ok(Outcome::new(source, vec![]))
 }
 
 /// Apply a partial update to a source.
@@ -75,14 +75,14 @@ pub async fn update(
     config: &Config,
     id: &str,
     patch: TaskSourcePatch,
-) -> Result<RpcOutcome<TaskSource>, String> {
+) -> Result<Outcome<TaskSource>, String> {
     let source = store::update_source(config, id, patch).map_err(|e| e.to_string())?;
     tracing::debug!(source_id = %id, "[task_sources:ops] update applied");
-    Ok(RpcOutcome::new(source, vec![]))
+    Ok(Outcome::new(source, vec![]))
 }
 
 /// Remove a source by id.
-pub async fn remove(config: &Config, id: &str) -> Result<RpcOutcome<Value>, String> {
+pub async fn remove(config: &Config, id: &str) -> Result<Outcome<Value>, String> {
     let ingested = store::list_ingested_refs(config, id).map_err(|e| e.to_string())?;
     let mut pruned = 0usize;
     for item in ingested {
@@ -92,21 +92,21 @@ pub async fn remove(config: &Config, id: &str) -> Result<RpcOutcome<Value>, Stri
     }
     store::remove_source(config, id).map_err(|e| e.to_string())?;
     tracing::debug!(source_id = %id, pruned, "[task_sources:ops] removed");
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         json!({ "id": id, "removed": true, "pruned": pruned }),
         vec![],
     ))
 }
 
 /// Manually fetch one source now (`FetchReason::Manual`).
-pub async fn fetch(config: &Config, id: &str) -> Result<RpcOutcome<super::FetchOutcome>, String> {
+pub async fn fetch(config: &Config, id: &str) -> Result<Outcome<super::FetchOutcome>, String> {
     let source = store::get_source(config, id).map_err(|e| e.to_string())?;
     let outcome = pipeline::run_source_once(config, &source, FetchReason::Manual).await;
-    Ok(RpcOutcome::new(outcome, vec![]))
+    Ok(Outcome::new(outcome, vec![]))
 }
 
 /// Manually sync all enabled task sources now.
-pub async fn sync(config: &Config) -> Result<RpcOutcome<Vec<super::FetchOutcome>>, String> {
+pub async fn sync(config: &Config) -> Result<Outcome<Vec<super::FetchOutcome>>, String> {
     let sources = store::list_sources(config).map_err(|e| e.to_string())?;
     let mut outcomes = Vec::new();
     for source in sources.into_iter().filter(|source| source.enabled) {
@@ -122,7 +122,7 @@ pub async fn sync(config: &Config) -> Result<RpcOutcome<Vec<super::FetchOutcome>
         pruned = outcomes.iter().map(|outcome| outcome.pruned).sum::<usize>(),
         "[task_sources:ops] sync completed"
     );
-    Ok(RpcOutcome::new(outcomes, vec![]))
+    Ok(Outcome::new(outcomes, vec![]))
 }
 
 /// Recently ingested tasks for a source (newest first).
@@ -130,10 +130,10 @@ pub async fn list_tasks(
     config: &Config,
     id: &str,
     limit: Option<usize>,
-) -> Result<RpcOutcome<Vec<NormalizedTask>>, String> {
+) -> Result<Outcome<Vec<NormalizedTask>>, String> {
     let limit = limit.unwrap_or(50);
     let tasks = store::list_ingested(config, id, limit).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::new(tasks, vec![]))
+    Ok(Outcome::new(tasks, vec![]))
 }
 
 /// Dry-run a filter: fetch matching tasks WITHOUT routing or recording
@@ -144,7 +144,7 @@ pub async fn preview_filter(
     filter_spec: FilterSpec,
     connection_id: Option<String>,
     max: Option<u32>,
-) -> Result<RpcOutcome<Vec<NormalizedTask>>, String> {
+) -> Result<Outcome<Vec<NormalizedTask>>, String> {
     if filter_spec.provider() != provider {
         return Err(format!(
             "filter provider '{}' does not match requested provider '{}'",
@@ -172,7 +172,7 @@ pub async fn list_databases(
     config: &Config,
     provider: ProviderSlug,
     connection_id: Option<String>,
-) -> Result<RpcOutcome<Vec<TaskContainer>>, String> {
+) -> Result<Outcome<Vec<TaskContainer>>, String> {
     let _ = (config, connection_id);
     // `ComposioProvider::list_databases` has no replacement — see
     // `pipeline::fetch_tasks_unavailable`'s doc comment for why.
@@ -185,10 +185,10 @@ pub async fn list_databases(
 }
 
 /// Domain status: enabled flag + source counts.
-pub async fn status(config: &Config) -> Result<RpcOutcome<Value>, String> {
+pub async fn status(config: &Config) -> Result<Outcome<Value>, String> {
     let sources = store::list_sources(config).map_err(|e| e.to_string())?;
     let enabled_count = sources.iter().filter(|s| s.enabled).count();
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         json!({
             "enabled": config.task_sources.enabled,
             "defaultIntervalSecs": config.task_sources.default_interval_secs,

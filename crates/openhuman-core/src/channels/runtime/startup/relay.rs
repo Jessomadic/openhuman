@@ -43,7 +43,7 @@ pub(super) struct RelayRuntimeHandle {
 
 impl Drop for RelayRuntimeHandle {
     fn drop(&mut self) {
-        crate::channels::relay_runtime::unregister_relay_transport(&self._transport);
+        tinychannels::relay::unregister_relay_transport(&self._transport);
         self._reconnect.abort();
     }
 }
@@ -74,7 +74,7 @@ pub(super) async fn start_relay_runtime(
         max_message_length = descriptor.max_message_length,
         "[channels][relay] connected relay runtime"
     );
-    crate::channels::relay_runtime::register_relay_transport(transport.clone());
+    tinychannels::relay::register_relay_transport(transport.clone());
 
     let dialer = Arc::new(tinychannels::relay::WebSocketRelayDialer::new(
         websocket_config,

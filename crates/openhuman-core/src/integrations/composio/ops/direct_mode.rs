@@ -1,10 +1,10 @@
 //! Direct mode (BYO API key) ops.
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::super::{
-    client::{create_direct_composio_tool_for_api_key, direct_list_connections},
+    client::{create_direct_client_for_api_key, direct_list_connections},
     direct_auth,
 };
 use super::error_utils::OpResult;
@@ -13,10 +13,10 @@ async fn validate_direct_api_key_before_store(config: &Config, api_key: &str) ->
     let key_id = direct_auth::fingerprint_api_key(api_key);
     direct_auth::reset_direct_auth_failure(key_id);
 
-    let direct = create_direct_composio_tool_for_api_key(config, api_key)
+    let direct = create_direct_client_for_api_key(api_key)
         .map_err(|e| format!("[composio-direct] validate_api_key: {e}"))?;
 
-    match direct_list_connections(&direct).await {
+    match direct_list_connections(config, &direct).await {
         Ok(_) => {
             direct_auth::record_direct_auth_success(key_id);
             tracing::debug!("[composio-direct] validate_api_key: probe succeeded");
@@ -44,7 +44,7 @@ async fn validate_direct_api_key_before_store(config: &Config, api_key: &str) ->
 /// Read the current Composio routing mode and whether a direct-mode API
 /// key is stored. **The key itself is never returned** — only a boolean
 /// flag so the UI can show a "Connected" / "Not set" status.
-pub async fn composio_get_mode(config: &Config) -> OpResult<RpcOutcome<serde_json::Value>> {
+pub async fn composio_get_mode(config: &Config) -> OpResult<Outcome<serde_json::Value>> {
     let mode = config.composio.mode.trim().to_string();
     let key_present = crate::security::credentials::get_composio_api_key(config)
         .map_err(|e| format!("[composio-direct] get_composio_api_key failed: {e}"))?
@@ -58,7 +58,7 @@ pub async fn composio_get_mode(config: &Config) -> OpResult<RpcOutcome<serde_jso
         "mode": mode,
         "api_key_set": key_present,
     });
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         payload,
         vec![format!(
             "composio: mode={mode}, api_key={}",
@@ -75,7 +75,7 @@ pub async fn composio_set_api_key(
     config: &Config,
     api_key: &str,
     activate_direct: bool,
-) -> OpResult<RpcOutcome<serde_json::Value>> {
+) -> OpResult<Outcome<serde_json::Value>> {
     let trimmed = api_key.trim();
     if trimmed.is_empty() {
         return Err("composio.set_api_key: api_key must not be empty".to_string());
@@ -120,7 +120,7 @@ pub async fn composio_set_api_key(
         "[composio-cache] published ComposioConfigChanged after set_api_key"
     );
 
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         serde_json::json!({
             "stored": true,
             "mode": effective_mode,
@@ -131,7 +131,7 @@ pub async fn composio_set_api_key(
 
 /// Clear the stored direct-mode API key and reset
 /// `config.composio.mode` back to `"backend"`.
-pub async fn composio_clear_api_key(config: &Config) -> OpResult<RpcOutcome<serde_json::Value>> {
+pub async fn composio_clear_api_key(config: &Config) -> OpResult<Outcome<serde_json::Value>> {
     tracing::debug!("[composio-direct] clear_api_key");
     crate::security::credentials::clear_composio_api_key(config)
         .await
@@ -153,7 +153,7 @@ pub async fn composio_clear_api_key(config: &Config) -> OpResult<RpcOutcome<serd
     });
     tracing::debug!("[composio-cache] published ComposioConfigChanged after clear_api_key");
 
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         serde_json::json!({ "cleared": true, "mode": "backend" }),
         vec!["composio: api key cleared, mode reset to backend".into()],
     ))

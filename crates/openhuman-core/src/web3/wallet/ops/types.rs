@@ -2,51 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Error message returned when the wallet has not been set up yet.
-///
-/// This is an expected user-state (the user simply has not created a wallet),
-/// not an internal failure. Downstream boundaries that surface this condition
-/// match against this constant to
-/// classify it as `expected_user_state` so it stays out of Sentry. Keep it a
-/// shared constant so the producer here and any classifier cannot drift apart.
-pub const WALLET_NOT_CONFIGURED_MESSAGE: &str = "wallet is not configured; run wallet setup first";
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum WalletChain {
-    Evm,
-    Btc,
-    Solana,
-    Tron,
-}
-
-impl WalletChain {
-    pub(super) const ALL: [Self; 4] = [Self::Evm, Self::Btc, Self::Solana, Self::Tron];
-
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::Evm => "evm",
-            Self::Btc => "btc",
-            Self::Solana => "solana",
-            Self::Tron => "tron",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum WalletSetupSource {
-    Generated,
-    Imported,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WalletAccount {
-    pub chain: WalletChain,
-    pub address: String,
-    pub derivation_path: String,
-}
+// The wallet's vocabulary lives in `tinywallet-web3`, which the engine and the
+// tools share; the host keeps only the persisted shape and the setup params.
+pub use tinywallet_web3::crypto::wallet::{
+    WalletAccount, WalletChain, WalletSetupSource, WalletStatus,
+};
+/// Error message returned when the wallet has not been set up yet. Downstream
+/// boundaries match against it to classify the condition as an expected user
+/// state, so it stays out of Sentry; it is defined once in `tinywallet-web3`
+/// so the producer and any classifier cannot drift apart.
+pub use tinywallet_web3::quote::WALLET_NOT_CONFIGURED_MESSAGE;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -81,22 +46,6 @@ pub(super) struct StoredWalletState {
 pub(crate) struct WalletSecretMaterial {
     pub encrypted_mnemonic: String,
     pub derivation_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct WalletStatus {
-    pub configured: bool,
-    pub onboarding_completed: bool,
-    pub consent_granted: bool,
-    pub secret_stored: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<WalletSetupSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mnemonic_word_count: Option<u8>,
-    pub accounts: Vec<WalletAccount>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at_ms: Option<u64>,
 }
 
 /// Result returned by `reveal_recovery_phrase`.

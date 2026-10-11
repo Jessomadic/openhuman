@@ -18,9 +18,8 @@ import {
  * which calls `.trim()` on it and throws, crashing the panel on a theme that
  * was by then already in the store.
  *
- * The panel is reached at `/settings/appearance`, which embeds
- * `ThemeStudioPanel` (`AppearancePanel.tsx:98`); the standalone
- * `/settings/theme` route redirects there.
+ * The panel lives at `/settings/theme`; `/settings/appearance` is for font
+ * sizing and layout preferences.
  *
  * The observable signal for accept-vs-reject is the textarea. `handleImport`
  * clears `importText` only on the success path, and sets `importError` only on
@@ -28,18 +27,16 @@ import {
  * there" is a state the accepting build cannot produce.
  */
 
-const importBox = (page: Page) => page.getByLabel('Import theme');
+const importBox = (page: Page) => page.getByRole('textbox', { name: 'Import theme' });
 const importButton = (page: Page) =>
   page.getByTestId('app-content-surface').getByRole('button', { name: 'Import', exact: true });
 const importError = (page: Page) => page.getByText('Could not parse that theme JSON.');
 
-async function openAppearance(page: Page) {
-  await page.goto('/#/settings/appearance');
+async function openThemeStudio(page: Page) {
+  await page.goto('/#/settings/theme');
   await waitForAppReady(page);
   await dismissWalkthroughIfPresent(page);
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Appearance', {
-    timeout: 20_000,
-  });
+  await expect(page.getByTestId('theme-card-import')).toBeVisible({ timeout: 20_000 });
   await expect(importBox(page)).toBeVisible({ timeout: 20_000 });
 }
 
@@ -51,8 +48,8 @@ async function attemptImport(page: Page, json: string) {
 
 test.describe('Theme Studio — import validation', () => {
   test.beforeEach(async ({ page }) => {
-    await bootAuthenticatedPage(page, 'pw-w8-theme-import', '/settings/appearance');
-    await openAppearance(page);
+    await bootAuthenticatedPage(page, 'pw-w8-theme-import', '/settings/theme');
+    await openThemeStudio(page);
   });
 
   // Each of these reached the store before #5946. `null` and `[]` are the two

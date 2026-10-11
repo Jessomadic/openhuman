@@ -10,6 +10,7 @@ use crate::skills::ops::{
     CreateWorkflowParams, InstallWorkflowFromUrlParams, Workflow, WorkflowCreateInputDef,
     WorkflowScope,
 };
+use crate::skills::ops_install::{ScanBlockedOutcome, SkillInstallOutcome};
 
 // ── Params ────────────────────────────────────────────────────────────────────
 
@@ -82,6 +83,10 @@ pub(super) struct WorkflowsInstallFromUrlParamsWire {
     pub(super) url: String,
     #[serde(default)]
     pub(super) timeout_secs: Option<u64>,
+    /// Set only by the Skills UI, to the `digest` of the blocked document the
+    /// user chose to install anyway.
+    #[serde(default)]
+    pub(super) acknowledged_digest: Option<String>,
 }
 
 impl From<WorkflowsInstallFromUrlParamsWire> for InstallWorkflowFromUrlParams {
@@ -155,15 +160,9 @@ pub(crate) struct WorkflowSummary {
 
 impl From<Workflow> for WorkflowSummary {
     fn from(s: Workflow) -> Self {
-        // `id` is the on-disk slug the uninstall RPC resolves against.
-        // Prefer `dir_name`, but fall back to `name` for back-compat on
-        // deserialised `Workflow` values written before `dir_name` existed
-        // (default empty string).
-        let id = if s.dir_name.is_empty() {
-            s.name.clone()
-        } else {
-            s.dir_name.clone()
-        };
+        // `id` is the on-disk slug the uninstall RPC resolves against
+        // (`dir_name`, falling back to `name` for pre-`dir_name` values).
+        let id = s.id().to_string();
         WorkflowSummary {
             id,
             name: s.name,
@@ -216,11 +215,29 @@ pub(super) struct WorkflowsCreateResult {
 }
 
 #[derive(Debug, Serialize)]
-pub(super) struct WorkflowsInstallFromUrlResult {
-    pub(super) url: String,
-    pub(super) stdout: String,
-    pub(super) stderr: String,
-    pub(super) new_workflows: Vec<String>,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub(super) enum WorkflowsInstallFromUrlResult {
+    Installed {
+        url: String,
+        stdout: String,
+        stderr: String,
+        new_workflows: Vec<String>,
+    },
+    ScanBlocked(ScanBlockedOutcome),
+}
+
+impl From<SkillInstallOutcome> for WorkflowsInstallFromUrlResult {
+    fn from(outcome: SkillInstallOutcome) -> Self {
+        match outcome {
+            SkillInstallOutcome::Installed(installed) => Self::Installed {
+                url: installed.url,
+                stdout: installed.stdout,
+                stderr: installed.stderr,
+                new_workflows: installed.new_skills,
+            },
+            SkillInstallOutcome::ScanBlocked(blocked) => Self::ScanBlocked(blocked),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

@@ -331,6 +331,9 @@ async fn run_agent_trigger(
             defer_until_ms,
             reason,
         } => Ok(format!("Triage deferred until {defer_until_ms}: {reason}")),
+        crate::agent::triage::TriageOutcome::Terminal { reason } => {
+            Ok(format!("Triage reached terminal state: {reason}"))
+        }
     }
 }
 

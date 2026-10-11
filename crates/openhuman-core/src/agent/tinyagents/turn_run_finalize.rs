@@ -39,7 +39,8 @@ pub(super) async fn finalize_turn_outcome(
     bridge: Option<Arc<OpenhumanEventBridge>>,
     early_exit_hook: Option<EarlyExitHook>,
     halt_summary: &HaltSummarySlot,
-    wrap_up_fired: &Option<Arc<std::sync::atomic::AtomicBool>>,
+    wrap_up_fired: &Option<Arc<tinyagents_harness::middleware::FinalCallWrapUpMiddleware>>,
+    run_instance_id: u64,
     tool_outcome_sink: &ToolOutcomeSink,
     resolved_route: Option<tinyinference_llm::model::ResolvedModelRoute>,
     request_base_len: usize,
@@ -106,42 +107,6 @@ pub(super) async fn finalize_turn_outcome(
         observability::surface_cache_layout_events(model, &cache_layout_events);
     }
 
-    // Terminal turn event (parity with the legacy engine's `progress::emit`): the
-    // harness stream has no run-completed event, so emit `TurnCompleted` here with
-    // the model-call count as the iteration total. Parent turns only; best-effort.
-    // `turn_completed_sink` is `None` for sub-agent turns AND when the caller
-    // opted to emit the terminal event itself after its post-run wrap-up
-    // (`defer_turn_completed_to_caller`, #4457 defect C) — so this is the single
-    // emission point for callers with no post-run streaming (channel/CLI).
-    if let Some(sink) = &turn_completed_sink {
-        // NOT best-effort. `TurnCompleted` is the web bridge's sole completion
-        // signal: drop it and `parent_completed` stays false, so the bridge
-        // marks a turn that actually finished as `interrupted` and never emits
-        // `chat_done`. The turn's output still reaches the journal, session
-        // transcript and memory tree, so the agent "remembers" replying while
-        // the user's thread shows silence. A heavy turn (many tools + long
-        // streaming) reliably fills the 256-slot channel, which is why only
-        // tool-heavy turns were affected.
-        //
-        // Blocking is safe *here specifically*: this site is guarded by
-        // `subagent_scope.is_none()`, so it only ever runs on a parent turn
-        // with nothing awaiting it. The sub-agent stall documented on
-        // `tool_progress::emit` comes from parking a *sub-agent's* loop while
-        // the orchestrator awaits its tool call — unreachable from this path.
-        // Deltas and sub-agent lifecycle events stay lossy via `emit`.
-        if let Err(err) = sink
-            .send(AgentProgress::TurnCompleted {
-                iterations: run.model_calls as u32,
-            })
-            .await
-        {
-            tracing::warn!(
-                error = %err,
-                "[tinyagents] TurnCompleted not delivered — progress receiver gone"
-            );
-        }
-    }
-
     // Response-cache effectiveness for this turn (issue #4249, 03.2). Additive —
     // logged with a grep-friendly `[cache]` prefix here; wiring the counts into the
     // cost-footer DTO is a follow-up coordinated with workstream 06. Only the
@@ -165,17 +130,27 @@ pub(super) async fn finalize_turn_outcome(
     // cached tokens and the estimated charged USD) when the observed path ran;
     // otherwise fall back to the run's aggregate totals and estimate the cost from
     // them so a fire-and-forget turn still reports a real (non-$0) cost.
-    let (input_tokens, output_tokens, cached_input_tokens, charged_amount_usd) = bridge_totals
-        .unwrap_or_else(|| {
+    let (input_tokens, output_tokens, cached_input_tokens, cost) =
+        bridge_totals.unwrap_or_else(|| {
             let input = run.usage.usage.input_tokens;
             let output = run.usage.usage.output_tokens;
             let cached = run.usage.usage.cache_read_tokens;
-            let charged =
-                crate::platform::cost::catalog::estimate_cost_usd(model, input, output, cached);
-            crate::agent::tinyagents::turn_outcome::record_unobserved_turn_usage(
-                model, input, output, cached, charged,
+            // No per-call charges on this path: the catalog estimate when the
+            // model has a list price, else the turn's cost is unknown.
+            let estimate = crate::agent::cost::estimate_call_cost_usd(
+                model,
+                &crate::inference::provider::BilledUsage::from_counts(input, output)
+                    .with_cached_input_tokens(cached),
             );
-            (input, output, cached, charged)
+            crate::agent::tinyagents::turn_outcome::record_unobserved_turn_usage(
+                model, input, output, cached, estimate,
+            );
+            let mut cost = crate::agent::cost::CostTally::default();
+            cost.add(match estimate {
+                Some(usd) => crate::agent::cost::CallCost::Estimated(usd),
+                None => crate::agent::cost::CallCost::Unknown,
+            });
+            (input, output, cached, cost)
         });
 
     // An early-exit tool fired: the loop paused after its round. Surface the tool
@@ -206,12 +181,60 @@ pub(super) async fn finalize_turn_outcome(
     // list) and the loop ran out with nothing final.
     let wrap_up_injected = wrap_up_fired
         .as_ref()
-        .is_some_and(|fired| fired.load(std::sync::atomic::Ordering::SeqCst));
+        .is_some_and(|mw| mw.fired_for(run_instance_id));
     let hit_cap = pause_at_cap
         && early_exit.is_none()
         && breaker_halt.is_none()
         && (wrap_up_injected
             || (run.model_calls >= max_iterations && run.final_response.is_none()));
+
+    // Terminal turn event (parity with the legacy engine's `progress::emit`): the
+    // harness stream has no run-completed event, so emit `TurnCompleted` here with
+    // the model-call count as the iteration total. Parent turns only; best-effort.
+    // `turn_completed_sink` is `None` for sub-agent turns AND when the caller
+    // opted to emit the terminal event itself after its post-run wrap-up
+    // (`defer_turn_completed_to_caller`, #4457 defect C) — so this is the single
+    // emission point for callers with no post-run streaming (channel/CLI).
+    // A run the harness stopped (breaker / cap) is traced as stopped, not as a
+    // clean completion. No deadline wind-down on this path: only the session
+    // turn carries one, and it records the stop through its sidecar.
+    let stop = crate::agent::turn_stop::TurnStop::classify(breaker_halt.as_deref(), false, hit_cap);
+    if let Some(stop) = stop.as_ref().filter(|_| turn_completed_sink.is_some()) {
+        tracing::debug!(
+            model,
+            "[tinyagents] turn stopped early; carrying it on TurnCompleted {}",
+            stop.status_message()
+        );
+    }
+    if let Some(sink) = &turn_completed_sink {
+        // NOT best-effort. `TurnCompleted` is the web bridge's sole completion
+        // signal: drop it and `parent_completed` stays false, so the bridge
+        // marks a turn that actually finished as `interrupted` and never emits
+        // `chat_done`. The turn's output still reaches the journal, session
+        // transcript and memory, so the agent "remembers" replying while
+        // the user's thread shows silence. A heavy turn (many tools + long
+        // streaming) reliably fills the 256-slot channel, which is why only
+        // tool-heavy turns were affected.
+        //
+        // Blocking is safe *here specifically*: this site is guarded by
+        // `subagent_scope.is_none()`, so it only ever runs on a parent turn
+        // with nothing awaiting it. The sub-agent stall documented on
+        // `tool_progress::emit` comes from parking a *sub-agent's* loop while
+        // the orchestrator awaits its tool call — unreachable from this path.
+        // Deltas and sub-agent lifecycle events stay lossy via `emit`.
+        if let Err(err) = sink
+            .send(AgentProgress::TurnCompleted {
+                iterations: run.model_calls as u32,
+                stop,
+            })
+            .await
+        {
+            tracing::warn!(
+                error = %err,
+                "[tinyagents] TurnCompleted not delivered — progress receiver gone"
+            );
+        }
+    }
 
     let (early_exit_tool, mut text) = match early_exit {
         Some(exit) => (Some(exit.tool), exit.question),
@@ -229,6 +252,18 @@ pub(super) async fn finalize_turn_outcome(
             "[tinyagents] run halted by circuit breaker; surfacing as breaker_halt (#4466)"
         );
         text = summary.clone();
+    }
+
+    // #6951: the run finished on a reply that spent the whole output budget
+    // reasoning. The closing call names that cause instead of "finished".
+    let truncated = super::turn_outcome::ended_out_of_output_budget(run.final_response.as_ref());
+    if truncated {
+        tracing::warn!(
+            model,
+            model_calls = run.model_calls,
+            tool_calls = run.tool_calls,
+            "[tinyagents] turn ended on a reply that ran out of output tokens while reasoning"
+        );
     }
 
     let tool_outcomes = tool_outcome_sink
@@ -270,6 +305,21 @@ pub(super) async fn finalize_turn_outcome(
         "[tinyagents] turn prompt summary"
     );
 
+    // The run's compaction (`AgentRun::compacted_history`), carried to the
+    // session driver so the persisted history starts from the checkpoint.
+    let compaction = run
+        .compacted_history
+        .as_deref()
+        .and_then(crate::agent::tinyagents::CompactionCarry::from_compacted_history);
+    if let Some(carry) = &compaction {
+        tracing::info!(
+            model,
+            kept_tail = carry.kept_tail,
+            transcript_len = run.messages.len(),
+            "[tinyagents] turn compacted; the persisted history will start from the checkpoint"
+        );
+    }
+
     TinyagentsTurnOutcome {
         text,
         resolved_route,
@@ -280,11 +330,13 @@ pub(super) async fn finalize_turn_outcome(
         input_tokens,
         output_tokens,
         cached_input_tokens,
-        charged_amount_usd,
+        cost,
         early_exit_tool,
         hit_cap,
         wrap_up_injected,
         breaker_halt,
+        truncated,
         tool_outcomes,
+        compaction,
     }
 }

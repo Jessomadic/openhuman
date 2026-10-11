@@ -151,7 +151,7 @@ export async function connectTelegramBot(
   }
 
   // The result shape from ops.rs is { status, restart_required, message? }.
-  // It is wrapped by RpcOutcome which the Node RPC client unwraps one level.
+  // It is wrapped by Outcome which the Node RPC client unwraps one level.
   const result = (out.result as Record<string, unknown> | null) ?? {};
   const inner =
     typeof result.result === 'object' && result.result !== null
@@ -207,7 +207,7 @@ export async function getTelegramChannelStatus(): Promise<TelegramStatusEntry | 
   }
 
   // channels_status returns entries: ChannelStatusEntry[].
-  // The core wraps with RpcOutcome so the Node client may unwrap one level.
+  // The core wraps with Outcome so the Node client may unwrap one level.
   const result = (out.result as Record<string, unknown> | null) ?? {};
   const entries: TelegramStatusEntry[] = Array.isArray(result)
     ? result
@@ -217,10 +217,17 @@ export async function getTelegramChannelStatus(): Promise<TelegramStatusEntry | 
         ? ((result as Record<string, unknown>).result as TelegramStatusEntry[])
         : [];
 
+  // The core serialises these in snake_case, so each entry carries keys the
+  // camelCase interface does not declare. `as unknown as` rather than a direct
+  // assertion: the two types genuinely do not overlap, and TS is right to say
+  // so — going through `unknown` states that we know we are reading past the
+  // declared shape instead of pretending the shapes match.
+  const asLoose = (entry: TelegramStatusEntry): Record<string, unknown> =>
+    entry as unknown as Record<string, unknown>;
   const raw = entries.find(
     (e: TelegramStatusEntry) =>
-      (e.channelId === 'telegram' || (e as Record<string, unknown>).channel_id === 'telegram') &&
-      (e.authMode === 'bot_token' || (e as Record<string, unknown>).auth_mode === 'bot_token')
+      (e.channelId === 'telegram' || asLoose(e).channel_id === 'telegram') &&
+      (e.authMode === 'bot_token' || asLoose(e).auth_mode === 'bot_token')
   ) as (TelegramStatusEntry & Record<string, unknown>) | undefined;
 
   // Normalise snake_case fields that the Rust core serialises.

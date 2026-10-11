@@ -10,14 +10,6 @@ fn keypair_round_trip_pubkey_is_base64url() {
 }
 
 #[test]
-fn keypair_private_bytes_round_trip() {
-    let kp = DeviceKeypair::generate();
-    let bytes = kp.private_bytes();
-    let kp2 = DeviceKeypair::from_private_bytes(bytes);
-    assert_eq!(kp.pubkey_b64, kp2.pubkey_b64);
-}
-
-#[test]
 fn dh_both_sides_derive_same_secret() {
     let core_kp = DeviceKeypair::generate();
     let device_kp = DeviceKeypair::generate();
@@ -188,7 +180,7 @@ fn directional_roundtrip_client_to_server_succeeds() {
 }
 
 /// A legacy `version=0x01` frame MUST be rejected post-upgrade with a
-/// distinctive error message — peers see "re-pair required" instead
+/// distinctive error message — peers see "client upgrade required" instead
 /// of a generic AEAD failure.
 #[test]
 fn frame_v1_rejected_after_upgrade() {
@@ -207,8 +199,8 @@ fn frame_v1_rejected_after_upgrade() {
         .open(&v1_frame)
         .expect_err("v1 frame must be rejected");
     assert!(
-        err.contains("UnsupportedFrameVersion") && err.contains("re-pair"),
-        "expected explicit UnsupportedFrameVersion + re-pair hint, got: {err}"
+        err.contains("UnsupportedFrameVersion") && err.contains("upgrade"),
+        "expected explicit UnsupportedFrameVersion + upgrade hint, got: {err}"
     );
 }
 

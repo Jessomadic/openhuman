@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
 import { mcpClientsApi } from '../../../services/api/mcpClientsApi';
+import Badge from '../../ui/Badge';
 import Button from '../../ui/Button';
 import TextField from '../../ui/TextField';
 import ConnectAuthModal, { authHintMessageKey } from './ConnectAuthModal';
@@ -346,11 +347,9 @@ const InstalledServerDetail = ({
           {!reconfigOpen && (
             <div className="flex flex-wrap gap-1.5">
               {visibleEnvKeys.map(key => (
-                <span
-                  key={key}
-                  className="px-2 py-0.5 text-[11px] font-mono rounded bg-surface-subtle text-content-secondary border border-line">
+                <Badge key={key} dot={false} className="font-mono">
                   {key}
-                </span>
+                </Badge>
               ))}
             </div>
           )}

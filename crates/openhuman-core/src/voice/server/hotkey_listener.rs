@@ -33,7 +33,7 @@ impl HotkeyListenerKind {
 /// Start the appropriate hotkey listener for the current platform and key.
 ///
 /// On macOS, the Fn/Globe key is handled by the Swift-based globe listener
-/// (`accessibility::globe`) which monitors `NSEvent.flagsChanged`. All other
+/// (`tinycomputer_accessibility::globe`) which monitors `NSEvent.flagsChanged`. All other
 /// keys return an error on macOS: rdev's CGEventTap callback calls
 /// `TSMGetInputSourceProperty` off the main thread; macOS 26 enforces
 /// `dispatch_assert_queue(main_queue)` inside that API and kills the process
@@ -75,8 +75,8 @@ pub(super) fn start_hotkey_listener(
         // branch above; the rdev listener manages its own lifecycle, so bind it
         // here to keep the shared signature warning-free on non-macOS.
         let _ = server_cancel;
-        let combo = hotkey::parse_hotkey(hotkey_str)?;
-        let (handle, rx) = hotkey::start_listener(combo, mode)?;
+        let combo = hotkey::parse_hotkey(hotkey_str).map_err(|e| e.to_string())?;
+        let (handle, rx) = hotkey::start_listener(combo, mode).map_err(|e| e.to_string())?;
         Ok((HotkeyListenerKind::Rdev(handle), rx))
     }
 }
@@ -94,11 +94,11 @@ fn start_globe_hotkey_listener(
     ),
     String,
 > {
-    use crate::desktop::accessibility::{globe_listener_poll, globe_listener_start};
+    use tinycomputer_accessibility::{globe_listener_poll, globe_listener_start};
 
     info!("{LOG_PREFIX} hotkey is Fn on macOS — using Swift globe listener instead of rdev");
 
-    let status = globe_listener_start()?;
+    let status = globe_listener_start().map_err(|e| e.to_string())?;
     if !status.running {
         let err_msg = status
             .last_error

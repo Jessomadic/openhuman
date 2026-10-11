@@ -304,9 +304,8 @@ async fn unknown_or_mistyped_args_surface() {
 
 #[tokio::test]
 async fn fresh_gates_eventually_auto_proceed() {
-    // Regression for #5119: when the main agent re-delegates to a fresh
-    // integrations_agent sub-agent, each spawn creates a new ComposioActionTool
-    // with a fresh ContractGate. Without a process-wide safety net, every fresh
+    // Regression for #5119: each freshly built ComposioActionTool carries a
+    // fresh ContractGate. Without a process-wide safety net, every fresh
     // gate surfaces the contract again and the action never executes, causing an
     // infinite loop (51x surfacing in the reported log).
     //

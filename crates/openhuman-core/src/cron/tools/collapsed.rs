@@ -22,7 +22,7 @@
 //! the host). `permission_level_with_args` resolves the real one once the
 //! action is known; the argument-free `permission_level` reports the strictest,
 //! so a caller that does not pass arguments over-restricts rather than under-.
-//! See `tools::implementations::meta::collapse` for the reasoning.
+//! See `tinytools::collapse` for the reasoning.
 
 use std::sync::Arc;
 
@@ -35,7 +35,7 @@ use super::{
 };
 use crate::config::Config;
 use crate::security::policy::SecurityPolicy;
-use crate::tools::implementations::meta::collapse::{
+use tinytools::collapse::{
     any_external_effect, args_without_action, merge_action_schemas, resolve, strictest_permission,
     unknown_action_message, CollapsedAction,
 };
@@ -106,6 +106,10 @@ impl CronTool {
 
 #[async_trait]
 impl Tool for CronTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         CRON_TOOL_NAME
     }

@@ -37,6 +37,15 @@ pub enum VoiceEvent {
     },
 }
 
+/// A tool call made while answering a committed turn: name and id only.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ConversationToolCall {
+    /// Tool name.
+    pub name: String,
+    /// Provider-assigned call id, when known.
+    pub id: Option<String>,
+}
+
 /// Top-level domain event. Non-exhaustive so new variants can be added
 /// without breaking existing match arms.
 #[non_exhaustive]
@@ -51,6 +60,25 @@ pub enum DomainEvent {
         text_chars: usize,
         iterations: usize,
     },
+    /// A threaded conversation turn was durably committed. Memory logs the
+    /// turn itself (`memory::lifecycle::hooks`); this is for observers. Carries the turn text, as
+    /// `ChannelMessageProcessed` does; subscribers must never log it. Tool
+    /// calls carry names and ids only — never arguments.
+    ConversationTurnCommitted {
+        thread_id: String,
+        /// The agent definition that answered.
+        agent_id: Option<String>,
+        /// The agent's working folder (`action_dir`).
+        workspace: Option<String>,
+        /// The channel the turn arrived on (`web`, `telegram`, …).
+        channel: Option<String>,
+        user_text: String,
+        assistant_text: String,
+        tool_calls: Vec<ConversationToolCall>,
+        /// Workspace directory active when this event was published.
+        /// Subscribers that persist data load this workspace's config.
+        workspace_dir: std::path::PathBuf,
+    },
     /// An error occurred during agent processing.
     AgentError {
         session_id: String,
@@ -61,7 +89,7 @@ pub enum DomainEvent {
     SubagentSpawned {
         /// Parent agent's session id.
         parent_session: String,
-        /// Sub-agent definition id (e.g. `researcher`, `notion_specialist`, `fork`).
+        /// Sub-agent definition id (e.g. `code_executor`, `notion_specialist`, `fork`).
         agent_id: String,
         /// Spawn mode — `"typed"` or `"fork"`.
         mode: String,
@@ -126,38 +154,40 @@ pub enum DomainEvent {
         orchestration_id: String,
         reason: Option<String>,
     },
-    // ── Subconscious orchestrator ───────────────────────────────────────
-    /// A subconscious trigger finished gate evaluation (promote or drop).
-    /// Observability only — lets dashboards see ingestion volume and the
-    /// gate's promote/drop ratio without reading logs.
-    SubconsciousTriggerProcessed {
-        /// Trigger source family (`cron` / `user_message` / …).
-        source: String,
-        /// Gate decision (`promote` / `drop`).
-        decision: String,
-        /// Whether the trigger was promoted into the long-lived session.
-        promoted: bool,
-        /// Gate evaluation latency in milliseconds.
-        latency_ms: u64,
-    },
-
     // ── Run Queue ──────────────────────────────────────────────────────
     /// A message was queued into the active-run queue instead of interrupting.
     RunQueueMessageQueued {
         thread_id: String,
         mode: String,
         queue_depth: usize,
+        /// Stable id of the queued item, when the run queue assigns one.
+        /// `None` until the queue implementation is updated to mint ids.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_id: Option<String>,
+        /// Short, non-sensitive preview of the queued text (already
+        /// truncated by the publisher — never the raw message body at
+        /// full length). `None` until wired up.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_preview: Option<String>,
     },
     /// A queued followup message was dispatched as a fresh turn after the
     /// current turn completed.
     RunQueueFollowupDispatched {
         thread_id: String,
         followup_count: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_preview: Option<String>,
     },
     /// The active turn was interrupted by a new message (default behavior).
     RunQueueInterrupted {
         thread_id: String,
         cancelled_request_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_preview: Option<String>,
     },
     /// One or more queued steer/collect messages were delivered into a running
     /// turn's steering handle (the harness applies them at the next iteration
@@ -168,11 +198,22 @@ pub enum DomainEvent {
         thread_id: String,
         mode: String,
         delivered: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_preview: Option<String>,
     },
     /// Residual steer messages that the turn ended or was cancelled before
     /// applying were drained back into the session run queue so they become the
     /// next turn's input instead of silently vanishing (issue #4456).
-    RunQueueSteerRequeued { thread_id: String, requeued: usize },
+    RunQueueSteerRequeued {
+        thread_id: String,
+        requeued: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_preview: Option<String>,
+    },
 
     // ── Monitor ───────────────────────────────────────────────────────
     /// A background monitor changed lifecycle state.
@@ -242,114 +283,6 @@ pub enum DomainEvent {
     },
     /// A memory recall query completed.
     MemoryRecalled { query: String, hit_count: usize },
-    /// The configured memory driver could not be bound, and the kernel fell
-    /// back to the placeholder. Never silent — `docs/specs/kernel.md` §3.7.
-    ///
-    /// Carries driver *ids* and an operator-facing reason only: never an
-    /// endpoint, a `credential_ref`, or user memory content. See
-    /// `MemoryDriverConfig`'s manual redacting `Debug` impl for the same rule
-    /// on the config side.
-    MemoryDriverBindFailed {
-        /// The driver id asked for in `[subsystems.memory] driver`.
-        configured_driver: String,
-        /// What was bound instead (today always `"null"`).
-        bound_driver: String,
-        /// Why the configured driver was refused.
-        reason: String,
-    },
-    /// The memory policy guard refused a call before it reached the bound
-    /// driver (`docs/specs/kernel.md` §3.4).
-    ///
-    /// Carries the driver id, the contract method, and an operator-facing
-    /// reason — **never** a namespace key, a recall query, or memory content.
-    /// Same rule as [`Self::MemoryDriverBindFailed`] above, and the reason
-    /// [`Self::MemoryRecalled`] (which carries the raw query) is not reused for
-    /// this: the guard sits on the hot path and must not put user text on the
-    /// bus.
-    ///
-    /// Published on refusals only. A guard that published on success would emit
-    /// one event per memory read.
-    MemoryGuardDenied {
-        /// The bound driver the call was headed for.
-        driver_id: String,
-        /// The contract method that was refused, e.g. `"core.store"` or
-        /// `"tree.query_source"`.
-        method: String,
-        /// Why the guard refused it.
-        reason: String,
-    },
-    /// A memory sync was requested for a specific channel or all channels.
-    ///
-    /// Published by `openhuman.memory_sync_channel` (channel_id = Some(...)) and
-    /// `openhuman.memory_sync_all` (channel_id = None). No consumers exist yet —
-    /// this variant is a hook for future ingestion subscribers to react to pull
-    /// requests. See `crates/openhuman-core/src/memory/ops.rs` for the RPC handlers.
-    MemorySyncRequested { channel_id: Option<String> },
-    /// A high-level memory sync orchestration stage changed.
-    ///
-    /// Emitted by the `memory` domain so the frontend can surface progress
-    /// across request → fetch → store → queue → ingest → complete.
-    ///
-    /// `source_id` is the originating memory-source id (from
-    /// `memory_sources`) when the event can be attributed to a specific
-    /// source row. The frontend prefers this over `connection_id` for
-    /// per-row indicator matching (see RC#2, issue #3295). Set to `None`
-    /// when the event originates from a non-memory-source sync path (e.g. a
-    /// channel-provider ingest) — `connection_id` remains unchanged for
-    /// those callers.
-    MemorySyncStageChanged {
-        trigger: String,
-        stage: String,
-        provider: Option<String>,
-        connection_id: Option<String>,
-        detail: Option<String>,
-        /// Originating memory-source id for frontend per-row indicator
-        /// matching. `None` when the event is not attributable to a
-        /// specific `MemorySourceEntry`.
-        source_id: Option<String>,
-    },
-    /// A memory ingestion job started running on the local extraction LLM.
-    /// Ingestion is singleton — this fires once, then a matching
-    /// [`Self::MemoryIngestionCompleted`] follows when the job finishes.
-    MemoryIngestionStarted {
-        document_id: String,
-        title: String,
-        namespace: String,
-        queue_depth: usize,
-    },
-    /// A memory ingestion job finished (successfully or with an error).
-    MemoryIngestionCompleted {
-        document_id: String,
-        namespace: String,
-        success: bool,
-        elapsed_ms: u64,
-        queue_depth: usize,
-    },
-
-    // ── Memory Diff ─────────────────────────────────────────────────────
-    /// A snapshot of a memory source's chunk state was captured.
-    MemoryDiffSnapshotTaken {
-        snapshot_id: String,
-        source_id: String,
-        source_kind: String,
-        item_count: usize,
-        trigger: String,
-    },
-    /// A diff was computed between two snapshots.
-    MemoryDiffComputed {
-        source_id: String,
-        from_snapshot_id: Option<String>,
-        to_snapshot_id: String,
-        added: usize,
-        removed: usize,
-        modified: usize,
-    },
-    /// Read markers were committed for one or more sources, acknowledging
-    /// their current diffs as consumed.
-    MemoryDiffMarkedRead {
-        source_ids: Vec<String>,
-        snapshot_ids: Vec<String>,
-    },
 
     // ── Channels ────────────────────────────────────────────────────────
     /// An inbound channel message from the transport layer, ready for processing.
@@ -457,6 +390,12 @@ pub enum DomainEvent {
         message: String,
         /// Optional job name for display/threading purposes.
         job_name: Option<String>,
+    },
+    /// A host-owned system cron job came due (a `flow`-type row whose command
+    /// is `system:<job>`, see `cron::system_jobs`). The owning domain runs it.
+    CronSystemJobDue {
+        /// The job name, e.g. `memory_context_refresh`.
+        job: String,
     },
     /// A `flow`-type cron job fired its schedule tick (issue B2,
     /// `my_docs/ohxtf/b2-triggers-trust/01-triggers-and-trust.md` §1).
@@ -592,15 +531,10 @@ pub enum DomainEvent {
     },
 
     // ── Approval ────────────────────────────────────────────────────────
-    /// Agent attempted a tool call that produces an external side
-    /// effect; awaiting user approval. Published by `ApprovalGate`
-    /// before parking the tool-call future. Issue #1339.
-    ///
-    /// Note: this variant intentionally does not carry a `session_id`.
-    /// Session provenance is internal to `ApprovalGate`; downstream
-    /// surfaces (frontend approval card, audit log readers, web channel
-    /// bridge) only need the request correlation id plus optional chat
-    /// thread/client routing.
+    /// Agent attempted a tool call that produces an external side effect;
+    /// awaiting user approval. Published by `ApprovalGate` before parking the
+    /// tool-call future. Carries no `session_id`: consumers need only the
+    /// request id plus optional chat thread/client routing.
     ApprovalRequested {
         /// Unique id used to correlate the decision back to the
         /// parked future.
@@ -619,6 +553,21 @@ pub enum DomainEvent {
         /// Socket.IO client id (room) to surface the approval question to,
         /// when known. `None` for non-chat callers.
         client_id: Option<String>,
+        /// The gated tool call's provider-assigned call id, when the parked
+        /// call originated from a tracked tool-call turn. Lets a frontend
+        /// correlate the approval card back to the exact `tool_call` /
+        /// `tool_args_delta` timeline row instead of matching on tool name.
+        /// `None` until every publish site is updated to pass it through.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        /// RFC3339 expiry of this pending approval, mirrored from
+        /// `PendingApproval::expires_at`. `None` when the approval has no
+        /// expiry or the publish site hasn't been updated yet.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<String>,
+        /// The embedded agent whose turn parked this call, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
     },
     /// User decided a pending approval. Published by `approval_decide`
     /// RPC handler after the gate's parked future resolves.
@@ -628,17 +577,37 @@ pub enum DomainEvent {
         /// `"approve_once"`, `"approve_always_for_tool"`,
         /// `"approve_always_for_flow"`, or `"deny"`.
         decision: String,
+        /// Chat thread the decided approval belongs to, mirrored from the
+        /// original `ApprovalRequested` so a socket bridge can route the
+        /// decision without re-looking up the (possibly already-cleared)
+        /// pending-approval record. `None` for non-chat callers and until
+        /// every publish site is updated.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+        /// Socket.IO client id (room), mirrored the same way.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+        /// The gated tool call's provider-assigned call id, mirrored from
+        /// `ApprovalRequested::tool_call_id`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        /// Why the parked call resolved, when `decision` alone (`deny`)
+        /// can't say: `"expired"` (TTL/`expire_stale` sweep denied it with
+        /// nobody deciding) or `"cancelled"` (the decision channel dropped —
+        /// external turn teardown). `None` for an ordinary user-made
+        /// decision (approve or a deliberate deny).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<String>,
+        /// Mirrored from `ApprovalRequested::agent_id`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
     },
-    /// A `Workflow`-origin tool call parked in the `ApprovalGate` (issue
-    /// flow-approval-surface, PR2/PR3). Unlike `ApprovalRequested`, this
-    /// event carries no `thread_id`/`client_id` — a flow run has neither, so
-    /// the generic chat-routed socket bridge
-    /// (`web_chat::event_bus::ApprovalSurfaceSubscriber`)
-    /// silently drops it (that gap was the original silent-deadlock bug).
-    /// Published by `ApprovalGate::intercept_audited` alongside the existing
-    /// `ApprovalRequested`, bridged by `core::socketio` directly to a
-    /// broadcast (not per-room) `flow_approval_request` Socket.IO event so
-    /// the Workflows UI can surface and resolve the park without polling.
+    /// A `Workflow`-origin tool call parked in the `ApprovalGate`. It carries
+    /// no `thread_id`/`client_id` (a flow run has neither), so the chat-routed
+    /// `web_chat::event_bus::ApprovalSurfaceSubscriber` ignores it. Published
+    /// by `ApprovalGate::intercept_audited` alongside `ApprovalRequested` and
+    /// bridged by `openhuman_rpc::server::socketio` to a broadcast
+    /// `flow_approval_request` Socket.IO event for the Workflows UI.
     FlowApprovalRequested {
         /// Unique id used to correlate the decision back to the parked
         /// future — pass to `approval_decide` unchanged.
@@ -653,6 +622,9 @@ pub enum DomainEvent {
         /// Short human-readable summary of the action (redacted, same as
         /// `ApprovalRequested::action_summary`).
         summary: String,
+        /// The embedded agent whose flow run parked this call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
     },
 
     // ── Egress (privacy spine) ──────────────────────────────────────────
@@ -682,6 +654,11 @@ pub enum DomainEvent {
         /// Socket.IO client id (room) to surface the disclosure to, when known.
         /// `None` for non-chat callers.
         client_id: Option<String>,
+        /// The turn this transfer was made under, from the ambient
+        /// `ApprovalChatContext::request_id`. `None` for non-chat callers, or
+        /// a chat caller that had no turn request_id in scope.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
     },
 
     // ── Plan review (interactive plan-mode gate) ────────────────────────
@@ -701,6 +678,15 @@ pub enum DomainEvent {
         summary: String,
         /// Ordered plan steps shown in the review card.
         steps: Vec<String>,
+        /// The gated tool call's provider-assigned call id, when the parked
+        /// turn originated from a tracked tool-call. `None` until every
+        /// publish site is updated to pass it through.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        /// RFC3339 expiry of this pending plan review, mirrored the same
+        /// way as `ApprovalRequested::expires_at`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<String>,
     },
     /// User resolved a parked plan review. Published after the gate's parked
     /// future wakes. `decision` is `"approve"` / `"reject"` / `"revise"`
@@ -708,6 +694,23 @@ pub enum DomainEvent {
     PlanReviewDecided {
         request_id: String,
         decision: String,
+        /// Chat thread the decided review belongs to, mirrored from the
+        /// original `PlanReviewRequested`. `None` for non-chat callers and
+        /// until every publish site is updated.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+        /// Socket.IO client id (room), mirrored the same way.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+        /// The gated tool call's provider-assigned call id, mirrored from
+        /// `PlanReviewRequested::tool_call_id`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        /// Why the parked review resolved when `decision` alone (`reject`)
+        /// can't say: `"expired"` (TTL) or `"cancelled"` (sender dropped —
+        /// external teardown). `None` for a real user decision.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<String>,
     },
 
     // ── Artifacts ───────────────────────────────────────────────────────
@@ -734,8 +737,8 @@ pub enum DomainEvent {
         /// relative and would otherwise resolve into the wrong
         /// `<workspace>/artifacts/` tree.
         workspace_dir: String,
-        /// Relative path under `<workspace>/artifacts/`, e.g.
-        /// `"<uuid>/deck.pptx"`. The absolute path is reachable via
+        /// File name relative to its root (`"deck.pptx"` in the files folder,
+        /// legacy `"<uuid>/deck.pptx"`); the absolute path is reachable via
         /// `ai_get_artifact` so the renderer never needs the
         /// workspace root.
         path: String,
@@ -748,6 +751,13 @@ pub enum DomainEvent {
         /// Socket.IO client id (room) to surface the card to, when
         /// known. `None` for non-chat callers.
         client_id: Option<String>,
+        /// The tool call that produced this artifact, when known — lets the
+        /// UI attach the finished card to that exact timeline row.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        /// The turn/request id this artifact was produced under, when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
     },
     /// An artifact transitioned to [`ArtifactStatus::Failed`] — the
     /// producer surfaced a reason and the UI should render a
@@ -765,6 +775,12 @@ pub enum DomainEvent {
         error: String,
         thread_id: Option<String>,
         client_id: Option<String>,
+        /// The tool call that produced this artifact, when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        /// The turn/request id this artifact was produced under, when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
     },
     /// An artifact record has been **created** (`ArtifactStatus::Pending`)
     /// but no bytes are on disk yet — the producing tool has only just
@@ -787,8 +803,8 @@ pub enum DomainEvent {
         /// Absolute workspace root the artifact belongs to — see
         /// [`Self::ArtifactReady::workspace_dir`] for rationale.
         workspace_dir: String,
-        /// Relative path under `<workspace>/artifacts/` where the file
-        /// *will* land. The frontend uses it to render a stable card key
+        /// The name, relative to the visible files folder (#5505), the file
+        /// *will* land under. The frontend uses it to render a stable card key
         /// so subsequent `ArtifactReady` can swap the same surface in
         /// place without flicker.
         path: String,
@@ -799,6 +815,12 @@ pub enum DomainEvent {
         /// Socket.IO client id (room) to surface the card to, when known.
         /// `None` for non-chat callers.
         client_id: Option<String>,
+        /// The tool call that reserved this artifact, when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        /// The turn/request id this artifact was reserved under, when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
     },
 
     // ── Webhooks ────────────────────────────────────────────────────────
@@ -934,40 +956,6 @@ pub enum DomainEvent {
         reason: String,
     },
 
-    // ── Tree Summarizer ──────────────────────────────────────────────────
-    /// An hour leaf was created from buffered data.
-    TreeSummarizerHourCompleted {
-        namespace: String,
-        node_id: String,
-        token_count: u32,
-    },
-    /// A tree node summary was updated during propagation.
-    TreeSummarizerPropagated {
-        namespace: String,
-        node_id: String,
-        level: String,
-        token_count: u32,
-    },
-    /// A full tree rebuild completed.
-    TreeSummarizerRebuildCompleted { namespace: String, total_nodes: u64 },
-
-    /// Fine-grained progress during the memory tree build pipeline.
-    /// Emitted at each sub-phase so the frontend can show detailed status.
-    MemoryTreeBuildProgress {
-        /// Which phase: "extract", "append", "seal", "flush", "embed"
-        phase: String,
-        /// Sub-step within the phase (e.g. "loading", "summarising", "persisting")
-        step: String,
-        /// Tree scope when available (e.g. "github:org/repo")
-        tree_scope: Option<String>,
-        /// Tree level being processed (0 = leaves, 1+ = summaries)
-        level: Option<u32>,
-        /// Number of items being processed in this step
-        item_count: Option<u32>,
-        /// Human-readable detail
-        detail: Option<String>,
-    },
-
     // ── Notification ────────────────────────────────────────────────────
     /// An integration notification was ingested from an embedded webview.
     NotificationIngested {
@@ -1004,54 +992,6 @@ pub enum DomainEvent {
     DeviceTunnelFrame {
         channel_id: String,
         payload_b64: String,
-    },
-    // ── Memory tree ─────────────────────────────────────────────────────
-    /// A document (chat batch, email thread, or standalone document) was
-    /// fully canonicalised and its chunks written to the memory tree.
-    ///
-    /// Emitted by `tinymemory_core::tree::ingest::persist()` after the chunk upsert
-    /// and extract-job enqueue complete. Subscribers (Phase 2 producers such
-    /// as the email-signature parser) react to this to inspect the
-    /// canonicalised content.
-    DocumentCanonicalized {
-        /// The source identifier passed to the ingest call (e.g. `"gmail:abc"`,
-        /// `"conversations:agent"`).
-        source_id: String,
-        /// Kind of content — `"chat"`, `"email"`, `"document"`.
-        source_kind: String,
-        /// Number of chunks written to `vector_chunks` in this ingest.
-        chunks_written: usize,
-        /// IDs of the chunks that were written.
-        chunk_ids: Vec<String>,
-        /// Wall-clock seconds since epoch when canonicalisation completed.
-        canonicalized_at: f64,
-        /// Last ≤ 2 048 characters of the canonicalised markdown body.
-        ///
-        /// Populated for `email` and `document` sources so that lightweight
-        /// subscribers (e.g. the email-signature parser) can inspect trailing
-        /// content without hitting disk. `None` for `chat` sources where the
-        /// content is conversational and doesn't contain signature-style structure.
-        body_preview: Option<String>,
-    },
-
-    // ── Learning ─────────────────────────────────────────────────────────
-    /// The stability detector finished a full cache rebuild cycle.
-    ///
-    /// Emitted by `learning::stability_detector` (Phase 3) after writing
-    /// the new snapshot to `user_profile_facets`. Subscribers (Phase 4
-    /// `profile_md_renderer`) react to re-render the `PROFILE.md` managed
-    /// blocks.
-    CacheRebuilt {
-        /// Number of facets added in this cycle.
-        added: usize,
-        /// Number of facets evicted (below τ_evict threshold) in this cycle.
-        evicted: usize,
-        /// Number of facets unchanged / carried over.
-        kept: usize,
-        /// Total facets in the cache after the rebuild.
-        total_size: usize,
-        /// Wall-clock seconds since epoch when the rebuild completed.
-        rebuilt_at: f64,
     },
 
     // ── MCP Clients ─────────────────────────────────────────────────────
@@ -1282,21 +1222,6 @@ pub enum DomainEvent {
     },
     /// A component restart was observed.
     HealthRestarted { component: String },
-    /// A one-time harness-init step changed state (pending → running → done /
-    /// failed / skipped). Surfaced to the frontend initialization screen.
-    HarnessInitProgress {
-        step_id: String,
-        state: String,
-        message: Option<String>,
-        percent: Option<u8>,
-    },
-    /// The harness-init run reached a terminal state. `failed_required` is true
-    /// only when a *required* step failed (no required steps today).
-    HarnessInitCompleted {
-        overall: String,
-        failed_required: bool,
-    },
-
     // ── Keyring ─────────────────────────────────────────────────────────
     /// The OS keyring is unavailable and no user consent for local fallback
     /// has been recorded. Published once (deduplicated) when a secret
@@ -1320,6 +1245,14 @@ pub enum DomainEvent {
     /// detection (already redacted by the call site) — surfaced to logs,
     /// never to Sentry or the UI verbatim.
     SessionExpired { source: String, reason: String },
+
+    /// The backend credential this core holds was stored, replaced or
+    /// cleared (`auth.set_credential` / `auth.clear_credential`, including the
+    /// teardown after `SessionExpired`). `kind` is `session`, `api_key`,
+    /// `local` or `cleared` — never the credential itself. Subscribers that
+    /// cache credential-derived state (the search module's managed routes)
+    /// refresh on it.
+    CredentialChanged { kind: String },
 
     // ── Voice ────────────────────────────────────────────────────────────
     /// A voice domain event (PTT, transcription lifecycle, etc.).
@@ -1355,9 +1288,32 @@ pub enum DomainEvent {
         thread_id: String,
         goal_id: String,
         status: String,
+        /// Full goal snapshot (owned by `tinyagents-graph`'s goal shape, so
+        /// kept as a raw `Value` rather than a typed field here). `None`
+        /// until the publish site is updated to pass it through.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        goal: Option<serde_json::Value>,
     },
     /// A thread's goal was cleared (deleted).
     ThreadGoalCleared { thread_id: String },
+    /// A thread's session todo list changed (item added, checked, removed,
+    /// or reordered). Drives the desktop todo drawer.
+    ThreadTodosChanged {
+        thread_id: String,
+        /// Full todo-list snapshot, owned by `tinyagents-graph`'s todo shape.
+        todos: serde_json::Value,
+    },
+    // ── Plan mode ───────────────────────────────────────────────────────
+    /// A thread's [`tinyagents_harness::middleware::RunMode`] (Plan vs Build)
+    /// changed, via `agent.set_run_mode` or the `plan_exit` tool. Bridged to
+    /// the `run_mode_changed` web-channel socket event by
+    /// `crate::agent::tinyagents::run_mode::set_mode`'s caller.
+    ThreadRunModeChanged {
+        thread_id: String,
+        /// `"plan"` or `"build"` — see
+        /// `crate::agent::tinyagents::run_mode::mode_label`.
+        mode: String,
+    },
 }
 
 /// Truncate to `max` characters, appending `…` when anything was dropped.
@@ -1382,6 +1338,7 @@ impl DomainEvent {
         match self {
             Self::AgentTurnStarted { .. }
             | Self::AgentTurnCompleted { .. }
+            | Self::ConversationTurnCommitted { .. }
             | Self::AgentError { .. }
             | Self::SubagentSpawned { .. }
             | Self::SubagentCompleted { .. }
@@ -1401,19 +1358,7 @@ impl DomainEvent {
 
             Self::EmbeddingModelUnhealthy { .. }
             | Self::MemoryStored { .. }
-            | Self::MemoryRecalled { .. }
-            | Self::MemoryDriverBindFailed { .. }
-            | Self::MemoryGuardDenied { .. }
-            | Self::MemorySyncRequested { .. }
-            | Self::MemorySyncStageChanged { .. }
-            | Self::MemoryIngestionStarted { .. }
-            | Self::MemoryIngestionCompleted { .. }
-            | Self::DocumentCanonicalized { .. }
-            | Self::MemoryDiffSnapshotTaken { .. }
-            | Self::MemoryDiffComputed { .. }
-            | Self::MemoryDiffMarkedRead { .. } => "memory",
-
-            Self::CacheRebuilt { .. } => "learning",
+            | Self::MemoryRecalled { .. } => "memory",
 
             Self::ChannelInboundMessage { .. }
             | Self::ChannelMessageReceived { .. }
@@ -1428,6 +1373,7 @@ impl DomainEvent {
             | Self::CronDeliveryRequested { .. }
             | Self::ProactiveMessageRequested { .. }
             | Self::FlowScheduleTick { .. }
+            | Self::CronSystemJobDue { .. }
             | Self::FlowRunProgress { .. }
             | Self::FlowRunStarted { .. }
             | Self::FlowRunFinished { .. }
@@ -1462,11 +1408,6 @@ impl DomainEvent {
             | Self::TriggerEscalated { .. }
             | Self::TriggerEscalationFailed { .. } => "triage",
 
-            Self::TreeSummarizerHourCompleted { .. }
-            | Self::TreeSummarizerPropagated { .. }
-            | Self::TreeSummarizerRebuildCompleted { .. }
-            | Self::MemoryTreeBuildProgress { .. } => "tree_summarizer",
-
             Self::NotificationIngested { .. } | Self::NotificationTriaged { .. } => "notification",
 
             Self::DevicePaired { .. }
@@ -1483,21 +1424,22 @@ impl DomainEvent {
             | Self::AgentPathsChanged
             | Self::ActiveWorkspaceChanged { .. }
             | Self::HealthChanged { .. }
-            | Self::HealthRestarted { .. }
-            | Self::HarnessInitProgress { .. }
-            | Self::HarnessInitCompleted { .. } => "system",
+            | Self::HealthRestarted { .. } => "system",
 
             Self::KeyringConsentRequired | Self::KeyringDecryptFailed { .. } => "keyring",
 
-            Self::SessionExpired { .. } | Self::ProviderApiKeyRejected { .. } => "auth",
+            Self::SessionExpired { .. }
+            | Self::CredentialChanged { .. }
+            | Self::ProviderApiKeyRejected { .. } => "auth",
 
             Self::TaskSourceFetched { .. }
             | Self::TaskSourceTaskIngested { .. }
             | Self::TaskSourceFetchFailed { .. } => "task_sources",
 
-            Self::ThreadGoalUpdated { .. } | Self::ThreadGoalCleared { .. } => "agent",
-
-            Self::SubconsciousTriggerProcessed { .. } => "subconscious",
+            Self::ThreadGoalUpdated { .. }
+            | Self::ThreadGoalCleared { .. }
+            | Self::ThreadTodosChanged { .. }
+            | Self::ThreadRunModeChanged { .. } => "agent",
 
             Self::Voice(_) => "voice",
 
@@ -1533,6 +1475,7 @@ impl DomainEvent {
         match self {
             Self::AgentTurnStarted { .. } => "AgentTurnStarted",
             Self::AgentTurnCompleted { .. } => "AgentTurnCompleted",
+            Self::ConversationTurnCommitted { .. } => "ConversationTurnCommitted",
             Self::AgentError { .. } => "AgentError",
             Self::SubagentSpawned { .. } => "SubagentSpawned",
             Self::SubagentCompleted { .. } => "SubagentCompleted",
@@ -1542,7 +1485,6 @@ impl DomainEvent {
             Self::AgentOrchestrationCompleted { .. } => "AgentOrchestrationCompleted",
             Self::AgentOrchestrationFailed { .. } => "AgentOrchestrationFailed",
             Self::AgentOrchestrationClosed { .. } => "AgentOrchestrationClosed",
-            Self::SubconsciousTriggerProcessed { .. } => "SubconsciousTriggerProcessed",
             Self::RunQueueMessageQueued { .. } => "RunQueueMessageQueued",
             Self::RunQueueFollowupDispatched { .. } => "RunQueueFollowupDispatched",
             Self::RunQueueInterrupted { .. } => "RunQueueInterrupted",
@@ -1552,17 +1494,6 @@ impl DomainEvent {
             Self::MonitorLine { .. } => "MonitorLine",
             Self::MemoryStored { .. } => "MemoryStored",
             Self::MemoryRecalled { .. } => "MemoryRecalled",
-            Self::MemoryDriverBindFailed { .. } => "MemoryDriverBindFailed",
-            Self::MemoryGuardDenied { .. } => "MemoryGuardDenied",
-            Self::MemorySyncRequested { .. } => "MemorySyncRequested",
-            Self::MemorySyncStageChanged { .. } => "MemorySyncStageChanged",
-            Self::MemoryIngestionStarted { .. } => "MemoryIngestionStarted",
-            Self::MemoryIngestionCompleted { .. } => "MemoryIngestionCompleted",
-            Self::DocumentCanonicalized { .. } => "DocumentCanonicalized",
-            Self::MemoryDiffSnapshotTaken { .. } => "MemoryDiffSnapshotTaken",
-            Self::MemoryDiffComputed { .. } => "MemoryDiffComputed",
-            Self::MemoryDiffMarkedRead { .. } => "MemoryDiffMarkedRead",
-            Self::CacheRebuilt { .. } => "CacheRebuilt",
             Self::ChannelInboundMessage { .. } => "ChannelInboundMessage",
             Self::ChannelMessageReceived { .. } => "ChannelMessageReceived",
             Self::ChannelMessageProcessed { .. } => "ChannelMessageProcessed",
@@ -1575,6 +1506,7 @@ impl DomainEvent {
             Self::CronDeliveryRequested { .. } => "CronDeliveryRequested",
             Self::ProactiveMessageRequested { .. } => "ProactiveMessageRequested",
             Self::FlowScheduleTick { .. } => "FlowScheduleTick",
+            Self::CronSystemJobDue { .. } => "CronSystemJobDue",
             Self::FlowRunProgress { .. } => "FlowRunProgress",
             Self::FlowRunStarted { .. } => "FlowRunStarted",
             Self::FlowRunFinished { .. } => "FlowRunFinished",
@@ -1603,10 +1535,6 @@ impl DomainEvent {
             Self::TriggerEvaluated { .. } => "TriggerEvaluated",
             Self::TriggerEscalated { .. } => "TriggerEscalated",
             Self::TriggerEscalationFailed { .. } => "TriggerEscalationFailed",
-            Self::TreeSummarizerHourCompleted { .. } => "TreeSummarizerHourCompleted",
-            Self::TreeSummarizerPropagated { .. } => "TreeSummarizerPropagated",
-            Self::TreeSummarizerRebuildCompleted { .. } => "TreeSummarizerRebuildCompleted",
-            Self::MemoryTreeBuildProgress { .. } => "MemoryTreeBuildProgress",
             Self::NotificationIngested { .. } => "NotificationIngested",
             Self::NotificationTriaged { .. } => "NotificationTriaged",
             Self::DevicePaired { .. } => "DevicePaired",
@@ -1623,11 +1551,10 @@ impl DomainEvent {
             Self::ActiveWorkspaceChanged { .. } => "ActiveWorkspaceChanged",
             Self::HealthChanged { .. } => "HealthChanged",
             Self::HealthRestarted { .. } => "HealthRestarted",
-            Self::HarnessInitProgress { .. } => "HarnessInitProgress",
-            Self::HarnessInitCompleted { .. } => "HarnessInitCompleted",
             Self::KeyringConsentRequired => "KeyringConsentRequired",
             Self::KeyringDecryptFailed { .. } => "KeyringDecryptFailed",
             Self::SessionExpired { .. } => "SessionExpired",
+            Self::CredentialChanged { .. } => "CredentialChanged",
             Self::ApprovalRequested { .. } => "ApprovalRequested",
             Self::ApprovalDecided { .. } => "ApprovalDecided",
             Self::FlowApprovalRequested { .. } => "FlowApprovalRequested",
@@ -1656,6 +1583,8 @@ impl DomainEvent {
             Self::TaskSourceFetchFailed { .. } => "TaskSourceFetchFailed",
             Self::ThreadGoalUpdated { .. } => "ThreadGoalUpdated",
             Self::ThreadGoalCleared { .. } => "ThreadGoalCleared",
+            Self::ThreadTodosChanged { .. } => "ThreadTodosChanged",
+            Self::ThreadRunModeChanged { .. } => "ThreadRunModeChanged",
             Self::Voice(_) => "Voice",
         }
     }

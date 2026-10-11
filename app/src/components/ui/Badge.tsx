@@ -3,33 +3,39 @@ import { type HTMLAttributes, type ReactNode } from 'react';
 
 import { cn } from '../../lib/cn';
 
+/**
+ * One chip style app-wide: shadcn's outline status badge — a faint border and
+ * a faint fill, content-coloured text, and (for the semantic variants) a small
+ * coloured dot carrying the meaning. The dot, not a tinted fill, is what sets
+ * success / warning / danger apart, so a row of chips stays calm.
+ */
 export const badgeVariants = cva(
-  'inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-medium leading-none',
+  'inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-line/60 bg-content/5 px-2 py-0.5 text-xs font-medium leading-5 text-content',
   {
-    variants: {
-      variant: {
-        neutral: 'border-line bg-surface-subtle text-content-secondary dark:border-line-strong',
-        primary:
-          'border-primary-200 bg-primary-50 text-primary-700 dark:border-primary-500/30 dark:bg-primary-500/10 dark:text-primary-300',
-        success:
-          'border-sage-200 bg-sage-50 text-sage-700 dark:border-sage-500/30 dark:bg-sage-500/10 dark:text-sage-300',
-        warning:
-          'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300',
-        danger:
-          'border-coral-200 bg-coral-50 text-coral-600 dark:border-coral-500/30 dark:bg-coral-500/10 dark:text-coral-300',
-      },
-    },
+    variants: { variant: { neutral: '', primary: '', success: '', warning: '', danger: '' } },
     defaultVariants: { variant: 'neutral' },
   }
 );
+
+const DOT_CLASS: Record<string, string | null> = {
+  neutral: null,
+  primary: 'bg-primary-500',
+  success: 'bg-sage-500',
+  warning: 'bg-amber-500',
+  danger: 'bg-coral-500',
+};
 
 export type BadgeVariant = NonNullable<VariantProps<typeof badgeVariants>['variant']>;
 
 export interface BadgeProps
   extends Omit<HTMLAttributes<HTMLSpanElement>, 'children'>, VariantProps<typeof badgeVariants> {
   children: ReactNode;
+  /** Status dot; on by default for every variant except `neutral`. */
+  dot?: boolean;
   className?: string;
   'data-testid'?: string;
+  /** Arbitrary `data-*` passthrough (e.g. `data-status`) for callers that key tests/CSS off it. */
+  [key: `data-${string}`]: unknown;
 }
 
 /**
@@ -39,15 +45,34 @@ export interface BadgeProps
  * component-owned attributes are applied after `...rest` so the default render
  * is identical whether or not extra props are passed.
  */
-const Badge = ({ variant, children, className, 'data-testid': testId, ...rest }: BadgeProps) => (
-  <span
-    {...rest}
-    data-slot="badge"
-    data-variant={variant ?? 'neutral'}
-    data-testid={testId}
-    className={cn(badgeVariants({ variant }), className)}>
-    {children}
-  </span>
-);
+const Badge = ({
+  variant,
+  dot,
+  children,
+  className,
+  'data-testid': testId,
+  ...rest
+}: BadgeProps) => {
+  const resolved = variant ?? 'neutral';
+  const dotClass = DOT_CLASS[resolved];
+  const showDot = dot ?? dotClass != null;
+  return (
+    <span
+      {...rest}
+      data-slot="badge"
+      data-variant={resolved}
+      data-testid={testId}
+      className={cn(badgeVariants({ variant }), className)}>
+      {showDot && (
+        <span
+          data-slot="badge-dot"
+          className={cn('h-1.5 w-1.5 shrink-0 rounded-full', dotClass ?? 'bg-content-faint')}
+          aria-hidden
+        />
+      )}
+      {children}
+    </span>
+  );
+};
 
 export default Badge;

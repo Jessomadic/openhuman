@@ -486,6 +486,26 @@ describe('coreRpcClient', () => {
     expect(headers.Authorization).toBe('Bearer test-local-token');
   });
 
+  test('desktop setup follows the resolved shell endpoint, not the loopback build default', async () => {
+    vi.resetModules();
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.stubGlobal('__TAURI_INTERNALS__', { invoke: vi.fn() });
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'core_rpc_endpoint') {
+        return { url: 'https://remote.example/rpc', token: 'test-remote-token' };
+      }
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    const { isLocalDesktopHost: checkLocalHost } = await import('../coreRpcClient');
+    try {
+      expect(await checkLocalHost()).toBe(false);
+      expect(invoke).toHaveBeenCalledWith('core_rpc_endpoint');
+    } finally {
+      vi.mocked(isTauri).mockReturnValue(false);
+      vi.unstubAllGlobals();
+    }
+  });
+
   test('fails closed in Tauri mode when core rpc token is unavailable', async () => {
     vi.resetModules();
     vi.mocked(isTauri).mockReturnValue(true);
@@ -774,7 +794,6 @@ describe('classifyRpcError', () => {
     ['HTTP 429 rate-limit exceeded', undefined, 'rate_limited'],
     // #5157 verbatim from Sentry (CORE-RUST-1PY) — the running core does not
     // expose the method. Permanent, so pollers must be able to stop.
-    ['unknown method: openhuman.harness_init_status', undefined, 'method_not_found'],
     ['unknown method: openhuman.memory_tree_create_namespace', undefined, 'method_not_found'],
     ['Budget exceeded for current period', undefined, 'budget_exceeded'],
     ['Insufficient budget for request', undefined, 'budget_exceeded'],
@@ -849,9 +868,6 @@ describe('classifyRpcError', () => {
     // `dispatch::unknown_method_name` classifies with `strip_prefix`, so the
     // frontend anchors identically — a nested/quoted occurrence is not the
     // core telling us *this* call's method is absent.
-    expect(classifyRpcError('unknown method: openhuman.harness_init_status')).toBe(
-      'method_not_found'
-    );
     expect(classifyRpcError('tool failed: unknown method: openhuman.foo_bar')).toBe('unknown');
   });
 

@@ -77,16 +77,21 @@ describe('SecurityPanel — unknown storage mode', () => {
     expect(badge.textContent).toContain('hardware_token_v2');
   });
 
-  it('uses a distinct badge styling for each consent-outcome mode', () => {
-    const seen = new Map<string, string>();
+  it('uses a distinct badge variant for each consent-outcome mode', () => {
+    // The redesigned Badge (ui/Badge.tsx) gives every `variant` the same
+    // border/fill/text classes — a calm row of chips where only the status
+    // dot's color and the `data-variant` attribute carry the semantic
+    // difference (see the "one chip style app-wide" comment there). So the
+    // distinguishing signal moved off `className` onto `data-variant`.
+    const seen = new Map<string, string | null>();
     for (const mode of ['os_keyring', 'local_encrypted', 'consent_pending', 'declined']) {
       cleanup();
-      seen.set(mode, render(mode).className);
+      seen.set(mode, render(mode).getAttribute('data-variant'));
     }
 
-    // Four modes, four different variants — if two collapsed to the same class
-    // the badge would stop distinguishing "stored in the OS keyring" from
-    // "declined", which is the whole signal this row carries.
+    // Four modes, four different variants — if two collapsed to the same
+    // variant the badge would stop distinguishing "stored in the OS keyring"
+    // from "declined", which is the whole signal this row carries.
     expect(new Set(seen.values()).size).toBe(4);
   });
 

@@ -29,9 +29,9 @@ use serde_json::Value;
 
 use crate::agent::hooks::{PostTurnHook, ToolHook, ToolHookContext, ToolHookDecision, TurnContext};
 
-use super::context::{build_input, TurnIdentity};
-use super::engine::{self, HookOutcome};
-use super::types::{
+use tinyagents_runtime::command_hooks::context::{build_input, TurnIdentity};
+use tinyagents_runtime::command_hooks::engine::HookOutcome;
+use tinyagents_runtime::command_hooks::types::{
     FileEdit, FilePayload, HookEvent, HookOutput, HookPayload, ShellPayload, StopPayload,
     TextPayload, ToolPayload,
 };
@@ -41,7 +41,7 @@ use super::types::{
 pub const BRIDGE_HOOK_NAME: &str = "configured_hooks";
 
 /// Tools whose calls are also reported as shell execution.
-const SHELL_TOOLS: &[&str] = &["shell", "run_command", "bash", "node_exec", "npm_exec"];
+const SHELL_TOOLS: &[&str] = &["shell", "run_command", "bash"];
 
 /// Tools whose calls are also reported as a file read.
 const READ_TOOLS: &[&str] = &["file_read", "read_diff"];
@@ -82,7 +82,10 @@ fn identity_from_tool(context: &ToolHookContext) -> TurnIdentity {
     TurnIdentity {
         session_id: context.session_id.clone(),
         agent_id: context.agent_id.clone(),
-        cwd: string_field(&context.arguments, "cwd"),
+        cwd: context
+            .cwd
+            .as_ref()
+            .map(|cwd| cwd.to_string_lossy().into_owned()),
         ..TurnIdentity::default()
     }
 }
@@ -220,7 +223,7 @@ async fn dispatch_pair(
     context: &ToolHookContext,
     identity: TurnIdentity,
 ) -> HookOutcome {
-    let engine = engine::global();
+    let engine = super::host::engine();
     let mut merged = HookOutcome::default();
 
     if engine.has_hooks(generic).await {
@@ -317,7 +320,7 @@ impl PostTurnHook for ConfiguredHookBridge {
     }
 
     async fn on_turn_complete(&self, ctx: &TurnContext) -> anyhow::Result<()> {
-        let engine = engine::global();
+        let engine = super::host::engine();
         let identity = TurnIdentity {
             session_id: ctx.session_id.clone(),
             agent_id: ctx.agent_id.clone(),
@@ -354,7 +357,11 @@ impl PostTurnHook for ConfiguredHookBridge {
                 // lets the entrypoint that owns the conversation decide whether
                 // to start another one — the only layer that knows if there is
                 // still a user attached.
-                super::followup::publish(ctx.session_id.clone(), followup).await;
+                tinyagents_runtime::command_hooks::followup::publish(
+                    ctx.session_id.clone(),
+                    followup,
+                )
+                .await;
             }
         }
         Ok(())

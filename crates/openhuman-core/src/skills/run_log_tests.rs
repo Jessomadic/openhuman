@@ -19,20 +19,22 @@ fn detect_repeated_line_catches_real_failure_modes() {
     // The exact text shapes we observed in run adcd2dfd (×23) and
     // dffae55d (×8). With defaults (min_len=30, min_count=4) both must
     // trip and the worst offender is returned.
-    let adcd = std::iter::repeat(
+    let adcd = std::iter::repeat_n(
         "Now I understand the structure. The keys need to go into the chunk files.",
+        23,
     )
-    .take(23)
     .collect::<Vec<_>>()
     .join("\n");
     let (line, n) = detect_repeated_line(&adcd, 30, 4).expect("must trip");
     assert_eq!(n, 23);
     assert!(line.contains("Now I understand the structure"));
 
-    let dffae = std::iter::repeat("Good, the repo is cloned. Let me narrow down the search.")
-        .take(8)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let dffae = std::iter::repeat_n(
+        "Good, the repo is cloned. Let me narrow down the search.",
+        8,
+    )
+    .collect::<Vec<_>>()
+    .join("\n");
     let (_, n2) = detect_repeated_line(&dffae, 30, 4).expect("must trip");
     assert_eq!(n2, 8);
 }
@@ -265,4 +267,28 @@ fn noisy_events_are_skipped_steps_are_kept() {
     .expect("tool call logged");
     assert!(line.contains("memory_search"));
     assert!(line.contains("it 2"));
+}
+
+/// A workflow run whose turn the harness stopped early (breaker, wind-down,
+/// iteration cap) must not be written up as `DONE`: the drain hands the stop
+/// back so the footer can say `STOPPED`, and the step log names it.
+#[tokio::test]
+async fn drain_to_log_returns_the_turns_stop() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("run.log");
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    tx.send(AgentProgress::TurnCompleted {
+        iterations: 5,
+        stop: Some(crate::agent::turn_stop::TurnStop::iteration_cap()),
+    })
+    .await
+    .unwrap();
+    drop(tx);
+    let stop = drain_to_log(rx, path.clone()).await;
+    assert_eq!(
+        stop,
+        Some(crate::agent::turn_stop::TurnStop::iteration_cap())
+    );
+    let log = std::fs::read_to_string(&path).expect("log written");
+    assert!(log.contains("stopped: iteration_cap"), "{log}");
 }

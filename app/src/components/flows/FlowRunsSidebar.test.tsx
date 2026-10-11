@@ -236,6 +236,54 @@ describe('FlowRunsSidebar', () => {
     await waitFor(() => expect(runRow).toHaveTextContent('Running'));
   });
 
+  describe('controlled selection (selectedRunId / onSelectRun)', () => {
+    function renderControlled(
+      props: { selectedRunId?: string | null; onSelectRun: (runId: string) => void },
+      flowId = 'flow-1'
+    ) {
+      return render(
+        <Provider store={store}>
+          <MemoryRouter initialEntries={[`/flows/${flowId}`]}>
+            <Routes>
+              <Route path="/flows/:id" element={<FlowRunsSidebar flowId={flowId} {...props} />} />
+            </Routes>
+          </MemoryRouter>
+        </Provider>
+      );
+    }
+
+    it('calls onSelectRun instead of opening its own drawer when a run is clicked', async () => {
+      listFlowRuns.mockResolvedValue([makeRun()]);
+      const onSelectRun = vi.fn();
+      renderControlled({ selectedRunId: null, onSelectRun });
+
+      const row = await screen.findByTestId('flow-runs-sidebar-run-run-1');
+      fireEvent.click(row);
+
+      expect(onSelectRun).toHaveBeenCalledWith('run-1');
+      // Controlled mode never mounts its own inspector drawer.
+      expect(screen.queryByTestId('flow-run-inspector-drawer-stub')).not.toBeInTheDocument();
+    });
+
+    it('highlights the row matching the controlled selectedRunId as current', async () => {
+      listFlowRuns.mockResolvedValue([makeRun({ id: 'run-1' }), makeRun({ id: 'run-2' })]);
+      renderControlled({ selectedRunId: 'run-2', onSelectRun: vi.fn() });
+
+      const row1 = await screen.findByTestId('flow-runs-sidebar-run-run-1');
+      const row2 = await screen.findByTestId('flow-runs-sidebar-run-run-2');
+      expect(row2).toHaveAttribute('aria-current', 'page');
+      expect(row1).not.toHaveAttribute('aria-current');
+    });
+
+    it('treats an undefined/null selectedRunId as nothing selected', async () => {
+      listFlowRuns.mockResolvedValue([makeRun()]);
+      renderControlled({ onSelectRun: vi.fn() });
+
+      const row = await screen.findByTestId('flow-runs-sidebar-run-run-1');
+      expect(row).not.toHaveAttribute('aria-current');
+    });
+  });
+
   it('registers useFlowRunStarted scoped to this flow and refetches when it fires (B35)', async () => {
     listFlowRuns.mockResolvedValue([]);
     renderSidebar('flow-1');

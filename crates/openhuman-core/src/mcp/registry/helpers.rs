@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use crate::config::Config;
 use crate::mcp::host;
 
-/// Renders a value into the `RpcOutcome` payload the frontend expects.
+/// Renders a value into the `Outcome` payload the frontend expects.
 pub(crate) fn encode<T: serde::Serialize>(value: &T) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|error| format!("serialization error: {error}"))
 }

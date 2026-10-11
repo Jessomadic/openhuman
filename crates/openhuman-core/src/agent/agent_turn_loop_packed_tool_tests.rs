@@ -36,7 +36,7 @@ impl Tool for RecordingPackedTool {
 #[tokio::test]
 async fn turn_routes_a_bare_packed_tool_call_through_use_skill() {
     let provider = Arc::new(ScriptedProvider::new(vec![
-        tool_response(vec![ToolCall {
+        tool_response(vec![NativeToolCall {
             id: "tc1".into(),
             name: "skill_registry_search".into(),
             arguments: r#"{"query": "code review"}"#.into(),
@@ -67,13 +67,13 @@ async fn turn_routes_a_bare_packed_tool_call_through_use_skill() {
         .history()
         .iter()
         .filter_map(|msg| match msg {
-            ConversationMessage::ToolResults(results) => Some(
+            TranscriptEntry::ToolResults(results) => Some(
                 results
                     .iter()
                     .map(|r| r.content.clone())
                     .collect::<Vec<_>>(),
             ),
-            ConversationMessage::Chat(message) if message.role == "tool" => {
+            TranscriptEntry::Chat(message) if message.role.as_str() == "tool" => {
                 Some(vec![message.content.clone()])
             }
             _ => None,
@@ -120,7 +120,7 @@ impl Tool for WritePackedTool {
 #[tokio::test]
 async fn turn_does_not_route_a_bare_call_the_session_would_refuse() {
     let provider = Arc::new(ScriptedProvider::new(vec![
-        tool_response(vec![ToolCall {
+        tool_response(vec![NativeToolCall {
             id: "tc1".into(),
             name: "skill_registry_install".into(),
             arguments: r#"{"entry_id": "code-reviewer"}"#.into(),
@@ -148,11 +148,11 @@ async fn turn_does_not_route_a_bare_call_the_session_would_refuse() {
         "a packed tool the session blocks must not run through a bare call"
     );
     let unrouted = agent.history().iter().any(|msg| match msg {
-        ConversationMessage::ToolResults(results) => results
+        TranscriptEntry::ToolResults(results) => results
             .iter()
             .any(|r| r.content.contains("unknown tool `skill_registry_install`")),
-        ConversationMessage::Chat(message) => {
-            message.role == "tool"
+        TranscriptEntry::Chat(message) => {
+            message.role.as_str() == "tool"
                 && message
                     .content
                     .contains("unknown tool `skill_registry_install`")

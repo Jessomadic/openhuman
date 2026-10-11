@@ -38,9 +38,8 @@ use tinyagents_harness::observability::AgentObservation;
 use crate::core::all::{ControllerFuture, RegisteredController};
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
 
-use super::ops::{
-    list_active_runs, read_run_events_page, read_run_status, DEFAULT_EVENTS_LIMIT, MAX_EVENTS_LIMIT,
-};
+use super::ops::{list_active_runs, read_run_events_page, read_run_status};
+use tinyagents_harness::observability::replay::{DEFAULT_EVENTS_LIMIT, MAX_EVENTS_LIMIT};
 
 const NAMESPACE: &str = "agent";
 
@@ -89,15 +88,6 @@ struct RunsActiveResponse {
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
-
-/// All read-only replay/status controller schemas (workstream 05.x).
-pub(crate) fn all_agent_replay_controller_schemas() -> Vec<ControllerSchema> {
-    vec![
-        replay_schema("run_events"),
-        replay_schema("run_status"),
-        replay_schema("runs_active"),
-    ]
-}
 
 /// All read-only replay/status registered controllers (workstream 05.x).
 pub(crate) fn all_agent_replay_registered_controllers() -> Vec<RegisteredController> {
@@ -231,7 +221,7 @@ fn replay_schema(function: &str) -> ControllerSchema {
 /// Resolve the configured internal workspace whose `tinyagents_store/` holds the
 /// journal + status stores.
 async fn configured_workspace() -> Result<std::path::PathBuf, String> {
-    let config = crate::config::Config::load_or_init()
+    let config = crate::config::ops::load_current_or_init()
         .await
         .map_err(|e| format!("failed to load config: {e}"))?;
     Ok(config.workspace_dir)

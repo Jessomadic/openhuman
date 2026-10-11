@@ -27,8 +27,8 @@ impl SecurityPolicy {
     /// guard, which sits under `MemoryCore::store` and is hit hundreds of times
     /// by one bulk ingest — want the tier refusal and nothing else. That is the
     /// same shape the ~15 acting tools which gate on bare [`Self::can_act`]
-    /// already use (e.g. `tools/impl/filesystem/file_write.rs`,
-    /// `tools/impl/system/python_exec.rs`, `cron/scheduler.rs`).
+    /// already use (e.g. `tinytools_std::filesystem::FileWriteTool`,
+    /// `cron/scheduler.rs`).
     pub fn enforce_write_tier(&self, operation_name: &str) -> Result<(), String> {
         if !self.can_act() {
             log::warn!(
@@ -103,6 +103,23 @@ impl SecurityPolicy {
         workspace_dir: &Path,
         action_dir: &Path,
     ) -> Self {
+        Self::from_config_with(
+            crate::core::runtime::is_saas(),
+            autonomy_config,
+            workspace_dir,
+            action_dir,
+        )
+    }
+
+    /// [`from_config`](Self::from_config) with the process mode passed in, so
+    /// the SaaS grants (no shared projects home, no shared `/tmp/openhuman`)
+    /// are testable without the process-wide mode lock.
+    pub(crate) fn from_config_with(
+        saas: bool,
+        autonomy_config: &crate::config::AutonomyConfig,
+        workspace_dir: &Path,
+        action_dir: &Path,
+    ) -> Self {
         log::info!(
             "[openhuman:policy] SecurityPolicy created: autonomy={:?}, workspace_only={}, allowed_cmds={}, max_actions/hr={}, auto_approve_all={}",
             autonomy_config.level,
@@ -131,11 +148,13 @@ impl SecurityPolicy {
         // channels-startup injection is skipped on cores with no listening
         // integrations (web-chat-only), and a freshly reloaded config wouldn't
         // carry an in-memory edit anyway. A user-granted entry is left as-is.
+        // SaaS: the projects home and `/tmp/openhuman` are shared by every user
+        // of the process, so neither is granted there.
         let mut trusted_roots = autonomy_config.trusted_roots.clone();
         let projects_path = crate::config::default_projects_dir()
             .to_string_lossy()
             .to_string();
-        if !trusted_roots.iter().any(|r| r.path == projects_path) {
+        if !saas && !trusted_roots.iter().any(|r| r.path == projects_path) {
             trusted_roots.push(TrustedRoot {
                 path: projects_path,
                 access: TrustedAccess::ReadWrite,
@@ -176,13 +195,31 @@ impl SecurityPolicy {
             });
         }
 
+        // Oversized tool outputs are saved to `<workspace_dir>/artifacts/tool-results`
+        // (`tool_result_artifacts_dir`), outside the action dir, and the model is
+        // handed the absolute path to page them back with `file_read`. Under
+        // `workspace_only` an absolute path is refused unless a trusted root
+        // covers it, so without this grant every pointer would be unreadable.
+        // Read-only: the agent reads its own outputs back; it has no reason to
+        // write there. `is_workspace_internal_path` already exempts this one
+        // directory from the internal-state boundary.
+        let tool_results = super::types::tool_result_artifacts_dir(workspace_dir)
+            .to_string_lossy()
+            .to_string();
+        if !trusted_roots.iter().any(|r| r.path == tool_results) {
+            trusted_roots.push(TrustedRoot {
+                path: tool_results,
+                access: TrustedAccess::Read,
+            });
+        }
+
         // Dedicated, namespaced scratch dir (`/tmp/openhuman`) granted ReadWrite
         // so the LLM's natural `/tmp/...` temp-file habit lands in a sandboxed,
         // trusted location instead of the world-shared `/tmp`. Only this subdir
         // is ever trusted — never `/tmp` itself. Created here with restrictive
         // perms and refused if it exists as a symlink (TOCTOU hardening, since
         // `/tmp` is world-writable and the name is predictable).
-        match ensure_openhuman_scratch_dir() {
+        match (!saas).then(ensure_openhuman_scratch_dir).flatten() {
             Some(scratch) => {
                 let scratch_str = scratch.to_string_lossy().to_string();
                 if trusted_roots.iter().any(|r| r.path == scratch_str) {

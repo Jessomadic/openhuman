@@ -1,74 +1,15 @@
 use super::*;
-use crate::agent::messages::ChatMessage;
 use crate::channels::context::{ChannelRuntimeContext, RouteSelectionMap, TurnModelSourceCacheMap};
-use crate::channels::telegram::{TelegramRemoteCommand, TelegramRemoteSubscriber};
+use crate::channels::host::ChannelTurnStateSubscriber;
 use crate::channels::traits::ChannelMessage;
 use crate::core::events::DomainEvent;
-use crate::memory::{Memory, MemoryCategory, MemoryEntry};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tinyagents_session::transcript::TranscriptMessage;
 use tinybus::EventHandler;
 use tinytools::{Tool, ToolResult};
-
-struct DummyMemory;
-
-#[async_trait]
-impl Memory for DummyMemory {
-    fn name(&self) -> &str {
-        "dummy"
-    }
-
-    async fn store(
-        &self,
-        _namespace: &str,
-        _key: &str,
-        _content: &str,
-        _category: MemoryCategory,
-        _session_id: Option<&str>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn recall(
-        &self,
-        _query: &str,
-        _limit: usize,
-        _opts: crate::memory::RecallOpts<'_>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        Ok(Vec::new())
-    }
-
-    async fn get(&self, _namespace: &str, _key: &str) -> anyhow::Result<Option<MemoryEntry>> {
-        Ok(None)
-    }
-
-    async fn list(
-        &self,
-        _namespace: Option<&str>,
-        _category: Option<&MemoryCategory>,
-        _session_id: Option<&str>,
-    ) -> anyhow::Result<Vec<MemoryEntry>> {
-        Ok(Vec::new())
-    }
-
-    async fn forget(&self, _namespace: &str, _key: &str) -> anyhow::Result<bool> {
-        Ok(false)
-    }
-
-    async fn namespace_summaries(&self) -> anyhow::Result<Vec<crate::memory::NamespaceSummary>> {
-        Ok(Vec::new())
-    }
-
-    async fn count(&self) -> anyhow::Result<usize> {
-        Ok(0)
-    }
-
-    async fn health_check(&self) -> bool {
-        true
-    }
-}
 
 struct DummyTool;
 
@@ -121,14 +62,11 @@ fn runtime_context(workspace_dir: PathBuf) -> ChannelRuntimeContext {
         channels_by_name: Arc::new(HashMap::new()),
         turn_model_source: Some(crate::agent::tinyagents::TurnModelSource::from_model(model)),
         default_provider: Arc::new("openai".into()),
-        memory: crate::memory::guard::in_memory::FixedRecallProvider::guarded(Vec::new()),
         tools_registry: Arc::new(vec![Box::new(DummyTool) as Box<dyn Tool>]),
         system_prompt: crate::channels::ChannelSystemPrompt::fixed("prompt"),
         model: Arc::new("reasoning-v1".into()),
         temperature: 0.0,
-        auto_save_memory: false,
         max_tool_iterations: 1,
-        min_relevance_score: 0.4,
         conversation_histories: Arc::new(Mutex::new(HashMap::new())),
         turn_model_source_cache: TurnModelSourceCacheMap::default(),
         route_overrides: RouteSelectionMap::default(),
@@ -170,18 +108,23 @@ fn runtime_command_parsing_and_provider_support_are_channel_scoped() {
     );
     assert_eq!(
         parse_runtime_command("telegram", "/status@OpenHumanBot"),
-        Some(ChannelRuntimeCommand::TelegramRemote(
-            TelegramRemoteCommand::Status
-        ))
+        Some(ChannelRuntimeCommand::Remote(RemoteCommand::Status))
     );
     assert_eq!(
         parse_runtime_command("telegram", "/help"),
-        Some(ChannelRuntimeCommand::TelegramRemote(
-            TelegramRemoteCommand::Help
-        ))
+        Some(ChannelRuntimeCommand::Remote(RemoteCommand::Help))
     );
     assert_eq!(parse_runtime_command("slack", "/models"), None);
-    assert_eq!(parse_runtime_command("discord", "/status"), None);
+    // Remote control is a provider capability, not a Telegram special case.
+    assert_eq!(
+        parse_runtime_command("discord", "/status"),
+        Some(ChannelRuntimeCommand::Remote(RemoteCommand::Status))
+    );
+    assert_eq!(
+        parse_runtime_command("slack", "/new"),
+        Some(ChannelRuntimeCommand::Remote(RemoteCommand::New))
+    );
+    assert_eq!(parse_runtime_command("email", "/status"), None);
     assert_eq!(parse_runtime_command("telegram", "hello"), None);
 }
 
@@ -270,6 +213,7 @@ fn model_command_messages_use_thread_aware_history_keys() {
         channel: "discord".into(),
         timestamp: 0,
         thread_ts: Some("thread-1".into()),
+        sender_name: None,
     };
     assert_eq!(
         super::super::context::conversation_history_key(&msg),
@@ -309,6 +253,7 @@ async fn handle_runtime_command_unknown_provider_sends_helpful_error() {
         channel: "telegram".into(),
         timestamp: 0,
         thread_ts: Some("thread-1".into()),
+        sender_name: None,
     };
 
     let handled = handle_runtime_command_if_needed(&ctx, &msg, Some(&channel)).await;
@@ -326,10 +271,10 @@ async fn handle_runtime_command_unknown_provider_sends_helpful_error() {
 async fn handle_runtime_command_set_model_clears_sender_history_and_persists_route_override() {
     let ctx = runtime_context(PathBuf::from("/tmp"));
     let key = "telegram_alice_room";
-    ctx.conversation_histories
-        .lock()
-        .unwrap()
-        .insert(key.to_string(), vec![ChatMessage::user("old history")]);
+    ctx.conversation_histories.lock().unwrap().insert(
+        key.to_string(),
+        vec![TranscriptMessage::user("old history")],
+    );
     let channel_impl = Arc::new(RecordingChannel::default());
     let channel: Arc<dyn Channel> = channel_impl.clone();
     let msg = ChannelMessage {
@@ -340,6 +285,7 @@ async fn handle_runtime_command_set_model_clears_sender_history_and_persists_rou
         channel: "telegram".into(),
         timestamp: 0,
         thread_ts: None,
+        sender_name: None,
     };
 
     let handled = handle_runtime_command_if_needed(&ctx, &msg, Some(&channel)).await;
@@ -377,6 +323,7 @@ async fn handle_runtime_command_telegram_status_replies_without_agent() {
         channel: "telegram".into(),
         timestamp: 0,
         thread_ts: Some("42".into()),
+        sender_name: None,
     };
 
     let handled = handle_runtime_command_if_needed(&ctx, &msg, Some(&channel)).await;
@@ -399,6 +346,7 @@ async fn handle_runtime_command_without_target_channel_still_consumes_command() 
         channel: "telegram".into(),
         timestamp: 0,
         thread_ts: None,
+        sender_name: None,
     };
 
     let handled = handle_runtime_command_if_needed(&ctx, &msg, None).await;
@@ -418,6 +366,7 @@ async fn handle_runtime_command_telegram_help_replies_with_remote_command_list()
         channel: "telegram".into(),
         timestamp: 0,
         thread_ts: Some("42".into()),
+        sender_name: None,
     };
 
     let handled = handle_runtime_command_if_needed(&ctx, &msg, Some(&channel)).await;
@@ -425,9 +374,7 @@ async fn handle_runtime_command_telegram_help_replies_with_remote_command_list()
 
     let sent = channel_impl.sent.lock().unwrap();
     assert_eq!(sent.len(), 1);
-    assert!(sent[0]
-        .content
-        .contains("OpenHuman Telegram remote control (phase 1):"));
+    assert!(sent[0].content.contains("Remote control:"));
     assert!(sent[0].content.contains("`/status`"));
     assert!(sent[0].content.contains("`/sessions`"));
     assert!(sent[0].content.contains("`/new`"));
@@ -450,6 +397,7 @@ async fn handle_runtime_command_telegram_sessions_reports_empty_store() {
         channel: "telegram".into(),
         timestamp: 0,
         thread_ts: Some("42".into()),
+        sender_name: None,
     };
 
     let handled = handle_runtime_command_if_needed(&ctx, &msg, Some(&channel)).await;
@@ -473,7 +421,7 @@ async fn handle_runtime_command_telegram_new_status_and_sessions_round_trip() {
 
     ctx.conversation_histories.lock().unwrap().insert(
         sender_key.to_string(),
-        vec![ChatMessage::user("old history")],
+        vec![TranscriptMessage::user("old history")],
     );
 
     let new_msg = ChannelMessage {
@@ -484,6 +432,7 @@ async fn handle_runtime_command_telegram_new_status_and_sessions_round_trip() {
         channel: "telegram".into(),
         timestamp: 0,
         thread_ts: Some("42".into()),
+        sender_name: None,
     };
     assert!(handle_runtime_command_if_needed(&ctx, &new_msg, Some(&channel)).await);
     assert!(ctx
@@ -493,10 +442,10 @@ async fn handle_runtime_command_telegram_new_status_and_sessions_round_trip() {
         .get(sender_key)
         .is_none());
 
-    ctx.conversation_histories
-        .lock()
-        .unwrap()
-        .insert(sender_key.to_string(), vec![ChatMessage::user("after new")]);
+    ctx.conversation_histories.lock().unwrap().insert(
+        sender_key.to_string(),
+        vec![TranscriptMessage::user("after new")],
+    );
     set_route_selection(
         &ctx,
         sender_key,
@@ -506,7 +455,7 @@ async fn handle_runtime_command_telegram_new_status_and_sessions_round_trip() {
         },
     );
 
-    let subscriber = TelegramRemoteSubscriber::new(tempdir.path().to_path_buf());
+    let subscriber = ChannelTurnStateSubscriber::new(tempdir.path().to_path_buf());
     subscriber
         .handle(&DomainEvent::ChannelMessageReceived {
             channel: "telegram".into(),
@@ -528,6 +477,7 @@ async fn handle_runtime_command_telegram_new_status_and_sessions_round_trip() {
         channel: "telegram".into(),
         timestamp: 0,
         thread_ts: Some("42".into()),
+        sender_name: None,
     };
     assert!(handle_runtime_command_if_needed(&ctx, &status_msg, Some(&channel)).await);
 
@@ -539,6 +489,7 @@ async fn handle_runtime_command_telegram_new_status_and_sessions_round_trip() {
         channel: "telegram".into(),
         timestamp: 0,
         thread_ts: Some("42".into()),
+        sender_name: None,
     };
     assert!(handle_runtime_command_if_needed(&ctx, &sessions_msg, Some(&channel)).await);
 

@@ -185,7 +185,7 @@ fn unresolvable_binding_graph() -> Value {
         "nodes": [
             { "id": "t", "kind": "trigger", "name": "Manual" },
             { "id": "summarize", "kind": "agent", "name": "Summarize",
-              "config": { "agent_ref": "researcher", "prompt": "summarize",
+              "config": { "agent_ref": "planner", "prompt": "summarize",
                 "output_parser": { "schema": { "type": "object",
                   "properties": { "summary": { "type": "string" } } } } } },
             { "id": "notify", "kind": "tool_call", "name": "Notify",

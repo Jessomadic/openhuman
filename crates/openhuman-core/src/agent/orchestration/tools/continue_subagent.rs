@@ -9,6 +9,7 @@
 //! appended to the conversation history.
 
 use crate::agent::harness::definition::AgentDefinitionRegistry;
+use crate::agent::orchestration::tools::dispatch::{incomplete_stop, stopped_subagent_result};
 use crate::agent::progress::AgentProgress;
 use crate::agent::subagent_host::{
     continue_subagent, continue_subagent_with_parent, load_subagent_checkpoint, SubagentRunOptions,
@@ -116,7 +117,10 @@ impl ContinueSubagentTool {
                  fresh task if the worker was closed."
             )));
         };
-        if session.agent_id != agent_id {
+        // The session id already identifies a worker within this parent's
+        // store. Accept it in `agent_id` too when a caller copies the roster's
+        // session id into both fields, but keep rejecting unrelated agents.
+        if session.agent_id != agent_id && session.subagent_session_id != agent_id {
             return Ok(ToolResult::error(format!(
                 "continue_subagent: agent_id mismatch — durable session '{}' belongs to \
                  '{}', caller passed '{agent_id}'",
@@ -134,7 +138,7 @@ impl ContinueSubagentTool {
         tracing::info!(
             task_id = %task_id,
             subagent_session_id = %session.subagent_session_id,
-            agent_id = %agent_id,
+            agent_id = %session.agent_id,
             status = ?session.status,
             "[continue_subagent] resuming durable session via reusable async path"
         );
@@ -145,12 +149,6 @@ impl ContinueSubagentTool {
             "task_key": session.task_key.clone(),
             "task_title": session.task_title.clone(),
         });
-        if let (Some(obj), Some(toolkit)) = (async_args.as_object_mut(), &session.toolkit) {
-            obj.insert(
-                "toolkit".to_string(),
-                serde_json::Value::String(toolkit.clone()),
-            );
-        }
         if let (Some(obj), Some(model)) = (async_args.as_object_mut(), &session.model) {
             obj.insert(
                 "model".to_string(),
@@ -203,7 +201,7 @@ impl Tool for ContinueSubagentTool {
                 },
                 "agent_id": {
                     "type": "string",
-                    "description": "The worker's agent_id (from the envelope or the roster line)."
+                    "description": "The worker's agent_id (from the envelope or roster). For a durable session, its subagent_session_id is also accepted here when used as task_id."
                 },
                 "message": {
                     "type": "string",
@@ -375,7 +373,7 @@ impl ContinueSubagentTool {
         }
 
         // Look up the agent definition
-        let registry = match AgentDefinitionRegistry::global() {
+        let registry = match AgentDefinitionRegistry::current() {
             Some(reg) => reg,
             None => {
                 return Ok(ToolResult::error(
@@ -422,6 +420,7 @@ impl ContinueSubagentTool {
                     prompt: message.to_string(),
                     worker_thread_id: checkpoint.worker_thread_id.clone(),
                     display_name: definition.display_name.clone(),
+                    parent_call_id: crate::tools::host_extensions::tool_call_id(tool_context),
                 })
                 .await;
         }
@@ -447,7 +446,6 @@ impl ContinueSubagentTool {
         }
         let options = SubagentRunOptions {
             skill_filter_override: checkpoint.skill_filter_override,
-            toolkit_override: checkpoint.toolkit_override,
             context: None,
             model_override: checkpoint.model_override,
             task_id: Some(task_id.clone()),
@@ -556,6 +554,7 @@ impl ContinueSubagentTool {
                                         worktree_path: None,
                                         changed_files: Vec::new(),
                                         dirty_status: None,
+                                        stop: None,
                                     })
                                     .await;
                             }
@@ -600,11 +599,12 @@ impl ContinueSubagentTool {
                                         worktree_path: None,
                                         changed_files: Vec::new(),
                                         dirty_status: None,
+                                        stop: incomplete_stop(reason),
                                     })
                                     .await;
                             }
                         }
-                        Ok(ToolResult::success(format!(
+                        let envelope = format!(
                             "[SUBAGENT_INCOMPLETE]\n\
                              task_id: {}\n\
                              agent_id: {}\n\
@@ -615,7 +615,14 @@ impl ContinueSubagentTool {
                              report this as done; relay the partial result and the blocker to the \
                              user, or take a different approach.",
                             outcome.task_id, outcome.agent_id, outcome.output,
-                        )))
+                        );
+                        Ok(stopped_subagent_result(
+                            "continue_subagent",
+                            &outcome.agent_id,
+                            &outcome.task_id,
+                            reason,
+                            envelope,
+                        ))
                     }
                     SubagentRunStatus::Cancelled => {
                         tracing::info!(

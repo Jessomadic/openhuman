@@ -1,7 +1,7 @@
 //! Tool listing ops.
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::super::module_client::{self as connectors, methods};
 use super::super::types::{ComposioListToolsRequest, ComposioToolsResponse};
@@ -37,7 +37,7 @@ pub async fn composio_list_tools(
     config: &Config,
     toolkits: Option<Vec<String>>,
     tags: Option<Vec<String>>,
-) -> OpResult<RpcOutcome<ComposioToolsResponse>> {
+) -> OpResult<Outcome<ComposioToolsResponse>> {
     let effective_tags = if should_forward_tags(toolkits.as_deref()) {
         tags
     } else {
@@ -60,7 +60,7 @@ pub async fn composio_list_tools(
             } else {
                 format!("composio: {count} tool(s) listed across {named} toolkit(s)")
             };
-            Ok(RpcOutcome::new(resp, vec![line]))
+            Ok(Outcome::new(resp, vec![line]))
         }
         Err(error) => {
             report_composio_op_error("list_tools", &anyhow::anyhow!("{error}"));

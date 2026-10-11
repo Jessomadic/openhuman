@@ -8,7 +8,7 @@ use serde_json::json;
 
 use super::load::load_config_with_timeout;
 use super::paths::{active_workspace_marker_path, config_openhuman_dir, default_openhuman_dir};
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 pub(crate) fn is_windows_file_lock_error(error: &std::io::Error) -> bool {
     cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33))
@@ -72,7 +72,7 @@ pub(crate) fn reset_local_data_marker_remove_error(path: &Path, error: &std::io:
 pub(crate) async fn reset_local_data_for_paths(
     current_openhuman_dir: &Path,
     default_openhuman_dir: &Path,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let active_workspace_marker = active_workspace_marker_path(default_openhuman_dir);
     let active_user_marker = crate::config::active_user_marker_path(default_openhuman_dir);
     tracing::debug!(
@@ -119,7 +119,7 @@ pub(crate) async fn reset_local_data_for_paths(
         );
     }
 
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         json!({
             "removed_paths": removed_paths,
             "current_openhuman_dir": current_openhuman_dir.display().to_string(),
@@ -147,7 +147,7 @@ pub(crate) async fn reset_local_data_for_paths(
 /// callers where in-process removal is acceptable (POSIX file semantics
 /// tolerate unlinking open files; on Windows the CLI invocation runs
 /// without the core attached, so no handle is in the way).
-pub async fn reset_local_data() -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn reset_local_data() -> Result<Outcome<serde_json::Value>, String> {
     let config = load_config_with_timeout().await?;
     let current_openhuman_dir = config_openhuman_dir(&config);
     let default_openhuman_dir = default_openhuman_dir();
@@ -164,7 +164,7 @@ pub async fn reset_local_data() -> Result<RpcOutcome<serde_json::Value>, String>
 /// after which the Tauri shell removes them while no process holds open
 /// handles. See OPENHUMAN-TAURI-AF for the Windows file-locking failure
 /// that motivated the split.
-pub async fn get_data_paths() -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn get_data_paths() -> Result<Outcome<serde_json::Value>, String> {
     let config = load_config_with_timeout().await?;
     let current_openhuman_dir = config_openhuman_dir(&config);
     let default_openhuman_dir = default_openhuman_dir();
@@ -174,7 +174,7 @@ pub async fn get_data_paths() -> Result<RpcOutcome<serde_json::Value>, String> {
     // out) but must leave the sibling `users/<other>` dirs and the root
     // itself intact — see `reset_local_data_for_paths`.
     let active_user_marker = crate::config::active_user_marker_path(&default_openhuman_dir);
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         json!({
             "current_openhuman_dir": current_openhuman_dir.display().to_string(),
             "default_openhuman_dir": default_openhuman_dir.display().to_string(),
@@ -213,9 +213,7 @@ pub async fn get_data_paths() -> Result<RpcOutcome<serde_json::Value>, String> {
 /// let `Path::join` resolve a delete target OUTSIDE `<root>/users/<id>`. We
 /// therefore reject anything that isn't a single plain path segment and, as
 /// defense in depth, verify the resolved dir is a direct child of `users/`.
-pub async fn get_data_paths_for_user(
-    user_id: &str,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn get_data_paths_for_user(user_id: &str) -> Result<Outcome<serde_json::Value>, String> {
     if !is_plain_user_id(user_id) {
         return Err(format!(
             "refusing to resolve data paths for unsafe user id {user_id:?}: must be a single path segment with no separators, `.` or `..`"
@@ -242,7 +240,7 @@ pub async fn get_data_paths_for_user(
     // the id or the resolved dirs. The paths are still returned in the JSON
     // result below for the caller that actually needs them.
     log::debug!("[config] get_data_paths_for_user: explicit_user_id=true");
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         json!({
             "current_openhuman_dir": current_openhuman_dir.display().to_string(),
             "default_openhuman_dir": default_openhuman_dir.display().to_string(),

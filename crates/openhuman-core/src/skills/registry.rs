@@ -203,11 +203,7 @@ fn load_workflows_and_discovered(workspace_dir: &Path) -> (Vec<WorkflowDefinitio
         // name and be unresolvable by `skills_describe` / `skills_run`
         // ("unknown skill"). Falls back to `name` for legacy `Workflow` values
         // that predate `dir_name`. (#3987 codex review.)
-        let slug = if wf.dir_name.is_empty() {
-            wf.name.as_str()
-        } else {
-            wf.dir_name.as_str()
-        };
+        let slug = wf.id();
         if let Some(def) = load_workflow_definition(dir, slug, &wf.description) {
             workflows.push(def);
         }
@@ -227,12 +223,13 @@ fn load_workflow_definition(
 ) -> Option<WorkflowDefinition> {
     // WORKFLOW.md / workflow.toml are current; SKILL.md / skill.toml are read
     // for back-compat with workflows authored before the rename.
-    let md = std::fs::read_to_string(dir.join("WORKFLOW.md"))
-        .or_else(|_| std::fs::read_to_string(dir.join("SKILL.md")))
+    // `read_document` is bounded and refuses symlinks.
+    let md = tinyskills::read_document(&dir.join("WORKFLOW.md"))
+        .or_else(|_| tinyskills::read_document(&dir.join("SKILL.md")))
         .ok()?;
 
-    let manifest = std::fs::read_to_string(dir.join("workflow.toml"))
-        .or_else(|_| std::fs::read_to_string(dir.join("skill.toml")));
+    let manifest = tinyskills::read_document(&dir.join("workflow.toml"))
+        .or_else(|_| tinyskills::read_document(&dir.join("skill.toml")));
     if let Ok(toml_str) = manifest {
         match toml::from_str::<WorkflowDefinition>(&toml_str) {
             Ok(mut def) => {

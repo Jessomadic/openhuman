@@ -1,0 +1,6 @@
+{
+  "$comment": [
+    "Provider modules released from their own repositories on their own version line. See scripts/ci/check-module-pins.mjs."
+  ],
+  "providers": {}
+}

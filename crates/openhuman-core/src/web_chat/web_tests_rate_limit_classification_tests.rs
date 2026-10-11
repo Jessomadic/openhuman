@@ -149,8 +149,8 @@ fn classify_inference_error_rate_limited_returns_structured_retry_after_ms() {
         classified.source, "provider",
         "upstream 429 must classify source=provider, not openhuman_budget"
     );
-    assert_eq!(
-        classified.retryable, true,
+    assert!(
+        classified.retryable,
         "transient upstream 429 must allow same-thread retry"
     );
     assert_eq!(
@@ -167,7 +167,7 @@ async fn start_chat_chat_error_event_serializes_structured_fields_to_json_wire()
     let _serial = FORCED_ERROR_TEST_LOCK.lock().await;
     // The JSON-RPC SSE endpoint emits chat_error by running
     // `serde_json::to_value(&event)` over the WebChannelEvent struct
-    // (see `core/socketio.rs::emit_web_channel_event`). This pins the
+    // (see `openhuman-rpc/src/server/socketio.rs::emit_web_channel_event`). This pins the
     // resulting JSON keys so the frontend contract stays stable: the
     // FE reads exactly `error_source`, `error_retryable`,
     // `error_retry_after_ms`, `error_provider`, `error_fallback_available`
@@ -241,7 +241,7 @@ async fn start_chat_chat_error_event_serializes_structured_fields_to_json_wire()
 
     // Pin the additive contract: serializing a default (no error)
     // event must NOT introduce any of the new keys.
-    let empty = crate::core::socketio::WebChannelEvent {
+    let empty = crate::web_chat::WebChannelEvent {
         event: "chat_done".to_string(),
         ..Default::default()
     };
@@ -577,13 +577,9 @@ fn classify_inference_error_retryable_429_message_keeps_retry_hint() {
 }
 
 #[test]
-fn generic_error_copy_is_sanitized_and_has_discord_report_action() {
+fn generic_error_copy_is_plain_text_for_the_error_card() {
     let message = generic_inference_error_user_message();
-    assert!(message.contains("Something went wrong. Please try again."));
-    assert!(message.contains("This error has been reported."));
-    assert!(message.contains(
-        "<openhuman-link path=\"community/discord-report\">Report on Discord</openhuman-link>"
-    ));
+    assert_eq!(message, "Something went wrong. Please try again.");
 }
 
 #[test]

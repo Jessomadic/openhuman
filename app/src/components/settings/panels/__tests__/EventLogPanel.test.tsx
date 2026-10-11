@@ -205,25 +205,31 @@ describe('EventLogPanel', () => {
     });
   });
 
-  it('handles scroll and shows jump-to-latest button', async () => {
-    mockFetchSSE([{ domain: 'tool', event: 'ScrollTest' }]);
-    const { container } = renderWithProviders(<EventLogPanel />);
+  it('shows the jump-to-latest button after paging away from page 1 and returns on click', async () => {
+    // The redesign replaced the old scroll-position heuristic with plain
+    // pagination: "jump to latest" now just means "back to page 1", and it
+    // only renders once the reader has actually left it (`currentPage > 1`
+    // in EventLogPanel.tsx). Seed more rows than the default page size (50)
+    // so a second page exists to navigate to.
+    mockFetchSSE(Array.from({ length: 60 }, (_, i) => ({ domain: 'tool', event: `Event${i}` })));
+    renderWithProviders(<EventLogPanel />);
 
     await waitFor(() => {
-      expect(screen.getByText('ScrollTest')).toBeTruthy();
+      expect(screen.getByText('Event59')).toBeTruthy();
     });
 
-    // Was `container.querySelector('.max-h-[60vh]')` — the scroll region was
-    // addressed by a utility class, so restyling it broke the test without any
-    // behaviour changing. A testid is the stable handle.
-    const scrollDiv = container.querySelector('[data-testid="event-log-scroll"]')!;
-    Object.defineProperty(scrollDiv, 'scrollTop', { value: 100, writable: true });
-    fireEvent.scroll(scrollDiv);
+    expect(screen.queryByText('settings.developerMenu.eventLog.jumpToLatest')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('dataTable.nextPage'));
 
     await waitFor(() => {
       expect(screen.getByText('settings.developerMenu.eventLog.jumpToLatest')).toBeTruthy();
     });
 
     fireEvent.click(screen.getByText('settings.developerMenu.eventLog.jumpToLatest'));
+
+    await waitFor(() => {
+      expect(screen.queryByText('settings.developerMenu.eventLog.jumpToLatest')).toBeNull();
+    });
   });
 });

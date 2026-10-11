@@ -161,6 +161,73 @@ describe('SuggestedWorkflows', () => {
     expect(buildButtons[1]).toBeDisabled();
   });
 
+  describe('trigger filters', () => {
+    async function renderWithMixedTriggers() {
+      api.listSuggestions = vi
+        .fn()
+        .mockResolvedValue([
+          suggestion({ id: 'sug_schedule', title: 'Scheduled one', trigger_hint: 'schedule' }),
+          suggestion({ id: 'sug_event_1', title: 'Event one', trigger_hint: 'app_event' }),
+          suggestion({ id: 'sug_event_2', title: 'Event two', trigger_hint: 'app_event' }),
+          suggestion({ id: 'sug_manual', title: 'Manual one', trigger_hint: 'manual' }),
+        ]);
+      render(<SuggestedWorkflows />);
+      await waitFor(() => expect(screen.getAllByTestId('flow-suggestion-card')).toHaveLength(4));
+    }
+
+    it('shows a chip per trigger present, with counts, and only "all" when there is one card', async () => {
+      api.listSuggestions = vi.fn().mockResolvedValue([suggestion()]);
+      render(<SuggestedWorkflows />);
+      await waitFor(() => expect(screen.getByTestId('flow-suggestion-card')).toBeInTheDocument());
+
+      expect(screen.getByTestId('flow-suggestions-filter-all')).toBeInTheDocument();
+      // Only `app_event` is present among this single suggestion's triggers.
+      expect(screen.getByTestId('flow-suggestions-filter-app_event')).toBeInTheDocument();
+      expect(screen.queryByTestId('flow-suggestions-filter-schedule')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('flow-suggestions-filter-manual')).not.toBeInTheDocument();
+    });
+
+    it('filters the visible cards when a trigger chip is clicked', async () => {
+      await renderWithMixedTriggers();
+
+      fireEvent.click(screen.getByTestId('flow-suggestions-filter-app_event'));
+
+      expect(screen.getByText('Event one')).toBeInTheDocument();
+      expect(screen.getByText('Event two')).toBeInTheDocument();
+      expect(screen.queryByText('Scheduled one')).not.toBeInTheDocument();
+      expect(screen.queryByText('Manual one')).not.toBeInTheDocument();
+      expect(screen.getByTestId('flow-suggestions-filter-app_event')).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      );
+    });
+
+    it('clicking the "all" chip restores every card after a filter was applied', async () => {
+      await renderWithMixedTriggers();
+
+      fireEvent.click(screen.getByTestId('flow-suggestions-filter-manual'));
+      expect(screen.getAllByTestId('flow-suggestion-card')).toHaveLength(1);
+
+      fireEvent.click(screen.getByTestId('flow-suggestions-filter-all'));
+      expect(screen.getAllByTestId('flow-suggestion-card')).toHaveLength(4);
+    });
+
+    it('falls back to "all" once the active filter\'s last matching card is dismissed', async () => {
+      await renderWithMixedTriggers();
+
+      fireEvent.click(screen.getByTestId('flow-suggestions-filter-schedule'));
+      expect(screen.getAllByTestId('flow-suggestion-card')).toHaveLength(1);
+
+      fireEvent.click(screen.getByTestId('flow-suggestion-dismiss'));
+
+      // The `schedule` chip disappears (0 left) and the view falls back to "all".
+      await waitFor(() =>
+        expect(screen.queryByTestId('flow-suggestions-filter-schedule')).not.toBeInTheDocument()
+      );
+      expect(screen.getAllByTestId('flow-suggestion-card')).toHaveLength(3);
+    });
+  });
+
   it('surfaces an error and re-enables Build this when createFlow fails', async () => {
     api.listSuggestions = vi.fn().mockResolvedValue([suggestion()]);
     api.createFlow = vi.fn().mockRejectedValue(new Error('boom'));

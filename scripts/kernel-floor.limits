@@ -13,6 +13,79 @@
 # Simulate with: scripts/dep-sim.py --cut <crates>
 #
 # History
+#   337/316/3  2026-10-04  Merge upstream/main file-intake and module updates.
+#                      The merged flows profile measures 337 packages / 316
+#                      names / 3 native builds (including libdeflate-sys).
+#   332/311/3  2026-10-05  Re-measure on the current upstream CI toolchain; the
+#                      flows profile resolves five fewer packages and names.
+#   342/320/3  2026-10-07  tinyskills v0.2.8 (#7054) depends on cap-std, which
+#                      brings cap-std, cap-primitives, cap-fs-ext,
+#                      ambient-authority, io-extras, a second io-lifetimes,
+#                      fs-set-times, maybe-owned and rustix-linux-procfs into
+#                      the always-on flows graph. Measured on CI (Linux):
+#                      342 packages / 320 names / 3 native.
+#   335/313/2  2026-10-09  The tinyagents and tinyflows mains (storage drivers
+#                      on tinystoragedrivers v0.4.0) shed seven packages, seven
+#                      names and one native build from the flows graph.
+#                      Measured on CI (Linux): 335 packages / 313 names / 2
+#                      native.
+#   339/318/3  2026-10-04  Workspace attachment intake adds lossless PNG
+#                      optimization through oxipng (11 packages/names, including
+#                      libdeflate-sys C compilation). The merged TinyBox jail
+#                      enables Landlock by default (3 packages/names). Removing
+#                      both closures in the simulator exactly recovers 325/304;
+#                      this is dependency growth, not a shedding claim. Native
+#                      accounting now includes libdeflate-sys in both tools.
+#   325/304/2  2026-10-02  Merge upstream/main at 708f677cca. CI measures the
+#                      refreshed flows graph at 325 packages / 304 names / 2
+#                      native builds. This release merge adds no Cargo or
+#                      workspace changes beyond upstream/main; retain the
+#                      measured baseline and track dependency shedding separately.
+#   321/304/2  2026-10-01  Merge upstream/main at d0b235b352. The refreshed
+#                      first-party module workspaces add required host APIs and
+#                      transitive dependencies to the always-on flows profile.
+#                      This merged graph measures 321 packages / 304 names /
+#                      2 native builds (libsqlite3-sys and ring). The increase
+#                      is inherited from upstream; no native build dependency
+#                      was added. Keep it visible for a follow-up gating pass.
+#   304/283/2  2026-09-30  TinyChannels now supplies the always-on CLI channel
+#                      and shared channel runtime helpers through its new
+#                      `tinychannels-runtime` crate. The crate's dependencies
+#                      were already in the flows profile; this adds only the
+#                      required workspace package/name, with no new native
+#                      build. See PR #6782.
+#   304/283/2  2026-09-29  The merged lockfile and dependency graph resolve
+#                      three fewer packages and three fewer crate names for
+#                      the flows profile, with no change to native builds.
+#                      Measured by the gates-off CI lane; this lowers the
+#                      recorded floor without adding dependencies.
+#   303/282/2  2026-09-29  Merge the JSON-RPC split: removes openhuman-rpc
+#                      from the core flows graph; the resolved profile is
+#                      measured after the upstream TinyMCP v0.3.5 update.
+#   304/283/2  2026-09-29  The TinyMCP 0.3.5 dependency refresh lowers
+#                      the measured flows profile by three resolved package
+#                      versions and three unique crate names; native builds
+#                      remain unchanged. Ratchet to the new floor.
+#   304/283/2  2026-09-29  Tighten the flows package ceiling to the current
+#                      release branch's resolved graph. CI measured 304 packages,
+#                      283 unique names, and the existing two native builds;
+#                      no dependency policy was relaxed.
+#   307/286/2  2026-09-27  The multi-provider search config directly uses the
+#                      required TinySearch bus contract in always-on settings
+#                      and policy code. This adds one resolved crate/name and
+#                      no native build dependency.
+#   306/285/2  2026-09-26  The required TinyBrowser integration adds
+#                      tinybrowser-bus, tinybrowser-control, and tinyjevclient
+#                      to the flows profile compared with the 303/282 baseline.
+#                      No new native build dependency is introduced. The
+#                      macOS graph remains three packages/names above Linux.
+#   303/282/2  2026-09-25  The TinyChannels 0.1.3 contract refresh moves its
+#                      required HMAC path to hmac 0.13. The flows graph keeps
+#                      hmac 0.12 elsewhere, so this adds one package version;
+#                      digest 0.11 then resolves ctutils and cmov, adding two
+#                      names and two more packages. Comparing the pre-refresh
+#                      and current graphs gives +3 packages, +2 names, and no
+#                      new native build (still libsqlite3-sys and ring).
 #   300/280/2  2026-09-22  The TinyAgents 2.1.2 graph update moves its
 #                      runtime/session/graph split into the required agent
 #                      harness path. The `flows` profile therefore resolves
@@ -205,22 +278,7 @@
 #                      and drops the path dependency, keeping only
 #                      `tinymcp-bus` — at which point the MCP transport stack
 #                      leaves the always-on graph entirely. Lower it in that PR.
-#                      (2) Language runtimes moved behind the `tinyruntime`
-#                      TinyBus module (+1 package, +1 NAME: `tinyruntime-bus`,
-#                      the wire contract for the runtime router). It lands on the
-#                      always-on path and cannot be gated: `ShellTool` holds an
-#                      `Option<Arc<NodeBootstrap>>` as a FIELD and
-#                      `tools/impl/system/shell.rs` is kernel, so the toolchain
-#                      clients in `runtime/` are always compiled and name the
-#                      contract's payload types. `tinyruntime-bus` is
-#                      deliberately dependency-light — `serde` and `serde_json`,
-#                      both already in this profile, and nothing else. What it
-#                      buys is a much larger shed elsewhere: downloading,
-#                      verifying and unpacking language toolchains left this
-#                      repository entirely, taking `xz2` AND its static liblzma C
-#                      build with it, so `runtime-node = []` as a result. The
-#                      two native packages are unchanged.
-#   283/265/2  2026-08-21  tinymemory bumped past its #76/#77 line (-2 packages,
+#  283/265/2  2026-08-21  tinymemory bumped past its #76/#77 line (-2 packages,
 #                      +1 NAME). The name is `tinymemory-bus`, and it is a
 #                      RAISE, so: tinymemory#74 moved the wire vocabulary —
 #                      member names, payload types, the error-name table — out
@@ -400,7 +458,7 @@
 #                      limit to paper over inherited growth is what this file
 #                      exists to prevent.
 #   302/279/2  2026-08-09  `memory-git` gate (-3 packages / -3 names / -2 NATIVE),
-#                      measured on top of the runtime-node entry below.
+#                      measured on the then-current dependency graph.
 #
 #                      *** THE SPEC TARGET IS REACHED. *** Two native builds
 #                      remain — `libsqlite3-sys` and `ring` — which is exactly
@@ -420,7 +478,7 @@
 #                      that touch git2), the impls written against `Ledger`,
 #                      and `DiffEngine` sit behind the feature. OpenHuman
 #                      mirrors the split: `memory::diff::types` compiles in
-#                      both directions because the always-on subconscious
+#                      both directions because the always-on memory
 #                      profile renders those types into prompts.
 #                      Off-state: `memory_diff` is unknown-method, the
 #                      `memory_diff` agent tool is absent, the embedded driver
@@ -431,17 +489,6 @@
 #                      written. Default (full-feature) profile moved 356 -> 353.
 #                      Verified with `scripts/assert-shed.sh flows git2
 #                      libgit2-sys libz-sys`.
-#   305/282/4  2026-08-09  runtime-node gate, measured on top of the
-#                      upstream/main merge below (307/284/5 -> 305/282/4).
-#                      `xz2` + its static liblzma C build are exclusive to
-#                      runtime::node::extractor's .tar.xz path, so gating the
-#                      managed Node toolchain removes them: -2 packages, -2
-#                      names, and lzma-sys leaves the NATIVE list (5 -> 4) —
-#                      the first native toolchain build removed by the gating
-#                      program. Remaining native: libgit2-sys, libsqlite3-sys,
-#                      libz-sys, ring — the target keeps the last two.
-#                      Measured with `scripts/kernel-floor.sh flows`, and
-#                      `scripts/dep-sim.py --cut-nothing` agrees (282 names).
 #   307/284/5  2026-08-09  merge upstream/main + PR #5446 memory-subsystem work.
 #                      Measured, not derived: `scripts/kernel-floor.sh flows`
 #                      reports 307/284/5 on this merge. +3 names over the
@@ -588,4 +635,18 @@
 #                      into the required host runtime. The migration adds five
 #                      resolved packages and four unique crate names; it does
 #                      not add a native build dependency.
-flows:300:280:2
+# 332/311/3 2026-10-04 Memory lifecycle refresh removed five packages/names
+#                      from the Linux flows graph; native builds remain at 3.
+# 337/315/2 2026-10-09 secrets on the storage backend add the first-party
+#                      tinystoragedrivers-secrets crate (one package, one name).
+# 338/316/2 2026-10-09 cron and flows on the storage ports add the first-party
+#                      tinyflows-drivers crate (one package, one name; no new
+#                      external crate, native builds unchanged).
+# 339/317/2 2026-10-10 storage-file is always on (the default sqlite layout
+#                      keeps the small stores' rows in document tables and
+#                      the file driver backs `file:` URLs), which adds the
+#                      first-party tinystoragedrivers-file crate (one package,
+#                      one name; no external crate, native builds unchanged).
+# 337/315/2 2026-10-10 remove the managed runtime and ML compression stacks;
+#                      two unique packages and names leave the flows graph.
+flows:337:315:2

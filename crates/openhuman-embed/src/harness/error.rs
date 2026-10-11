@@ -77,6 +77,10 @@ impl From<crate::RuntimeError> for HarnessError {
             R::AlreadyRunning => Self::AlreadyRunning,
             R::Invalid(msg) => Self::Invalid(msg),
             R::BlankApiKey => Self::Invalid(err_text(&R::BlankApiKey)),
+            R::NoSessionStore => Self::Invalid(err_text(&R::NoSessionStore)),
+            R::MissingFeature { .. } | R::MissingStorageFeature { .. } => {
+                Self::Invalid(err_text(&err))
+            }
         }
     }
 }
@@ -87,9 +91,14 @@ impl From<crate::AgentError> for HarnessError {
         match err {
             A::Call(e) => Self::Call(e),
             A::Workspace { what, source } => Self::Workspace { what, source },
-            A::DuplicateId(_) | A::InvalidId { .. } | A::WidensRuntime(_) => {
-                Self::Invalid(err_text(&err))
-            }
+            A::DuplicateId(_)
+            | A::InvalidId { .. }
+            | A::WidensRuntime(_)
+            | A::ReservedId(_)
+            | A::AgentLimit { .. }
+            | A::UnknownId(_)
+            | A::UnknownTemplate(_)
+            | A::UnknownDefinition(_) => Self::Invalid(err_text(&err)),
             A::Invalid(msg) => Self::Invalid(msg),
         }
     }

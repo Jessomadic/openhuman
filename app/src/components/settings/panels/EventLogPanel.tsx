@@ -1,9 +1,12 @@
+import { ArrowUpToLine, Download } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
 import { getCoreHttpBaseUrl, getCoreRpcToken } from '../../../services/coreRpcClient';
+import { Badge, type BadgeVariant } from '../../ui';
 import Button from '../../ui/Button';
-import { SettingsSelect, SettingsTextField } from '../controls';
+import DataTable, { type DataTableColumn } from '../../ui/DataTable';
+import { SettingsSelect } from '../controls';
 import SettingsPanel from '../layout/SettingsPanel';
 
 interface EventEntry {
@@ -60,25 +63,23 @@ const DOMAIN_BADGE_KEYS: Record<string, string> = {
  * Domain tone table. Eleven domains, four themeable ramps — so the hue is spent
  * on the three readings a reader scans for in a live log (who acted: the agent
  * or a tool; and which rows are waiting on a human) and every other domain
- * takes the neutral pair `system` already used. Coral is deliberately left
+ * takes the neutral variant already used. Danger is deliberately left
  * unassigned: nothing here means "failure", and painting an ordinary domain in
  * the danger ramp would make routine events read as errors. The badge prints
  * the domain name either way. See `gitbooks/developing/theming.md`.
  */
-const DOMAIN_NEUTRAL_TONE = { bg: 'bg-content-muted/20', text: 'text-content-secondary' } as const;
-
-const DOMAIN_BADGE_COLORS: Record<string, { bg: string; text: string }> = {
-  tool: { bg: 'bg-primary-500/20', text: 'text-primary-400' },
-  agent: { bg: 'bg-sage-500/20', text: 'text-sage-400' },
-  system: DOMAIN_NEUTRAL_TONE,
-  memory: DOMAIN_NEUTRAL_TONE,
-  channel: DOMAIN_NEUTRAL_TONE,
-  cron: DOMAIN_NEUTRAL_TONE,
-  webhook: DOMAIN_NEUTRAL_TONE,
-  approval: { bg: 'bg-amber-500/20', text: 'text-amber-400' },
-  skill: DOMAIN_NEUTRAL_TONE,
-  composio: DOMAIN_NEUTRAL_TONE,
-  mcp_client: DOMAIN_NEUTRAL_TONE,
+const DOMAIN_BADGE_VARIANT: Record<string, BadgeVariant> = {
+  tool: 'primary',
+  agent: 'success',
+  system: 'neutral',
+  memory: 'neutral',
+  channel: 'neutral',
+  cron: 'neutral',
+  webhook: 'neutral',
+  approval: 'warning',
+  skill: 'neutral',
+  composio: 'neutral',
+  mcp_client: 'neutral',
 };
 
 const MAX_ENTRIES = 200;
@@ -103,8 +104,9 @@ const EventLogPanel = () => {
    */
   const [activeWorkspace, setActiveWorkspace] = useState<string | null>(null);
   const activeWorkspaceRef = useRef<string | null>(null);
-  const [autoScroll, setAutoScroll] = useState(true);
-  const containerRef = useRef<HTMLDivElement>(null);
+  // Controlled paging so "Jump to latest" can return to page 1.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const idRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -249,23 +251,6 @@ const EventLogPanel = () => {
     };
   }, []);
 
-  useEffect(() => {
-    if (autoScroll && containerRef.current) {
-      const el = containerRef.current;
-      el.scrollTop = newEntriesRef.current === 'top' ? 0 : el.scrollHeight;
-    }
-  }, [entries, autoScroll]);
-
-  const handleScroll = () => {
-    const el = containerRef.current;
-    if (!el) return;
-    const atAnchor =
-      newEntriesRef.current === 'top'
-        ? el.scrollTop < 10
-        : el.scrollHeight - el.scrollTop - el.clientHeight < 10;
-    setAutoScroll(atAnchor);
-  };
-
   const filteredEntries = entries.filter(e => {
     // Workspace scope first — it is the one filter that changes what the log
     // *means* rather than narrowing what it shows, and it also scopes the
@@ -306,148 +291,173 @@ const EventLogPanel = () => {
 
   const domains = [...new Set(entries.map(e => e.domain))].sort();
 
+  // Newest first regardless of the stream's `new_entries` order: page 1 is
+  // always "latest", so following the live tail is just staying on page 1.
+  const orderedEntries =
+    newEntriesRef.current === 'top' ? filteredEntries : [...filteredEntries].reverse();
+  const pageCount = Math.max(1, Math.ceil(orderedEntries.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pageRows = orderedEntries.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  const columns: DataTableColumn<EventEntry>[] = [
+    {
+      id: 'time',
+      header: t('settings.developerMenu.eventLog.column.time'),
+      className: 'w-px whitespace-nowrap font-mono text-[11px] text-content-muted',
+      cell: entry => entry.timestamp,
+    },
+    {
+      id: 'domain',
+      header: t('settings.developerMenu.eventLog.column.domain'),
+      className: 'w-px whitespace-nowrap',
+      cell: entry => (
+        <Badge variant={DOMAIN_BADGE_VARIANT[entry.domain] ?? 'neutral'}>
+          {DOMAIN_BADGE_KEYS[entry.domain]
+            ? t(DOMAIN_BADGE_KEYS[entry.domain])
+            : entry.domain.toUpperCase()}
+        </Badge>
+      ),
+    },
+    {
+      id: 'agent',
+      header: t('settings.developerMenu.eventLog.column.agent'),
+      className: 'w-px whitespace-nowrap font-mono text-[11px] text-content-muted',
+      cell: entry => entry.agent,
+    },
+    {
+      id: 'event',
+      header: t('settings.developerMenu.eventLog.column.event'),
+      // `max-w-0 w-full` lets the cell truncate instead of widening the table.
+      className: 'w-full max-w-0',
+      cell: entry => (
+        <div className="min-w-0 space-y-0.5">
+          <p className="truncate text-xs text-content" title={entry.event}>
+            {entry.event}
+          </p>
+          {entry.detail && (
+            <p className="truncate text-[11px] text-content-muted" title={entry.detail}>
+              {entry.detail}
+            </p>
+          )}
+        </div>
+      ),
+    },
+  ];
+
   return (
+    // Non-scrolling page body: the table card fills it and only rows scroll.
     <SettingsPanel
       testId="event-log-panel"
       scrollable={false}
       bodyClassName="flex h-full min-h-0 flex-col gap-4"
       description={t('settings.developerMenu.eventLog.desc')}>
-      {/* Status bar */}
-      <div className="flex flex-wrap items-center gap-2">
-        <SettingsSelect
-          value={scope}
-          onChange={e => setScope(e.target.value === 'all' ? 'all' : 'active')}
-          aria-label={t('settings.developerMenu.eventLog.workspaceScope')}
-          inputSize="sm">
-          <option value="active">
-            {t('settings.developerMenu.eventLog.workspaceScopeActive')}
-          </option>
-          <option value="all">{t('settings.developerMenu.eventLog.workspaceScopeAll')}</option>
-        </SettingsSelect>
-        <SettingsSelect
-          value={filterType}
-          onChange={e => setFilterType(e.target.value)}
-          aria-label={t('settings.developerMenu.eventLog.allTypes')}
-          inputSize="sm">
-          <option value="">{t('settings.developerMenu.eventLog.allTypes')}</option>
-          {domains.map(d => (
-            <option key={d} value={d}>
-              {d}
-            </option>
-          ))}
-        </SettingsSelect>
-        <SettingsTextField
-          className="w-40"
-          placeholder={t('settings.developerMenu.eventLog.filterAgent')}
-          value={filterText}
-          onChange={e => setFilterText(e.target.value)}
-          aria-label={t('settings.developerMenu.eventLog.filterAgent')}
-          inputSize="sm"
-        />
-        <Button
-          type="button"
-          variant="secondary"
-          size="xs"
-          onClick={exportLog}
-          disabled={filteredEntries.length === 0}>
-          {t('settings.developerMenu.eventLog.download')}
-        </Button>
-        <span className="text-xs text-content-muted">
-          {filteredEntries.length} {t('settings.developerMenu.eventLog.events')} &middot;{' '}
-          <span className={isLive ? 'text-sage-600 dark:text-sage-300' : 'text-content-muted'}>
-            {isLive
-              ? t('settings.developerMenu.eventLog.live')
-              : t('settings.developerMenu.eventLog.disconnected')}
+      <DataTable<EventEntry>
+        testId="event-log-scroll"
+        title={t('settings.developerMenu.eventLog.tableTitle')}
+        description={
+          <span className="inline-flex items-center gap-2">
+            <Badge variant={isLive ? 'success' : 'neutral'} data-testid="event-log-status">
+              {isLive
+                ? t('settings.developerMenu.eventLog.live')
+                : t('settings.developerMenu.eventLog.disconnected')}
+            </Badge>
+            <span>
+              {filteredEntries.length} {t('settings.developerMenu.eventLog.events')}
+            </span>
           </span>
-        </span>
-      </div>
-
-      {/* Jump to latest */}
-      {!autoScroll && (
-        <Button
-          type="button"
-          variant="tertiary"
-          size="xs"
-          onClick={() => {
-            setAutoScroll(true);
-            const el = containerRef.current;
-            if (el) {
-              el.scrollTop = newEntriesRef.current === 'top' ? 0 : el.scrollHeight;
-            }
-          }}>
-          {t('settings.developerMenu.eventLog.jumpToLatest')}
-        </Button>
-      )}
-
-      {/* Event stream.
-          This is a live region, not a document, so it claims the height rather
-          than taking a narrow measure: it was a `max-h-[60vh]` box that sized
-          to its content, so with no events the whole panel was a filter bar,
-          one grey sentence, and 700px of nothing -- indistinguishable from a
-          page that failed to load. Bounded and framed, the same emptiness reads
-          as a log that is connected and has not received anything yet, which is
-          what it is. */}
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line">
-        <div
-          ref={containerRef}
-          onScroll={handleScroll}
-          data-testid="event-log-scroll"
-          className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-          {filteredEntries.length === 0 && (
-            <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
-              <p className="text-sm text-content-secondary">
-                {isLive
-                  ? t('settings.developerMenu.eventLog.waiting')
-                  : t('settings.developerMenu.eventLog.notConnected')}
-              </p>
-              <p className="max-w-[44ch] text-xs text-content-faint">
-                {isLive
-                  ? t('settings.developerMenu.eventLog.waitingHint')
-                  : t('settings.developerMenu.eventLog.notConnectedHint')}
-              </p>
-            </div>
-          )}
-          {filteredEntries.map(entry => {
-            const colors = DOMAIN_BADGE_COLORS[entry.domain] || {
-              bg: 'bg-content-muted/20',
-              text: 'text-content-faint',
-            };
-            return (
-              <div
-                key={entry.id}
-                className="rounded-xl border border-line bg-surface-muted px-3 py-2 flex items-start gap-2">
-                <span className="text-[10px] text-content-muted font-mono shrink-0 pt-0.5">
-                  {entry.timestamp}
-                </span>
-                <span
-                  className={`rounded-full ${colors.bg} px-2 py-0.5 text-[10px] ${colors.text} shrink-0`}>
-                  {DOMAIN_BADGE_KEYS[entry.domain]
-                    ? t(DOMAIN_BADGE_KEYS[entry.domain])
-                    : entry.domain.toUpperCase()}
-                </span>
-                {entry.agent && (
-                  <span className="text-[10px] text-content-muted shrink-0 font-mono">
-                    {entry.agent}
-                  </span>
-                )}
-                {/* `min-w-0` is load-bearing: a flex item with `truncate` cannot
-                    shrink below min-content without it, so this span would hold its
-                    full width and the detail span beside it (which does set
-                    `min-w-0`) would absorb every pixel of overflow and render as a
-                    few characters — defeating the column it was added for. */}
-                <span className="text-xs text-content truncate min-w-0">{entry.event}</span>
-                {entry.detail && (
-                  <span
-                    className="text-[10px] text-content-muted truncate min-w-0 pt-0.5"
-                    title={entry.detail}>
-                    {entry.detail}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </section>
+        }
+        actions={
+          <>
+            {currentPage > 1 && (
+              <Button
+                type="button"
+                variant="tertiary"
+                size="sm"
+                leadingIcon={<ArrowUpToLine className="h-3.5 w-3.5" aria-hidden />}
+                onClick={() => setPage(1)}>
+                {t('settings.developerMenu.eventLog.jumpToLatest')}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              leadingIcon={<Download className="h-3.5 w-3.5" aria-hidden />}
+              onClick={exportLog}
+              disabled={filteredEntries.length === 0}>
+              {t('settings.developerMenu.eventLog.download')}
+            </Button>
+          </>
+        }
+        toolbarStart={
+          <>
+            <SettingsSelect
+              value={scope}
+              onChange={e => {
+                setScope(e.target.value === 'all' ? 'all' : 'active');
+                setPage(1);
+              }}
+              aria-label={t('settings.developerMenu.eventLog.workspaceScope')}
+              inputSize="sm">
+              <option value="active">
+                {t('settings.developerMenu.eventLog.workspaceScopeActive')}
+              </option>
+              <option value="all">{t('settings.developerMenu.eventLog.workspaceScopeAll')}</option>
+            </SettingsSelect>
+            <SettingsSelect
+              value={filterType}
+              onChange={e => {
+                setFilterType(e.target.value);
+                setPage(1);
+              }}
+              aria-label={t('settings.developerMenu.eventLog.allTypes')}
+              inputSize="sm">
+              <option value="">{t('settings.developerMenu.eventLog.allTypes')}</option>
+              {domains.map(d => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </SettingsSelect>
+          </>
+        }
+        search={{
+          value: filterText,
+          onChange: value => {
+            setFilterText(value);
+            setPage(1);
+          },
+          placeholder: t('settings.developerMenu.eventLog.filterAgent'),
+          ariaLabel: t('settings.developerMenu.eventLog.filterAgent'),
+        }}
+        columns={columns}
+        rows={pageRows}
+        rowKey={entry => String(entry.id)}
+        pagination={{
+          page: currentPage,
+          pageSize,
+          total: orderedEntries.length,
+          pageSizeOptions: [25, 50, 100, 200],
+          onPageChange: setPage,
+          onPageSizeChange: setPageSize,
+          testId: 'event-log-pagination',
+        }}
+        empty={
+          <div className="flex flex-col items-center gap-1 text-center">
+            <p className="text-sm text-content-secondary">
+              {isLive
+                ? t('settings.developerMenu.eventLog.waiting')
+                : t('settings.developerMenu.eventLog.notConnected')}
+            </p>
+            <p className="max-w-[44ch] text-xs text-content-faint">
+              {isLive
+                ? t('settings.developerMenu.eventLog.waitingHint')
+                : t('settings.developerMenu.eventLog.notConnectedHint')}
+            </p>
+          </div>
+        }
+        ariaLabel={t('settings.developerMenu.eventLog.title')}
+      />
     </SettingsPanel>
   );
 };

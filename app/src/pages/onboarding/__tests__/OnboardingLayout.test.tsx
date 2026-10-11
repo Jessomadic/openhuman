@@ -15,7 +15,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import socketReducer from '../../../store/socketSlice';
 import threadReducer from '../../../store/threadSlice';
+import { primeActiveUserId } from '../../../store/userScopedStorage';
 import { useOnboardingContext } from '../OnboardingContext';
+
+// The layout parks its draft in userScopedStorage, whose reads and writes wait
+// on the boot-time prime that main.tsx performs in the real app.
+primeActiveUserId('test-user');
 
 // ── Module-level mocks ─────────────────────────────────────────────────────
 
@@ -174,6 +179,17 @@ describe('OnboardingLayout — Joyride walkthrough integration (#1123)', () => {
     expect(mockCreateNewThreadArg).not.toHaveBeenCalled();
   });
 
+  it('clears the persisted onboarding draft on completion', async () => {
+    localStorage.setItem('test-user:onboarding_draft', JSON.stringify({ connectedSources: [] }));
+    await setupLayout();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('complete-btn'));
+    });
+
+    expect(localStorage.getItem('test-user:onboarding_draft')).toBeNull();
+  });
+
   it('calls setOnboardingCompletedFlag(true) during completeAndExit', async () => {
     const { mockSetOnboardingCompletedFlag } = await setupLayout();
 
@@ -273,8 +289,6 @@ describe('OnboardingLayout — Joyride walkthrough integration (#1123)', () => {
     const existing = ['shell', 'cron_add', 'cron_list'];
     const { mockSetOnboardingTasks } = await setupLayout({
       accessibilityPermissionGranted: false,
-      localModelConsentGiven: false,
-      localModelDownloadStarted: false,
       enabledTools: existing,
       connectedSources: [],
       updatedAtMs: 1,
@@ -288,6 +302,37 @@ describe('OnboardingLayout — Joyride walkthrough integration (#1123)', () => {
     // onboarding must never silently narrow an already-customized tool list.
     expect(mockSetOnboardingTasks).toHaveBeenCalledWith(
       expect.objectContaining({ enabledTools: existing })
+    );
+  });
+
+  /**
+   * Same read-through guard as `ToolsPanel.test.tsx`, for the other writer.
+   *
+   * `completeAndExit` re-sends the whole `StoredOnboardingTasks` record, so it
+   * has to carry `accessibilityPermissionGranted` through with
+   * `?? false` (OnboardingLayout.tsx). Every other fixture in this file passes
+   * `false` for it, so a regression that hardcoded `false` would be invisible
+   * here. (matrix 2.2.3)
+   *
+   * Worth knowing: at this commit nothing in `app/src` ever writes that flag
+   * `true` — both writers read it and write it straight back, and nothing
+   * re-derives it from the core's `detect_permissions()`. This test does not
+   * fix that; it makes sure the value is not dropped once it can be set.
+   */
+  it('carries a recorded accessibility permission through onboarding completion', async () => {
+    const { mockSetOnboardingTasks } = await setupLayout({
+      accessibilityPermissionGranted: true,
+      enabledTools: ['shell'],
+      connectedSources: [],
+      updatedAtMs: 1,
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('complete-btn'));
+    });
+
+    expect(mockSetOnboardingTasks).toHaveBeenCalledWith(
+      expect.objectContaining({ accessibilityPermissionGranted: true })
     );
   });
 });

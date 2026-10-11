@@ -8,7 +8,6 @@ import { useT } from '../../../lib/i18n/I18nContext';
 // as a regular IPC failure.
 import { safeInvoke as invoke, isTauri } from '../../../utils/tauriCommands/common';
 import ChipTabs from '../../layout/ChipTabs';
-import PanelPage from '../../layout/PanelPage';
 import { Alert, AlertDescription } from '../../ui';
 import Button from '../../ui/Button';
 import { SettingsSection } from '../controls';
@@ -265,8 +264,9 @@ const McpServerPanel = ({ embedded = false }: McpServerPanelProps = {}) => {
     </>
   );
 
+  // Embedded in Connections → MCP → Clients, whose page owns the header.
   if (embedded) {
-    return <PanelPage className="z-10">{body}</PanelPage>;
+    return <div className="space-y-5">{body}</div>;
   }
 
   return (

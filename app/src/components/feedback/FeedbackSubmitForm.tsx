@@ -25,6 +25,11 @@ type SubmitStatus = 'idle' | 'loading' | 'accepted' | 'rejected' | 'error';
 interface FeedbackSubmitFormProps {
   /** Called with the published item when a submission is accepted. */
   onAccepted: (result: CreateFeedbackResult) => void;
+  /**
+   * Drop the card surface and heading, for hosts that already frame the form
+   * (the Feedback page's compose dialog supplies its own title).
+   */
+  bare?: boolean;
 }
 
 // The card fills the pane; the fields inside it do not. A title line and a
@@ -33,7 +38,7 @@ interface FeedbackSubmitFormProps {
 // mistake. 68ch keeps both comfortable without leaving the field looking stunted.
 const INPUT_CLASS = 'w-full max-w-[68ch] rounded-xl bg-surface-muted px-4 py-2.5';
 
-export default function FeedbackSubmitForm({ onAccepted }: FeedbackSubmitFormProps) {
+export default function FeedbackSubmitForm({ onAccepted, bare = false }: FeedbackSubmitFormProps) {
   const { t } = useT();
   const [type, setType] = useState<FeedbackType>('feature');
   const [title, setTitle] = useState('');
@@ -145,7 +150,12 @@ export default function FeedbackSubmitForm({ onAccepted }: FeedbackSubmitFormPro
         : 'text-coral-600 dark:text-coral-400';
 
   return (
-    <div className="rounded-2xl border border-line bg-surface p-6 shadow-soft dark:shadow-none">
+    <div
+      className={
+        bare
+          ? undefined
+          : 'rounded-2xl border border-line bg-surface p-6 shadow-soft dark:shadow-none'
+      }>
       {/* The type toggle used to be two full-width `size="lg"` buttons stacked
           above the fields: a binary property of the draft, rendered larger and
           louder than the title, the body and Submit combined, so the form read
@@ -154,12 +164,16 @@ export default function FeedbackSubmitForm({ onAccepted }: FeedbackSubmitFormPro
           the billing panel gives its monthly/annual switch, which is the same
           kind of control: one bit that qualifies the thing below it. */}
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="max-w-[52ch]">
-          <h2 className="font-title text-base font-semibold text-content">
-            {t('feedback.submit.heading')}
-          </h2>
-          <p className="mt-0.5 text-xs text-content-muted">{t('feedback.submit.subheading')}</p>
-        </div>
+        {bare ? (
+          <span className="sr-only">{t('feedback.submit.heading')}</span>
+        ) : (
+          <div className="max-w-[52ch]">
+            <h2 className="font-title text-base font-semibold text-content">
+              {t('feedback.submit.heading')}
+            </h2>
+            <p className="mt-0.5 text-xs text-content-muted">{t('feedback.submit.subheading')}</p>
+          </div>
+        )}
 
         <div
           role="group"
@@ -260,7 +274,7 @@ export default function FeedbackSubmitForm({ onAccepted }: FeedbackSubmitFormPro
       <div className="mt-3 flex items-center justify-between gap-3">
         <Button
           variant="primary"
-          size="lg"
+          size={bare ? 'md' : 'lg'}
           onClick={handleSubmit}
           disabled={!canSubmit}
           aria-describedby={visibleHint ? QUALITY_HINT_ID : undefined}>

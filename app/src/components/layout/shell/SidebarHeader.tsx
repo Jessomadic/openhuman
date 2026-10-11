@@ -4,12 +4,14 @@ import { useNavigate } from 'react-router-dom';
 
 import { registry } from '../../../lib/commands/registry';
 import { useT } from '../../../lib/i18n/I18nContext';
+import { DISCORD_INVITE_URL } from '../../../utils/links';
 import { openUrl } from '../../../utils/openUrl';
 import { Button, SidebarHeader as SidebarHeaderShell, Tooltip } from '../../ui';
 import { useRootSidebar } from './RootShellLayout';
+import { isWindowsDesktop } from './WindowsWindowControls';
 
-/** The community invite the Discord button opens. */
-export const DISCORD_URL = 'https://discord.tinyhumans.ai';
+/** The community destination opened by the Discord button. */
+export const DISCORD_URL = DISCORD_INVITE_URL;
 
 /**
  * Header footprint layered on `<Button variant="tertiary" iconOnly>`: 28px
@@ -32,12 +34,12 @@ export default function SidebarHeader() {
   const { hide } = useRootSidebar();
 
   return (
-    // The primitive's header slot supplies the px-3/pb-2/pt-3 band; this only
-    // turns it into a right-aligned row. Right-aligned so the macOS traffic
-    // lights (top-left, overlay title bar) sit in the empty left space — the
-    // icons stay clear of the window controls and inline with them.
+    // The primitive supplies the horizontal and bottom inset; this overrides
+    // its top inset to align the row to the title-bar centreline, then turns it
+    // into a right-aligned row on macOS. The traffic lights sit in the empty
+    // left space. Windows has no controls in this corner, so center the row.
     //
-    // The icons deliberately do NOT move to meet the lights: this row's
+    // On macOS the icons deliberately do NOT move to meet the lights: this row's
     // vertical rhythm is the sidebar's, shared with `SidebarNav` below it, and
     // pulling it up to the window's edge to chase a platform control would bend
     // the app's own spacing around one OS's chrome. The lights are moved to
@@ -45,9 +47,13 @@ export default function SidebarHeader() {
     // file is JSON and cannot hold a comment, so the reasoning lives here,
     // beside the row it has to agree with.
     //
-    // The target is fixed and computable: this row's centre is pt-3 (12px) plus
-    // half of ICON_BTN's h-7 (14px) = 26px from the window top, and the sidebar
-    // starts flush at that top — `SidebarProvider`/`Sidebar` add no inset.
+    // The native traffic lights sit optically 4px above the title-bar band's
+    // mathematical centre. The sidebar starts 8px from the window edge, then
+    // 7px top padding plus half of ICON_BTN's h-7 (14px) puts the icon centre
+    // on the tuned 29px optical line.
+    // The native cluster is deliberately nudged toward the window corner:
+    // x 22 / y 32 keeps it inside the 88px collapsed rail while leaving more
+    // breathing room below it before the centred navigation controls begin.
     //
     // `y` is NOT that centre, and is not a simple gap either. tao positions the
     // lights by resizing the title-bar container: `inset_traffic_lights`
@@ -57,13 +63,13 @@ export default function SidebarHeader() {
     // works out as `y − b`, where `b` is whatever offset the button already had
     // inside that container. `b` is AppKit's and is not knowable from here,
     // which is why `y` is tuned by looking at the window rather than solved:
-    // 20 sat visibly high, 28 is the correction.
+    // 20 sat visibly high, 28 was the correction before the 8px sidebar inset.
     //
-    // `x: 20` is the conventional macOS left inset. Supplying it is unavoidable
+    // `x: 22` is the collapsed-rail optical correction. Supplying it is unavoidable
     // — the config takes a position, so `y` cannot be set alone without moving
     // this into Rust and reading the existing frame.
     //
-    // Re-check this if `pt-3` or `ICON_BTN`'s height ever changes: the target
+    // Re-check this if the 7px top inset or `ICON_BTN`'s height ever changes: the target
     // moves with them, and nothing fails loudly when the two disagree.
     //
     // `data-tauri-drag-region` lives directly on the primitive (rather than a
@@ -81,7 +87,7 @@ export default function SidebarHeader() {
     // correct on a band with no children — see `WindowDragBar`.
     <SidebarHeaderShell
       data-tauri-drag-region="deep"
-      className="flex-row items-center justify-end gap-1">
+      className={`flex-row items-center gap-1 pt-[7px] ${isWindowsDesktop() ? 'justify-center' : 'justify-end'}`}>
       <div className="flex items-center gap-0.5">
         {/* Community Discord — opens the invite in the system browser. This slot
             held the keyboard-shortcuts help; that directory is still one

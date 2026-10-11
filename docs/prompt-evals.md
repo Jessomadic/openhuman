@@ -6,7 +6,7 @@ other.
 | | Tier 1 — routing | Tier 2 — comprehension |
 |---|---|---|
 | Question | Is the agent wired so a model *could* follow its prompt? | Does a real model actually follow it? |
-| Where | `tests/agent_prompt_comprehension_e2e.rs` | `scripts/prompt-eval.sh` + `scripts/prompt-eval/cases.json` |
+| Where | `tests/in_process/agent_prompt_comprehension_e2e.rs` | `scripts/prompt-eval.sh` + `scripts/prompt-eval/cases.json` |
 | Model | Scripted completions (no model) | The real backend model |
 | Cost | Free, deterministic | Money per run, non-deterministic |
 | CI | Runs with the Rust integration tests | **Never.** Refuses to run when `CI=true` |
@@ -24,17 +24,20 @@ model never reached it.
 
 A green tier 1 is therefore not evidence of comprehension. Only tier 2 is.
 
-The six cases cover the agents where mis-routing has cost something:
+The cases cover the agents where mis-routing has cost something:
 `workflow_builder` (must reach `propose_workflow`, never three consecutive
 catalog searches), `orchestrator` (searches for and calls integration actions
-itself, never holds the raw Composio or cron tools), `integrations_agent`,
-`scheduler_agent`, and the
-two zero-belt agents `summarizer` and `trigger_triage` (advertise nothing).
+itself, never holds the raw Composio or cron tools on its advertised belt),
+and the two zero-belt agents `summarizer` and `trigger_triage` (advertise
+nothing). The old `integrations_agent` and `scheduler_agent` cases went with
+those agents: Composio actions are reached by the orchestrator through
+`tool_search`, and reminders through the `scheduling` skill (`use_skill`,
+then `cron`).
 Fleet-wide static coverage of all agents lives in the prompt tests under
 `crates/openhuman-core/src/agent/registry/agents/`, not here.
 
 ```sh
-cargo test -p openhuman --test agent_prompt_comprehension_e2e
+cargo test -p openhuman-cli --test in_process_all agent_prompt_comprehension_e2e
 ```
 
 ## Tier 2
@@ -128,13 +131,13 @@ scoring proves too coarse.
 | Case | Surface | Checks | Writes |
 |---|---|---|---|
 | `workflow-builder-news` | workflow | reaches `propose_workflow`; ≤2 consecutive catalog searches; saves nothing | nothing |
-| `orchestrator-reminder` | orchestration → scheduler | hands off through `schedule_task` | **a cron job**, remove it afterwards |
+| `orchestrator-reminder` | orchestration → scheduling skill | loads skill `scheduling` and creates the job with `cron` after proposing the timing; never answers in prose only | **a cron job**, remove it afterwards |
 | `orchestrator-direct-answer` | orchestration | answers a trivial question without spawning | nothing |
 | `orchestrator-research-trip` | orchestration | a research question goes straight to `web_search_tool` and streams an answer; never `request_plan_review`, `todo` or a spawn | nothing |
 | `composio-gmail-read` | composio | reads the latest Gmail subject via `tool_search` and a direct `GMAIL_*` call; never sends, deletes or reconnects | nothing |
-| `skill-notion-read` | skills | lists Notion pages through `run_skill`; never installs a skill | nothing |
+| `skill-notion-read` | skills | lists Notion pages by running the installed skill with `run_workflow`; never installs a skill | nothing |
 | `mcp-none-configured` | MCP, **error path** | with no MCP server configured, says so; never installs one, never fabricates results | nothing |
-| `web-search-fact` | web search | one built-in `web_search_tool` lookup, not a `research` spawn | nothing |
+| `web-search-fact` | web search | one built-in `web_search_tool` lookup, not a sub-agent spawn | nothing |
 
 (Rows are listed here by surface; `cases.json` holds them in run order.)
 

@@ -10,17 +10,14 @@ impl Tool for SpawnSubagentTool {
          per call: by default it runs as a reusable async worker and returns \
          immediately — pass `blocking: true` to run it inline and get the \
          sub-agent's final output back in this turn. To run several independent \
-         workers at once (e.g. \"a separate researcher for each X\", a council \
+         workers at once (e.g. \"a separate worker for each X\", a council \
          of opinions, or \"fan out over N items\"), use `spawn_parallel_agents` \
          with one task per worker — a SINGLE call that launches them \
          concurrently. Do NOT call this tool in a loop to fan out: repeated \
          `spawn_subagent` calls each delegate a single task and never launch \
          workers concurrently, which serializes the whole request. See the Delegation \
          Guide in the system prompt for available agent_ids and when to \
-         use each. When delegating to `integrations_agent`, you MUST also pass \
-         `toolkit=\"<name>\"` naming the Composio integration the \
-         sub-task targets (e.g. `gmail`, `notion`); the sub-agent will \
-         only see that toolkit's actions."
+         use each."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -111,12 +108,6 @@ impl SpawnSubagentTool {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        let toolkit_override = args
-            .get("toolkit")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-
         // Worker threads are now always created for delegations that may
         // need follow-up (checkpoint + replay for ask_user_clarification).
         // The `dedicated_thread` parameter is accepted but no longer
@@ -140,7 +131,7 @@ impl SpawnSubagentTool {
         if prompt.is_empty() {
             return Ok(ToolResult::error("spawn_subagent: `prompt` is required"));
         }
-        let registry = match AgentDefinitionRegistry::global() {
+        let registry = match AgentDefinitionRegistry::current() {
             Some(reg) => reg,
             None => {
                 return Ok(ToolResult::error(
@@ -180,164 +171,6 @@ impl SpawnSubagentTool {
                 parent_ctx.agent_definition_id,
                 definition.id
             );
-        }
-
-        // ── integrations_agent toolkit gate ──────────────────────────────────
-        // integrations_agent is a platform-parameterised specialist. Every
-        // spawn MUST name a CONNECTED toolkit so the sub-agent only
-        // sees one integration's tool catalogue instead of all of
-        // them. We split validation into three cases so the model
-        // gets a precise, actionable error on every failure mode —
-        // nothing reaches the LLM loop unless the spawn is valid.
-        if definition.id == "integrations_agent" {
-            // The parent's `connected_integrations` Vec is frozen at
-            // session-start (see `session/turn.rs::fetch_connected_integrations`),
-            // so a toolkit the user authorised mid-thread isn't visible
-            // here. Refresh from the global integrations cache —
-            // invalidated by `ComposioConnectionCreatedSubscriber` once
-            // OAuth reaches ACTIVE — so the pre-flight sees the latest
-            // truth. Falls back to the parent's frozen list when the
-            // live fetch returns empty (no signed-in user, backend
-            // unreachable, …) so offline behaviour is unchanged.
-            let parent_ctx = run_context.parent.clone();
-            let live_integrations: Vec<crate::agent::prompts::ConnectedIntegration> = {
-                match crate::config::Config::load_or_init().await {
-                    Ok(config) => {
-                        use crate::integrations::composio::FetchConnectedIntegrationsStatus;
-                        // Use the status-discriminating fetch so we can
-                        // tell "user has zero active integrations" (truth
-                        // — adopt it) apart from "backend unavailable"
-                        // (preserve the parent's frozen snapshot so the
-                        // pre-flight doesn't reject every toolkit during
-                        // a transient 5xx).
-                        match crate::integrations::composio::fetch_connected_integrations_status(
-                            &config,
-                        )
-                        .await
-                        {
-                            FetchConnectedIntegrationsStatus::Authoritative(fresh) => {
-                                tracing::debug!(
-                                    target: "spawn_subagent",
-                                    count = fresh.len(),
-                                    "[spawn_subagent] refreshed connected_integrations for pre-flight"
-                                );
-                                fresh
-                            }
-                            FetchConnectedIntegrationsStatus::Unavailable => {
-                                tracing::debug!(
-                                    target: "spawn_subagent",
-                                    "[spawn_subagent] integrations backend unavailable; falling back to parent's frozen list"
-                                );
-                                parent_ctx
-                                    .as_ref()
-                                    .map(|p| p.connected_integrations.clone())
-                                    .unwrap_or_default()
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            target: "spawn_subagent",
-                            error = %e,
-                            "[spawn_subagent] config load failed; falling back to parent's frozen list"
-                        );
-                        parent_ctx
-                            .as_ref()
-                            .map(|p| p.connected_integrations.clone())
-                            .unwrap_or_default()
-                    }
-                }
-            };
-            let allowlist: Vec<&crate::agent::prompts::ConnectedIntegration> =
-                live_integrations.iter().collect();
-            let connected_slugs: Vec<String> = allowlist
-                .iter()
-                .filter(|ci| ci.connected)
-                .map(|ci| ci.toolkit.clone())
-                .collect();
-
-            tracing::debug!(
-                target: "spawn_subagent",
-                toolkit = ?toolkit_override,
-                allowlist_count = allowlist.len(),
-                connected_count = connected_slugs.len(),
-                connected = ?connected_slugs,
-                "[spawn_subagent] integrations_agent gate: validating toolkit"
-            );
-
-            match toolkit_override.as_deref() {
-                None => {
-                    return Ok(ToolResult::error(format!(
-                        "spawn_subagent(integrations_agent): the `toolkit` argument is required. \
-                         Pass one of the currently-connected toolkits: [{}]. \
-                         See the Delegation Guide in your system prompt for which toolkit \
-                         matches each task.",
-                        connected_slugs.join(", ")
-                    )));
-                }
-                Some(tk) => {
-                    let entry = allowlist
-                        .iter()
-                        .find(|ci| ci.toolkit.eq_ignore_ascii_case(tk));
-                    match entry {
-                        None => {
-                            // Toolkit isn't even in the backend allowlist.
-                            return Ok(ToolResult::error(format!(
-                                "spawn_subagent(integrations_agent): toolkit '{tk}' is not in \
-                                 the backend allowlist. Valid toolkits: [{}]. Check the \
-                                 Delegation Guide in your system prompt for the exact slug.",
-                                allowlist
-                                    .iter()
-                                    .map(|ci| ci.toolkit.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            )));
-                        }
-                        Some(ci) if !ci.connected => {
-                            // Toolkit exists in the allowlist but isn't connected.
-                            // This is NOT a tool error — it's an expected condition
-                            // the orchestrator should communicate to the user. We
-                            // return `ToolResult::success` so:
-                            //   1. The agent loop doesn't prepend "Error: " to
-                            //      the result text (which would bias the model
-                            //      toward defensive failure language).
-                            //   2. The web channel emits `success: true` on the
-                            //      `tool_result` socket event, so the frontend
-                            //      doesn't render this as a failed tool call.
-                            // The model still reads the explanation and produces
-                            // an appropriate user-facing response.
-                            //
-                            // Split (#2365) into 4 cases driven by the upstream
-                            // status field on the most-informative connection
-                            // row, instead of the legacy generic
-                            // "not authorized yet" copy. Before this split,
-                            // an OAuth-in-progress / expired / failed Gmail
-                            // surfaced the same "you need to connect Gmail"
-                            // message — which Settings UI contradicted (it
-                            // shows the connection as initiated/expired), so
-                            // users concluded the agent was confused.
-                            tracing::debug!(
-                                target: "spawn_subagent",
-                                toolkit = %ci.toolkit,
-                                non_active_status = ?ci.non_active_status,
-                                "[spawn_subagent] integrations_agent gate: toolkit not connected — emitting status-specific message"
-                            );
-                            let message = describe_unconnected_state(
-                                &ci.toolkit,
-                                ci.non_active_status.as_deref(),
-                            );
-                            return Ok(ToolResult::success(message));
-                        }
-                        Some(_) => {
-                            tracing::debug!(
-                                target: "spawn_subagent",
-                                toolkit = %tk,
-                                "[spawn_subagent] integrations_agent gate: toolkit connected, proceeding with spawn"
-                            );
-                        }
-                    }
-                }
-            }
         }
 
         // Input, registry, allowlist, and integration validation are safe to
@@ -457,6 +290,7 @@ impl SpawnSubagentTool {
                     prompt: prompt.clone(),
                     worker_thread_id: worker_thread_id.clone(),
                     display_name: Some(definition.display_name().to_string()),
+                    parent_call_id: crate::tools::host_extensions::tool_call_id(tool_context),
                 })
                 .await;
         }
@@ -481,7 +315,6 @@ impl SpawnSubagentTool {
             .map(|parent| parent.workspace_dir.clone());
         let options = SubagentRunOptions {
             skill_filter_override: None,
-            toolkit_override,
             context,
             model_override,
             task_id: Some(task_id.clone()),
@@ -570,6 +403,7 @@ impl SpawnSubagentTool {
                                         worktree_path: None,
                                         changed_files: Vec::new(),
                                         dirty_status: None,
+                                        stop: None,
                                     })
                                     .await;
                             }
@@ -648,6 +482,7 @@ impl SpawnSubagentTool {
                                         worktree_path: None,
                                         changed_files: Vec::new(),
                                         dirty_status: None,
+                                        stop: incomplete_stop(reason),
                                     })
                                     .await;
                             }
@@ -666,7 +501,13 @@ impl SpawnSubagentTool {
                              delegation unchanged.",
                             outcome.task_id, outcome.agent_id, outcome.output,
                         );
-                        Ok(ToolResult::success(envelope))
+                        Ok(stopped_subagent_result(
+                            "spawn_subagent",
+                            &outcome.agent_id,
+                            &outcome.task_id,
+                            reason,
+                            envelope,
+                        ))
                     }
                     SubagentRunStatus::Cancelled => {
                         tracing::info!(

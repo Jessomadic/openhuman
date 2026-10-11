@@ -39,12 +39,12 @@ use crate::core::events::DomainEvent;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use thiserror::Error;
-use tinyagents_graph::orchestration::{
+use tinyagents_harness::ids::TaskId;
+use tinyagents_harness::CancellationToken;
+use tinyagents_tasks::{
     DetachedTaskRegistry, DetachedTaskRegistryError, DetachedTaskWaitOutcome,
     OrchestrationTaskStatus,
 };
-use tinyagents_harness::ids::TaskId;
-use tinyagents_harness::CancellationToken;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{Duration, Instant};
 
@@ -149,7 +149,7 @@ impl AgentOrchestrationSession {
     /// Spawn a child agent from the active parent agent turn.
     ///
     /// `request` must provide a non-empty `agent_id` and `prompt`; optional
-    /// context, toolkit, model, parent id, and metadata are carried into the
+    /// context, model, parent id, and metadata are carried into the
     /// child record and sub-agent run options. On success this returns the
     /// accepted child id and initial status while a background task executes the
     /// child through [`run_subagent`].
@@ -338,9 +338,8 @@ impl AgentOrchestrationSession {
 
         let progress_sink = parent.on_progress.clone();
         if let Some(progress) = progress_sink.clone() {
-            let resolved_display_name = AgentDefinitionRegistry::global()
-                .and_then(|reg| reg.get(&agent_id))
-                .map(|def| def.display_name().to_string());
+            let resolved_display_name = AgentDefinitionRegistry::current()
+                .and_then(|reg| reg.get(&agent_id).map(|def| def.display_name().to_string()));
             let _ = progress
                 .send(AgentProgress::SubagentSpawned {
                     agent_id: agent_id.clone(),
@@ -351,6 +350,7 @@ impl AgentOrchestrationSession {
                     prompt: prompt.clone(),
                     worker_thread_id: None,
                     display_name: resolved_display_name,
+                    parent_call_id: None,
                 })
                 .await;
         }
@@ -384,7 +384,6 @@ impl AgentOrchestrationSession {
 
         let options = SubagentRunOptions {
             skill_filter_override: None,
-            toolkit_override: request.toolkit,
             context: request.context,
             model_override: request.model,
             task_id: Some(orchestration_id.clone()),
@@ -520,6 +519,7 @@ impl AgentOrchestrationSession {
                                     worktree_path: None,
                                     changed_files: Vec::new(),
                                     dirty_status: None,
+                                    stop: None,
                                 })
                                 .await;
                         }
@@ -664,7 +664,7 @@ fn resolve_definition(request: &SpawnAgentRequest) -> Result<AgentDefinition, Or
         return Err(OrchestrationError::InvalidSpawnRequest);
     }
     let registry =
-        AgentDefinitionRegistry::global().ok_or(OrchestrationError::RegistryUnavailable)?;
+        AgentDefinitionRegistry::current().ok_or(OrchestrationError::RegistryUnavailable)?;
     registry
         .get(agent_id)
         .cloned()

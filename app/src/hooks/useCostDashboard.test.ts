@@ -53,7 +53,7 @@ describe('useCostDashboard', () => {
     expect(result.current.data?.currency).toBe('USD');
   });
 
-  it('unwraps RpcOutcome `{ result, logs }` envelopes', async () => {
+  it('unwraps Outcome `{ result, logs }` envelopes', async () => {
     mockedCall.mockResolvedValueOnce({ result: fixture, logs: ['info'] });
     const { result } = renderHook(() => useCostDashboard({ paused: true }));
     await waitFor(() => expect(result.current.data).not.toBeNull());

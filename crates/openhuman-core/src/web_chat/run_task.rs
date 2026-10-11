@@ -7,8 +7,9 @@
 use std::sync::Arc;
 use tinyagents_harness::run_queue::RunQueue;
 
+use crate::agent::progress::AgentProgress;
 use crate::config::rpc as config_rpc;
-use crate::threads::turn_state::TurnStateStore;
+use tinyagents_session::turn_state::TurnStateStore;
 
 use super::ops::BudgetCorrelation;
 use super::progress_bridge::spawn_progress_bridge;
@@ -18,9 +19,9 @@ use super::session::{
 };
 use super::types::{ChatRequestMetadata, WebChatTaskResult};
 use super::web_errors::{
-    classify_inference_error, inference_budget_exceeded_user_message,
-    is_empty_provider_response_text, is_inference_budget_exceeded_error,
+    inference_budget_exceeded_user_message, is_inference_budget_exceeded_error,
 };
+use tinyinference_llm::failure::is_empty_provider_response_text;
 
 #[cfg(any(test, debug_assertions))]
 use super::ops::TEST_FORCED_RUN_CHAT_TASK_ERROR;
@@ -35,6 +36,7 @@ pub(crate) async fn run_chat_task(
     locale: Option<String>,
     run_queue: Arc<RunQueue<crate::agent::queued_turn::QueuedTurn>>,
     metadata: ChatRequestMetadata,
+    origin: crate::agent::turn_origin::AgentTurnOrigin,
     // When true, run as an isolated fork: build a fresh agent seeded from the
     // thread's history-at-start and never touch the shared `THREAD_SESSIONS`
     // cache, so a concurrent same-thread (parallel) turn cannot clobber — or be
@@ -86,7 +88,16 @@ pub(crate) async fn run_chat_task(
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             tokio::select! {
                 _ = block.release.notified() => {
-                    return Err("test block released".to_string());
+                    return match block.succeed_in.clone() {
+                        Some(workspace_dir) => Ok(WebChatTaskResult {
+                            full_response: "parked reply".to_string(),
+                            citations: Vec::new(),
+                            usage: None,
+                            workspace_dir,
+                            timing: None,
+                        }),
+                        None => Err("test block released".to_string()),
+                    };
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
                     return Err("test block elapsed".to_string());
@@ -95,7 +106,17 @@ pub(crate) async fn run_chat_task(
         }
     }
 
-    let config = config_rpc::load_config_with_timeout().await?;
+    let mut config = config_rpc::load_config_with_timeout().await?;
+    // A thread started in a chosen folder acts there, not in the global
+    // `action_dir`. Applied before checkout so the session agent, its security
+    // policy (which grants `action_dir` as a trusted root) and its tools are
+    // all built on the thread's folder.
+    if let Some(dir) =
+        crate::threads::ops::thread_working_dir(config.workspace_dir.clone(), thread_id).await?
+    {
+        log::debug!("[web-channel] thread working folder applied thread_id={thread_id}");
+        config.action_dir = dir;
+    }
     let model_override = normalize_model_override(model_override);
     // The cached session (or a cold-boot resumed one) is the thread's single
     // live history; every turn on the thread checks it out through this path.
@@ -125,6 +146,12 @@ pub(crate) async fn run_chat_task(
     // defense-in-depth; extraction of durable state (like a workflow
     // proposal) must not depend on any single progress event surviving.
     let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(256);
+    // The channel is fresh here. Record the user input even if the turn fails
+    // before a committed reply can emit its final TurnContent event.
+    let _ = progress_tx.try_send(AgentProgress::TurnContent {
+        input: Some(message.to_string()),
+        output: None,
+    });
     agent.set_on_progress(Some(progress_tx));
     agent.set_run_queue(Some(run_queue));
     agent.set_thread_id(Some(thread_id));
@@ -133,7 +160,13 @@ pub(crate) async fn run_chat_task(
     // can attribute the run (`agent.id` attr / `agent.turn:<id>` trace name).
     let mut bridge_metadata = metadata.clone();
     bridge_metadata.agent_id = Some(current_fp.target_agent_id.clone());
-    spawn_progress_bridge(
+    // A TinyMemes treatment thread surfaces only the remixed reply, so the
+    // original answer text is not streamed ahead of it.
+    #[cfg(feature = "tinymemes")]
+    {
+        bridge_metadata.hold_text_stream = crate::tinymemes::holds_text_stream(thread_id);
+    }
+    let bridge = spawn_progress_bridge(
         progress_rx,
         client_id.to_string(),
         thread_id.to_string(),
@@ -147,20 +180,23 @@ pub(crate) async fn run_chat_task(
     // wrappers below hold a pointer rather than inlining the whole future into
     // this already-large `run_chat_task` frame (which otherwise overflows the
     // default test-thread stack — see the channels web-turn coverage tests).
-    let turn = Box::pin(agent.run_single(message));
-    let result = match turn.await {
+    #[cfg(feature = "tinymemes")]
+    let turn_started = std::time::Instant::now();
+    let turn = Box::pin(agent.run_single_with_origin(message, Some(origin)));
+    let mut result = match turn.await {
         Ok(response) => {
             // A successful turn proves the thread's balance is usable, so drop
             // any stale budget-exhausted signal before it could mislabel a
             // later genuine empty response. See #3386.
             super::ops::clear_budget_signal(thread_id).await;
-            let citations = agent.take_last_turn_citations().await;
+            let citations = crate::memory::tools::take_turn_citations(thread_id);
             let usage = agent.take_last_turn_usage_totals();
             Ok(WebChatTaskResult {
                 full_response: response,
                 citations,
                 usage,
                 workspace_dir: config.workspace_dir.clone(),
+                timing: None,
             })
         }
         Err(err) => {
@@ -192,6 +228,7 @@ pub(crate) async fn run_chat_task(
                         citations: Vec::new(),
                         usage: None,
                         workspace_dir: config.workspace_dir.clone(),
+                        timing: None,
                     })
                 }
                 BudgetCorrelation::UpgradeEmptyToBudget => {
@@ -211,12 +248,17 @@ pub(crate) async fn run_chat_task(
                         citations: Vec::new(),
                         usage: None,
                         workspace_dir: config.workspace_dir.clone(),
+                        timing: None,
                     })
                 }
                 BudgetCorrelation::PassThrough => Err(err_message),
             }
         }
     };
+    // The agent turn's own duration for the TinyMemes A/B log, taken before
+    // reply speech so synthesis time is not counted as turn time.
+    #[cfg(feature = "tinymemes")]
+    let turn_elapsed = turn_started.elapsed();
 
     if let Ok(ref task_result) = result {
         let speak_reply = matches!(metadata.speak_reply, Some(true));
@@ -258,30 +300,94 @@ pub(crate) async fn run_chat_task(
         }
     }
 
+    // TinyMemes: remix the final reply (slang + memes) when the flag puts this
+    // thread in the treatment arm. Runs after reply speech so TTS reads the
+    // original wording, and skips the budget-exhausted placeholder. Fails open.
+    #[cfg(feature = "tinymemes")]
+    if let Ok(ref mut task_result) = result {
+        crate::tinymemes::remix_task_reply(
+            &config,
+            thread_id,
+            request_id,
+            message,
+            &mut task_result.full_response,
+            inference_budget_exceeded_user_message(),
+            turn_elapsed,
+        )
+        .await;
+    }
+
     agent.set_on_progress(None);
+
+    // The caller publishes the terminal `chat_done`/`chat_error` as soon as
+    // this returns. Let the bridge forward everything the turn queued first,
+    // so the terminal event cannot overtake the turn's own last tool results
+    // and narration on the socket. Bounded (see `BRIDGE_DRAIN_TIMEOUT`).
+    if !bridge
+        .wait_drained(super::progress_bridge::BRIDGE_DRAIN_TIMEOUT)
+        .await
+    {
+        log::warn!(
+            "[web-channel] progress bridge did not drain within {:?}; delivering anyway \
+             client={} thread={} request_id={}",
+            super::progress_bridge::BRIDGE_DRAIN_TIMEOUT,
+            client_id,
+            thread_id,
+            request_id
+        );
+    }
+
+    // Settle the turn's own snapshot now the turn is over.
+    //
+    // The bridge marks the snapshot terminal on its way out, but it only exits
+    // once every clone of its progress sender drops. The cached session no
+    // longer keeps the turn's commit receipt (which held two), yet a detached
+    // sub-agent may still hold one past the turn, and an exit the bridge never
+    // reaches would leave `Streaming` on disk: re-entering the thread then
+    // hydrates that snapshot and paints a live "Thinking..." indicator under a
+    // reply that was already delivered. The turn has ended here by
+    // construction, so record that. A bridge that later observes
+    // `TurnCompleted` overwrites this with `Completed`, terminal either way.
+    {
+        let lifecycle = if result.is_ok() {
+            tinyagents_session::turn_state::TurnLifecycle::Completed
+        } else {
+            tinyagents_session::turn_state::TurnLifecycle::Interrupted
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        if let Err(err) = TurnStateStore::new(config.workspace_dir.clone())
+            .settle_turn(thread_id, request_id, lifecycle, &now)
+        {
+            log::warn!(
+                "[web-channel] failed to settle turn snapshot client={client_id} \
+                 thread={thread_id} request_id={request_id}: {err}"
+            );
+        }
+    }
+
+    // The bridge only stamps its `TurnTimingSnapshot` once it has seen the
+    // parent's `TurnCompleted`, which `wait_drained` above waits for — read
+    // it now so `chat_done.timing` reports the same first-token/first-tool/
+    // total numbers as the bridge's own `time-to-first-visible` log line.
+    // `None` on a synthetic (budget-exhausted) result, an `Err`, or a bridge
+    // that never drained in time.
+    if let Ok(ref mut task_result) = result {
+        task_result.timing = bridge.timing_snapshot();
+    }
 
     // Only the primary (non-fork) turn writes its agent back to the shared
     // cache; a fork is fully isolated and lets its agent drop here.
     if !fork {
-        // De-poison guard. A `provider_request_rejected` outcome means the
-        // provider could not parse THIS turn's request — an orphaned
-        // `tool_calls` round-trip, an empty `tool_call_id`, or a reasoning
-        // echo it rejects. For the managed backend that rejection arrives as an
-        // in-stream `event: error` SSE frame carrying `errorCode:"BAD_REQUEST"`
-        // (the response already flushed HTTP 200), NOT an HTTP 400 — so we key
-        // off the classified type, not a status code. Re-caching this agent
-        // would replay the identical malformed history on every later turn,
-        // dead-ending the thread. Drop it instead (the entry was already
-        // removed from the map at the top of this fn): the next turn cold-boots
-        // and reseeds from the plain-text conversation log, which is
-        // structurally incapable of carrying tool malformation
-        // (`seed_resume_from_messages` rebuilds only system/user/assistant
-        // text). Transient failures (rate-limit / timeout / 5xx) keep the warm
-        // session so the user can retry this turn with context intact.
+        // A harness error can leave its session prefix committed even when the
+        // turn itself did not complete (for example an in-stream credential
+        // failure after partial text). Re-caching that host makes the next
+        // request fail with "cannot change a session prefix after a committed
+        // turn". The durable transcript remains authoritative, so discard an
+        // agent after every failed turn and cold-boot it on the next request.
         if turn_result_poisoned_session(&result) {
             log::warn!(
-                "[web-channel] dropping session agent after provider_request_rejected — \
-                 next turn cold-boots from the conversation log (de-poison) \
+                "[web-channel] dropping session agent after failed turn — \
+                 next turn cold-boots from the durable transcript \
                  client={} thread={} request_id={}",
                 client_id,
                 thread_id,
@@ -295,29 +401,18 @@ pub(crate) async fn run_chat_task(
     result
 }
 
-/// Whether a completed turn's session agent must be **dropped** rather than
-/// cached back, because its in-memory history would replay a provider request
-/// rejection on every subsequent turn.
-///
-/// True only for a *retryable* `provider_request_rejected` — i.e. the
-/// poisoned-history case. The copy-split in `web_errors.rs` marks a tool-ordering
-/// rejection (orphaned / mismatched `tool_call_id` — for the managed backend an
-/// in-stream SSE `event: error` frame stamped `errorCode:"BAD_REQUEST"`)
-/// `retryable: true` because the de-poison makes "send it again" true, while a
-/// genuine model/parameter 400 stays `retryable: false`. Gating on `&& retryable`
-/// therefore evicts ONLY the poisoned session: a non-retryable param 400 keeps
-/// its warm session (no needless reseed), exactly like successes and transient
-/// failures (rate-limit, timeout, 5xx, session-expiry).
+/// Whether a completed turn's checked-out agent must be dropped instead of
+/// returned to the warm-session cache. Any `Err` can leave the underlying host
+/// session partially advanced, so only completed task results are reusable.
 fn turn_result_poisoned_session(result: &Result<WebChatTaskResult, String>) -> bool {
-    matches!(result, Err(err) if turn_error_poisons_session(err))
+    result.is_err()
 }
 
 /// The error-string half of [`turn_result_poisoned_session`], shared with the
 /// host-authored turn path (`ops/system_turn.rs`) whose result carries no
 /// `WebChatTaskResult`.
-pub(super) fn turn_error_poisons_session(err: &str) -> bool {
-    let classified = classify_inference_error(err);
-    classified.error_type == "provider_request_rejected" && classified.retryable
+pub(super) fn turn_error_discards_session(_err: &str) -> bool {
+    true
 }
 
 #[cfg(test)]

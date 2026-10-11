@@ -2,10 +2,10 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use openhuman_core::config::rpc as config_rpc;
-use openhuman_core::core::all::{ControllerFuture, RegisteredController};
-use openhuman_core::core::{ControllerSchema, FieldSchema, TypeSchema};
-use openhuman_core::rpc::RpcOutcome;
+use openhuman_embed::__host::config::rpc as config_rpc;
+use openhuman_embed::__host::core::all::{ControllerFuture, RegisteredController};
+use openhuman_embed::__host::core::Outcome;
+use openhuman_embed::__host::core::{ControllerSchema, FieldSchema, TypeSchema};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,7 +107,7 @@ fn handle_referral_claim(params: Map<String, Value>) -> ControllerFuture {
     })
 }
 
-fn to_json(outcome: RpcOutcome<Value>) -> Result<Value, String> {
+fn to_json(outcome: Outcome<Value>) -> Result<Value, String> {
     outcome.into_cli_compatible_json()
 }
 

@@ -30,12 +30,24 @@ pub(super) fn handle_get_client_config(_params: Map<String, Value>) -> Controlle
 pub(super) fn handle_update_model_settings(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let update = deserialize_params::<ModelSettingsUpdate>(params)?;
+        let cloud_provider_ca_certs = update
+            .cloud_providers
+            .as_ref()
+            .map(|providers| {
+                config_rpc::collect_provider_ca_certs(
+                    providers
+                        .iter()
+                        .map(|provider| (provider.slug.as_str(), provider.ca_cert_pem.as_deref())),
+                )
+            })
+            .transpose()?;
         let patch = config_rpc::ModelSettingsPatch {
             api_url: update.api_url,
             inference_url: update.inference_url,
             api_key: update.api_key,
             default_model: update.default_model,
             default_temperature: update.default_temperature,
+            cloud_provider_ca_certs,
             model_routes: update.model_routes.map(|routes| {
                 routes
                     .into_iter()
@@ -141,9 +153,6 @@ pub(super) fn handle_update_model_settings(params: Map<String, Value>) -> Contro
             vision_provider: update.vision_provider,
             memory_provider: update.memory_provider,
             embeddings_provider: update.embeddings_provider,
-            heartbeat_provider: update.heartbeat_provider,
-            learning_provider: update.learning_provider,
-            subconscious_provider: update.subconscious_provider,
         };
         to_json(config_rpc::load_and_apply_model_settings(patch).await?)
     })
@@ -153,12 +162,9 @@ pub(super) fn handle_update_memory_settings(params: Map<String, Value>) -> Contr
     Box::pin(async move {
         let update = deserialize_params::<MemorySettingsUpdate>(params)?;
         let patch = config_rpc::MemorySettingsPatch {
-            backend: update.backend,
-            auto_save: update.auto_save,
             embedding_provider: update.embedding_provider,
             embedding_model: update.embedding_model,
             embedding_dimensions: update.embedding_dimensions,
-            memory_window: update.memory_window,
         };
         to_json(config_rpc::load_and_apply_memory_settings(patch).await?)
     })
@@ -170,6 +176,8 @@ pub(super) fn handle_update_runtime_settings(params: Map<String, Value>) -> Cont
         let patch = config_rpc::RuntimeSettingsPatch {
             kind: update.kind,
             reasoning_enabled: update.reasoning_enabled,
+            reasoning_effort: update.reasoning_effort,
+            reasoning_effort_model: update.reasoning_effort_model,
         };
         to_json(config_rpc::load_and_apply_runtime_settings(patch).await?)
     })
@@ -192,9 +200,6 @@ pub(super) fn handle_update_local_ai_settings(params: Map<String, Value>) -> Con
             model_id: update.model_id,
             chat_model_id: update.chat_model_id,
             usage_embeddings: update.usage_embeddings,
-            usage_heartbeat: update.usage_heartbeat,
-            usage_learning_reflection: update.usage_learning_reflection,
-            usage_subconscious: update.usage_subconscious,
             api_key: update.api_key,
         };
         to_json(config_rpc::load_and_apply_local_ai_settings(patch).await?)

@@ -12,10 +12,11 @@
  * `openUrl` helper (never `window.open` directly) so it works on macOS,
  * Windows, and Linux via `tauri-plugin-opener`.
  */
+import { Star } from 'lucide-react';
 import { useCallback } from 'react';
 
 import { trackAnalyticsEvent } from '../../components/analytics';
-import Button from '../../components/ui/Button';
+import { Button, Field } from '../../components/ui';
 import { useT } from '../../lib/i18n/I18nContext';
 import { dismissGithubStarCta } from '../../store/githubStarSlice';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
@@ -49,41 +50,33 @@ export function GitHubStarCard() {
   // Durable dismissal: once handled, never render again.
   if (dismissed) return null;
 
+  // A row inside About's Resources card (a `Field`), not a banner of its own.
   return (
-    <div
+    <Field
       data-testid="github-star-cta"
-      className="px-4 py-3 space-y-2 rounded-xl border border-primary-500/30 bg-primary-500/5">
-      <div className="flex items-start gap-2">
-        <span aria-hidden="true" className="text-lg leading-none">
-          ⭐
-        </span>
-        <div className="space-y-1">
-          <div className="text-sm font-medium text-content">
-            {t('settings.about.starCta.title')}
-          </div>
-          <p className="text-xs text-content-muted leading-relaxed">
-            {t('settings.about.starCta.body')}
-          </p>
+      label={t('settings.about.starCta.title')}
+      description={t('settings.about.starCta.body')}
+      control={
+        <div className="flex items-center gap-1.5">
+          <Button
+            type="button"
+            variant="tertiary"
+            size="sm"
+            analyticsId="github_star_cta_dismissed"
+            onClick={handleDismiss}>
+            {t('settings.about.starCta.dismiss')}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            leadingIcon={<Star className="h-3.5 w-3.5" aria-hidden />}
+            analyticsId="github_star_cta_clicked"
+            onClick={handleStar}>
+            {t('settings.about.starCta.star')}
+          </Button>
         </div>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          variant="primary"
-          size="xs"
-          analyticsId="github_star_cta_clicked"
-          onClick={handleStar}>
-          {t('settings.about.starCta.star')}
-        </Button>
-        <Button
-          type="button"
-          variant="tertiary"
-          size="xs"
-          analyticsId="github_star_cta_dismissed"
-          onClick={handleDismiss}>
-          {t('settings.about.starCta.dismiss')}
-        </Button>
-      </div>
-    </div>
+      }
+    />
   );
 }

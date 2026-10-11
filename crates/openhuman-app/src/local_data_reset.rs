@@ -89,7 +89,7 @@ pub async fn reset_local_data(
     // below to fail with `ERROR_SHARING_VIOLATION` (os error 32). Drop
     // the writer guard now so the background flushing thread exits and
     // the file handle is closed before the removal walks the tree.
-    let log_guard_dropped = openhuman_core::core::logging::shutdown_file_guard();
+    let log_guard_dropped = openhuman_rpc::embed::process::shutdown_file_guard();
     log::info!("[core] reset_local_data: shutdown_file_guard dropped guard = {log_guard_dropped}");
 
     // ── 4. Remove the paths ─────────────────────────────────────────────
@@ -304,12 +304,11 @@ async fn fetch_data_paths(user_id: Option<String>) -> Result<ResolvedDataPaths, 
     if let Some(id) = user_id {
         params.insert("user_id".to_string(), serde_json::Value::String(id));
     }
-    let body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "openhuman.config_get_data_paths",
-        "params": serde_json::Value::Object(params),
-    });
+    let body = openhuman_rpc::request_body(
+        1,
+        "openhuman.config_get_data_paths",
+        serde_json::Value::Object(params),
+    );
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -327,7 +326,7 @@ async fn fetch_data_paths(user_id: Option<String>) -> Result<ResolvedDataPaths, 
         .json()
         .await
         .map_err(|e| format!("config_get_data_paths decode failed: {e}"))?;
-    // JSON-RPC envelope wraps the `RpcOutcome` result twice:
+    // JSON-RPC envelope wraps the `Outcome` result twice:
     // `{ "result": { "result": { ...paths... }, "logs": [...] } }`.
     let inner = envelope
         .pointer("/result/result")

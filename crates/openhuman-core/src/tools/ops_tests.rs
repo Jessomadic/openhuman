@@ -1,9 +1,12 @@
 use super::*;
-use crate::config::{BrowserConfig, Config, MemoryConfig};
+use crate::config::{BrowserConfig, Config};
 use crate::security::credentials::{AuthService, APP_SESSION_PROVIDER, DEFAULT_AUTH_PROFILE_NAME};
 use crate::security::AuditLogger;
 use crate::skills::types::ToolContent;
+use crate::tools::ops::{all_tools, tool_group};
+use std::collections::HashMap;
 use tempfile::TempDir;
+use tinytools::ToolResult;
 
 #[path = "../integrations/test_support.rs"]
 mod integration_test_support;
@@ -32,7 +35,7 @@ fn assert_contains_all(names: &[String], expected: &[&str]) {
 
 fn only_json_content(result: &ToolResult) -> &serde_json::Value {
     match result.content.as_slice() {
-        [ToolContent::Json { data }] => data,
+        [ToolContent::Json { data }] => &data,
         other => panic!("expected a single JSON content block, got {other:?}"),
     }
 }
@@ -56,12 +59,6 @@ fn integration_test_config(tmp: &TempDir, backend_url: &str) -> Config {
     cfg.integrations.parallel.enabled = true;
     cfg.integrations.tinyfish.enabled = true;
     cfg.integrations.stock_prices.enabled = true;
-    cfg.integrations.twilio.enabled = true;
-    // Parallel tools (search/extract/chat/research/enrich/dataset) are
-    // registered by the unified search-engine selector, so flip the
-    // engine to `parallel` in test setup.
-    cfg.search.engine = crate::config::SEARCH_ENGINE_PARALLEL.into();
-    cfg.search.parallel.api_key = Some("test-parallel-key".into());
     cfg
 }
 
@@ -167,30 +164,10 @@ const KNOWLEDGE_TOOLS: &[&str] = &[
     "create_skill",
     "install_workflow_from_url",
     "uninstall_workflow",
-    "learning_list_facets",
-    "learning_get_facet",
-    "learning_cache_stats",
-    "learning_update_facet",
-    "learning_pin_facet",
-    "learning_unpin_facet",
-    "learning_forget_facet",
-    "learning_rebuild_cache",
-    "learning_reset_cache",
-    "learning_save_profile",
-    "learning_enrich_profile",
 ];
 
 fn knowledge_default_off() -> Vec<&'static str> {
-    let mut tools = vec![
-        "learning_update_facet",
-        "learning_pin_facet",
-        "learning_unpin_facet",
-        "learning_forget_facet",
-        "learning_rebuild_cache",
-        "learning_reset_cache",
-        "learning_save_profile",
-        "learning_enrich_profile",
-    ];
+    let mut tools: Vec<&'static str> = Vec::new();
     // These tools exist only when their feature gates are on. All of
     // create_skill / install_workflow_from_url / uninstall_workflow are
     // registered under `#[cfg(feature = "skills")]` in ops.rs — none of
@@ -204,7 +181,7 @@ fn knowledge_default_off() -> Vec<&'static str> {
 }
 
 fn knowledge_always_on() -> Vec<&'static str> {
-    let mut tools = vec!["learning_list_facets", "learning_cache_stats"];
+    let mut tools: Vec<&'static str> = Vec::new();
     // These tools exist only when the skills feature is on (`WorkflowListTool`
     // / `WorkflowRecentRunsTool` — both `#[cfg(feature = "skills")]`).
     if cfg!(feature = "skills") {
@@ -332,7 +309,7 @@ const REPRESENTATIVE: &[(&str, crate::core::all::DomainGroup)] = {
     use crate::core::all::DomainGroup as G;
     &[
         ("delegate", G::Agent),
-        ("memory_search", G::Memory),
+        ("memory", G::Memory),
         ("goal_get", G::Threads),
         ("mcp_list_servers", G::Mcp),
         ("wallet_get_address", G::Web3),
@@ -343,8 +320,7 @@ const REPRESENTATIVE: &[(&str, crate::core::all::DomainGroup)] = {
         ("cron_add", G::Automation),
         ("composio_execute", G::Integrations),
         ("dashboard_model_health", G::Desktop),
-        ("node_exec", G::Runtimes),
-        ("tinyjuice_retrieve", G::Inference),
+        ("juice_retrieve", G::Inference),
         ("shell", G::Platform),
     ]
 };
@@ -358,87 +334,29 @@ const TOOL_LESS: &[crate::core::all::DomainGroup] = {
     // `Channels` joined this list when the three `whatsapp_data_*` tools went —
     // the channel runtime,
     // its controllers and its inbound dispatch are all still there.
+    // `Operator` is the SaaS provisioning plane: controllers for the gateway,
+    // never tools an agent could call on itself.
     &[
         G::Config,
         G::Security,
-        G::Medulla,
         G::Modules,
         G::Channels,
         G::Hosted,
+        G::Operator,
     ]
 };
-
-// ---- tool_capability() drift guard (M5.3) ----------------------------------
-
-/// Driver-backed memory tools and the capability each requires.
-const MEMORY_TOOL_CAPABILITIES: &[(&str, tinymemory_api::capabilities::Capability)] = {
-    use tinymemory_api::capabilities::Capability as C;
-    &[
-        ("memory_store", C::Core),
-        ("memory_forget", C::Core),
-        ("remember_preference", C::Core),
-        ("save_preference", C::Core),
-        ("memory_recall", C::Recall),
-        ("memory_vector_search", C::Recall),
-        ("memory_chunk_context", C::Recall),
-        ("memory_hybrid_search", C::Recall),
-        ("memory_store_raw_chunks", C::Recall),
-        ("memory_tree", C::Tree),
-        ("memory_flavour", C::Tree),
-        ("memory_store_raw_search", C::Entities),
-        ("memory_doctor", C::Maintenance),
-        ("tool_stats", C::ToolMemory),
-        ("goals", C::Goals),
-    ]
-};
-
-/// Memory-family tools that are deliberately NOT driver-backed. Each entry is
-/// an argument, not an omission — see `tool_capability`.
-const MEMORY_TOOLS_NOT_DRIVER_BACKED: &[&str] = &["update_memory_md", "memory_store_kinds"];
-
-// ---- both-ways: the capability post-filter (M5.3) --------------------------
-//
-// The ABSENT half is the one that proves the filter removes anything.
-
-/// A distinct workspace per test: the memory binding cache is keyed by
-/// workspace dir, so sharing one path between an ON and an OFF test would make
-/// one of them silently assert the other's driver (the `caps_ws` convention
-/// from `core::all_tests`).
-fn caps_tools_ws(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("oh-m53-tools-{name}"))
-}
-
-/// `[subsystems.memory] driver = "null"` — `NullMemoryProvider` advertises
-/// exactly `Capability::MANDATORY` = {core, recall, portability}, so every
-/// optional family is OFF at once. An operator who wrote `driver = "null"` is
-/// honoured rather than falling back (`memory::binding`).
-fn null_driver_memory_cfg() -> crate::config::schema::MemorySubsystemConfig {
-    crate::config::schema::MemorySubsystemConfig {
-        driver: "null".into(),
-        ..Default::default()
-    }
-}
-
-/// The optional-family tools that must vanish under a driver advertising
-/// nothing optional.
-///
-const OPTIONAL_FAMILY_MEMORY_TOOLS: &[&str] = &[
-    "memory_tree",
-    "memory_flavour",
-    "memory_store_raw_search",
-    "memory_doctor",
-    "goals",
-];
-
-/// Memory-family tools that remain available when a null driver deliberately
-/// disables every driver-backed capability.
-const ALWAYS_PRESENT_MEMORY_TOOLS: &[&str] = &["update_memory_md", "memory_store_kinds"];
 
 #[path = "ops_tests_capability_gating_tests.rs"]
 mod capability_gating_tests;
+#[path = "ops_tests_catalog_fixture_tests.rs"]
+mod catalog_fixture_tests;
+#[path = "ops_tests_composio_registration_tests.rs"]
+mod composio_registration_tests;
 #[path = "ops_tests_default_registry_tests.rs"]
 mod default_registry_tests;
 #[path = "ops_tests_domain_family_tests.rs"]
 mod domain_family_tests;
 #[path = "ops_tests_execution_and_serde_tests.rs"]
 mod execution_and_serde_tests;
+#[path = "ops_tests_repl_tools_tests.rs"]
+mod repl_tools_tests;

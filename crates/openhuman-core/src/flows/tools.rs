@@ -16,20 +16,15 @@
 //! `external_effect() == false` reflect that this call has no side effect —
 //! it is pure validation.
 
+use crate::tools::schema_cache::static_schema;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tinyflows::model::{Node, NodeKind, WorkflowGraph};
 
 use crate::config::Config;
 use crate::flows::ops::{build_builder_proposal, validate_and_migrate_graph};
 use tinytools::{PermissionLevel, Tool, ToolResult};
-
-/// Max characters kept for a `config_hint` before truncation, so a long
-/// prompt/expression doesn't blow up the proposal summary sent to the LLM
-/// and rendered in the chat card.
-const MAX_CONFIG_HINT_CHARS: usize = 80;
 
 pub struct ProposeWorkflowTool {
     config: Arc<Config>,
@@ -100,62 +95,7 @@ impl Tool for ProposeWorkflowTool {
     }
 
     fn parameters_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Human-readable name for the proposed flow."
-                },
-                "graph": {
-                    "type": "object",
-                    "description": "A tinyflows WorkflowGraph: { name?, nodes: [...], edges: [...] }. See the tool description for node kinds and their config shapes.",
-                    "properties": {
-                        "nodes": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "id": { "type": "string", "description": "Unique id within the graph." },
-                                    "kind": {
-                                        "type": "string",
-                                        "enum": [
-                                            "trigger", "agent", "tool_call", "http_request",
-                                            "code", "shell", "condition", "switch", "merge", "split_out",
-                                            "transform", "output_parser", "sub_workflow", "memory",
-                                            "dedup", "loop", "spawn", "gate", "scatter", "gather",
-                                            "approval", "void"
-                                        ]
-                                    },
-                                    "name": { "type": "string", "description": "Human-readable node name." },
-                                    "config": { "description": "Kind-specific configuration; see tool description." }
-                                },
-                                "required": ["id", "kind", "name"]
-                            }
-                        },
-                        "edges": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "from_node": { "type": "string" },
-                                    "to_node": { "type": "string" },
-                                    "from_port": { "type": "string", "description": "Defaults to \"main\". For a condition/switch branch, this is where the branch label (e.g. \"true\"/\"false\") goes." },
-                                    "to_port": { "type": "string", "description": "Defaults to \"main\". Almost always stays \"main\" — branch labels go on from_port, not here." }
-                                },
-                                "required": ["from_node", "to_node"]
-                            }
-                        }
-                    },
-                    "required": ["nodes", "edges"]
-                },
-                "require_approval": {
-                    "type": "boolean",
-                    "description": "Force a human-approval gate on every outbound tool/HTTP action this flow takes once saved. Defaults to true for agent-proposed flows."
-                }
-            },
-            "required": ["name", "graph"]
-        })
+        static_schema!(include_str!("parameters/propose_workflow.json"))
     }
 
     fn permission_level(&self) -> PermissionLevel {
@@ -398,227 +338,10 @@ impl Tool for RunFlowTool {
     }
 }
 
-/// Builds the `{ trigger, steps }` summary surfaced to both the LLM (in the
-/// tool result) and the chat UI's `WorkflowProposalCard`.
-///
-/// `pub(crate)` so the `workflow-builder` tool belt's
-/// [`crate::flows::builder_tools::ReviseWorkflowTool`] reuses the
-/// identical summary shape rather than duplicating it.
-pub(crate) fn build_summary(graph: &WorkflowGraph) -> Value {
-    let trigger = graph
-        .trigger()
-        .map(describe_trigger)
-        .unwrap_or_else(|| "no trigger".to_string());
-
-    let steps: Vec<Value> = graph
-        .nodes
-        .iter()
-        .filter(|n| n.kind != NodeKind::Trigger)
-        .map(|n| {
-            let mut step = json!({
-                "kind": node_kind_str(&n.kind),
-                "name": n.name,
-            });
-            if let Some(hint) = config_hint(n) {
-                step["config_hint"] = json!(hint);
-            }
-            step
-        })
-        .collect();
-
-    json!({ "trigger": trigger, "steps": steps })
-}
-
-/// The `snake_case` wire string for a [`NodeKind`] (its `Serialize` impl),
-/// for the summary/step JSON. Falls back to `"unknown"` only if serializing
-/// ever somehow fails — `NodeKind`'s derive is infallible in practice.
-fn node_kind_str(kind: &NodeKind) -> String {
-    serde_json::to_value(kind)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-/// One-line human description of a trigger node, for the summary's
-/// `"trigger"` field — e.g. `"schedule: 0 9 * * *"`, `"app event:
-/// gmail/GMAIL_NEW_GMAIL_MESSAGE"`, `"manual"`.
-///
-/// `pub(crate)` so [`crate::flows::builder_tools::SaveWorkflowTool`]
-/// reuses it verbatim for its enabled+auto-trigger arming warning (issue
-/// B29) instead of re-deriving the same human string.
-pub(crate) fn describe_trigger(node: &Node) -> String {
-    let trigger_kind = node
-        .config
-        .get("trigger_kind")
-        .and_then(Value::as_str)
-        .unwrap_or("manual");
-
-    match trigger_kind {
-        "schedule" => {
-            let schedule = node.config.get("schedule");
-            if let Some(expr) = schedule.and_then(|s| s.get("expr")).and_then(Value::as_str) {
-                format!("schedule: {expr}")
-            } else if let Some(ms) = schedule
-                .and_then(|s| s.get("every_ms"))
-                .and_then(Value::as_u64)
-            {
-                format!("schedule: every {ms}ms")
-            } else if let Some(at) = schedule.and_then(|s| s.get("at")).and_then(Value::as_str) {
-                format!("schedule: once at {at}")
-            } else {
-                "schedule (unspecified)".to_string()
-            }
-        }
-        "app_event" => {
-            let toolkit = node
-                .config
-                .get("toolkit")
-                .and_then(Value::as_str)
-                .unwrap_or("?");
-            let slug = node
-                .config
-                .get("trigger_slug")
-                .and_then(Value::as_str)
-                .unwrap_or("?");
-            format!("app event: {toolkit}/{slug}")
-        }
-        other => other.to_string(),
-    }
-}
-
-/// Short, human-readable hint for a non-trigger node's config, for the
-/// step's optional `"config_hint"` field. `None` when the kind has nothing
-/// worth surfacing (e.g. `merge`, `output_parser`).
-fn config_hint(node: &Node) -> Option<String> {
-    let cfg = &node.config;
-    match &node.kind {
-        NodeKind::Agent => cfg.get("prompt").and_then(Value::as_str).map(truncate_hint),
-        NodeKind::ToolCall => cfg.get("slug").and_then(Value::as_str).map(str::to_string),
-        NodeKind::HttpRequest => {
-            let method = cfg.get("method").and_then(Value::as_str).unwrap_or("GET");
-            let url = cfg.get("url").and_then(Value::as_str).unwrap_or("?");
-            Some(truncate_hint(&format!("{method} {url}")))
-        }
-        NodeKind::Code => cfg
-            .get("language")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| Some("javascript".to_string())),
-        NodeKind::Shell => cfg
-            .get("script_path")
-            .and_then(Value::as_str)
-            .map(|path| truncate_hint(&format!("script: {path}")))
-            .or_else(|| cfg.get("source").and_then(Value::as_str).map(truncate_hint)),
-        NodeKind::Condition => cfg
-            .get("field")
-            .and_then(Value::as_str)
-            .map(|f| format!("field: {f}")),
-        NodeKind::Switch => cfg
-            .get("expression")
-            .and_then(Value::as_str)
-            .or_else(|| cfg.get("field").and_then(Value::as_str))
-            .map(truncate_hint),
-        NodeKind::Transform => cfg.get("set").and_then(Value::as_object).map(|set| {
-            let keys: Vec<&str> = set.keys().map(String::as_str).collect();
-            truncate_hint(&format!("sets: {}", keys.join(", ")))
-        }),
-        NodeKind::SplitOut => cfg
-            .get("path")
-            .and_then(Value::as_str)
-            .map(|p| format!("path: {p}")),
-        NodeKind::SubWorkflow => Some("embedded sub-workflow".to_string()),
-        NodeKind::Memory => {
-            let operation = cfg.get("operation").and_then(Value::as_str).unwrap_or("?");
-            let hint = match cfg.get("scope").and_then(Value::as_str) {
-                Some(scope) => format!("{operation} · {scope}"),
-                None => operation.to_string(),
-            };
-            Some(truncate_hint(&hint))
-        }
-        NodeKind::Dedup => cfg
-            .get("key")
-            .and_then(Value::as_str)
-            .map(|k| truncate_hint(&format!("key: {k}"))),
-        // The cap is the one thing worth surfacing at a glance; the engine
-        // applies its own default when the key is absent, so say so rather than
-        // showing nothing.
-        NodeKind::Loop => {
-            let max = cfg
-                .get("max_iterations")
-                .and_then(Value::as_u64)
-                .map_or_else(|| "default".to_string(), |n| n.to_string());
-            Some(match cfg.get("condition").and_then(Value::as_str) {
-                Some(condition) => truncate_hint(&format!("max {max} · while {condition}")),
-                None => format!("max {max}"),
-            })
-        }
-        // What was started is the one thing worth seeing at a glance; which
-        // gate collects it is an edge, and the timeline already shows edges.
-        NodeKind::Spawn => {
-            let target = cfg.get("target").and_then(Value::as_str).unwrap_or("?");
-            let what = cfg
-                .get("slug")
-                .and_then(Value::as_str)
-                .or_else(|| cfg.get("name").and_then(Value::as_str));
-            Some(truncate_hint(&match what {
-                Some(what) => format!("{target}: {what}"),
-                None => target.to_string(),
-            }))
-        }
-        // A gate and a gather both wait, and the release policy is the whole
-        // question — `any` versus `all` is the difference between a run that
-        // proceeds on one result and one that blocks on the slowest.
-        NodeKind::Gate | NodeKind::Gather => {
-            let release = cfg
-                .get("release")
-                .and_then(Value::as_str)
-                .unwrap_or("all")
-                .to_string();
-            Some(match cfg.get("n").and_then(Value::as_u64) {
-                Some(n) => format!("{release} ({n})"),
-                None => release,
-            })
-        }
-        NodeKind::Scatter => {
-            let over = cfg
-                .get("path")
-                .and_then(Value::as_str)
-                .map_or_else(|| "input items".to_string(), |p| format!("path: {p}"));
-            Some(truncate_hint(
-                &match cfg.get("lanes").and_then(Value::as_u64) {
-                    Some(lanes) => format!("{over} · {lanes} lanes"),
-                    None => over,
-                },
-            ))
-        }
-        NodeKind::Approval => cfg
-            .get("title")
-            .and_then(Value::as_str)
-            .or_else(|| cfg.get("prompt").and_then(Value::as_str))
-            .map(truncate_hint)
-            .or_else(|| Some("human review".to_string())),
-        // A void takes no config, and "discards its input" is what the kind
-        // already says on the timeline.
-        NodeKind::Void => None,
-        NodeKind::Merge | NodeKind::OutputParser | NodeKind::Trigger => None,
-    }
-}
-
-/// Truncates a hint string to [`MAX_CONFIG_HINT_CHARS`], appending an
-/// ellipsis when it was cut — mirrors
-/// `tinytools::render_context_value`'s truncation
-/// behavior for tool-call timeline details.
-fn truncate_hint(s: &str) -> String {
-    if s.chars().count() <= MAX_CONFIG_HINT_CHARS {
-        return s.to_string();
-    }
-    let truncated: String = s
-        .chars()
-        .take(MAX_CONFIG_HINT_CHARS.saturating_sub(1))
-        .collect();
-    format!("{truncated}…")
-}
-
 #[cfg(test)]
 #[path = "tools_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tools_schema_tests.rs"]
+mod schema_tests;

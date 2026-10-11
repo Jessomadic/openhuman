@@ -42,7 +42,7 @@ fn agents_md_section_registered_in_default_builder() {
 
 #[test]
 fn agents_md_section_registered_in_dynamic_builder() {
-    // The primary/orchestrator + welcome + integrations_agent path:
+    // The primary/orchestrator + welcome path:
     // `PromptSource::Dynamic` agents assemble their own body via `render_*`
     // helpers and never call `render_agents_md` individually, so the shared
     // AGENTS.md section is injected centrally in `from_dynamic`. Without this

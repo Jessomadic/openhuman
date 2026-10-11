@@ -4,16 +4,15 @@
 //! the conversion to OpenHuman's established wire rows; keeping it here makes
 //! the runtime usable by non-OpenHuman hosts without inheriting our metadata.
 
-use crate::agent::{
-    message_convert,
-    messages::{chat_message_from_transcript, transcript_message_from_chat},
-    tinyagents::host::OpenHumanRunContext,
-};
+use crate::agent::{message_convert, tinyagents::host::OpenHumanRunContext};
 use tinyagents_runtime::{RuntimeError, TranscriptCodec, TranscriptTurnOptions};
+use tinyagents_session::transcript::view::TOOL_RESULT_FAILURES_METADATA_KEY;
 use tinyagents_session::transcript::{
     MessageUsage, SessionTranscript, ToolFailure, TranscriptMessage, TranscriptToolCall, TurnUsage,
+    UsageCostSource,
 };
 use tinyinference_llm::message::Message;
+use tinytools_agent::dialect::parse_replayed_results;
 
 /// Converts OpenHuman's durable transcript rows at the TinyAgents boundary.
 #[derive(Default)]
@@ -21,13 +20,7 @@ pub struct OpenHumanTranscriptCodec;
 
 impl TranscriptCodec<OpenHumanRunContext> for OpenHumanTranscriptCodec {
     fn decode_history(&self, transcript: &SessionTranscript) -> Result<Vec<Message>, RuntimeError> {
-        let rows = transcript
-            .messages
-            .iter()
-            .cloned()
-            .map(chat_message_from_transcript)
-            .collect::<Vec<_>>();
-        Ok(message_convert::history_to_messages(&rows))
+        Ok(message_convert::history_to_messages(&transcript.messages))
     }
 
     fn reconcile(
@@ -40,7 +33,6 @@ impl TranscriptCodec<OpenHumanRunContext> for OpenHumanTranscriptCodec {
         let mut rows = next
             .iter()
             .filter_map(message_convert::message_to_native_chat_message)
-            .map(|message| transcript_message_from_chat(&message))
             .collect::<Vec<_>>();
 
         // `Message` intentionally cannot represent all durable transcript
@@ -51,6 +43,7 @@ impl TranscriptCodec<OpenHumanRunContext> for OpenHumanTranscriptCodec {
         // keeps non-prefix messages.  New messages alone receive this turn's
         // request correlation id.
         let mut consumed = vec![false; previous.len().min(prior.len())];
+        let mut fresh = vec![false; rows.len()];
         for (next_index, next_message) in next.iter().enumerate() {
             let matched = previous.iter().enumerate().take(consumed.len()).find_map(
                 |(previous_index, previous_message)| {
@@ -63,6 +56,7 @@ impl TranscriptCodec<OpenHumanRunContext> for OpenHumanTranscriptCodec {
                 consumed[previous_index] = true;
             } else {
                 rows[next_index].request_id = options.request_id.clone();
+                fresh[next_index] = true;
             }
         }
         // The generic inference `Message::Tool` intentionally carries only a
@@ -70,11 +64,13 @@ impl TranscriptCodec<OpenHumanRunContext> for OpenHumanTranscriptCodec {
         // sidecar preserves the execution failure bit until this persistence
         // boundary, so resumed transcript rows retain the same failure status
         // the live tool timeline observed.
-        let failures = options
+        let sidecar = options
             .context
             .session_sidecar
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let failures = sidecar
             .tool_outcomes
             .iter()
             .filter(|outcome| !outcome.success)
@@ -88,6 +84,12 @@ impl TranscriptCodec<OpenHumanRunContext> for OpenHumanTranscriptCodec {
                 });
             }
         }
+        attach_text_dialect_rounds(
+            &mut rows,
+            &fresh,
+            &sidecar.tool_outcomes,
+            sidecar.resolved_route.as_ref(),
+        );
         Ok(rows)
     }
 
@@ -141,7 +143,7 @@ impl TranscriptCodec<OpenHumanRunContext> for OpenHumanTranscriptCodec {
         if sidecar.input_tokens == 0
             && sidecar.output_tokens == 0
             && sidecar.cached_input_tokens == 0
-            && sidecar.cost_usd == 0.0
+            && sidecar.cost.known_usd == 0.0
             && route.is_none()
         {
             return Ok(None);
@@ -160,21 +162,149 @@ impl TranscriptCodec<OpenHumanRunContext> for OpenHumanTranscriptCodec {
                 output: sidecar.output_tokens,
                 cached_input: sidecar.cached_input_tokens,
                 context_window: sidecar.context_window,
-                cost_usd: sidecar.cost_usd,
+                cost_usd: sidecar.cost.known_usd,
+                cost_source: Some(match sidecar.cost.source {
+                    crate::agent::cost::CostSource::Charged => UsageCostSource::Charged,
+                    crate::agent::cost::CostSource::Estimated => UsageCostSource::Estimated,
+                    crate::agent::cost::CostSource::Unknown => UsageCostSource::Unknown,
+                }),
+                last_call_input: sidecar.last_call_input_tokens,
+                last_call_output: sidecar.last_call_output_tokens,
             },
             ts: chrono::Utc::now().to_rfc3339(),
             reasoning_content: None,
-            tool_calls: sidecar
-                .tool_outcomes
-                .iter()
-                .map(|outcome| TranscriptToolCall {
-                    id: outcome.call_id.clone(),
-                    name: outcome.name.clone(),
-                    arguments: outcome.arguments.to_string(),
-                    extra_content: None,
-                })
-                .collect(),
+            // Deliberately empty. `TurnUsage` lands on the turn's *final*
+            // assistant row, and the transcript writer falls back to
+            // `tool_calls` here for any assistant row whose own content is not
+            // a native tool-call envelope — i.e. the plain-text final answer.
+            // Filling it with every outcome of the turn wrote each tool call a
+            // second time onto that answer, so a reader projected the answer
+            // as an interim step followed by duplicate, never-settled tool
+            // rows (which also mis-paired later FIFO results). Each call is
+            // already recorded, once, in the envelope of the assistant row
+            // that issued it.
+            // A text dialect has no envelope; `attach_text_dialect_rounds` files
+            // each round's calls on its issuing row instead.
+            tool_calls: Vec::new(),
             iteration: sidecar.model_calls.min(u32::MAX as usize) as u32,
         }))
+    }
+}
+
+/// Give each text-dialect tool round's calls to the assistant row that issued
+/// them, and record which of its results failed.
+///
+/// A native round is persisted as a `{content, tool_calls}` envelope followed
+/// by `tool` rows, so its calls and failure bits already sit on the right rows.
+/// A text dialect (`xml`, `pformat`, code) persists its replay form instead: the
+/// issuing assistant row holds only prose, and every result of the round is
+/// folded into one `[Tool results]` user row. Neither shape can say which calls
+/// were made or which of them failed, so this reads the round's call ids back
+/// out of that results row and takes names, arguments and outcomes from the
+/// turn sidecar:
+///
+/// - the issuing row (the fresh assistant row directly before the results row)
+///   gets a provenance-only [`TurnUsage`] — zero spend, since the turn's spend
+///   is recorded once on its final row — whose `tool_calls` are this round's;
+/// - the results row gets the ids of its failed results under
+///   [`TOOL_RESULT_FAILURES_METADATA_KEY`], the per-result analogue of a native
+///   `tool` row's `tool_failure`.
+///
+/// Rows carried over from a previous turn are left untouched.
+fn attach_text_dialect_rounds(
+    rows: &mut [TranscriptMessage],
+    fresh: &[bool],
+    outcomes: &[crate::agent::tinyagents::ToolCallOutcome],
+    route: Option<&tinyinference_llm::model::ResolvedModelRoute>,
+) {
+    let mut iteration = 0u32;
+    for index in 0..rows.len() {
+        if !fresh[index] {
+            continue;
+        }
+        if rows[index].role == "assistant" {
+            iteration = iteration.saturating_add(1);
+            continue;
+        }
+        if rows[index].role != "user" {
+            continue;
+        }
+        let Some(results) = parse_replayed_results(&rows[index].content) else {
+            continue;
+        };
+        let outcome_for = |id: &str| outcomes.iter().find(|outcome| outcome.call_id == id);
+
+        let failed: Vec<serde_json::Value> = results
+            .iter()
+            .filter(|result| outcome_for(&result.tool_call_id).is_some_and(|o| !o.success))
+            .map(|result| serde_json::Value::String(result.tool_call_id.clone()))
+            .collect();
+        if !failed.is_empty() {
+            match rows[index]
+                .extra_metadata
+                .get_or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            {
+                serde_json::Value::Object(map) => {
+                    map.insert(
+                        TOOL_RESULT_FAILURES_METADATA_KEY.to_string(),
+                        serde_json::Value::Array(failed),
+                    );
+                }
+                _ => log::warn!(
+                    "[session_host][codec] text-dialect results row has non-object metadata; \
+                     failure status not recorded"
+                ),
+            }
+        }
+
+        let Some(issuer) = index.checked_sub(1) else {
+            continue;
+        };
+        if !fresh[issuer] || rows[issuer].role != "assistant" || rows[issuer].turn_usage.is_some() {
+            continue;
+        }
+        let calls: Vec<TranscriptToolCall> = results
+            .iter()
+            .filter_map(|result| outcome_for(&result.tool_call_id))
+            .map(|outcome| TranscriptToolCall {
+                id: outcome.call_id.clone(),
+                name: outcome.name.clone(),
+                arguments: outcome.arguments.to_string(),
+                extra_content: None,
+            })
+            .collect();
+        log::debug!(
+            "[session_host][codec] text-dialect round iteration={iteration} results={} \
+             attached_calls={} failed={}",
+            results.len(),
+            calls.len(),
+            rows[index]
+                .extra_metadata
+                .as_ref()
+                .and_then(|meta| meta.get(TOOL_RESULT_FAILURES_METADATA_KEY))
+                .and_then(serde_json::Value::as_array)
+                .map_or(0, Vec::len)
+        );
+        if calls.is_empty() {
+            continue;
+        }
+        rows[issuer].turn_usage = Some(TurnUsage {
+            provider: route
+                .map(|route| route.provider.clone())
+                .unwrap_or_default(),
+            model: route.map(|route| route.model.clone()).unwrap_or_default(),
+            usage: MessageUsage {
+                input: 0,
+                output: 0,
+                cached_input: 0,
+                context_window: 0,
+                cost_usd: 0.0,
+                ..Default::default()
+            },
+            ts: chrono::Utc::now().to_rfc3339(),
+            reasoning_content: None,
+            tool_calls: calls,
+            iteration,
+        });
     }
 }

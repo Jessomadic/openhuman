@@ -7,6 +7,8 @@ import SidebarHeader from './SidebarHeader';
 
 const mockNavigate = vi.fn();
 const mockHide = vi.fn();
+const mockIsWindowsDesktop = vi.fn(() => false);
+vi.mock('./WindowsWindowControls', () => ({ isWindowsDesktop: () => mockIsWindowsDesktop() }));
 
 vi.mock('react-router-dom', async importOriginal => {
   const actual = await importOriginal<typeof import('react-router-dom')>();
@@ -19,7 +21,16 @@ vi.mock('../../../utils/openUrl', () => ({ openUrl: (...args: unknown[]) => open
 vi.mock('../../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (k: string) => k }) }));
 
 describe('SidebarHeader', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsWindowsDesktop.mockReturnValue(false);
+  });
+
+  it('centers the utility icons on Windows', () => {
+    mockIsWindowsDesktop.mockReturnValue(true);
+    const { container } = renderWithProviders(<SidebarHeader />, { initialEntries: ['/home'] });
+    expect(container.querySelector('[data-tauri-drag-region]')).toHaveClass('justify-center');
+  });
 
   it('renders Discord, Search, Settings, and Collapse buttons', () => {
     renderWithProviders(<SidebarHeader />, { initialEntries: ['/home'] });
@@ -38,7 +49,7 @@ describe('SidebarHeader', () => {
   it('Discord button opens the community invite in the browser', () => {
     renderWithProviders(<SidebarHeader />, { initialEntries: ['/home'] });
     fireEvent.click(screen.getByRole('button', { name: 'nav.discord' }));
-    expect(openUrl).toHaveBeenCalledWith('https://discord.tinyhumans.ai');
+    expect(openUrl).toHaveBeenCalledWith('https://guild.tinyhumans.ai');
   });
 
   it('Discord button has correct data-analytics-id', () => {
@@ -86,6 +97,7 @@ describe('SidebarHeader', () => {
     const { container } = renderWithProviders(<SidebarHeader />, { initialEntries: ['/home'] });
     const region = container.querySelector('[data-tauri-drag-region]') as HTMLElement;
     expect(region.getAttribute('data-tauri-drag-region')).toBe('deep');
+    expect(region).toHaveClass('pt-[7px]');
     // The icons sit inside the region and keep their clicks: `isDragRegion`
     // short-circuits on a clickable element before it reaches `deep`, and
     // resolving them by button role is what asserts they are still clickable.

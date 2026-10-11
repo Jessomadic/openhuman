@@ -119,7 +119,8 @@ test-map.md
 # Local AI assistant state and scratch files
 .kimi/
 .specify/
-.claude/skills/
+.claude/skills/*
+!.claude/skills/migrate-to-submodule/
 .claude/memory.md
 .claude/projects/
 .claude/scratch/
@@ -150,3 +151,8 @@ diff-coverage.md
 
 # CI lane runner output (scripts/ci/self-hosted/lanes.mjs)
 /ci-out/
+
+# Local/self-hosted CI run output (never commit)
+ci-out/
+ci-out-ex63/
+

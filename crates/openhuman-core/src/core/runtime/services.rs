@@ -1,12 +1,12 @@
 //! Background service spawns.
 //!
 //! Extracted (Phase 0 — pure motion) from the inline `tokio::spawn` blocks that
-//! used to live in `run_server_inner` (`crates/openhuman-core/src/core/jsonrpc.rs`, ~lines 2050-2191).
+//! used to live in `run_server_inner` (later in the since-split `core/jsonrpc.rs`).
 //! Each function spawns one long-lived background service as a detached task,
 //! preserving the exact gating and behavior of the original inline block.
 //!
 //! Today these are launched unconditionally from `run_server_inner`; the
-//! per-service *config* gates (`config.cron.enabled`, `config.heartbeat.enabled`,
+//! per-service *config* gates (`config.cron.enabled`,
 //! `OPENHUMAN_DISABLE_CHANNEL_LISTENERS`, `has_listening_integrations()`) stay
 //! inside each function. Phase 1 lifts the *selection* (should this service be
 //! spawned at all) up to a `ServiceSet` chosen by the embedder, while these
@@ -19,14 +19,127 @@
 use crate::config::Config;
 use crate::core::runtime::ServiceSet;
 
+/// The long-lived background services a runtime started, so it can stop them.
+///
+/// The service spawns below used to be fire-and-forget: fine for a desktop
+/// core that lives as long as its process, wrong for a library runtime that is
+/// dropped and rebuilt in one process, whose cron loop would otherwise keep
+/// polling the old workspace forever. [`CoreRuntime::start_services`]
+/// (crate::core::runtime::CoreRuntime::start_services) tracks each top-level
+/// service task here; [`stop`](Self::stop) and `Drop` abort them. Aborting the
+/// cron loop drops its dispatcher, which aborts the jobs it was running.
+///
+/// Work a service spawns detached on its own (a channel listener's sockets,
+/// the login-gated services' workers) is not reached by the abort; only the
+/// cron loop and the other top-level spawns are guaranteed to stop.
+#[derive(Default)]
+pub struct ServiceTasks {
+    started: std::sync::atomic::AtomicBool,
+    tasks: std::sync::Mutex<Vec<(&'static str, tokio::task::AbortHandle)>>,
+}
+
+impl ServiceTasks {
+    /// Claim the start; `false` when the services already started and have
+    /// not been stopped since.
+    pub fn begin(&self) -> bool {
+        !self.started.swap(true, std::sync::atomic::Ordering::AcqRel)
+    }
+
+    /// Track a service task so [`stop`](Self::stop) can abort it.
+    pub fn track(&self, name: &'static str, handle: tokio::task::JoinHandle<()>) {
+        log::debug!("[runtime.services] tracking service task {name}");
+        self.tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((name, handle.abort_handle()));
+    }
+
+    /// How many service tasks are tracked.
+    pub fn len(&self) -> usize {
+        self.tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    /// Whether no service task is tracked.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Abort every tracked service task; the services may be started again.
+    pub fn stop(&self) {
+        let tasks = std::mem::take(
+            &mut *self
+                .tasks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for (name, handle) in &tasks {
+            log::debug!("[runtime.services] stopping service task {name}");
+            handle.abort();
+        }
+        self.started
+            .store(false, std::sync::atomic::Ordering::Release);
+        if !tasks.is_empty() {
+            log::info!("[runtime.services] stopped {} service task(s)", tasks.len());
+        }
+    }
+}
+
+impl Drop for ServiceTasks {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// The body of [`CoreRuntime::start_services`](crate::core::runtime::CoreRuntime::start_services):
+/// start what `services` selects once, tracking the long-lived loops in `tasks`.
+pub(crate) async fn start_selected_services(
+    tasks: &ServiceTasks,
+    services: ServiceSet,
+    config: Option<&Config>,
+    ctx: &std::sync::Arc<crate::core::runtime::CoreContext>,
+) {
+    if !tasks.begin() {
+        log::debug!("[core-runtime] start_services: already started; skipped");
+        return;
+    }
+    log::debug!("[core-runtime] start_services services={services:?}");
+    super::bootstrap::start_core_runtime_services(services, config).await;
+    if services.login_gated {
+        tasks.track(
+            "login_gated",
+            spawn_login_gated_services(ctx.host_kind().is_desktop_shell()),
+        );
+    }
+    if services.update_scheduler {
+        tasks.track("update_scheduler", spawn_update_scheduler());
+    }
+    if services.cron {
+        tasks.track("cron", spawn_cron_service(std::sync::Arc::clone(ctx)));
+    }
+    // Flow-run boot reconciliation is selected by the flows *domain*, not by
+    // a background service — runs can be started without cron in the
+    // ServiceSet, so their orphans must be reconcilable without it too.
+    if ctx.domains().flows {
+        spawn_flows_boot_reconcile();
+    }
+    if services.channels {
+        if let Some(handle) = spawn_channels_service() {
+            tasks.track("channels", handle);
+        }
+    }
+}
+
 /// Background bootstrap for login-gated services (local AI, voice, screen
-/// intelligence, autocomplete) plus the subconscious engine + heartbeat.
+/// intelligence, autocomplete).
 ///
 /// Heavy services are only started when a user is logged in. If no user session
 /// exists on disk, startup is deferred until the login handler in
 /// `credentials::ops::store_session()` triggers it. The autocomplete shutdown
 /// hook is registered unconditionally.
-pub fn spawn_login_gated_services(embedded_core: bool) {
+pub fn spawn_login_gated_services(embedded_core: bool) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         match crate::config::Config::load_or_init().await {
             Ok(config) => {
@@ -56,11 +169,11 @@ pub fn spawn_login_gated_services(embedded_core: bool) {
                 log::warn!("[core] config load failed, skipping service startup: {err}");
             }
         }
-    });
+    })
 }
 
 /// Periodic self-update checker (default: every 1 hour).
-pub fn spawn_update_scheduler() {
+pub fn spawn_update_scheduler() -> tokio::task::JoinHandle<()> {
     tokio::spawn(async {
         match crate::config::Config::load_or_init().await {
             Ok(config) => {
@@ -70,7 +183,7 @@ pub fn spawn_update_scheduler() {
                 log::warn!("[core] config load failed, skipping update scheduler: {err}");
             }
         }
-    });
+    })
 }
 
 /// Boot-time flow-run reconciliation (bug B42): reconciles any `flow_runs` row
@@ -119,9 +232,17 @@ pub fn spawn_flows_boot_reconcile() {
 
 /// Cron scheduler — polls `due_jobs()` every ~5s and executes them
 /// automatically. Gated by `config.cron.enabled`.
-pub fn spawn_cron_service() {
-    tokio::spawn(async {
-        match crate::config::Config::load_or_init().await {
+///
+/// Runs under `ctx`, the runtime's own context: the config is read through
+/// `load_config_with_timeout`, which prefers an embedder-supplied config, so a
+/// library runtime's scheduler polls *its* workspace rather than the
+/// operator's `~/.openhuman`, and every job it dispatches inherits that
+/// context.
+pub fn spawn_cron_service(
+    ctx: std::sync::Arc<crate::core::runtime::CoreContext>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(crate::core::runtime::CoreContext::scope(ctx, async {
+        match crate::config::ops::load_config_with_timeout().await {
             Ok(config) => {
                 if !config.cron.enabled {
                     log::info!("[cron] scheduler disabled via config; skipping");
@@ -149,7 +270,7 @@ pub fn spawn_cron_service() {
                 log::warn!("[core] config load failed, skipping cron scheduler: {err}");
             }
         }
-    });
+    }))
 }
 
 /// Realtime channel listeners (Telegram getUpdates, Discord gateway, etc.).
@@ -158,7 +279,7 @@ pub fn spawn_cron_service() {
 /// messages are never polled. Skipped entirely when
 /// `OPENHUMAN_DISABLE_CHANNEL_LISTENERS` is set to `1`/`true`, and returns early
 /// when no channel integrations are configured.
-pub fn spawn_channels_service() {
+pub fn spawn_channels_service() -> Option<tokio::task::JoinHandle<()>> {
     // Compile-time `channels` gate: the body names `channels::start_channels`,
     // so the whole thing is `#[cfg]`-gated. With the feature off there are no
     // realtime listeners to spawn.
@@ -171,7 +292,7 @@ pub fn spawn_channels_service() {
         // Capture before loading config: logout during that await must also
         // invalidate a listener that has not finished starting yet.
         let channel_session = crate::channels::session::channel_session();
-        tokio::spawn(async move {
+        return Some(tokio::spawn(async move {
             let config = match crate::config::Config::load_or_init().await {
                 Ok(c) => c,
                 Err(e) => {
@@ -191,12 +312,15 @@ pub fn spawn_channels_service() {
             {
                 log::error!("[channels] start_channels ended with error: {e}");
             }
-        });
-    } else {
+        }));
+    }
+    #[cfg(feature = "channels")]
+    {
         log::info!("[channels] OPENHUMAN_DISABLE_CHANNEL_LISTENERS set — skipping start_channels");
     }
     #[cfg(not(feature = "channels"))]
     log::debug!("[channels] channels feature disabled at compile time — not spawning listeners");
+    None
 }
 
 /// Which bootstrap jobs a given [`ServiceSet`] enables — the single source of
@@ -207,35 +331,27 @@ pub fn spawn_channels_service() {
 /// [`start_bootstrap_jobs`] launches. Each field maps 1:1 to one spawn site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BootstrapJobPlan {
-    /// Memory queue ingestion workers (`memory_queue::start`).
-    pub memory_queue: bool,
-    /// Composio periodic connection sync (`composio::start_periodic_sync`).
-    pub composio_integration_sync: bool,
-    /// Workspace memory-source periodic sync — repos, folders, RSS, web pages
-    /// (`memory_sync::workspace::start_workspace_periodic_sync`).
-    pub workspace_memory_sync: bool,
+    /// Memory background work: seed memory's cron jobs and recover source
+    /// sync state an interrupted process left `syncing`.
+    pub memory_jobs: bool,
     /// Proactive external task-source polling (`task_sources::start_periodic_poll`).
     pub task_source_pollers: bool,
-    /// Eager native-module preload (`modules::boot::load_declared_modules`):
-    /// the memory module resolving at boot, off the request path.
+    /// Native-module preload (`modules::boot::load_declared_modules`):
+    /// search-path artifacts and eager registry records, off the request path.
     pub module_preload: bool,
 }
 
 /// Pure flag→job mapping for [`start_bootstrap_jobs`]. No side effects.
 ///
-/// Note the Composio integration sync AND the one-shot Composio source reconcile
-/// both ride `services.integrations` — both no-op without active Composio
-/// connections, so they share the one concern flag. `channels` gates NO
-/// bootstrap job (its remaining meaning is exactly `spawn_channels_service`).
+/// `channels` gates NO bootstrap job (its remaining meaning is exactly
+/// `spawn_channels_service`).
 pub(crate) fn bootstrap_job_plan(services: &ServiceSet) -> BootstrapJobPlan {
     BootstrapJobPlan {
-        memory_queue: services.memory_queue,
-        composio_integration_sync: services.integrations,
-        workspace_memory_sync: services.memory_sync,
+        memory_jobs: services.memory_sync,
         task_source_pollers: services.cron,
-        // The memory module is the only eager module, so its preload is memory
-        // background work and rides the same flag as the queue.
-        module_preload: services.memory_queue,
+        // Module preload is background boot work and rides the integrations
+        // flag.
+        module_preload: services.integrations,
     }
 }
 
@@ -251,101 +367,30 @@ pub(crate) fn bootstrap_job_plan(services: &ServiceSet) -> BootstrapJobPlan {
 /// silently lost all of them (#5028) — so they now sit behind `integrations` /
 /// `memory_sync` instead.
 ///
-/// `config` feeds the native-module preload and nothing else here: the
-/// engine's `queue::start` was this function's other consumer of it, and the
-/// loaded TinyMemory module starts that pool itself now (openhuman#5560).
+/// `config` feeds the native-module preload and memory's job seeding.
 pub fn start_bootstrap_jobs(services: ServiceSet, config: &Config) {
     let plan = bootstrap_job_plan(&services);
     log::debug!("[runtime.bootstrap] starting bootstrap jobs with plan {plan:?}");
 
-    // Native modules the registry marks eager — today TinyMemory, when the
-    // memory driver is module-backed. Off the boot path: the first launch on a
-    // machine downloads the release, and becoming RPC-ready must not wait on
-    // the network. A warm launch maps the cached library in milliseconds, so
-    // the first memory call finds it serving instead of starting the load
-    // itself and waiting behind it.
+    // Native modules on the search path and the registry's eager records. Off
+    // the boot path: the first launch on a machine may download a release, and
+    // becoming RPC-ready must not wait on the network.
     if plan.module_preload {
         spawn_module_preload(config);
     } else {
         log::debug!("[runtime.bootstrap] native module preload disabled by ServiceSet");
     }
 
-    // ── The queue pool moved into the module, and must NOT be started here ──
-    //
-    // This block used to call `tinymemory_core::queue::start(config.to_arc())`,
-    // and it was the only caller of the engine's worker pool in any tree.
-    // openhuman#5560 deletes the host's second, in-process engine, so that call
-    // has no engine to drain — and `tinymemory` v1.5.0's module starts its own
-    // pool at load (`tinymemory-module/src/lib.rs`, `start_queue_pool`), which
-    // is what keeps ingest, `retry_failed` and `ensure_reembed_backfill` alive.
-    //
-    // **Restoring the call would not be a duplicate, it would be a second pool
-    // that cannot see the first.** The `cdylib` links its own copy of
-    // `tinymemory-core`, so the `Once` inside `queue::start` is a *different*
-    // static from the host's: two pools would claim jobs from one SQLite queue
-    // with neither aware of the other. That is why the line is gone rather than
-    // gated.
-    //
-    // `plan.memory_queue` is kept — it is `ServiceSet`'s statement of intent
-    // and other jobs may hang off it — but the host has no work to do for it.
-    if plan.memory_queue {
-        log::debug!(
-            "[runtime.bootstrap] memory queue workers are owned by the tinymemory module (start_queue_pool); host starts none"
-        );
+    // Memory: seed the `memory_context_refresh` / `memory_sources_sync` cron
+    // jobs (idempotent) and mark sources a killed process left `syncing` idle.
+    if plan.memory_jobs {
+        crate::memory::sources::state::reset_interrupted(&config.workspace_dir);
+        crate::memory::sources::state::remove_orphaned_connector_files(&config.workspace_dir);
+        if let Err(error) = crate::cron::system_jobs::ensure_memory_jobs(config) {
+            log::warn!("[runtime.bootstrap] seeding memory cron jobs failed: {error}");
+        }
     } else {
-        log::debug!("[runtime.bootstrap] memory queue workers disabled by ServiceSet");
-    }
-
-    // Integrations — Composio source reconcile. No-ops without active
-    // connections.
-    //
-    // ── The periodic loops are NOT started here any more ────────────────────
-    //
-    // They were, and deleting them was blocked on upstream rather than on
-    // taste: `start_periodic_sync` is not host code, it re-exported through
-    // `integrations::composio` to `memory::sync::composio::periodic`, which was
-    // `pub use tinymemory_core::sync::composio::*` — engine code running in
-    // this process against the engine this host used to boot.
-    //
-    // tinymemory v1.6.0 moves both loops into the module and closes the three
-    // things that stopped them working there: the cadence, the Composio mode,
-    // and the module's client not being in the engine's global slot. The host
-    // now passes the first two in `ModuleConfig` (see `modules::ops`).
-    //
-    // Restoring either call would be worse than a duplicate. The cdylib carries
-    // its OWN copy of `tinymemory-core`, so each loop's `OnceLock` is a
-    // different static from this process's: a host that starts them while
-    // loading the module gets TWO pairs of loops over one store, and neither
-    // can see the other.
-    if plan.composio_integration_sync {
-        log::debug!("[runtime.bootstrap] starting composio source reconcile");
-        tokio::spawn(async {
-            log::debug!("[runtime.bootstrap] composio source reconcile started");
-            crate::memory::sources::reconcile::ensure_composio_sources().await;
-            log::debug!("[runtime.bootstrap] composio source reconcile completed");
-        });
-    } else {
-        log::debug!(
-            "[runtime.bootstrap] composio integration sync + source reconcile disabled by ServiceSet"
-        );
-    }
-
-    // Memory sync — workspace-kind memory sources (GitHub repos, folders, RSS,
-    // web pages) get their own cadence loop; the Composio scheduler above only
-    // walks Composio connections.
-    if plan.workspace_memory_sync {
-        // Owned by the module for the same reason as the Composio loop above.
-        // The flag survives because `ServiceSet` is the host's declaration of
-        // which background work it wants running at all, and a host that turns
-        // this off should not have the module running it either — wiring that
-        // through is follow-up, and until then this logs the divergence rather
-        // than hiding it.
-        log::debug!(
-            "[runtime.bootstrap] workspace memory-source periodic sync is owned by the memory \
-             module; this process starts none"
-        );
-    } else {
-        log::debug!("[runtime.bootstrap] workspace periodic sync disabled by ServiceSet");
+        log::debug!("[runtime.bootstrap] memory background jobs disabled by ServiceSet");
     }
 
     if plan.task_source_pollers {
@@ -380,15 +425,6 @@ pub async fn start_boot_once_jobs(services: ServiceSet, config: &Config) {
     // The orphaned-run sweep does NOT live here. It runs in
     // `CoreBuilder::build`, which every runtime goes through — these jobs only
     // run from `serve()`, so a build-only embedder would never be swept.
-
-    if services.harness_init {
-        let cfg_for_init = config.clone();
-        tokio::spawn(async move {
-            crate::agent::harness_init::run_harness_init(cfg_for_init).await;
-        });
-    } else {
-        log::debug!("[runtime] harness init disabled by ServiceSet");
-    }
 
     if services.skill_catalog_refresh {
         crate::skills::catalog::ops::start_boot_catalog_refresh();
@@ -426,9 +462,8 @@ pub(crate) async fn run_legacy_migrations(config: &Config) {
 pub fn spawn_socket_auto_connect(
     services: ServiceSet,
     socket_mgr: std::sync::Arc<crate::platform::socket::SocketManager>,
-    _flows_enabled: bool,
 ) {
-    if services.socketio {
+    if services.socketio && crate::backend::transport::is_installed() {
         tokio::spawn(async move {
             log::info!("[socket] Checking for stored session to auto-connect...");
             let config = match Config::load_or_init().await {
@@ -438,26 +473,34 @@ pub fn spawn_socket_auto_connect(
                     return;
                 }
             };
-            let api_url = crate::api::config::effective_backend_api_url(&config.api_url);
-            let initial_token = match crate::api::jwt::get_session_token(&config) {
-                Ok(Some(t)) => t,
-                Ok(None) => {
-                    log::info!(
+            let Ok(api_url) = crate::backend::base_url(&config.api_url) else {
+                log::debug!("[socket] No backend transport or base URL — skipping auto-connect");
+                return;
+            };
+            let initial_token =
+                match crate::security::credentials::session_support::get_session_token(&config) {
+                    Ok(Some(t)) => t,
+                    Ok(None) => {
+                        log::info!(
                         "[socket] No session token stored — skipping auto-connect (will connect after login)"
                     );
-                    return;
-                }
-                Err(e) => {
-                    log::warn!("[socket] Failed to read session token: {e}");
-                    return;
-                }
-            };
+                        return;
+                    }
+                    Err(e) => {
+                        log::warn!("[socket] Failed to read session token: {e}");
+                        return;
+                    }
+                };
+            if crate::security::credentials::session_support::is_local_session_token(&initial_token)
+            {
+                log::debug!("[socket] Offline local session — skipping auto-connect");
+                return;
+            }
             log::info!(
                 "[socket] Session token found — auto-connecting to {}",
                 api_url
             );
-            // Keep the authenticated token and user-scoped workflow bridge in
-            // one serialized identity transaction. The active profile may have
+            // Rebind the socket identity in one serialized transaction. The active profile may have
             // changed since CoreRuntime::build(), so the build-time Config is
             // not authoritative here.
             let _rebind = socket_mgr.lock_identity_rebind().await;
@@ -467,16 +510,8 @@ pub fn spawn_socket_auto_connect(
             // handshake (#6181); if it is already up for this identity there is
             // nothing to rebind.
             if socket_mgr.is_live_for(&api_url, &initial_token) {
-                // The socket is reusable, the bridge is not: it is pinned to the
-                // `Config` resolved above, which a workspace switch invalidates.
-                // `set_workflow_bridge` re-advertises over a live socket by
-                // design, so reinstall and skip only the handshake.
-                #[cfg(feature = "flows")]
-                if _flows_enabled {
-                    crate::flows::medulla_bridge::install(std::sync::Arc::clone(&config));
-                }
                 log::info!(
-                    "[socket] Auto-connect: {api_url} already connected with this session — refreshed the workflow bridge, kept the socket"
+                    "[socket] Auto-connect: {api_url} already connected with this session — kept the socket"
                 );
                 return;
             }
@@ -484,14 +519,19 @@ pub fn spawn_socket_auto_connect(
                 log::error!("[socket] Auto-connect could not stop the prior connection: {e}");
                 return;
             }
-            #[cfg(feature = "flows")]
-            if _flows_enabled {
-                crate::flows::medulla_bridge::install(std::sync::Arc::clone(&config));
-            }
             let provider =
                 crate::platform::socket::token_provider::token_provider_from_config(config);
             if let Err(e) = socket_mgr.connect_with_provider(&api_url, provider).await {
-                log::error!("[socket] Auto-connect failed: {e}");
+                // Signing out between the token check above and the provider's
+                // read leaves no token (Sentry 35911). That is a user-state
+                // race, not a fault: warn so it stays a breadcrumb.
+                if e.contains("no session token stored") {
+                    log::warn!(
+                        "[socket] Auto-connect skipped — session cleared before connect: {e}"
+                    );
+                } else {
+                    log::error!("[socket] Auto-connect failed: {e}");
+                }
             } else {
                 log::info!("[socket] Auto-connect initiated successfully");
             }

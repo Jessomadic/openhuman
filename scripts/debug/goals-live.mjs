@@ -211,7 +211,7 @@ async function rpc(coreUrl, token, method, params, timeoutMs = 600_000) {
   return body.result;
 }
 
-// RpcOutcome serializes either as the bare value (no logs) or { result, logs }.
+// Outcome serializes either as the bare value (no logs) or { result, logs }.
 function unwrap(result) {
   if (result && typeof result === "object" && "result" in result && "logs" in result) {
     return { value: result.result, logs: result.logs || [] };

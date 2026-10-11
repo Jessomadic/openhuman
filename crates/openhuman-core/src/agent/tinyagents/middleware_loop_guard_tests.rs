@@ -1,5 +1,19 @@
 use super::*;
 
+#[test]
+fn repeated_tool_failure_middleware_observes_outcomes_after_control_requests() {
+    let mw = RepeatedToolFailureMiddleware::new(
+        SteeringHandle::allow_all(),
+        3,
+        std::sync::Arc::new(std::sync::Mutex::new(None)),
+    );
+
+    // The harness consults this contract when an earlier middleware has
+    // requested control; this observer must still receive failures so its
+    // no-progress accounting and corrective nudge remain active.
+    assert!(Middleware::is_observer(&mw));
+}
+
 #[tokio::test]
 async fn sampling_tool_output_still_hits_the_byte_budget_backstop() {
     // Unlike the proposal tools, sampling tools are deliberately NOT
@@ -144,6 +158,53 @@ async fn repeated_tool_failure_pauses_only_after_the_threshold() {
 }
 
 #[tokio::test]
+async fn ordinary_web_fetch_status_ignores_timeout_words_in_body_excerpt() {
+    let handle = SteeringHandle::allow_all();
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let mw = RepeatedToolFailureMiddleware::new(handle.clone(), 3, slot.clone());
+    let error = "HTTP 404 Not Found from example.com; the page could not be fetched.\nResponse excerpt: request timed out while rendering";
+
+    for index in 0..2 {
+        let mut result = failing_result("web_fetch", error);
+        mw.after_tool(
+            &mut ctx(),
+            &(),
+            &invocation(format!("fetch-{index}"), "web_fetch"),
+            &mut result,
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        drain_pause_count(&handle),
+        0,
+        "the ordinary site failure should remain below the exact-repeat halt threshold"
+    );
+
+    let mut result = failing_result("web_fetch", error);
+    mw.after_tool(
+        &mut ctx(),
+        &(),
+        &invocation("fetch-2", "web_fetch"),
+        &mut result,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        drain_pause_count(&handle),
+        1,
+        "the body excerpt must not divert an ordinary site error into transient-failure handling"
+    );
+    let summary = slot
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("exact-repeat halt summary");
+    assert!(summary.contains("404") && summary.contains("timed out"));
+}
+
+#[tokio::test]
 async fn repeated_tool_failure_resets_on_a_success() {
     let handle = SteeringHandle::allow_all();
     let mw = RepeatedToolFailureMiddleware::new(
@@ -276,9 +337,6 @@ async fn halt_on_missing_connection_asks_the_user_instead_of_reporting_back() {
 
 #[tokio::test]
 async fn repeated_tool_failure_nudges_change_of_strategy_before_the_halt() {
-    use crate::agent::tinyagents::host::steering::{openhuman_steering_handle, SteeringRunClass};
-    use tinyagents_harness::steering::SteeringCommandKind;
-
     // #4089: before the same-strategy retry cap, the breaker must feed a
     // structured "no progress since step X" corrective back into the loop so
     // the model changes approach rather than retrying the identical failing
@@ -303,7 +361,7 @@ async fn repeated_tool_failure_nudges_change_of_strategy_before_the_halt() {
     mw.after_tool(&mut ctx(), &(), &invocation("read-2", "read_file"), &mut r)
         .await
         .unwrap();
-    let nudges = drain_nudge_messages(&handle);
+    let nudges = drain_nudge_messages(&mw);
     assert_eq!(
         nudges.len(),
         1,
@@ -319,22 +377,13 @@ async fn repeated_tool_failure_nudges_change_of_strategy_before_the_halt() {
         "the nudge names the failing call so the model knows what not to repeat: {nudge}"
     );
 
-    // Regression for the #4473 crash: the nudge must ride a steering lane the
-    // user's *interactive* turn permits. `Redirect` is Background-only, so a
-    // Redirect nudge aborted interactive turns; `InjectMessage` is permitted
-    // on both classes. Assert the interactive policy accepts the lane we use.
-    let interactive = openhuman_steering_handle(SteeringRunClass::Interactive);
+    // Regression for the #4473 crash (a `Redirect` nudge was refused by the
+    // interactive run policy and aborted the turn) and for #6725 (an
+    // `InjectMessage` nudge was committed into durable history): the nudge
+    // must not ride steering at all.
     assert!(
-        interactive
-            .policy()
-            .is_allowed(SteeringCommandKind::InjectMessage),
-        "the no-progress nudge must use a lane the interactive turn permits"
-    );
-    assert!(
-        !interactive
-            .policy()
-            .is_allowed(SteeringCommandKind::Redirect),
-        "sanity: interactive still refuses Redirect (the lane that crashed it)"
+        handle.drain().is_empty(),
+        "the nudge must not be sent as a steering command"
     );
 }
 
@@ -524,207 +573,5 @@ async fn existing_error_is_some_behavior_is_unchanged_by_body_level_check() {
         drain_pause_count(&handle2),
         1,
         "the third identical error+ok:false result halts, same as a plain error"
-    );
-}
-
-#[tokio::test]
-async fn successful_repeat_tracker_halt_maps_to_summary_and_pause() {
-    let handle = SteeringHandle::allow_all();
-    let summary = std::sync::Arc::new(std::sync::Mutex::new(None));
-    let mw = RepeatProgressMiddleware::new(handle.clone(), summary.clone());
-
-    for _ in 0..DEFAULT_REPEAT_CALL_THRESHOLD - 1 {
-        run_successful_repeat_cycle(&mw, "lookup", json!({"id": 1}), "ok", None).await;
-        assert_eq!(drain_pause_count(&handle), 0);
-    }
-    run_successful_repeat_cycle(&mw, "lookup", json!({"id": 1}), "ok", None).await;
-
-    assert_eq!(drain_pause_count(&handle), 1);
-    assert!(
-        summary
-            .lock()
-            .unwrap()
-            .as_deref()
-            .is_some_and(|text| text.contains("successful tool-call batch")),
-        "crate halt summary should be preserved for the host turn result"
-    );
-}
-
-#[tokio::test]
-async fn successful_repeat_tracker_resets_failed_and_exempt_batches() {
-    let handle = SteeringHandle::allow_all();
-    let mw = RepeatProgressMiddleware::new(
-        handle.clone(),
-        std::sync::Arc::new(std::sync::Mutex::new(None)),
-    );
-
-    // Distinct outputs keep the run-wide recurrence ledger out of this test: it
-    // pins the adjacent-batch streak, which a failure resets.
-    for i in 0..DEFAULT_REPEAT_CALL_THRESHOLD - 1 {
-        let output = format!("before-{i}");
-        run_successful_repeat_cycle(&mw, "lookup", json!({"id": 1}), &output, None).await;
-    }
-    run_successful_repeat_cycle(
-        &mw,
-        "lookup",
-        json!({"id": 1}),
-        "ok",
-        Some("temporary failure"),
-    )
-    .await;
-    for i in 0..DEFAULT_REPEAT_CALL_THRESHOLD - 1 {
-        let output = format!("after-{i}");
-        run_successful_repeat_cycle(&mw, "lookup", json!({"id": 1}), &output, None).await;
-    }
-    assert_eq!(
-        drain_pause_count(&handle),
-        0,
-        "a failed batch resets the successful-repeat streak"
-    );
-
-    for _ in 0..DEFAULT_REPEAT_OUTPUT_THRESHOLD + 1 {
-        run_successful_repeat_cycle(&mw, "wait_subagent", json!({"task_id": "t"}), "ok", None)
-            .await;
-    }
-    assert_eq!(
-        drain_pause_count(&handle),
-        0,
-        "polling tools remain exempt from successful-repeat halts"
-    );
-}
-
-// ── ApprovalSecurityMiddleware ──────────────────────────────────────────
-
-#[test]
-fn approval_external_effect_resolution_walks_the_tool_sets() {
-    let tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![
-        Box::new(FakeTool {
-            name: "send_email",
-            cap: None,
-            external: true,
-        }),
-        Box::new(FakeTool {
-            name: "read_file",
-            cap: None,
-            external: false,
-        }),
-    ]);
-    let mw = ApprovalSecurityMiddleware::new(vec![tools]);
-    assert!(mw.has_external_effect("send_email", &json!({})));
-    assert!(!mw.has_external_effect("read_file", &json!({})));
-    // Unknown tool defaults to no external effect (nothing to gate).
-    assert!(!mw.has_external_effect("missing", &json!({})));
-}
-
-#[test]
-fn approval_identity_scopes_composio_dispatcher_grants_to_one_action() {
-    assert_eq!(
-        approval_tool_name(
-            "composio_execute",
-            &json!({ "tool": "  GMAIL_SEND_EMAIL  " })
-        ),
-        "composio_execute:GMAIL_SEND_EMAIL"
-    );
-    assert_eq!(
-        approval_tool_name("composio_execute", &json!({ "tool": "GMAIL_DELETE_EMAIL" })),
-        "composio_execute:GMAIL_DELETE_EMAIL"
-    );
-    assert_eq!(
-        approval_tool_name("composio_execute", &json!({})),
-        "composio_execute:<invalid-action>"
-    );
-    assert_eq!(
-        approval_tool_name("send_email", &json!({ "tool": "ignored" })),
-        "send_email"
-    );
-}
-
-#[tokio::test]
-async fn memory_write_without_index_read_gets_a_corrective_note() {
-    let mw = MemoryProtocolMiddleware::new();
-    let result = run_cycle(&mw, "memory_store", json!({}), "stored entry 42", None).await;
-    assert!(
-        result_text(&result).contains(MEMORY_PROTOCOL_MARKER),
-        "a write with no preceding dedupe read should be annotated: {}",
-        result_text(&result)
-    );
-    assert!(result_text(&result).contains("without first reading the memory index"));
-    assert!(result_text(&result).contains("update_memory_md"));
-    // The original tool output is preserved, guidance is appended.
-    assert!(result_text(&result).starts_with("stored entry 42"));
-}
-
-#[tokio::test]
-async fn full_cycle_read_then_write_then_update_only_reminds_on_the_write() {
-    let mw = MemoryProtocolMiddleware::new();
-
-    let read = run_cycle(&mw, "memory_recall", json!({}), "no dupes", None).await;
-    assert!(
-        !result_text(&read).contains(MEMORY_PROTOCOL_MARKER),
-        "a read is not annotated"
-    );
-
-    let write = run_cycle(&mw, "memory_store", json!({}), "stored", None).await;
-    assert!(result_text(&write).contains(MEMORY_PROTOCOL_MARKER));
-    // The read preceded the write, so no missing-read complaint — just the
-    // forward "sync the index" reminder.
-    assert!(!result_text(&write).contains("without first reading the memory index"));
-
-    let update = run_cycle(
-        &mw,
-        "update_memory_md",
-        json!({ "file": "MEMORY.md" }),
-        "index updated",
-        None,
-    )
-    .await;
-    assert!(
-        !result_text(&update).contains(MEMORY_PROTOCOL_MARKER),
-        "closing the cycle needs no guidance"
-    );
-}
-
-#[tokio::test]
-async fn skill_md_update_does_not_close_the_memory_cycle() {
-    let mw = MemoryProtocolMiddleware::new();
-    run_cycle(&mw, "memory_recall", json!({}), "checked", None).await;
-    run_cycle(&mw, "memory_store", json!({}), "stored", None).await;
-    // update_memory_md targeting SKILL.md must NOT reconcile the MEMORY.md
-    // index, so the stale-index warning is still owed at run end.
-    run_cycle(
-        &mw,
-        "update_memory_md",
-        json!({ "file": "SKILL.md" }),
-        "skill updated",
-        None,
-    )
-    .await;
-    let mut run = AgentRun::new();
-    // Still pending → after_agent takes its warn path without erroring.
-    mw.after_agent(&mut ctx(), &(), &mut run).await.unwrap();
-    // A following write reports drift, proving pending was not cleared.
-    let next = run_cycle(&mw, "memory_store", json!({}), "again", None).await;
-    assert!(
-        result_text(&next).contains("drifting"),
-        "SKILL.md update must not mask the stale MEMORY.md index: {}",
-        result_text(&next)
-    );
-}
-
-#[tokio::test]
-async fn consolidated_memory_tree_ingest_is_treated_as_a_write() {
-    let mw = MemoryProtocolMiddleware::new();
-    let ingest = run_cycle(
-        &mw,
-        "memory_tree",
-        json!({ "mode": "ingest_document" }),
-        "ingested",
-        None,
-    )
-    .await;
-    assert!(
-        result_text(&ingest).contains(MEMORY_PROTOCOL_MARKER),
-        "memory_tree ingest_document is a write and must be annotated: {}",
-        result_text(&ingest)
     );
 }

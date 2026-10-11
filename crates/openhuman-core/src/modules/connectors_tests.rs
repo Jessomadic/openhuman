@@ -54,7 +54,6 @@ fn every_member_this_host_names_is_one_the_module_serves() {
         methods::DELETE_CONNECTION,
         methods::LIST_TOOLS,
         methods::EXECUTE,
-        methods::SYNC,
         methods::LIST_CAPABILITIES,
     ] {
         assert!(
@@ -86,6 +85,47 @@ fn direct_mode_takes_the_api_key_from_the_config_file() {
     assert_eq!(blob["api_key"], "sk-from-file", "the key is trimmed");
     assert_eq!(blob["entity_id"], config.composio.entity_id);
     assert!(blob.get("state_dir").is_some());
+}
+
+#[test]
+fn direct_mode_hands_the_module_the_hosts_proxy_policy() {
+    // Part of the route description, so a proxy change reconfigures the module.
+    use crate::config::schema::{ProxyConfig, ProxyScope};
+    use crate::config::{runtime_proxy_config, set_runtime_proxy_config};
+
+    let _env = crate::config::TEST_ENV_LOCK.blocking_lock();
+    let mut config = bare_config();
+    config.composio.mode = COMPOSIO_MODE_DIRECT.to_string();
+    config.composio.api_key = Some("sk-from-file".to_string());
+
+    let previous = runtime_proxy_config();
+    set_runtime_proxy_config(ProxyConfig {
+        enabled: true,
+        https_proxy: Some("http://127.0.0.1:3128".into()),
+        no_proxy: vec!["localhost".into()],
+        // Scoped to Composio so no other test's loopback request is proxied.
+        scope: ProxyScope::Services,
+        services: vec!["tool.composio".into()],
+        ..ProxyConfig::default()
+    });
+    let proxied = module_config(&config).expect("resolves");
+    set_runtime_proxy_config(ProxyConfig::default());
+    let plain = module_config(&config).expect("resolves");
+    set_runtime_proxy_config(previous);
+
+    assert_eq!(proxied["transport"]["proxy_url"], "http://127.0.0.1:3128");
+    assert_eq!(proxied["transport"]["no_proxy"][0], "localhost");
+    if !cfg!(target_os = "windows") {
+        assert!(
+            plain.get("transport").is_none(),
+            "the default policy is not sent"
+        );
+    }
+    assert_ne!(
+        super::fingerprint(&proxied),
+        super::fingerprint(&plain),
+        "a proxy change must change the route fingerprint"
+    );
 }
 
 #[test]

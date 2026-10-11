@@ -118,8 +118,8 @@ export default function ScheduledCronCard({
           <Badge
             variant="success"
             data-testid={`${rootId}-active-badge`}
-            className="uppercase tracking-wide shrink-0">
-            {`★ ${t('settings.skillsRunner.schedule.active')}`}
+            className="shrink-0">
+            {t('settings.skillsRunner.schedule.active')}
           </Badge>
         )}
         <span

@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { checkBackendHealthy } from '../../../services/backendHealth';
 import {
+  beginAwaitingAuthCallback,
   beginDeepLinkAuthProcessing,
   completeDeepLinkAuthProcessing,
+  endAwaitingAuthCallback,
   getDeepLinkAuthState,
 } from '../../../store/deepLinkAuthState';
 import { handleDeepLinkUrls } from '../../../utils/desktopDeepLinkListener';
@@ -13,6 +15,7 @@ import { prepareOAuthLoginLaunch } from '../../../utils/oauthAppVersionGate';
 import { openUrl } from '../../../utils/openUrl';
 import { isTauri } from '../../../utils/tauriCommands';
 import OAuthProviderButton from '../OAuthProviderButton';
+import { oauthProviderConfigs } from '../providerConfigs';
 
 vi.mock('../../../services/backendHealth', () => ({ checkBackendHealthy: vi.fn() }));
 
@@ -34,6 +37,8 @@ vi.mock('../../../utils/desktopDeepLinkListener', () => ({
 vi.mock('../../../store/deepLinkAuthState', () => ({
   beginDeepLinkAuthProcessing: vi.fn(),
   completeDeepLinkAuthProcessing: vi.fn(),
+  beginAwaitingAuthCallback: vi.fn(),
+  endAwaitingAuthCallback: vi.fn(),
   getDeepLinkAuthState: vi.fn(),
 }));
 
@@ -66,6 +71,7 @@ describe('OAuthProviderButton', () => {
     vi.mocked(isTauri).mockReturnValue(true);
     vi.mocked(getDeepLinkAuthState).mockReturnValue({
       isProcessing: false,
+      awaitingCallback: false,
       errorMessage: null,
       errorMessageKey: null,
       requiresAppDataReset: false,
@@ -100,6 +106,39 @@ describe('OAuthProviderButton', () => {
     expect(screen.getByRole('button', { name: /Connecting/ })).toBeDisabled();
   });
 
+  it('warns before switching away from a local profile and continues only after confirmation', async () => {
+    render(<OAuthProviderButton provider={stubProvider} localProfileId="local-device" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Google' }));
+
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    expect(screen.getByText(/users\/local-device/)).toBeInTheDocument();
+    expect(screen.getByText(/sign out and choose the local session/i)).toBeInTheDocument();
+    expect(checkBackendHealthy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /continue to sign in/i }));
+    await act(async () => {
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
+
+    expect(checkBackendHealthy).toHaveBeenCalledTimes(1);
+    expect(openUrl).toHaveBeenCalledWith(
+      expect.stringMatching(/^https:\/\/backend\.test\/auth\/google\/login/)
+    );
+  });
+
+  it('does not show the local-profile warning for a cloud profile', async () => {
+    render(<OAuthProviderButton provider={stubProvider} localProfileId="cloud-user" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Google' }));
+    await act(async () => {
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(checkBackendHealthy).toHaveBeenCalledTimes(1);
+  });
+
   it('resets isLoading when the window regains focus', async () => {
     render(<OAuthProviderButton provider={stubProvider} />);
 
@@ -123,6 +162,7 @@ describe('OAuthProviderButton', () => {
   it('does NOT reset isLoading on focus when a deep-link auth round-trip is processing', async () => {
     vi.mocked(getDeepLinkAuthState).mockReturnValue({
       isProcessing: true,
+      awaitingCallback: false,
       errorMessage: null,
       errorMessageKey: null,
       requiresAppDataReset: false,
@@ -196,6 +236,29 @@ describe('OAuthProviderButton', () => {
 
     expect(screen.queryByText('Connecting...')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Google' })).toBeEnabled();
+  });
+
+  it('ends the awaiting-callback hand-off when the 300s timeout elapses, not before', async () => {
+    render(<OAuthProviderButton provider={stubProvider} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Google' }));
+    await act(async () => {
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
+
+    // The browser is open: the hand-off flag was raised and not yet dropped.
+    expect(beginAwaitingAuthCallback).toHaveBeenCalledTimes(1);
+    expect(endAwaitingAuthCallback).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(299_999);
+    });
+    expect(endAwaitingAuthCallback).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(endAwaitingAuthCallback).toHaveBeenCalledTimes(1);
   });
 
   it('honors onClickOverride and skips the OAuth flow', () => {
@@ -455,5 +518,133 @@ describe('OAuthProviderButton', () => {
     expect(openUrl).toHaveBeenCalledTimes(1);
     expect(handleDeepLinkUrls).not.toHaveBeenCalled();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('OAuthProviderButton web dev redirect', () => {
+  const originalLocation = window.location;
+
+  const setLocation = (origin: string) => {
+    const url = new URL(origin);
+    delete (window as unknown as Record<string, unknown>).location;
+    (window as unknown as Record<string, unknown>).location = {
+      href: '',
+      origin: url.origin,
+      protocol: url.protocol,
+      hostname: url.hostname,
+    };
+  };
+
+  const clickAndDrain = async (name: string) => {
+    fireEvent.click(screen.getByRole('button', { name }));
+    await act(async () => {
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
+  };
+
+  beforeEach(() => {
+    vi.mocked(checkBackendHealthy).mockResolvedValue(healthyResult);
+    vi.mocked(isTauri).mockReturnValue(false);
+    vi.mocked(getDeepLinkAuthState).mockReturnValue({
+      isProcessing: false,
+      awaitingCallback: false,
+      errorMessage: null,
+      errorMessageKey: null,
+      requiresAppDataReset: false,
+    });
+  });
+
+  afterEach(() => {
+    (window as unknown as Record<string, unknown>).location = originalLocation;
+    vi.clearAllMocks();
+  });
+
+  it('returns a loopback browser build to /__dev-auth instead of JSON', async () => {
+    setLocation('http://localhost:1420');
+    render(<OAuthProviderButton provider={stubProvider} />);
+    await clickAndDrain('Google');
+
+    const target = new URL((window.location as unknown as { href: string }).href);
+    expect(target.origin + target.pathname).toBe('https://backend.test/auth/google/login');
+    expect(target.searchParams.get('redirectUri')).toBe('http://localhost:1420/__dev-auth');
+    expect(target.searchParams.get('responseType')).toBeNull();
+    expect(target.searchParams.get('state')).toBe('mock-state');
+    expect(openUrl).not.toHaveBeenCalled();
+  });
+
+  it('keeps the responseType=json fallback on a non-loopback origin', async () => {
+    setLocation('http://dev-box.lan:1420');
+    render(<OAuthProviderButton provider={stubProvider} />);
+    await clickAndDrain('Google');
+
+    const target = new URL((window.location as unknown as { href: string }).href);
+    expect(target.searchParams.get('responseType')).toBe('json');
+    expect(target.searchParams.get('redirectUri')).toBeNull();
+  });
+});
+
+// Every case above this point renders `stubProvider` (google) or a google stub
+// with the id swapped, so all of them pass even if `github` or `discord` were
+// misspelled in the real config. The provider id is the ONLY part of a login
+// that is observable client-side: `/auth/me` returns no provider field and the
+// session crate models none, so a wrong id here is invisible until the backend
+// 404s. Drive the real config, not a stub. (matrix 1.1.1-1.1.4)
+// [provider id, accessible button name]. Written out rather than derived, so
+// the table below is a claim about what SHOULD ship, not an echo of what does.
+const EXPECTED_LOGIN_PROVIDERS = [
+  ['google', 'Google'],
+  ['github', 'GitHub'],
+  ['twitter', 'Twitter'],
+  ['discord', 'Discord'],
+] as const;
+
+describe('OAuthProviderButton — every configured provider reaches its own backend route', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(checkBackendHealthy).mockResolvedValue(healthyResult);
+    vi.mocked(openUrl).mockResolvedValue(undefined);
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(getDeepLinkAuthState).mockReturnValue({
+      isProcessing: false,
+      awaitingCallback: false,
+      errorMessage: null,
+      errorMessageKey: null,
+      requiresAppDataReset: false,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  // Pins the fixture itself. Without this, the `it.each` below degrades to a
+  // no-op the day someone empties the config, and the suite stays green while
+  // login is broken for a provider nobody tested by hand.
+  it('the shipped config is exactly the four expected providers', () => {
+    expect(oauthProviderConfigs.map(config => config.id)).toEqual(
+      EXPECTED_LOGIN_PROVIDERS.map(([id]) => id)
+    );
+  });
+
+  it.each(EXPECTED_LOGIN_PROVIDERS)('provider %s opens /auth/%s/login', async (id, name) => {
+    // Looked up by the expected id rather than iterated off the config: a
+    // table built by mapping the config would assert `/auth/<whatever the
+    // config says>/login` and pass for a typo'd id. This fails instead.
+    const config = oauthProviderConfigs.find(candidate => candidate.id === id);
+    expect(config, `no provider config with id "${id}"`).toBeDefined();
+
+    render(<OAuthProviderButton provider={config!} />);
+
+    fireEvent.click(screen.getByRole('button', { name }));
+    await act(async () => {
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
+
+    expect(openUrl).toHaveBeenCalledTimes(1);
+    const opened = new URL(vi.mocked(openUrl).mock.calls[0][0] as string);
+    // Exact pathname, not a `contains`: `/auth/x/login` must not satisfy a
+    // check for `/auth/twitter/login`, and vice versa.
+    expect(opened.origin + opened.pathname).toBe(`https://backend.test/auth/${id}/login`);
   });
 });

@@ -1,141 +1,60 @@
-//! Direct-mode response reshapers: `direct_authorize`, `direct_execute`,
-//! `direct_list_connections`, and `direct_list_tools`. Mirror the
-//! backend-proxied [`super::connections::ComposioClient`] methods but call
-//! Composio's v3 API directly (via a bound [`crate::tools::ComposioTool`])
-//! and reshape the v3 response into the same envelope types, so downstream
-//! callers in `ops.rs` / `tools.rs` don't have to branch on mode.
+//! Direct-mode reads: `direct_list_connections` and `direct_list_tools`.
+//!
+//! The v3 requests and their reshaping into the canonical envelopes run in the
+//! connector module, reached over the bus with `ListConnectionsDirect` and
+//! `ListToolsDirect`. Those members carry the credential on the request, so the
+//! module's configured route is untouched and nothing is persisted (which is
+//! also how `composio.set_api_key` checks a key before storing it).
+//!
+//! What stays here is host policy: the process-wide invalid-key gate
+//! (`direct_auth`) and its user-facing messages, the host's proxy and TLS policy
+//! (handed to the module with the credential, see `network`), and the identity
+//! fields the host fills in itself.
 
 use std::sync::Arc;
 
+use tinyconnectors_bus::{ComposioDirectConnectionsRequest, ComposioDirectToolsRequest};
+
 use super::super::direct_auth;
-use super::super::types::{
-    ComposioAuthorizeResponse, ComposioConnection, ComposioConnectionsResponse,
-    ComposioExecuteResponse, ComposioToolsResponse,
-};
+use super::super::module_client::{self, methods};
+use super::super::types::{ComposioConnectionsResponse, ComposioToolsResponse};
+use super::DirectCredential;
 
-/// Direct-mode counterpart to [`ComposioClient::authorize`]. Calls
-/// Composio v3 `/connected_accounts/link` via
-/// [`crate::tools::ComposioTool::get_connection_url`] and
-/// reshapes the response into the [`ComposioAuthorizeResponse`] the
-/// backend-proxied path emits.
-///
-/// The v3 endpoint returns a redirect URL but does NOT (currently)
-/// surface a stable `connection_id` in the same call — the connection
-/// row is created lazily when the user completes OAuth on Composio's
-/// hosted page. To preserve the response contract the frontend already
-/// consumes, we emit an empty `connection_id` for now. The 5 s
-/// `list_connections` poll (now live in direct mode too — see
-/// [`direct_list_connections`]) is what ultimately surfaces the new
-/// row to the UI.
-pub(crate) async fn direct_authorize(
-    direct: &Arc<crate::tools::ComposioTool>,
-    toolkit: &str,
-    entity_id: &str,
-) -> anyhow::Result<ComposioAuthorizeResponse> {
-    let toolkit = toolkit.trim();
-    if toolkit.is_empty() {
-        anyhow::bail!("composio direct authorize: toolkit must not be empty");
-    }
-    let entity_id = entity_id.trim();
-    let entity_id = if entity_id.is_empty() {
-        "default"
-    } else {
-        entity_id
+/// `ListConnectionsDirect`, with the member failure peeled down to the message
+/// the user is shown.
+async fn module_list_connections(
+    config: &crate::config::Config,
+    direct: &DirectCredential,
+) -> anyhow::Result<ComposioConnectionsResponse> {
+    let request = ComposioDirectConnectionsRequest {
+        credential: direct.module_credential(),
     };
-    tracing::debug!(
-        toolkit = %toolkit,
-        entity_id = %entity_id,
-        "[composio-direct] authorize: requesting hosted connect URL"
-    );
-    let connect_url = direct
-        .get_connection_url(Some(toolkit), None, entity_id)
-        .await?;
-    tracing::debug!(
-        toolkit = %toolkit,
-        url_len = connect_url.len(),
-        "[composio-direct] authorize: got connect url (redacted)"
-    );
-    Ok(ComposioAuthorizeResponse {
-        connect_url,
-        // No stable connection id in the v3 link response — see fn-level
-        // doc. The frontend uses `connectUrl` to open the browser and
-        // `listConnections` polling to detect the resulting row.
-        connection_id: String::new(),
-    })
-}
-
-/// Direct-mode counterpart to [`ComposioClient::execute_tool`]. Mirrors
-/// the v3 `/tools/{slug}/execute` envelope into [`ComposioExecuteResponse`]
-/// so the caller doesn't branch on mode for the
-/// `ComposioActionExecuted` event-bus payload or the
-/// markdown-vs-JSON-body preference.
-///
-/// Direct mode runs without the backend's billing margin, so `cost_usd`
-/// is reported as `0.0`. The backend's `markdownFormatted` field is
-/// likewise specific to the backend-proxied path and remains `None` for
-/// direct callers, which fall back to the raw JSON envelope.
-pub async fn direct_execute(
-    direct: &Arc<crate::tools::ComposioTool>,
-    tool: &str,
-    arguments: Option<serde_json::Value>,
-    entity_id: &str,
-    connection_id: Option<&str>,
-) -> anyhow::Result<ComposioExecuteResponse> {
-    let tool = tool.trim();
-    if tool.is_empty() {
-        anyhow::bail!("composio direct_execute: tool slug must not be empty");
+    let mut response: ComposioConnectionsResponse =
+        module_client::call_stateless(config, methods::LIST_CONNECTIONS_DIRECT, request)
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(module_client::member_failure_message(
+                    methods::LIST_CONNECTIONS_DIRECT,
+                    &error
+                ))
+            })?;
+    // Identity fields are the host's to fill (`enrich_connections_with_identity`
+    // from cached profile data); the module also lifts them from the v3 row.
+    for connection in &mut response.connections {
+        connection.account_email = None;
+        connection.workspace = None;
+        connection.username = None;
     }
-    let params = arguments.unwrap_or_else(|| serde_json::Value::Object(Default::default()));
-    let entity_id = entity_id.trim();
-    let entity_id_opt = (!entity_id.is_empty()).then_some(entity_id);
-    let conn_id = connection_id.map(str::trim).filter(|s| !s.is_empty());
-    tracing::debug!(
-        tool = %tool,
-        has_entity = entity_id_opt.is_some(),
-        connection_id = ?conn_id,
-        "[composio-direct] execute: invoking v3 /tools/{{slug}}/execute"
-    );
-    let raw = direct
-        .execute_action(tool, params, entity_id_opt, conn_id)
-        .await?;
-    // v3 surfaces `successful` + `data` + `error` at the top level. If
-    // none are present, treat the call as success so callers see the
-    // raw payload instead of an empty error envelope.
-    let successful = raw
-        .get("successful")
-        .and_then(serde_json::Value::as_bool)
-        .or_else(|| raw.get("success").and_then(serde_json::Value::as_bool))
-        .unwrap_or(true);
-    let error = raw
-        .get("error")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
-    let data = raw.get("data").cloned().unwrap_or(raw);
-    Ok(ComposioExecuteResponse {
-        data,
-        successful,
-        error,
-        cost_usd: 0.0,
-        markdown_formatted: None,
-    })
+    Ok(response)
 }
 
-/// Direct-mode counterpart to [`ComposioClient::list_connections`].
-///
-/// Calls Composio v3 `/connected_accounts` (via
-/// [`crate::tools::ComposioTool::list_connected_accounts`])
-/// and maps each item to the canonical [`ComposioConnection`] so the
-/// existing frontend type contract and the 5 s UI poll keep working
-/// unchanged.
-///
-/// Toolkit slug, status, and `created_at` are extracted defensively —
-/// missing or unparseable fields fall back to empty strings / `None`
-/// rather than dropping the row. The status filter applied downstream
-/// (`ComposioConnection::is_active`) treats empty status as inactive,
-/// so a malformed row will simply not be presented as connected — the
-/// fail-safe shape the user expects.
+/// Direct-mode connection listing (Composio v3 `/connected_accounts`), gated
+/// by the host's invalid-key breaker. Rows come back as canonical
+/// [`ComposioConnection`](super::super::types::ComposioConnection)s; a malformed
+/// row is kept with empty fields and reads as inactive (fail-safe).
 pub async fn direct_list_connections(
-    direct: &Arc<crate::tools::ComposioTool>,
+    config: &crate::config::Config,
+    direct: &Arc<DirectCredential>,
 ) -> anyhow::Result<ComposioConnectionsResponse> {
     tracing::debug!("[composio-direct] list_connections: GET v3 /connected_accounts");
     let key_id = direct.auth_key_fingerprint();
@@ -147,10 +66,10 @@ pub async fn direct_list_connections(
         anyhow::bail!("{error}");
     }
 
-    let items = match direct.list_connected_accounts().await {
-        Ok(items) => {
+    let response = match module_list_connections(config, direct).await {
+        Ok(response) => {
             direct_auth::record_direct_auth_success(key_id);
-            items
+            response
         }
         Err(error) => {
             let rendered = format!("{error:#}");
@@ -176,40 +95,16 @@ pub async fn direct_list_connections(
             return Err(error);
         }
     };
-    let connections: Vec<ComposioConnection> = items
-        .into_iter()
-        .filter_map(|item| {
-            let id = item.id.trim().to_string();
-            if id.is_empty() {
-                return None;
-            }
-            let toolkit = item.toolkit_slug().unwrap_or_default();
-            let status = item.status.clone().unwrap_or_default();
-            Some(ComposioConnection {
-                id,
-                toolkit,
-                status,
-                created_at: item.created_at.clone(),
-                // Identity fields are populated by
-                // `enrich_connections_with_identity` in ops.rs after
-                // the full list is fetched, using cached profile data.
-                account_email: None,
-                workspace: None,
-                username: None,
-            })
-        })
-        .collect();
     tracing::debug!(
-        count = connections.len(),
+        count = response.connections.len(),
         "[composio-direct] list_connections: mapped v3 connected accounts"
     );
-    Ok(ComposioConnectionsResponse { connections })
+    Ok(response)
 }
 
-/// Direct-mode counterpart to [`ComposioClient::list_tools`]. Calls
-/// Composio v3 `/tools?toolkits=<csv>&tags=<a>&tags=<b>` via
-/// [`crate::tools::ComposioTool::list_tool_schemas_v3`] and
-/// reshapes each item into the same [`ComposioToolSchema`] envelope the
+/// Direct-mode tool listing. Calls Composio v3 `/tools` through the module (it sends
+/// `limit=200`, `toolkit_versions=latest`, `toolkits=<csv>` and repeated
+/// `tags=`) and returns the same `ComposioToolSchema` envelope the
 /// backend-proxied path returns.
 ///
 /// `toolkits` may be empty (full direct-tenant catalogue) or scoped to
@@ -237,36 +132,33 @@ pub async fn direct_list_connections(
 /// which this function never applies itself; the filter is layered on by
 /// its `composio_list_tools` caller, not baked in here.
 pub(crate) async fn direct_list_tools(
-    direct: &Arc<crate::tools::ComposioTool>,
+    config: &crate::config::Config,
+    direct: &Arc<DirectCredential>,
     toolkits: &[String],
     tags: Option<&[String]>,
 ) -> anyhow::Result<ComposioToolsResponse> {
-    let toolkit_refs: Vec<&str> = toolkits.iter().map(|s| s.as_str()).collect();
-    let tag_refs: Option<Vec<&str>> = tags.map(|t| t.iter().map(|s| s.as_str()).collect());
     tracing::debug!(
-        toolkits = toolkit_refs.len(),
-        tags = tag_refs.as_ref().map(Vec::len).unwrap_or(0),
+        toolkits = toolkits.len(),
+        tags = tags.map(<[String]>::len).unwrap_or(0),
         "[composio-direct] list_tools: GET v3 /tools"
     );
-    let items = direct
-        .list_tool_schemas_v3(&toolkit_refs, tag_refs.as_deref())
-        .await?;
-    let tools: Vec<super::super::types::ComposioToolSchema> = items
-        .into_iter()
-        .filter(|item| !item.slug.is_empty())
-        .map(|item| super::super::types::ComposioToolSchema {
-            kind: "function".to_string(),
-            function: super::super::types::ComposioToolFunction {
-                name: item.slug,
-                description: item.description,
-                parameters: item.input_parameters,
-                output_parameters: item.output_parameters,
-            },
-        })
-        .collect();
+    let request = ComposioDirectToolsRequest {
+        credential: direct.module_credential(),
+        toolkits: toolkits.to_vec(),
+        tags: tags.unwrap_or(&[]).to_vec(),
+    };
+    let response: ComposioToolsResponse =
+        module_client::call_stateless(config, methods::LIST_TOOLS_DIRECT, request)
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(module_client::member_failure_message(
+                    methods::LIST_TOOLS_DIRECT,
+                    &error
+                ))
+            })?;
     tracing::debug!(
-        count = tools.len(),
+        count = response.tools.len(),
         "[composio-direct] list_tools: mapped v3 tool schemas"
     );
-    Ok(ComposioToolsResponse { tools })
+    Ok(response)
 }

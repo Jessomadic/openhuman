@@ -409,34 +409,6 @@ async fn ttl_sweep_still_expires_an_unclaimed_parked_run() {
     assert_eq!(row.status, "cancelled");
 }
 
-/// T-M1 scope: the pin must cover `require_approval`, not just the graph.
-///
-/// The flag feeds `workflow_origin(...)`, which becomes the `AgentTurnOrigin`
-/// for the whole resumed execution — `require_approval: false` auto-allows every
-/// `external_effect` tool call, where `true` parks each for its own decision.
-/// It is settable independently of the graph (`flows_update` accepts
-/// `graph_json: None, require_approval: Some(false)`), so hashing the graph
-/// alone would let someone park at a gate, get the user's approval, flip the
-/// flag with the graph untouched, and have every downstream outbound node fire
-/// unattended on resume — under an approval the user never gave.
-#[test]
-fn graph_hash_covers_require_approval_not_just_the_graph() {
-    let graph = structurally_valid_graph(trigger_only_graph());
-
-    let gated = compute_graph_hash(&graph, true).expect("should hash");
-    let ungated = compute_graph_hash(&graph, false).expect("should hash");
-
-    assert_ne!(
-        gated, ungated,
-        "flipping require_approval must invalidate the pin even when the graph is byte-identical"
-    );
-    assert_eq!(
-        gated,
-        compute_graph_hash(&graph, true).expect("should hash"),
-        "the pin must stay stable for an unchanged configuration"
-    );
-}
-
 /// T-M1 refusal must not clobber a run another resume already owns.
 ///
 /// The stale-approval check runs BEFORE this call claims the run, so a losing
@@ -638,7 +610,7 @@ fn toolkit_for_contract_slug_accepts_real_action_slugs() {
     // The shared helper stays permissive for its other callers — this stricter
     // rule is this controller's, not `toolkit_from_slug`'s.
     assert_eq!(
-        tinymemory_api::composio::toolkit_from_slug("nodashhere").as_deref(),
+        crate::integrations::composio::contract::toolkit_from_slug("nodashhere").as_deref(),
         Some("nodashhere")
     );
     assert_eq!(toolkit_for_contract_slug("nodashhere"), None);

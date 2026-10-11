@@ -44,10 +44,25 @@ fn builtin_def(id: &str) -> crate::agent::harness::definition::AgentDefinition {
         .unwrap_or_else(|| panic!("builtin agent definition not found: {id}"))
 }
 
+/// A wildcard-belt definition for tests that need the whole registry on the
+/// wire. No built-in keeps a wildcard belt any more (the generalist
+/// `tools_agent` was removed), so the shape is synthesised from a real
+/// built-in: same parsing and defaults, only the id and the belt differ.
+fn wildcard_probe_def() -> crate::agent::harness::definition::AgentDefinition {
+    let mut def = builtin_def("summarizer");
+    def.id = "wildcard_probe".to_string();
+    def.delegate_name = None;
+    def.tools = crate::agent::harness::definition::ToolScope::Wildcard;
+    def.subagents = Vec::new();
+    def
+}
+
 #[path = "builder_tests_explicit_definition_tests.rs"]
 mod explicit_definition_tests;
-#[path = "builder_tests_memory_write_instruction_tests.rs"]
-mod memory_write_instruction_tests;
+#[path = "builder_tests_host_only_tests.rs"]
+mod host_only_tests;
+#[path = "builder_tests_host_tools_tests.rs"]
+mod host_tools_tests;
 #[path = "builder_tests_session_definition_tests.rs"]
 mod session_definition_tests;
 #[path = "builder_tests_tool_exposure_tests.rs"]
@@ -97,7 +112,7 @@ fn use_skill_spec_from_registry() -> ToolSpec {
     crate::tools::toolpacks::append_pack_tools(&mut tools);
     let tool = tools
         .iter()
-        .find(|t| t.name() == crate::tools::toolpacks::USE_SKILL)
+        .find(|t| t.name() == tinyagents_harness::tool::packs::USE_SKILL)
         .expect("append_pack_tools registers use_skill");
     ToolSpec {
         name: tool.name().to_string(),
@@ -117,12 +132,12 @@ fn visible_specs_scope_use_skills_index_to_the_session() {
     let visible: std::collections::HashSet<String> = specs.iter().map(|s| s.name.clone()).collect();
     // Reachable: one workflows tool. Everything else in every other pack is
     // denied, exactly like the orchestrator against `system` / `audio`.
-    let session = session_allowing(&["run_workflow", crate::tools::toolpacks::USE_SKILL]);
+    let session = session_allowing(&["run_workflow", tinyagents_harness::tool::packs::USE_SKILL]);
 
     let out = visible_tool_specs_for_policy(&specs, &visible, &session);
     let load = out
         .iter()
-        .find(|s| s.name == crate::tools::toolpacks::USE_SKILL)
+        .find(|s| s.name == tinyagents_harness::tool::packs::USE_SKILL)
         .expect("use_skill is still offered — workflows is reachable");
 
     assert!(
@@ -154,7 +169,7 @@ fn visible_specs_drop_the_pack_tool_when_no_pack_is_reachable() {
     let specs: Vec<std::sync::Arc<ToolSpec>> =
         vec![std::sync::Arc::new(use_skill_spec_from_registry())];
     let visible: std::collections::HashSet<String> = specs.iter().map(|s| s.name.clone()).collect();
-    let session = session_allowing(&[crate::tools::toolpacks::USE_SKILL]);
+    let session = session_allowing(&[tinyagents_harness::tool::packs::USE_SKILL]);
 
     let out = visible_tool_specs_for_policy(&specs, &visible, &session);
     assert!(
@@ -231,12 +246,12 @@ fn a_realistic_withheld_session_keeps_its_packs_advertised() {
     let names: Vec<&str> = out.iter().map(|s| s.name.as_str()).collect();
 
     assert!(
-        names.contains(&crate::tools::toolpacks::USE_SKILL),
+        names.contains(&tinyagents_harness::tool::packs::USE_SKILL),
         "use_skill must survive — the pack it opens is reachable: {names:?}"
     );
     let load = out
         .iter()
-        .find(|s| s.name == crate::tools::toolpacks::USE_SKILL)
+        .find(|s| s.name == tinyagents_harness::tool::packs::USE_SKILL)
         .expect("use_skill spec");
     assert!(
         load.description.contains("`goals`"),
@@ -266,7 +281,7 @@ fn use_skill_survives_a_ceiling_that_excludes_it_when_a_pack_is_still_reachable(
     assert!(
         !session
             .allowed_tool_names
-            .contains(crate::tools::toolpacks::USE_SKILL),
+            .contains(tinyagents_harness::tool::packs::USE_SKILL),
         "precondition: use_skill itself is not in the allowlist"
     );
 
@@ -277,7 +292,7 @@ fn use_skill_survives_a_ceiling_that_excludes_it_when_a_pack_is_still_reachable(
     let out = visible_tool_specs_for_policy(&specs, &visible, &session);
     let load = out
         .iter()
-        .find(|s| s.name == crate::tools::toolpacks::USE_SKILL)
+        .find(|s| s.name == tinyagents_harness::tool::packs::USE_SKILL)
         .expect(
             "use_skill must survive even though it is not itself in allowed_tool_names — \
              its listing action is always ReadOnly and the workflows pack is reachable",
@@ -392,4 +407,111 @@ fn is_empty_tool_scope_distinguishes_the_three_states() {
         .into_iter()
         .collect();
     assert!(!is_empty_tool_scope(&mixed));
+}
+
+#[tokio::test]
+async fn a_summarized_agent_sees_the_recovery_tool_with_compaction_off() {
+    // A summary's footer names `juice_retrieve`, and summaries run with
+    // the compaction router off (the default). The orchestrator is the agent
+    // that gets them, so it must see the tool whatever the router says.
+    use crate::agent::session_host::types::OpenHumanSessionHost;
+    use crate::inference::tokenjuice::RETRIEVE_TOOL_NAME;
+
+    let _ = crate::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = test_config(&tmp);
+    config.context.compaction_enabled = false;
+    assert!(super::summarizes_tool_output("orchestrator", &config));
+    let agent = OpenHumanSessionHost::from_config_for_agent(&config, "orchestrator")
+        .expect("orchestrator is a shipped agent definition");
+    let visible = agent.visible_tool_names_for_test();
+    assert!(
+        visible.is_empty() || visible.contains(RETRIEVE_TOOL_NAME),
+        "the orchestrator's summaries point at a tool it must be able to call"
+    );
+}
+
+#[test]
+fn the_recovery_tool_joins_a_belt_only_when_something_can_point_at_it() {
+    use crate::inference::tokenjuice::RETRIEVE_TOOL_NAME;
+    let belt = || std::collections::HashSet::from(["web_fetch".to_string()]);
+
+    let mut unused = belt();
+    super::ensure_recovery_tool_visible(&mut unused, false);
+    assert!(!unused.contains(RETRIEVE_TOOL_NAME));
+
+    let mut needed = belt();
+    super::ensure_recovery_tool_visible(&mut needed, true);
+    assert!(needed.contains(RETRIEVE_TOOL_NAME));
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = test_config(&tmp);
+    assert!(!super::summarizes_tool_output("researcher", &config));
+    config.context.summarizer_payload_threshold_tokens = 0;
+    assert!(!super::summarizes_tool_output("orchestrator", &config));
+}
+
+#[test]
+fn the_repl_tools_join_a_belt_only_while_handle_mode_is_active() {
+    use crate::agent::harness::definition::NO_TOOLS_SENTINEL;
+    use crate::inference::tokenjuice::REPL_TOOL_NAMES;
+    let belt = || std::collections::HashSet::from(["web_fetch".to_string()]);
+
+    let mut inactive = belt();
+    super::ensure_repl_tools_visible(&mut inactive, false);
+    assert!(REPL_TOOL_NAMES.iter().all(|n| !inactive.contains(*n)));
+
+    let mut active = belt();
+    super::ensure_repl_tools_visible(&mut active, true);
+    assert!(REPL_TOOL_NAMES.iter().all(|n| active.contains(*n)));
+
+    // "No filter" and "deliberately no tools" both stay as they were.
+    let mut unfiltered = std::collections::HashSet::new();
+    super::ensure_repl_tools_visible(&mut unfiltered, true);
+    assert!(unfiltered.is_empty());
+    let mut none = std::collections::HashSet::from([NO_TOOLS_SENTINEL.to_string()]);
+    super::ensure_repl_tools_visible(&mut none, true);
+    assert_eq!(none.len(), 1);
+}
+
+#[tokio::test]
+async fn a_curated_orchestrator_sees_and_holds_every_juice_tool_in_handle_mode() {
+    // Regression for the 0.64.x "unknown tool juice_*" cluster: with large
+    // results stored behind a handle, the footer tells the model to call
+    // `juice_find` / `juice_summarize` / `juice_retrieve`. A curated
+    // (`ToolScope::Named`) belt that lacked them was told to call tools it
+    // could not dispatch.
+    use crate::agent::session_host::types::OpenHumanSessionHost;
+    use crate::inference::tokenjuice::{REPL_TOOL_NAMES, RETRIEVE_TOOL_NAME};
+
+    let _ = crate::agent::harness::definition::AgentDefinitionRegistry::init_global_builtins();
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = test_config(&tmp);
+    config.context.compaction_enabled = true;
+    config.tokenjuice.router_enabled = true;
+    config.tokenjuice.ccr_enabled = true;
+    config.tokenjuice.repl_handle_enabled = true;
+    assert!(crate::inference::tokenjuice::repl_handle_active(&config));
+
+    let agent = OpenHumanSessionHost::from_config_for_agent(&config, "orchestrator")
+        .expect("orchestrator is a shipped agent definition");
+    let visible = agent.visible_tool_names_for_test();
+    assert!(
+        !visible.is_empty(),
+        "the orchestrator's belt is curated; an empty set would make this test vacuous"
+    );
+    let registered: std::collections::HashSet<&str> =
+        agent.tools().iter().map(|t| t.name()).collect();
+    for name in REPL_TOOL_NAMES.iter().copied().chain([RETRIEVE_TOOL_NAME]) {
+        assert!(
+            visible.contains(name),
+            "{name} must be visible to the orchestrator"
+        );
+        assert!(
+            registered.contains(name),
+            "{name} must be registered so a call to it dispatches"
+        );
+    }
 }

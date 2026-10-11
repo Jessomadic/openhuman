@@ -25,6 +25,7 @@ import { renderWithProviders } from '../../../../test/test-utils';
 
 const hoisted = vi.hoisted(() => ({
   testCoreRpcConnection: vi.fn(),
+  probeCoreRealtime: vi.fn(async () => 'ok'),
   clearCoreRpcUrlCache: vi.fn(),
   clearCoreRpcTokenCache: vi.fn(),
   restartApp: vi.fn(),
@@ -34,6 +35,7 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock('../../../../services/coreRpcClient', () => ({
   testCoreRpcConnection: hoisted.testCoreRpcConnection,
+  probeCoreRealtime: hoisted.probeCoreRealtime,
   clearCoreRpcUrlCache: hoisted.clearCoreRpcUrlCache,
   clearCoreRpcTokenCache: hoisted.clearCoreRpcTokenCache,
 }));
@@ -70,8 +72,8 @@ async function openRemoteForm(url: string, token = 'remote-token-xyz') {
   await waitFor(() => expect(screen.getByText('Connected to local core')).toBeInTheDocument());
 
   fireEvent.click(screen.getByTestId('core-use-remote-toggle'));
-  fireEvent.change(screen.getByLabelText(/Runtime URL/i), { target: { value: url } });
-  fireEvent.change(screen.getByLabelText(/Auth Token/i), { target: { value: token } });
+  fireEvent.change(screen.getByLabelText(/Address/i), { target: { value: url } });
+  fireEvent.change(screen.getByLabelText(/^Token/i), { target: { value: token } });
   return rendered;
 }
 
@@ -151,7 +153,7 @@ describe('CoreConnectionPanel remote URL validation', () => {
     await openRemoteForm('http://127.0.0.1:7788/rpc');
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/Runtime URL/i)).toHaveValue('http://127.0.0.1:7788/rpc')
+      expect(screen.getByLabelText(/Address/i)).toHaveValue('http://127.0.0.1:7788/rpc')
     );
     expect(screen.queryByText(HTTP_WARNING)).not.toBeInTheDocument();
   });
@@ -160,7 +162,7 @@ describe('CoreConnectionPanel remote URL validation', () => {
     await openRemoteForm('http://192.168.1.50:7788/rpc');
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/Runtime URL/i)).toHaveValue('http://192.168.1.50:7788/rpc')
+      expect(screen.getByLabelText(/Address/i)).toHaveValue('http://192.168.1.50:7788/rpc')
     );
     expect(screen.queryByText(HTTP_WARNING)).not.toBeInTheDocument();
   });
@@ -169,7 +171,7 @@ describe('CoreConnectionPanel remote URL validation', () => {
     await openRemoteForm('https://core.example.com/rpc');
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/Runtime URL/i)).toHaveValue('https://core.example.com/rpc')
+      expect(screen.getByLabelText(/Address/i)).toHaveValue('https://core.example.com/rpc')
     );
     expect(screen.queryByText(HTTP_WARNING)).not.toBeInTheDocument();
   });

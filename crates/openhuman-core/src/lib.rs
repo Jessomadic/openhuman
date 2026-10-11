@@ -4,19 +4,19 @@
 //! (`src/main.rs`). Owns business rules, persistence, execution
 //! policy, the JSON-RPC/Socket.IO server, and the CLI. Hosted in-process by
 //! `openhuman-app` (the Tauri shell), `openhuman-embed` (the typed facade for
-//! third-party embedders such as Medulla and OpenCompany), and `openhuman-tui`.
+//! third-party embedders such as OpenCompany), and `openhuman-tui`.
 //!
 //! Business logic lives one directory per domain family under `src/`, listed
 //! below in the order they are declared (module declarations are kept
 //! alphabetical, with the `rpc` re-export sitting between `platform` and
 //! `runtime` — keep new modules sorted the same way): `agent`, `api`,
 //! `channels`, `config`, `core`, `cron`, `desktop`, `flows` (feature
-//! `flows`), `hooks`, `hosting` (feature `hosting`), `http_host`
-//! (feature `http-server`), `inference`, `integrations`, `json_schema`,
-//! `mcp`, `media` (feature `media`), `medulla`, `memory`, `modules` (feature
+//! `flows`), `hooks`, `hosting` (feature `hosting`),
+//! `inference`, `integrations`,
+//! `mcp`, `media` (feature `media`), `memory`, `modules` (feature
 //! `modules`), `platform`, `runtime`, `sandbox`, `search`, `security`,
 //! `skills`, `test_support` (feature `e2e-test-support`), `threads`, `tools`,
-//! `util`, `voice`, `web3`, `web_chat`. `channels`, `mcp`, `medulla`,
+//! `util`, `voice`, `web3`, `web_chat`. `channels`, `mcp`,
 //! `skills`, `voice` and `web3` are always declared but gate most of their
 //! contents inside their own `mod.rs` behind the feature of the same name.
 //! `core/` is not a domain: it holds transport, dispatch, the controller
@@ -24,10 +24,11 @@
 //! composition (`core::runtime`). See `README.md` and AGENTS.md ("Rust domain
 //! structure") for the preferred per-domain module shape.
 //!
-//! `pub use openhuman_rpc as rpc;` re-exports the `openhuman-rpc` crate, so
-//! `crate::rpc::{RpcOutcome, StructuredRpcError, ...}` are the same types the
-//! app and TUI decode responses with — there is no separate RPC contract
-//! layer in this crate.
+//! The controller contract lives in `core`: every domain operation returns
+//! [`core::Outcome`], controllers are described by `core::ControllerSchema`,
+//! and `core::invoke::invoke_method` dispatches them in-process. The JSON-RPC
+//! protocol and server that expose them live in `openhuman-rpc`, which depends
+//! on this crate.
 //!
 //! [`CoreBuilder`], [`CoreRuntime`], [`DomainSet`], [`ServiceSet`],
 //! [`TokenSource`] and [`HostKind`] are the embeddable composition API;
@@ -52,8 +53,9 @@
 #![allow(dead_code)]
 
 pub mod agent;
-pub mod api;
+pub mod backend;
 pub mod channels;
+pub mod commands;
 pub mod config;
 pub mod core;
 pub mod cron;
@@ -63,28 +65,26 @@ pub mod flows;
 pub mod hooks;
 #[cfg(feature = "hosting")]
 pub mod hosting;
-#[cfg(feature = "http-server")]
-pub mod http_host;
 pub mod inference;
 pub mod integrations;
-pub mod json_schema;
 pub mod mcp;
 #[cfg(feature = "media")]
 pub mod media;
-pub mod medulla;
 pub mod memory;
 #[cfg(feature = "modules")]
 pub mod modules;
 pub mod platform;
-pub use openhuman_rpc as rpc;
-pub mod runtime;
+pub mod profiles;
 pub mod sandbox;
 pub mod search;
 pub mod security;
 pub mod skills;
+pub mod storage;
 #[cfg(feature = "e2e-test-support")]
 pub mod test_support;
 pub mod threads;
+#[cfg(feature = "tinymemes")]
+pub mod tinymemes;
 pub mod tools;
 pub mod util;
 pub mod voice;
@@ -113,8 +113,31 @@ pub use core::types::HostKind;
 ///
 /// Returns an error if command execution fails.
 pub fn run_core_from_args(args: &[String]) -> anyhow::Result<()> {
+    run_core_from_args_with(args, None)
+}
+
+/// [`run_core_from_args`] with a host-supplied boot description.
+///
+/// `host_boot` rides on the `run` / `serve` [`ServeRequest`] to the installed
+/// server launcher, which boots from it instead of its own default preset.
+/// Explicit command-line flags still apply on top of it; see [`ServeRequest`]
+/// for the precedence. Subcommands that do not start a server ignore it.
+///
+/// # Errors
+///
+/// Returns an error if command execution fails.
+pub fn run_core_from_args_with(
+    args: &[String],
+    host_boot: Option<core::server_launcher::HostBoot>,
+) -> anyhow::Result<()> {
     core::cli::load_dotenv_for_cli()?;
     platform::service::apply_startup_restart_delay_from_env();
-    security::keyring::init_master_key();
-    core::cli::run_from_cli_args(args)
+    // A SaaS boot roots the keyring under its operator directory
+    // (`saas::build`), so it must not be latched to the home directory here.
+    if !core::cli::is_help_only(args)
+        && !core::runtime::mode::requested_in(args, std::env::var("OPENHUMAN_MODE").ok().as_deref())
+    {
+        security::keyring::init_master_key().map_err(anyhow::Error::msg)?;
+    }
+    core::cli::run_from_cli_args_with(args, host_boot)
 }

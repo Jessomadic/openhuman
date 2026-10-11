@@ -11,14 +11,10 @@ fn prompt_builder_assembles_sections() {
         tools: &prompt_tools,
         workflows: &[],
         dispatcher_instructions: "instr",
-        learned: LearnedContextData::default(),
         visible_tool_names: &NO_FILTER,
         tool_call_format: ToolCallFormat::PFormat,
         connected_integrations: &[],
         connected_identities_md: String::new(),
-        include_profile: false,
-        include_memory_md: false,
-        curated_snapshot: None,
         user_identity: None,
         personality_roster: vec![],
         agents_md_global: None,
@@ -41,14 +37,10 @@ fn grounding_contract_appended_to_every_build_path() {
         tools: &prompt_tools,
         workflows: &[],
         dispatcher_instructions: "instr",
-        learned: LearnedContextData::default(),
         visible_tool_names: &NO_FILTER,
         tool_call_format: ToolCallFormat::PFormat,
         connected_integrations: &[],
         connected_identities_md: String::new(),
-        include_profile: false,
-        include_memory_md: false,
-        curated_snapshot: None,
         user_identity: None,
         personality_roster: vec![],
         agents_md_global: None,
@@ -133,14 +125,10 @@ fn identity_section_creates_missing_workspace_files() {
         tools: &prompt_tools,
         workflows: &[],
         dispatcher_instructions: "",
-        learned: LearnedContextData::default(),
         visible_tool_names: &NO_FILTER,
         tool_call_format: ToolCallFormat::PFormat,
         connected_integrations: &[],
         connected_identities_md: String::new(),
-        include_profile: false,
-        include_memory_md: false,
-        curated_snapshot: None,
         user_identity: None,
         personality_roster: vec![],
         agents_md_global: None,
@@ -156,8 +144,8 @@ fn identity_section_creates_missing_workspace_files() {
             "expected workspace file to be created: {file}"
         );
     }
-    // HEARTBEAT.md and MEMORY_GOALS.md are no longer seeded (#5701). The
-    // subconscious engine that read HEARTBEAT.md is gone, and the goals store
+    // HEARTBEAT.md and MEMORY_GOALS.md are no longer seeded (#5701). Nothing
+    // reads HEARTBEAT.md any more, and the goals store
     // returns an empty `GoalsDoc` for a missing file and creates it on first
     // write, so seeding either bought a file nothing needed.
     for file in ["HEARTBEAT.md", "MEMORY_GOALS.md"] {
@@ -214,14 +202,10 @@ fn datetime_section_is_static_grounding_rule_without_volatile_timestamp() {
         tools: &prompt_tools,
         workflows: &[],
         dispatcher_instructions: "instr",
-        learned: LearnedContextData::default(),
         visible_tool_names: &NO_FILTER,
         tool_call_format: ToolCallFormat::PFormat,
         connected_integrations: &[],
         connected_identities_md: String::new(),
-        include_profile: false,
-        include_memory_md: false,
-        curated_snapshot: None,
         user_identity: None,
         personality_roster: vec![],
         agents_md_global: None,
@@ -232,7 +216,7 @@ fn datetime_section_is_static_grounding_rule_without_volatile_timestamp() {
     assert!(rendered.starts_with("## Current Date & Time\n\n"));
     // Greeting/clock grounding rule must be present, ungated (no tools here).
     assert!(
-        rendered.contains("good morning") && rendered.contains("match the actual local hour"),
+        rendered.contains("match greetings") && rendered.contains("local hour"),
         "datetime section must carry the greeting-grounding rule; got:\n{rendered}"
     );
     assert!(
@@ -254,7 +238,7 @@ fn current_datetime_line_is_fresh_local_stamp() {
     // The per-turn stamp carries a parseable local date, IANA zone (or the
     // `UTC` fallback), a UTC offset, and the weekday — everything the model
     // needs to localize a greeting without a tool call (#3602).
-    let line = super::super::current_datetime_line();
+    let line = super::super::current_datetime_line(None);
     let rest = line
         .strip_prefix("Current Date & Time: ")
         .unwrap_or_else(|| panic!("stamp must start with canonical prefix: {line}"));
@@ -271,13 +255,30 @@ fn current_datetime_line_is_fresh_local_stamp() {
     );
 }
 
+/// The stamp reads in the user's zone, not the machine's; a name chrono-tz
+/// does not know falls back to the device stamp rather than echoing it.
+#[test]
+fn current_datetime_line_is_stamped_in_the_users_zone() {
+    let line = super::super::current_datetime_line(Some("Pacific/Chatham"));
+    let now = chrono::Utc::now().with_timezone(&chrono_tz::Pacific::Chatham);
+    assert!(line.contains(" Pacific/Chatham ("), "{line}");
+    assert!(
+        line.contains(&format!("UTC{}", now.format("%:z"))),
+        "{line}"
+    );
+    assert!(line.contains(&now.format("%Y-%m-%d").to_string()), "{line}");
+
+    let line = super::super::current_datetime_line(Some("Not/AZone"));
+    assert!(!line.contains("Not/AZone"), "{line}");
+}
+
 #[test]
 fn datetime_section_appends_resolve_time_rule_only_when_tool_present() {
     // With `resolve_time` in the agent's tool set, the time-discipline rule
     // is rendered under the date block (prevents the LLM hand-computing epoch
     // timestamps — the bug this tool exists to fix).
-    let with_tools: Vec<Box<dyn Tool>> = vec![Box::new(crate::tools::ResolveTimeTool::new())];
-    let with_prompt_tools = PromptTool::from_tools(&with_tools);
+    let timed = vec![Box::new(tinyagents_harness::tools::ResolveTimeTool::new()) as Box<dyn Tool>];
+    let with_prompt_tools = PromptTool::from_tools(&timed);
     let ctx_with = PromptContext {
         workspace_dir: Path::new("/tmp"),
         model_name: "test-model",
@@ -285,14 +286,10 @@ fn datetime_section_appends_resolve_time_rule_only_when_tool_present() {
         tools: &with_prompt_tools,
         workflows: &[],
         dispatcher_instructions: "instr",
-        learned: LearnedContextData::default(),
         visible_tool_names: &NO_FILTER,
         tool_call_format: ToolCallFormat::PFormat,
         connected_integrations: &[],
         connected_identities_md: String::new(),
-        include_profile: false,
-        include_memory_md: false,
-        curated_snapshot: None,
         user_identity: None,
         personality_roster: vec![],
         agents_md_global: None,
@@ -300,7 +297,7 @@ fn datetime_section_appends_resolve_time_rule_only_when_tool_present() {
     };
     let rendered_with = DateTimeSection.build(&ctx_with).unwrap();
     assert!(
-        rendered_with.contains("resolve_time") && rendered_with.contains("never hand-compute"),
+        rendered_with.contains("resolve_time") && rendered_with.contains("never hand-computed"),
         "expected the resolve_time discipline rule when the tool is present; got:\n{rendered_with}"
     );
 
@@ -442,14 +439,10 @@ fn tools_section_pformat_renders_signature_not_schema() {
         tools: &prompt_tools,
         workflows: &[],
         dispatcher_instructions: "",
-        learned: LearnedContextData::default(),
         visible_tool_names: &NO_FILTER,
         tool_call_format: ToolCallFormat::PFormat,
         connected_integrations: &[],
         connected_identities_md: String::new(),
-        include_profile: false,
-        include_memory_md: false,
-        curated_snapshot: None,
         user_identity: None,
         personality_roster: vec![],
         agents_md_global: None,
@@ -500,14 +493,10 @@ fn tools_section_renders_invalid_schema_tool_without_arguments() {
         tools: &prompt_tools,
         workflows: &[],
         dispatcher_instructions: "",
-        learned: LearnedContextData::default(),
         visible_tool_names: &NO_FILTER,
         tool_call_format: ToolCallFormat::PFormat,
         connected_integrations: &[],
         connected_identities_md: String::new(),
-        include_profile: false,
-        include_memory_md: false,
-        curated_snapshot: None,
         user_identity: None,
         personality_roster: vec![],
         agents_md_global: None,
@@ -569,14 +558,10 @@ fn tools_section_code_formats_render_function_signatures() {
             tools: &prompt_tools,
             workflows: &[],
             dispatcher_instructions: "## Tool Use Protocol\n\n(block)",
-            learned: LearnedContextData::default(),
             visible_tool_names: &NO_FILTER,
             tool_call_format: format,
             connected_integrations: &[],
             connected_identities_md: String::new(),
-            include_profile: false,
-            include_memory_md: false,
-            curated_snapshot: None,
             user_identity: None,
             personality_roster: vec![],
             agents_md_global: None,
@@ -619,14 +604,10 @@ fn tools_section_uses_pformat_signature_for_text_dispatchers() {
             tools: &prompt_tools,
             workflows: &[],
             dispatcher_instructions: "",
-            learned: LearnedContextData::default(),
             visible_tool_names: &NO_FILTER,
             tool_call_format: format,
             connected_integrations: &[],
             connected_identities_md: String::new(),
-            include_profile: false,
-            include_memory_md: false,
-            curated_snapshot: None,
             user_identity: None,
             personality_roster: vec![],
             agents_md_global: None,
@@ -665,14 +646,10 @@ fn tools_section_json_with_an_embedded_catalogue_lists_tools_once() {
         tools: &prompt_tools,
         workflows: &[],
         dispatcher_instructions: &block,
-        learned: LearnedContextData::default(),
         visible_tool_names: &NO_FILTER,
         tool_call_format: ToolCallFormat::Json,
         connected_integrations: &[],
         connected_identities_md: String::new(),
-        include_profile: false,
-        include_memory_md: false,
-        curated_snapshot: None,
         user_identity: None,
         personality_roster: vec![],
         agents_md_global: None,
@@ -689,91 +666,25 @@ fn tools_section_json_with_an_embedded_catalogue_lists_tools_once() {
 }
 
 #[test]
-fn user_memory_section_renders_namespaces_with_headings() {
-    let learned = LearnedContextData {
-        tree_root_summaries: vec![
-            ns_summary_at(
-                "user",
-                "Steven prefers terse Rust answers.",
-                "2026-05-25T00:00:00Z",
-            ),
-            ns_summary_at(
-                "conversations",
-                "Recent thread: prompt rework.",
-                "2026-05-25T00:00:00Z",
-            ),
-        ],
-        ..Default::default()
-    };
-    let prompt_tools: Vec<PromptTool<'_>> = Vec::new();
+fn verbatim_builder_renders_the_body_and_nothing_else() {
     let ctx = PromptContext {
         workspace_dir: Path::new("/tmp"),
         model_name: "test-model",
         agent_id: "",
-        tools: &prompt_tools,
+        tools: &[],
         workflows: &[],
-        dispatcher_instructions: "",
-        learned,
+        dispatcher_instructions: "instr",
         visible_tool_names: &NO_FILTER,
-        tool_call_format: ToolCallFormat::PFormat,
+        tool_call_format: ToolCallFormat::Native,
         connected_integrations: &[],
         connected_identities_md: String::new(),
-        include_profile: false,
-        include_memory_md: false,
-        curated_snapshot: None,
         user_identity: None,
         personality_roster: vec![],
         agents_md_global: None,
         agents_md_local: None,
     };
-    let rendered = UserMemorySection.build(&ctx).unwrap();
-    assert!(rendered.starts_with("## User Memory\n\n"));
-    assert!(
-        rendered
-            .contains("### user (last updated 2026-05-25)\n\nSteven prefers terse Rust answers."),
-        "heading must carry the absolute update date (#2944); got:\n{rendered}"
-    );
-    assert!(rendered
-        .contains("### conversations (last updated 2026-05-25)\n\nRecent thread: prompt rework."));
-}
-
-#[test]
-fn memory_date_label_formats_absolute_utc_date() {
-    let dt = chrono::DateTime::parse_from_rfc3339("2026-05-25T18:30:00Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    // Absolute date, no time-of-day — must stay byte-stable day to day.
-    assert_eq!(memory_date_label(dt), "2026-05-25");
-}
-
-#[test]
-fn user_memory_section_labels_stale_summary_and_warns_against_present_tense() {
-    // #2944 regression: a summary last updated weeks ago must render with
-    // its absolute date, and the section must steer the model to compare
-    // against the current date — so a May-25 briefing is never served as
-    // today's.
-    let learned = LearnedContextData {
-        tree_root_summaries: vec![ns_summary_at(
-            "briefings",
-            "Daily briefing: 2 meetings, proposal due.",
-            "2026-05-25T07:00:00Z",
-        )],
-        ..Default::default()
-    };
-    let rendered = UserMemorySection.build(&ctx_with_learned(learned)).unwrap();
-
-    assert!(
-        rendered.contains("### briefings (last updated 2026-05-25)"),
-        "stale summary must carry its absolute update date; got:\n{rendered}"
-    );
-    // Guardrail: tell the model to cross-check against the current date
-    // and not restate older memory as today's.
-    assert!(
-        rendered.contains("Current Date & Time"),
-        "section must reference the current-date block; got:\n{rendered}"
-    );
-    assert!(
-        rendered.contains("never present older memory as"),
-        "section must forbid presenting stale memory as current; got:\n{rendered}"
-    );
+    let rendered = SystemPromptBuilder::verbatim("Review the diff.".to_string())
+        .build(&ctx)
+        .unwrap();
+    assert_eq!(rendered.trim_end(), "Review the diff.");
 }

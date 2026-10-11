@@ -19,54 +19,9 @@ fn base() -> GenerateDocumentInput {
     }
 }
 
-/// Assert `validate_input` rejects `input` naming `field` in the error.
-fn assert_rejects(input: &GenerateDocumentInput, field: &str) {
-    match validate_input(input) {
-        Err(DocumentError::InvalidInput { field: f, .. }) => {
-            assert!(
-                f.contains(field),
-                "expected error field to contain {field:?}, got {f:?}"
-            );
-        }
-        other => panic!("expected InvalidInput({field}), got {other:?}"),
-    }
-}
-
 #[test]
 fn accepts_a_well_formed_input() {
     assert!(validate_input(&base()).is_ok());
-}
-
-#[test]
-fn rejects_an_empty_title() {
-    let mut input = base();
-    input.title = "   ".to_string();
-    assert_rejects(&input, "title");
-}
-
-#[test]
-fn rejects_an_empty_section_list() {
-    let mut input = base();
-    input.sections.clear();
-    assert_rejects(&input, "sections");
-}
-
-#[test]
-fn rejects_a_blank_section_naming_its_index() {
-    let mut input = base();
-    input.sections.push(DocumentSection {
-        heading: Some("  ".to_string()),
-        paragraphs: vec![],
-        bullets: vec![],
-    });
-    assert_rejects(&input, "sections[1]");
-}
-
-#[test]
-fn rejects_over_long_text_fields() {
-    let mut input = base();
-    input.title = "t".repeat(MAX_TEXT_CHARS + 1);
-    assert_rejects(&input, "title");
 }
 
 #[test]

@@ -4,13 +4,29 @@ use serde_json::json;
 
 use super::load::load_config_with_timeout;
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 /// Serializes the current configuration into a JSON snapshot for the UI.
 pub fn snapshot_config_json(config: &Config) -> Result<serde_json::Value, String> {
-    let value = serde_json::to_value(config).map_err(|e| e.to_string())?;
+    let mut value = serde_json::to_value(config).map_err(|e| e.to_string())?;
+    // The full snapshot is sent over RPC. Keep search settings visible while
+    // removing credentials, including the legacy Seltz key.
+    for provider in ["brave", "querit", "exa", "tavily", "gemini", "parallel"] {
+        value["search"][provider]["api_key"] = serde_json::Value::Null;
+    }
+    value["seltz"]["api_key"] = serde_json::Value::Null;
+    // A storage URL may carry database credentials; show it redacted.
+    if let Some(url) = config.storage.url.as_deref() {
+        value["storage"]["url"] =
+            serde_json::Value::String(crate::config::schema::storage::redact_url(url));
+    }
+    #[cfg(feature = "modules")]
+    let browser_billing_route = crate::modules::desktop::billing_route(config);
+    #[cfg(not(feature = "modules"))]
+    let browser_billing_route = "unavailable";
     Ok(json!({
         "config": value,
+        "browser_billing_route": browser_billing_route,
         "workspace_dir": config.workspace_dir.display().to_string(),
         "config_path": config.config_path.display().to_string(),
     }))
@@ -40,6 +56,7 @@ pub fn client_config_json(config: &Config) -> serde_json::Value {
                 "label": c.label,
                 "endpoint": c.endpoint,
                 "auth_style": c.auth_style.as_str(),
+                "ca_cert_pem": config.cloud_provider_ca_certs.get(&c.slug),
             })
         })
         .collect();
@@ -63,6 +80,11 @@ pub fn client_config_json(config: &Config) -> serde_json::Value {
         "api_url": config.api_url,
         "inference_url": config.inference_url,
         "default_model": config.default_model,
+        // The composer's thinking-level default (`runtime.reasoning_effort`);
+        // `null` means the provider decides.
+        "reasoning_effort": config.runtime.reasoning_effort,
+        // Per-model thinking levels (`runtime.reasoning_effort_by_model`).
+        "reasoning_effort_by_model": config.runtime.reasoning_effort_by_model,
         "app_version": app_version,
         "api_key_set": api_key_set,
         "model_routes": model_routes,
@@ -93,9 +115,6 @@ pub fn client_config_json(config: &Config) -> serde_json::Value {
         "vision_provider": config.vision_provider,
         "memory_provider": config.memory_provider,
         "embeddings_provider": config.embeddings_provider,
-        "heartbeat_provider": config.heartbeat_provider,
-        "learning_provider": config.learning_provider,
-        "subconscious_provider": config.subconscious_provider,
         "voice_providers": config.voice_providers.iter().map(|v| {
             serde_json::json!({
                 "id": v.id,
@@ -116,20 +135,19 @@ pub fn client_config_json(config: &Config) -> serde_json::Value {
 }
 
 /// Loads config and returns the client-facing AI config slice.
-pub async fn load_and_get_client_config_snapshot() -> Result<RpcOutcome<serde_json::Value>, String>
-{
+pub async fn load_and_get_client_config_snapshot() -> Result<Outcome<serde_json::Value>, String> {
     let config = load_config_with_timeout().await?;
     let snapshot = client_config_json(&config);
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         snapshot,
         vec!["client config read".to_string()],
     ))
 }
 
 /// Returns a full configuration snapshot for the UI.
-pub async fn get_config_snapshot(config: &Config) -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn get_config_snapshot(config: &Config) -> Result<Outcome<serde_json::Value>, String> {
     let snapshot = snapshot_config_json(config)?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         snapshot,
         vec![format!(
             "config loaded from {}",
@@ -139,13 +157,13 @@ pub async fn get_config_snapshot(config: &Config) -> Result<RpcOutcome<serde_jso
 }
 
 /// Loads the configuration from disk and returns a snapshot.
-pub async fn load_and_get_config_snapshot() -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn load_and_get_config_snapshot() -> Result<Outcome<serde_json::Value>, String> {
     let config = load_config_with_timeout().await?;
     get_config_snapshot(&config).await
 }
 
 /// Reads dashboard settings exposed to the desktop UI.
-pub async fn get_dashboard_settings() -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn get_dashboard_settings() -> Result<Outcome<serde_json::Value>, String> {
     let request_id = uuid::Uuid::new_v4().to_string();
     tracing::debug!(
         target: "openhuman_core::config",
@@ -195,7 +213,7 @@ pub async fn get_dashboard_settings() -> Result<RpcOutcome<serde_json::Value>, S
         method = "openhuman.config_get_dashboard_settings",
         "OPENHUMAN: get_dashboard_settings exit"
     );
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         result,
         vec!["dashboard settings read".to_string()],
     ))

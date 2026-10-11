@@ -4,14 +4,15 @@ import AppRoutesIOS from './AppRoutesIOS';
 import DefaultRedirect from './components/DefaultRedirect';
 import ProtectedRoute from './components/ProtectedRoute';
 import PublicRoute from './components/PublicRoute';
+import BrainRedirect from './components/routing/BrainRedirect';
 import ForwardSearch from './components/routing/ForwardSearch';
 import HumanPage from './features/human/HumanPage';
 import { getIsMobile } from './lib/platform';
 import Accounts from './pages/Accounts';
 import Activity from './pages/Activity';
-import Brain from './pages/Brain';
 import AgentInsightsPreview from './pages/dev/AgentInsightsPreview';
 import AssistantUiDemoPage from './pages/dev/assistant-ui-demo';
+import ToolCallGallery from './pages/dev/ToolCallGallery';
 import UiGallery from './pages/dev/UiGallery';
 import FlowCanvasPage, { FlowCanvasDraftPage } from './pages/FlowCanvasPage';
 import FlowsPage from './pages/FlowsPage';
@@ -87,16 +88,9 @@ const AppRoutes = ({ location }: AppRoutesProps = {}) => {
         }
       />
 
-      {/* Brain — the centerpiece memory knowledge-graph surface, reached from
-          the raised center button in the bottom bar. Full-page, graph-only. */}
-      <Route
-        path="/brain"
-        element={
-          <ProtectedRoute requireAuth={true}>
-            <Brain />
-          </ProtectedRoute>
-        }
-      />
+      {/* Back-compat: Brain moved under Connections → Integrations → Brain.
+          BrainRedirect remaps its old `?tab=` sub-tab to `?brain=`. */}
+      <Route path="/brain" element={<BrainRedirect />} />
 
       {/* Workflows — the `flows::` domain's discoverable list hub (issue
           B5a) plus the read-only Workflow Canvas (issue B5b.1) at
@@ -138,9 +132,10 @@ const AppRoutes = ({ location }: AppRoutesProps = {}) => {
         }
       />
 
-      {/* Back-compat: /activity and /intelligence → settings notifications page. */}
-      <Route path="/activity" element={<Navigate to="/settings/notifications" replace />} />
-      <Route path="/intelligence" element={<Navigate to="/settings/notifications" replace />} />
+      {/* Back-compat: /activity and /intelligence used to land on the settings
+          Notifications page; that page is gone, so they land on Account. */}
+      <Route path="/activity" element={<Navigate to="/settings/account" replace />} />
+      <Route path="/intelligence" element={<Navigate to="/settings/account" replace />} />
 
       {/* Connections page lives at /connections (Phase 2 rename from /skills).
           The old /skills path is kept as a back-compat redirect so bookmarks
@@ -259,6 +254,9 @@ const AppRoutes = ({ location }: AppRoutesProps = {}) => {
 
           {/* Gallery of every shared UI primitive, in the active theme. */}
           <Route path="/dev/ui" element={<UiGallery />} />
+
+          {/* Tool-call presentation: every state and the whole core catalog. */}
+          <Route path="/dev/tools" element={<ToolCallGallery />} />
 
           {/* The upstream assistant-ui `base` demo on a mock runtime. */}
           <Route path="/dev/assistant-ui" element={<AssistantUiDemoPage />} />

@@ -1,8 +1,8 @@
 //! Paginated projection of a thread's settled transcript.
 
 use super::support::{counts, envelope, workspace_dir};
-use crate::memory::{ApiEnvelope, PaginationMeta};
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
+use crate::threads::{ApiEnvelope, PaginationMeta};
 
 /// Request for [`transcript_get`]: the thread to project, plus newest-first
 /// pagination controls. `cursor` is the opaque token from a prior page's
@@ -21,13 +21,13 @@ pub struct TranscriptGetRequest {
 /// `hasTranscript: false` when the thread has no persisted transcript yet.
 pub async fn transcript_get(
     request: TranscriptGetRequest,
-) -> Result<RpcOutcome<ApiEnvelope<crate::threads::transcript_view::TranscriptPage>>, String> {
+) -> Result<Outcome<ApiEnvelope<tinyagents_session::transcript::view::TranscriptPage>>, String> {
     let dir = workspace_dir().await?;
     let thread_id = request.thread_id.trim();
     if thread_id.is_empty() {
         return Err("thread_id is required".to_string());
     }
-    let page = crate::threads::transcript_view::get_page(
+    let page = tinyagents_session::transcript::view::get_page(
         &dir,
         thread_id,
         request.cursor.as_deref(),
@@ -41,7 +41,7 @@ pub async fn transcript_get(
     let pagination = Some(PaginationMeta {
         limit: request
             .limit
-            .unwrap_or(crate::threads::transcript_view::DEFAULT_LIMIT),
+            .unwrap_or(tinyagents_session::transcript::view::DEFAULT_LIMIT),
         offset: request
             .cursor
             .as_deref()

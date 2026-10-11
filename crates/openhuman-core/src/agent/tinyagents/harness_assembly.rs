@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use tinyagents_harness::cache::InMemoryResponseCache;
 use tinyagents_harness::middleware::{
-    BudgetLimits, BudgetMiddleware, ContextCompressionMiddleware, PromptCacheGuardMiddleware,
-    ToolPolicyMiddleware as TaToolPolicyMiddleware,
+    plan_mode_middleware, ApprovalGateMiddleware, ArgRecoveryMiddleware, BudgetLimits,
+    BudgetMiddleware, ContextCompressionMiddleware, PromptCacheGuardMiddleware,
+    RepeatProgressMiddleware, RunModeHandle, ToolPolicyMiddleware as TaToolPolicyMiddleware,
 };
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::steering::SteeringHandle;
@@ -15,13 +16,13 @@ use tinyagents_registry::{CapabilityRegistry, RegistryDiagnostic, RegistrySnapsh
 use tinyinference_llm::model::CapabilitySet;
 use tokio::sync::mpsc::Sender;
 
-use crate::agent::harness::tool_result_artifacts::ToolResultArtifactIndexStore;
 use crate::agent::progress::AgentProgress;
 use crate::agent::tinyagents::harness_context_ladder::install_context_ladder;
 use crate::agent::tinyagents::harness_tool_registration::register_turn_tools_and_agents;
 use crate::agent::tinyagents::host::steering;
 use crate::agent::tinyagents::host::OpenHumanRunContext;
 use crate::agent::tinyagents::middleware::{self, TurnContextMiddleware};
+use crate::agent::tinyagents::model::{ErrorSlotModel, TurnChatModel};
 use crate::agent::tinyagents::observability::{
     IterationCursor, ProviderUsageCarry, SubagentScope, ToolFailureMap, ToolNameMap,
 };
@@ -30,76 +31,15 @@ use crate::agent::tinyagents::stop_hooks;
 use crate::agent::tinyagents::tools::EarlyExitHook;
 use crate::agent::tinyagents::turn_models::TurnModels;
 use crate::agent::tinyagents::turn_outcome::{HaltSummarySlot, ToolOutcomeSink};
-use crate::agent::tinyagents::turn_policy::{run_policy_for, REPEATED_TOOL_FAILURE_THRESHOLD};
+use crate::agent::tinyagents::turn_policy::{
+    run_policy_for_provider, REPEATED_TOOL_FAILURE_THRESHOLD,
+};
+use crate::agent::tinyagents::verify_before_finish;
+use tinyagents_harness::store::InMemoryStore as ToolResultArtifactIndexStore;
 
 use super::ToolPolicyEnforcement;
-
-/// Everything [`assemble_turn_harness`] wires up for one turn: the configured
-/// harness plus the shared slots/handles the run loop reads after the drive
-/// future returns.
-pub(super) struct AssembledTurnHarness {
-    /// The fully assembled harness: model, tools, and middleware registered in
-    /// the intended order.
-    pub(super) harness: AgentHarness<(), OpenHumanRunContext>,
-    /// Shared 1-based model-call cursor (event bridge advances, model adapter
-    /// reads for out-of-band thinking attribution).
-    pub(super) cursor: IterationCursor,
-    /// Shared `call_id → tool_name` map: the model adapter's `ThinkingForwarder`
-    /// writes it on tool-call start; the event bridge reads it to label the
-    /// tool-argument fragments it now projects off the crate stream.
-    pub(super) tool_names: ToolNameMap,
-    /// Shared `call_id → (success, failure, elapsed_ms, output_chars)`
-    /// side-channel: the tool-outcome capture middleware classifies each outcome
-    /// + records its duration/output size; the event bridge reads it to project
-    ///
-    /// Real success + a user-facing failure + timing onto `ToolCallCompleted`.
-    pub(super) failure_map: ToolFailureMap,
-    /// Shared FIFO carry of per-call provider `UsageInfo` (charged USD + context
-    /// window): the model adapter pushes, the event bridge pops when recording
-    /// usage — restores charged-USD precedence on the tinyagents path (#4467).
-    pub(super) provider_usage_carry: ProviderUsageCarry,
-    /// Recovers the original (downcastable) provider error on run failure.
-    pub(super) error_slot: crate::agent::tinyagents::model::ModelErrorSlot,
-    /// Root-cause summary recorded by the repeated-tool-failure breaker.
-    pub(super) halt_summary: HaltSummarySlot,
-    /// Per-call tool success/content capture for honest `ToolCallRecord`s.
-    pub(super) tool_outcome_sink: ToolOutcomeSink,
-    /// The shared steering handle (mid-flight steer, early-exit, cap, stop-hook
-    /// pauses).
-    pub(super) handle: Option<SteeringHandle>,
-    /// Records the first early-exit tool round, when early-exit tools exist.
-    pub(super) early_exit_hook: Option<EarlyExitHook>,
-    /// Set by [`FinalCallWrapUpMiddleware`] when it turned the last permitted
-    /// model call into the turn's conclusion (issue #6014). `None` when the
-    /// middleware is not installed (a run that does not pause at its cap).
-    ///
-    /// A flag rather than an inference off the run, because this turn now ends
-    /// the way a finished one does — the model returns text and requests no
-    /// tools — so `final_response.is_none()` no longer tells the two apart.
-    pub(super) wrap_up_fired: Option<Arc<std::sync::atomic::AtomicBool>>,
-    /// Number of callable tools registered.
-    pub(super) tool_count: usize,
-    /// TinyAgents named-capability projection for this turn. The live run still
-    /// uses the harness registries above; this snapshot makes the projected
-    /// model/tool/graph inventory inspectable without changing dispatch.
-    pub(super) registry_snapshot: RegistrySnapshot,
-    /// Health diagnostics from the projected registry.
-    pub(super) registry_diagnostics: Vec<RegistryDiagnostic>,
-    /// TinyAgents store index for OpenHuman action-dir tool-result artifacts.
-    pub(super) tool_result_artifact_index: Option<Arc<ToolResultArtifactIndexStore>>,
-    /// Concrete handle to the installed [`ContextCompressionMiddleware`], when the
-    /// summarization step is active. Drained after the run to surface each
-    /// compaction's [`CompressionProvenance`][tinyagents_harness::summarization::CompressionProvenance]
-    /// (source ids + before/after token estimates) via the observability path.
-    pub(super) compression_mw: Option<Arc<ContextCompressionMiddleware>>,
-    /// Crate prompt-cache guard (issue #4249, 03.2). Records a `CacheLayoutEvent`
-    /// whenever the cacheable prompt prefix (system prompt + tool set) changes
-    /// across model calls. Drained after the run and surfaced via
-    /// [`observability::surface_cache_layout_events`](crate::agent::tinyagents::observability::surface_cache_layout_events) —
-    /// the crate-native replacement for the deleted `CacheAlignMiddleware`
-    /// warn-log (C3).
-    pub(super) prompt_cache_guard: Arc<PromptCacheGuardMiddleware>,
-}
+mod assembled;
+pub(super) use assembled::AssembledTurnHarness;
 
 /// Assemble the turn harness for [`run_turn_via_tinyagents_shared`](super::run_turn_via_tinyagents_shared):
 /// register the provider model, every shared tool, and the full middleware
@@ -135,6 +75,29 @@ pub(super) fn assemble_turn_harness(
     // The dialect the session composed its prompt for; see
     // `OpenHumanRunContext::tool_dialect`.
     tool_dialect: tinyagents_harness::config::ToolDispatcher,
+    // Session-deferred tools (`OpenHumanRunContext::deferred_tool_names`):
+    // registered as `Deferred` whatever their own exposure says.
+    session_deferred: Arc<HashSet<String>>,
+    // Live per-thread Plan/Build mode handle (`agent::tinyagents::run_mode`).
+    // `Some` installs `PlanModeMiddleware`, which hides/denies side-effecting
+    // tools while the thread is in `RunMode::Plan` — flipped without
+    // restarting the run by `plan_exit` or the `agent.set_run_mode` RPC.
+    // `None` for a caller with no thread identity (a sub-agent child, most
+    // notably), which never runs in plan mode.
+    run_mode: Option<RunModeHandle>,
+    // The turn's reasoning choice (`reasoning::turn_reasoning_for`), attached
+    // to every model request this harness builds.
+    reasoning: Option<tinyinference_llm::model::ReasoningConfig>,
+    // Whether this turn runs on a chat thread (`OpenHumanRunContext::thread_id`
+    // is `Some`). The per-thread `goal_*` tools resolve their target from the
+    // run's thread, so a thread-less turn (a headless `inference_agent_chat`
+    // without a `thread_id`) is not offered them at all (issue #6956).
+    has_thread: bool,
+    // This turn's memory binding (`OpenHumanRunContext::memory_turn`): the
+    // compaction summarizer recalls under it. `None` leaves compaction
+    // memory-free.
+    memory_turn: Option<Arc<crate::memory::lifecycle::hooks::MemoryTurn>>,
+    tool_rules: Option<Arc<tinyagents_harness::tool::ToolRulePolicy>>, // `OpenHumanRunContext::tool_rules`
 ) -> AssembledTurnHarness {
     let mut harness: AgentHarness<(), OpenHumanRunContext> = AgentHarness::new();
     // Cross-route fallback ownership (issue #4249, Workstream 02.2): populate the
@@ -144,7 +107,11 @@ pub(super) fn assemble_turn_harness(
     // to a single attempt (see `run_policy_for`) — fallback and retry are
     // independent knobs, and only fallback is enabled here because `ReliableProvider`
     // (still wrapped) does not fail over across the registered tier routes.
-    let mut policy = run_policy_for(max_iterations, deterministic_cacheable);
+    let mut policy = run_policy_for_provider(
+        max_iterations,
+        deterministic_cacheable,
+        turn_models.is_local(),
+    );
     let route_fallback = routes::route_fallback_policy(model);
     policy.fallback = route_fallback.clone();
     // Tool discovery: the harness advertises its `tool_search` bridge over the
@@ -153,12 +120,14 @@ pub(super) fn assemble_turn_harness(
     policy.discovery = super::discovery::discovery_policy();
 
     policy.tool_dialect = tool_dialect;
+    policy.default_reasoning = reasoning;
     // The session composes its prompt for this same dialect: `ToolsSection`
     // renders the protocol block and the catalogue of the visible tools into
     // the system prompt (inside the cacheable prefix, counted by
     // `prompt-size`). Without this the harness appended a second copy of
     // both on every text-dialect call.
     policy.host_renders_tool_catalogue = true;
+    crate::tools::rules::install_turn_rules(&mut policy, tool_rules);
     tracing::debug!(
         model,
         ?tool_dialect,
@@ -170,6 +139,7 @@ pub(super) fn assemble_turn_harness(
         "[models] assembling turn harness with SDK retry/fallback policy"
     );
     harness.with_policy(policy);
+    crate::tools::timeout::install_harness_tool_timeouts(&mut harness);
     // Deterministic internal runs (summarizer/triage/memory-scoring style) may
     // reuse a prior identical model response; attach an in-memory response cache
     // so the agent loop can short-circuit a recurring provider call and emit
@@ -189,7 +159,7 @@ pub(super) fn assemble_turn_harness(
     // tool-call start (the crate `ToolDelta` carries none), the bridge reads it
     // to label the argument fragments now streamed via `MessageDelta.tool_call`.
     let tool_names: ToolNameMap = Arc::default();
-    // Shared FIFO carry of per-call provider `UsageInfo`: `UsageCarryMiddleware`
+    // Shared FIFO carry of per-call provider `BilledUsage`: `UsageCarryMiddleware`
     // pushes each response's usage (charged USD + context window +
     // cache-creation/reasoning tokens, read off the response via G1), the event
     // bridge pops it when recording that call's usage (#4467, item 1). The carry
@@ -208,6 +178,17 @@ pub(super) fn assemble_turn_harness(
         // caller before dispatch, not by harness assembly.
         ..
     } = turn_models;
+    // A non-hosted run owns its registry, so its models record into the run's
+    // error slot (#6724). A hosted root shares its runtime registry with its
+    // sub-agents; there only the resolver's lead model records.
+    let slotted = |model: TurnChatModel| -> TurnChatModel {
+        if hosted_security_gate {
+            model
+        } else {
+            Arc::new(ErrorSlotModel::new(model, error_slot.clone()))
+        }
+    };
+    let primary = slotted(primary);
     capability_registry.replace_model(model, primary.clone());
     harness
         .register_model(model, primary)
@@ -220,12 +201,13 @@ pub(super) fn assemble_turn_harness(
     // fallback/selection (02.2) chooses among the routes. `build_turn_models`
     // already skipped the turn's own model, so we don't shadow the default.
     for (name, route_model) in routes {
+        let route_model = slotted(route_model);
         capability_registry.replace_model(name.as_str(), route_model.clone());
         harness.register_model(name, route_model);
     }
 
     // Cost usage capture (issue #4249, Phase 5): feed the event bridge's usage
-    // carry from a wrap-model middleware that reads the full `UsageInfo` off each
+    // carry from a wrap-model middleware that reads the full `BilledUsage` off each
     // response, instead of every `native model adapter` pushing it. Installed
     // unconditionally — usage flows on every turn — and shares the same carry the
     // bridge drains on `UsageRecorded`.
@@ -264,6 +246,7 @@ pub(super) fn assemble_turn_harness(
 
     // Capture context settings before `install` consumes `context_mw`.
     let autocompact_enabled = context_mw.autocompact_enabled;
+    let compaction = context_mw.compaction;
     // Captured for the same reason `autocompact_enabled` is — `install` consumes
     // `context_mw` — and used to site microcompact below, after compression.
     let microcompact_keep_recent = context_mw.microcompact_keep_recent;
@@ -272,13 +255,6 @@ pub(super) fn assemble_turn_harness(
         .as_ref()
         .map(|_| Arc::new(ToolResultArtifactIndexStore::new()));
 
-    // The explicit run carrier supplies the stop hooks; no middleware needs to
-    // recover policy from a task-local while the harness is driving.
-    let stop_hooks_installed = stop_hooks;
-
-    // A single steering handle drives mid-flight steering (run queue), the
-    // early-exit pause, the model-call-cap pause, and stop-hook pauses, so they
-    // all reach the same loop. Created when any of them is active.
     // A steering handle is always created now: besides run-queue steering, the
     // early-exit / cap / stop-hook pauses, the repeated-tool-failure breaker
     // (below) also pauses through it, and it wants to fire on every path
@@ -299,61 +275,59 @@ pub(super) fn assemble_turn_harness(
     // Shared by the two breakers below: whichever halts writes the root cause here.
     let halt_summary: HaltSummarySlot = std::sync::Arc::new(std::sync::Mutex::new(None));
 
-    // Repeat-progress breaker (issue #4463, restoring #4088 / #4095): the failure
-    // breaker below resets on every success, so a model looping on a *successful*
-    // no-op tool or re-emitting an identical narration+call never trips it. This
-    // guard halts on identical successful `(tool, args)` batches / identical
-    // outputs, and on one call returning the identical result again with other
-    // calls in between (#6275), sharing the same halt-summary slot + steering
-    // handle. Polling tools (`wait_subagent`) stay exempt.
+    // Repeat-progress breaker (#4463, restoring #4088/#4095): the failure
+    // breaker resets on success, so it misses successful no-op loops and repeated
+    // narration+call batches. This guard catches identical successful calls or
+    // outputs, including repeats with other calls between them (#6275). Polling
+    // tools (`wait_subagent`) stay exempt.
     //
     // Pushed first / outermost: `after_tool` runs in reverse registration order,
     // so this guard fingerprints a result only after every other middleware
     // (byte cap, summarizer, memory-protocol note) has finished rewriting it,
     // i.e. exactly what the model sees. Registered any later, a result whose
     // visible note changed between calls would count as identical.
+    // Classified read-only tools are the guard's read-only set.
+    let read_only_tools: HashSet<String> = tool_sets
+        .iter()
+        .flat_map(|set| set.iter())
+        .filter(|t| t.policy().classified && t.policy().side_effects.read_only)
+        .map(|t| t.name().to_string())
+        .collect();
     let repeat_progress = handle.as_ref().map(|handle| {
-        Arc::new(middleware::RepeatProgressMiddleware::new(
-            handle.clone(),
-            halt_summary.clone(),
-        ))
+        Arc::new(
+            RepeatProgressMiddleware::new(
+                handle.clone(),
+                halt_summary.clone(),
+                Arc::new(middleware::is_repeat_call_exempt),
+            )
+            .with_read_only(Arc::new(move |name: &str| read_only_tools.contains(name)))
+            .with_cleared_placeholder(crate::agent::context::CLEARED_PLACEHOLDER),
+        )
     });
+    // Time awareness (#6953); before the repeat guard so its notes land last.
+    let shell_turn_budget = middleware::install_time_notes(&mut harness);
     if let Some(mw) = &repeat_progress {
         harness.push_middleware(mw.clone());
     }
 
-    // Memory protocol (issue #4116): observe the read → dedupe → write →
-    // update-index cycle and append a corrective note when a write skips the
-    // dedupe read or leaves the index stale. Pushed ahead of every other
-    // result-rewriting middleware so its `after_tool` runs *after* the byte-cap
-    // truncation, keeping the note.
-    harness.push_middleware(Arc::new(middleware::MemoryProtocolMiddleware::new()));
-
-    // Repeated-failure circuit breaker: pause the run when a tool returns the same
-    // error `REPEATED_TOOL_FAILURE_THRESHOLD` times in a row, so a deterministic
-    // security/approval denial or terminal tool error surfaces its root cause
-    // instead of burning the whole iteration budget (legacy ProgressGuard parity).
-    if let Some(handle) = &handle {
-        harness.push_middleware(Arc::new(middleware::RepeatedToolFailureMiddleware::new(
-            handle.clone(),
-            REPEATED_TOOL_FAILURE_THRESHOLD,
-            halt_summary.clone(),
-        )));
+    // Repeated failures stop the run using each tool's declared side effects.
+    let repeated_failure = handle.as_ref().map(|handle| {
+        let (t, halt) = (REPEATED_TOOL_FAILURE_THRESHOLD, halt_summary.clone());
+        let mw = middleware::RepeatedToolFailureMiddleware::new(handle.clone(), t, halt);
+        Arc::new(mw.with_tool_facts(middleware::tool_sets_lookup(tool_sets.clone())))
+    });
+    if let Some(mw) = &repeated_failure {
+        harness.push_middleware(mw.clone());
     }
 
-    // Policy-driven stop hooks (budget cap, thread-goal budget, ad-hoc iteration
-    // ceiling): fire after each model call and pause the run on the first stop
-    // vote. Replaces the legacy tool-call-loop firing point.
-    if let Some(handle) = &handle {
-        if !stop_hooks_installed.is_empty() {
-            harness.push_middleware(Arc::new(stop_hooks::StopHookMiddleware::new(
-                handle.clone(),
-                model,
-                max_iterations,
-                stop_hooks_installed,
-            )));
-        }
-    }
+    stop_hooks::install(
+        &mut harness,
+        handle.as_ref(),
+        model,
+        max_iterations,
+        stop_hooks,
+        halt_summary.clone(),
+    );
     let early_exit_set: HashSet<&str> = early_exit_tools.iter().copied().collect();
     // One hook per run, shared by every early-exit adapter (records the first
     // early-exit and pauses). Requires the steering handle.
@@ -372,6 +346,8 @@ pub(super) fn assemble_turn_harness(
             &early_exit_set,
             early_exit_hook.as_ref(),
             is_subagent_run,
+            has_thread,
+            &session_deferred,
         );
 
     // SHADOW tool-exposure layer (issue #4249, 01.3 — dynamic exposure). Compose
@@ -409,17 +385,13 @@ pub(super) fn assemble_turn_harness(
         ),
     ));
 
-    // Prompt-cache prefix protection (issue #4249, 03.2). First declare the turn's
-    // stable prefix (system prompt + tool schemas) as `PromptSegment`s, then let
-    // the crate `PromptCacheGuardMiddleware` diff the cacheable prefix across model
-    // calls and record a `CacheLayoutEvent` when volatile content busts it.
-    // `before_model` hooks run in registration order, so the segment stamper must
-    // precede the guard; both run before the context middlewares below (they only
-    // touch the volatile tail / tool bodies, never the stable prefix). The guard is
-    // returned so the run loop can drain its events into the observability bridge —
-    // the crate-native replacement for the deleted `CacheAlignMiddleware` warn-log
-    // (C3: the warn-only shadow is gone; this guard is the sole owner).
-    harness.push_middleware(Arc::new(middleware::PromptCacheSegmentMiddleware));
+    // Prompt-cache prefix protection (issue #4249, 03.2). The vendor loop owns
+    // the stable-prefix layout (`PromptSegment`s built from the session's frozen
+    // system prefix, `frozen_system_prefix_len`); the crate
+    // `PromptCacheGuardMiddleware` diffs the cacheable prefix across model calls
+    // and records a `CacheLayoutEvent` when volatile content busts it. The guard
+    // is returned so the run loop can drain its events into the observability
+    // bridge.
     let prompt_cache_guard = Arc::new(PromptCacheGuardMiddleware::new());
     harness.push_middleware(prompt_cache_guard.clone());
 
@@ -451,7 +423,41 @@ pub(super) fn assemble_turn_harness(
     )));
 
     let tool_policies = harness.tools().policies();
-    context_mw.install(&mut harness, tool_policies);
+    let summary_focus_tools = harness
+        .tools()
+        .schemas()
+        .into_iter()
+        .chain(harness.tools().deferred_schemas())
+        .filter(|schema| {
+            crate::inference::tokenjuice::focus::declares_summary_focus(&schema.parameters)
+        })
+        .map(|schema| schema.name)
+        .collect();
+    context_mw.install(&mut harness, tool_policies, summary_focus_tools);
+
+    // Plan mode (issue: plan-mode approvals). `run_mode` is `Some` only for a
+    // turn with a thread identity (chat, not a sub-agent child); the
+    // middleware itself is a no-op whenever the live handle reads
+    // `RunMode::Build`, so pushing it unconditionally for those turns is
+    // cheap and lets a mid-run `plan_exit`/`agent.set_run_mode` flip take
+    // effect on the very next tool exposure or execution check. `.allow(..)`
+    // keeps plan-mode-specific and session-bookkeeping tools reachable while
+    // planning even though they are not (or should not be gated as)
+    // side-effect-free: `plan_exit` (the hand-off signal itself),
+    // `request_plan_review` (the review gate IS the consent surface), the
+    // session `todo` list, and the per-thread `goal_*` tools.
+    if let Some(mode) = run_mode {
+        harness.push_middleware(Arc::new(
+            plan_mode_middleware(mode, harness.tools().policies()).allow([
+                "plan_exit",
+                "request_plan_review",
+                "todo",
+                "goal_set",
+                "goal_get",
+                "goal_complete",
+            ]),
+        ));
+    }
 
     // Observe-only crate `BudgetMiddleware` (W2-budget-dedupe / workstream 06).
     // Installed with empty `BudgetLimits` so it NEVER enforces or halts: its
@@ -506,12 +512,35 @@ pub(super) fn assemble_turn_harness(
         model,
         context_window,
         autocompact_enabled,
+        compaction.trigger_tokens,
+        compaction.strategy,
         microcompact_keep_recent,
         summarizer_model,
         pause_at_cap && subagent_scope.is_none(),
         &tool_outcome_sink,
+        memory_turn,
     );
+    let is_subagent = subagent_scope.is_some();
+    let agent_id = tool_policy.as_ref().map(|p| p.agent_definition_id.as_str());
+    let turn_wall_clock_ms = harness.policy().limits.max_wall_clock_ms;
+    verify_before_finish::install(
+        &mut harness,
+        is_subagent,
+        agent_id,
+        &wrap_up_fired,
+        turn_wall_clock_ms,
+    );
+    // The rungs above all *tell* the turn to produce its deliverable; this one
+    // looks, on the same scope as the requirements check.
+    middleware::install_unmet_deliverable(&mut harness, is_subagent, agent_id);
 
+    // Direct web lookup is bounded. Once enough search/fetch results have
+    // returned, the web tools leave the request so the run works with what it
+    // has; a run with nothing but web tools answers instead. Sub-agent runs
+    // keep their own budgets and are not narrowed here.
+    if subagent_scope.is_none() {
+        harness.push_middleware(Arc::new(middleware::ResearchBudgetMiddleware::new()));
+    }
     // SDK-owned tool-policy projection (issue #4249 / tinyagents-full-migration
     // 01.1). Keep this narrow for now: enforce sandbox requirements declared by
     // adapter policies without enabling classification/approval/result-byte
@@ -529,8 +558,11 @@ pub(super) fn assemble_turn_harness(
     // an approved call records a terminal audit row. Replaces the inline approval
     // block that used to live in the legacy tool adapter.
     if !hosted_security_gate {
-        harness.push_tool_middleware(Arc::new(middleware::ApprovalSecurityMiddleware::new(
-            tool_sets.clone(),
+        harness.push_tool_middleware(Arc::new(ApprovalGateMiddleware::new(
+            "approval_security",
+            Arc::new(middleware::ApprovalSecurityMiddleware::new(
+                tool_sets.clone(),
+            )),
         )));
     }
 
@@ -571,7 +603,7 @@ pub(super) fn assemble_turn_harness(
     // capture sink can observe the unredacted content — covering the parent,
     // sub-agent, persisted-transcript, and `ToolCallOutcome` surfaces by
     // construction since every path shares this seam.
-    harness.push_tool_middleware(Arc::new(middleware::CredentialScrubMiddleware::new()));
+    harness.push_tool_middleware(Arc::new(middleware::credential_scrub_middleware()));
 
     // Malformed-argument recovery (`before_tool`): repair a call's non-object
     // arguments before the crate's schema gate — decode JSON-encoded-string args
@@ -580,9 +612,10 @@ pub(super) fn assemble_turn_harness(
     // required-field schema is left untouched so the crate's
     // `InvalidArgsPolicy::ReturnToolError` admission path reports the original
     // validation error. It never reaches approval/policy wrappers or the tool.
-    harness.push_middleware(Arc::new(middleware::ArgRecoveryMiddleware::new(
-        tool_sets.clone(),
-    )));
+    harness.push_middleware(Arc::new(ArgRecoveryMiddleware::new(tool_sets.clone())));
+
+    // Clamp shell `timeout_secs` to the turn remainder (#6953), on recovered args.
+    harness.push_middleware(Arc::new(shell_turn_budget.clamp()));
 
     // Bare packed-tool routing (`before_tool`, #6276): a call that names a
     // withheld packed tool directly becomes the `use_skill` call that reaches
@@ -605,7 +638,7 @@ pub(super) fn assemble_turn_harness(
     // observation-only (never mutates the result), so running first in the
     // reverse-order `after_tool` chain is safe — it cannot perturb the
     // summarization/cap or tool-outcome capture layers.
-    let embedder_tool_hooks = crate::agent::hooks::embedder_tool_hooks();
+    let embedder_tool_hooks = crate::agent::hooks::turn_tool_hooks();
     if !embedder_tool_hooks.is_empty() {
         harness.push_middleware(Arc::new(middleware::EmbedderToolHooksMiddleware::new(
             embedder_tool_hooks,
@@ -619,6 +652,16 @@ pub(super) fn assemble_turn_harness(
     if let Some(mw) = &repeat_progress {
         harness.push_middleware(Arc::new(mw.eviction_observer()));
     }
+    // Registered after it: the breaker's corrective nudges ride the next
+    // request only. Anything earlier (notably the transcript snapshot a failed
+    // turn persists) must not see them, or they become durable history (#6725).
+    if let Some(mw) = &repeated_failure {
+        harness.push_middleware(Arc::new(mw.nudge_injector()));
+    }
+    // The turn's memory pack rides every request of the turn, after every
+    // reduction step and after the transcript snapshot, so it is never
+    // compacted, trimmed or persisted (`memory::lifecycle::hooks::pre_turn`).
+    harness.push_middleware(Arc::new(middleware::MemoryPackMiddleware));
 
     AssembledTurnHarness {
         harness,
@@ -640,3 +683,7 @@ pub(super) fn assemble_turn_harness(
         prompt_cache_guard,
     }
 }
+
+#[cfg(test)]
+#[path = "harness_assembly_tests.rs"]
+mod tests;

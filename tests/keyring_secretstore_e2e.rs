@@ -1,3 +1,6 @@
+#[path = "support/env_guard.rs"]
+mod env_guard;
+use env_guard::EnvVarGuard;
 use openhuman_core::config::schema::{Config, StreamMode, TelegramConfig};
 use openhuman_core::security::keyring;
 use std::sync::OnceLock;
@@ -9,42 +12,6 @@ async fn env_lock() -> tokio::sync::MutexGuard<'static, ()> {
         .await
 }
 
-struct EnvGuard {
-    key: &'static str,
-    previous: Option<std::ffi::OsString>,
-}
-
-impl EnvGuard {
-    fn set(key: &'static str, value: &std::path::Path) -> Self {
-        let previous = std::env::var_os(key);
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, previous }
-    }
-
-    fn set_str(key: &'static str, value: &'static str) -> Self {
-        let previous = std::env::var_os(key);
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        match self.previous.take() {
-            Some(value) => unsafe {
-                std::env::set_var(self.key, value);
-            },
-            None => unsafe {
-                std::env::remove_var(self.key);
-            },
-        }
-    }
-}
-
 #[tokio::test]
 async fn config_secrets_roundtrip_via_keyring_backed_master_key_migration() {
     let _guard = env_lock().await;
@@ -53,8 +20,8 @@ async fn config_secrets_roundtrip_via_keyring_backed_master_key_migration() {
     let workspace_dir = openhuman_dir.join("workspace");
     std::fs::create_dir_all(&workspace_dir).expect("workspace dir");
 
-    let _keyring_backend = EnvGuard::set_str("OPENHUMAN_KEYRING_BACKEND", "file");
-    let _workspace_override = EnvGuard::set("OPENHUMAN_WORKSPACE", &openhuman_dir);
+    let _keyring_backend = EnvVarGuard::set("OPENHUMAN_KEYRING_BACKEND", "file");
+    let _workspace_override = EnvVarGuard::set("OPENHUMAN_WORKSPACE", &openhuman_dir);
     keyring::init_workspace(&workspace_dir);
 
     let legacy_key_path = openhuman_dir.join(".secret_key");
@@ -70,9 +37,8 @@ async fn config_secrets_roundtrip_via_keyring_backed_master_key_migration() {
         workspace_dir: workspace_dir.clone(),
         api_key: Some("sk-direct-secret".into()),
         search: openhuman_core::config::schema::SearchConfig {
-            parallel: openhuman_core::config::schema::SearchEngineCredentials {
-                api_key: Some("parallel-secret".into()),
-                ..Default::default()
+            brave: openhuman_core::config::schema::SearchEngineCredentials {
+                api_key: Some("brave-secret".into()),
             },
             ..Default::default()
         },
@@ -110,7 +76,7 @@ async fn config_secrets_roundtrip_via_keyring_backed_master_key_migration() {
         "config should not contain plaintext api_key"
     );
     assert!(
-        !config_toml.contains("parallel-secret"),
+        !config_toml.contains("brave-secret"),
         "config should not contain plaintext search api key"
     );
     assert!(
@@ -129,10 +95,7 @@ async fn config_secrets_roundtrip_via_keyring_backed_master_key_migration() {
 
     let loaded = Config::load_or_init().await.expect("reload config");
     assert_eq!(loaded.api_key.as_deref(), Some("sk-direct-secret"));
-    assert_eq!(
-        loaded.search.parallel.api_key.as_deref(),
-        Some("parallel-secret")
-    );
+    assert_eq!(loaded.search.brave.api_key.as_deref(), Some("brave-secret"));
     assert_eq!(
         loaded
             .channels_config

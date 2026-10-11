@@ -1,4 +1,5 @@
 import debug from 'debug';
+import { RotateCcw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
@@ -17,12 +18,23 @@ import {
   setPersonaDescription,
   setPersonaDisplayName,
 } from '../../../store/personaSlice';
-import Button from '../../ui/Button';
-import { ToggleGroupItem, ToggleGroupRoot } from '../../ui/ToggleGroup';
-import { SettingsRow, SettingsSection, SettingsTextArea, SettingsTextField } from '../controls';
-import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  Card,
+  Field,
+  TextArea,
+  TextField,
+  ToggleGroupItem,
+  ToggleGroupRoot,
+} from '../../ui';
 import SettingsPanel from '../layout/SettingsPanel';
 import PersonaGuidedFields from './persona/PersonaGuidedFields';
+import PersonaTemplatePicker from './persona/PersonaTemplatePicker';
+
+const SEGMENT_CLASS =
+  'h-auto px-2.5 py-1 text-xs font-medium data-[state=on]:bg-primary-500 data-[state=on]:text-content-inverted';
 
 type SoulMode = 'guided' | 'advanced';
 
@@ -36,7 +48,6 @@ interface PersonaPanelProps {
 
 const PersonaPanel = ({ embedded = false }: PersonaPanelProps) => {
   const { t } = useT();
-  const { navigateToSettings } = useSettingsNavigation();
   const dispatch = useAppDispatch();
 
   const storedDisplayName = useAppSelector(selectPersonaDisplayName);
@@ -141,16 +152,34 @@ const PersonaPanel = ({ embedded = false }: PersonaPanelProps) => {
     }
   };
 
+  const dirty = identityDirty || soulDirty;
+
+  // One save for the whole page. Identity lives in the store and the character
+  // in SOUL.md on disk, but to the user it is one form; two Save buttons in two
+  // cards made it easy to save half an edit.
+  const onSaveAll = async () => {
+    if (identityDirty) onSaveIdentity();
+    if (soulDirty) await onSaveSoul();
+  };
+
+  const onDiscard = () => {
+    setNameDraft(storedDisplayName);
+    setDescriptionDraft(storedDescription);
+    setSoulDraft(soulSaved);
+    setSoulError(null);
+  };
+
   const body = (
     <>
-      {/* ── Identity ─────────────────────────────────────────────── */}
-      <SettingsSection title={t('settings.persona.identityHeading')}>
-        <SettingsRow
+      {/* ── 1. Identity: how the assistant is shown in the app ──────────── */}
+      <Card
+        title={t('settings.persona.identityHeading')}
+        description={t('settings.persona.identityDesc')}>
+        <Field
           htmlFor="persona-display-name"
           label={t('settings.persona.displayNameLabel')}
-          stacked
           control={
-            <SettingsTextField
+            <TextField
               id="persona-display-name"
               aria-label={t('settings.persona.displayNameLabel')}
               data-testid="persona-display-name-input"
@@ -158,152 +187,157 @@ const PersonaPanel = ({ embedded = false }: PersonaPanelProps) => {
               maxLength={MAX_PERSONA_DISPLAY_NAME_LEN}
               placeholder={t('settings.persona.displayNamePlaceholder')}
               onChange={e => setNameDraft(e.target.value)}
+              className="w-72"
             />
           }
         />
-        <SettingsRow
+        <Field
           htmlFor="persona-description"
           label={t('settings.persona.descriptionLabel')}
-          stacked
           control={
-            <SettingsTextArea
+            <TextField
               id="persona-description"
               aria-label={t('settings.persona.descriptionLabel')}
               data-testid="persona-description-input"
               value={descriptionDraft}
               maxLength={MAX_PERSONA_DESCRIPTION_LEN}
-              rows={3}
               placeholder={t('settings.persona.descriptionPlaceholder')}
               onChange={e => setDescriptionDraft(e.target.value)}
+              className="w-72"
             />
           }
         />
-        <div className="flex justify-end px-4 py-3">
-          <Button
-            type="button"
-            data-testid="persona-identity-save"
-            variant="primary"
-            size="xs"
-            onClick={onSaveIdentity}
-            disabled={!identityDirty}>
-            {t('common.save')}
-          </Button>
-        </div>
-      </SettingsSection>
-      <p className="text-xs text-content-muted leading-relaxed px-1">
-        {t('settings.persona.identityDesc')}
-      </p>
+      </Card>
 
-      {/* ── Personality (SOUL.md) ────────────────────────────────── */}
-      <SettingsSection title={t('settings.persona.soul.heading')}>
-        {soulLoading ? (
-          <div className="px-4 py-3">
-            <p className="text-sm text-content-muted">{t('common.loading')}</p>
-          </div>
-        ) : (
-          <>
-            <ToggleGroupRoot
-              type="single"
-              value={soulMode}
-              onValueChange={next => {
-                if (next) setSoulMode(next as SoulMode);
-              }}
-              aria-label={t('settings.persona.builder.modeLabel')}
-              variant="secondary"
-              size="xs"
-              className="px-4 pt-3">
-              <ToggleGroupItem value="guided" data-testid="persona-soul-mode-guided">
-                {t('settings.persona.builder.modeGuided')}
-              </ToggleGroupItem>
-              <ToggleGroupItem value="advanced" data-testid="persona-soul-mode-advanced">
-                {t('settings.persona.builder.modeAdvanced')}
-              </ToggleGroupItem>
-            </ToggleGroupRoot>
-            {soulMode === 'guided' ? (
-              <PersonaGuidedFields value={soulDraft} onChange={setSoulDraft} disabled={soulBusy} />
-            ) : (
-              <div className="px-4 py-3">
-                <SettingsTextArea
+      {soulLoading ? (
+        <Card padded>
+          <p className="text-sm text-content-muted">{t('common.loading')}</p>
+        </Card>
+      ) : (
+        <>
+          {/* ── 2. Role: pick a template, or Custom once edited ───────────── */}
+          {soulMode === 'guided' && (
+            <Card
+              title={t('settings.persona.templates.heading')}
+              description={t('settings.persona.templates.desc')}>
+              <div className="p-4">
+                <PersonaTemplatePicker
+                  value={soulDraft}
+                  onChange={setSoulDraft}
+                  disabled={soulBusy}
+                />
+              </div>
+            </Card>
+          )}
+
+          {/* ── 3. Character: the SOUL.md sections, as plain fields ──────── */}
+          <Card
+            title={t('settings.persona.characterHeading')}
+            description={
+              soulMode === 'guided'
+                ? t('settings.persona.builder.intro')
+                : t('settings.persona.characterDesc')
+            }
+            headerRight={
+              <ToggleGroupRoot
+                type="single"
+                value={soulMode}
+                onValueChange={next => {
+                  if (next) setSoulMode(next as SoulMode);
+                }}
+                aria-label={t('settings.persona.builder.modeLabel')}
+                variant="secondary"
+                size="xs"
+                className="overflow-hidden rounded-lg border border-line gap-0 *:rounded-none *:border-0">
+                <ToggleGroupItem
+                  value="guided"
+                  data-testid="persona-soul-mode-guided"
+                  className={SEGMENT_CLASS}>
+                  {t('settings.persona.builder.modeGuided')}
+                </ToggleGroupItem>
+                <ToggleGroupItem
+                  value="advanced"
+                  data-testid="persona-soul-mode-advanced"
+                  className={SEGMENT_CLASS}>
+                  {t('settings.persona.builder.modeAdvanced')}
+                </ToggleGroupItem>
+              </ToggleGroupRoot>
+            }>
+            <div className="p-4">
+              {soulMode === 'guided' ? (
+                <PersonaGuidedFields
+                  value={soulDraft}
+                  onChange={setSoulDraft}
+                  disabled={soulBusy}
+                />
+              ) : (
+                <TextArea
                   aria-label={t('settings.persona.soul.editorLabel')}
                   data-testid="persona-soul-editor"
                   value={soulDraft}
-                  rows={12}
+                  rows={14}
                   spellCheck={false}
                   className="font-mono text-xs leading-relaxed"
                   onChange={e => setSoulDraft(e.target.value)}
                 />
-              </div>
-            )}
-            <div className="flex flex-wrap items-center gap-2 px-4 pb-3">
-              <Button
-                type="button"
-                data-testid="persona-soul-save"
-                variant="primary"
-                size="xs"
-                onClick={() => void onSaveSoul()}
-                disabled={soulBusy || !soulDirty}>
-                {t('common.save')}
-              </Button>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+              <span className="text-[11px] text-content-muted">
+                {soulIsDefault ? (
+                  <span data-testid="persona-soul-default-badge">
+                    {t('settings.persona.soul.usingDefault')}
+                  </span>
+                ) : null}
+              </span>
               <Button
                 type="button"
                 data-testid="persona-soul-reset"
-                variant="secondary"
+                variant="tertiary"
                 size="xs"
+                leadingIcon={<RotateCcw className="h-3.5 w-3.5" aria-hidden />}
                 onClick={() => void onResetSoul()}
                 disabled={soulBusy || soulIsDefault}>
                 {t('settings.persona.soul.reset')}
               </Button>
-              {soulIsDefault && (
-                <span
-                  data-testid="persona-soul-default-badge"
-                  className="text-[11px] text-content-muted">
-                  {t('settings.persona.soul.usingDefault')}
-                </span>
-              )}
             </div>
-          </>
-        )}
-        {soulError && (
-          <p
-            data-testid="persona-soul-error"
-            className="px-4 pb-3 text-xs text-coral-700 dark:text-coral-300">
-            {soulError}
-          </p>
-        )}
-      </SettingsSection>
-      <p className="text-xs text-content-muted leading-relaxed px-1">
-        {t('settings.persona.soul.desc')}
-      </p>
+          </Card>
+        </>
+      )}
 
-      {/* ── Appearance & Voice (handled in Mascot settings) ──────── */}
-      <SettingsSection title={t('settings.persona.appearanceHeading')}>
-        <div className="px-4 py-3">
-          <Button
-            type="button"
-            variant="tertiary"
-            data-testid="persona-open-mascot"
-            onClick={() => navigateToSettings('personality#face')}
-            className="w-full justify-between px-0 text-sm text-content hover:bg-transparent hover:text-primary-700 dark:hover:text-primary-300">
-            <span>{t('settings.persona.openMascotSettings')}</span>
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </Button>
+      {soulError && (
+        <Alert variant="destructive" density="compact" data-testid="persona-soul-error">
+          <AlertDescription>{soulError}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* ── One save bar for the page, shown only with unsaved edits ────── */}
+      {dirty && (
+        <div
+          className="sticky bottom-0 z-10 -mx-1 flex items-center justify-between gap-3 rounded-xl border border-line bg-surface/95 px-4 py-3 shadow-float backdrop-blur"
+          data-testid="persona-save-bar">
+          <span className="text-sm text-content-muted">{t('settings.persona.unsavedChanges')}</span>
+          <div className="flex gap-2">
+            <Button variant="secondary" size="sm" onClick={onDiscard} disabled={soulBusy}>
+              {t('settings.persona.discard')}
+            </Button>
+            <Button
+              size="sm"
+              data-testid="persona-save"
+              onClick={() => void onSaveAll()}
+              disabled={soulBusy}>
+              {t('settings.persona.saveChanges')}
+            </Button>
+          </div>
         </div>
-      </SettingsSection>
-      <p className="text-xs text-content-muted leading-relaxed px-1">
-        {t('settings.persona.appearanceDesc')}
-      </p>
+      )}
     </>
   );
 
-  // Embedded inside the tabbed Personality & Face page: the parent owns the
-  // header AND the page gutter (`SettingsPanel` supplies `p-4` now), so this
-  // renders the body flush — a `p-4` here would indent it twice, and the
-  // sibling Face tab (MascotPanel) is already flush.
+  // Embedded inside another page: the host owns the header and gutter.
   if (embedded) return <div className="space-y-5">{body}</div>;
 
-  return <SettingsPanel>{body}</SettingsPanel>;
+  return <SettingsPanel description={t('settings.personality.menuDesc')}>{body}</SettingsPanel>;
 };
 
 export default PersonaPanel;

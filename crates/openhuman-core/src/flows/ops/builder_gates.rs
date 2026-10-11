@@ -227,7 +227,7 @@ pub(crate) async fn build_builder_proposal(
         ));
     }
 
-    let summary = crate::flows::tools::build_summary(graph);
+    let summary = tinyflows::summary::summarize(graph);
     let mut warnings = graph_trigger_warnings(graph);
     warnings.extend(graph_wiring_warnings(config, graph).await);
     // Connector onboarding (Phase 5, item 18): tell the proposal card which
@@ -377,7 +377,7 @@ pub(crate) fn validate_binding_resolvability(graph: &WorkflowGraph) -> Vec<Strin
 /// checks the custom agent registry and would reject a valid harness agent
 /// as unknown. So this gate defensively (re-)initialises the harness registry
 /// itself, same idempotent (`OnceLock`) idiom as
-/// `memory_goals::enrich::enrich`, before resolving any ref — the two planes
+/// other lazy registry users, before resolving any ref — the two planes
 /// (author-time gate and `OpenHumanAgentRunner::run_agent` at actual run
 /// time) then always see the same registry state. Second, it threads through
 /// to `agent_registry::get_agent`'s underlying config load.
@@ -421,12 +421,12 @@ pub(crate) async fn validate_agent_refs(config: &Config, graph: &WorkflowGraph) 
         }
 
         match route_for_agent_ref(agent_ref) {
-            AgentRoute::Harness => {
+            AgentRoute::Harness | AgentRoute::HostAgent => {
                 tracing::debug!(
                     target: "flows",
                     node = %node.id,
                     %agent_ref,
-                    "[flows] agent-ref check: resolves to a harness agent definition"
+                    "[flows] agent-ref check: resolves to a harness or host agent definition"
                 );
             }
             AgentRoute::RegistryFallback => {

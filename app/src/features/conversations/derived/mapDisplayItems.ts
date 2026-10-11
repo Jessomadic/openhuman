@@ -3,11 +3,10 @@
  * {@link DerivedDisplayItem}s onto the **existing** settled-turn renderer
  * models, keyed by producing `requestId` — the exact shapes
  * `fetchAndHydrateTurnHistory` produces from the legacy `turn_state_history`
- * snapshot ring, so `PastTurnInsights` / `ProcessingTranscriptView` /
- * assistant-ui tool and delegation cards are reused unchanged.
+ * snapshot ring, so `ProcessingTranscriptView` / assistant-ui tool and
+ * delegation cards are reused unchanged.
  *
- * Division of labour (matches how `turnTimelinesByThread` / `PastTurnInsights`
- * anchor today):
+ * Division of labour (matches how `turnTimelinesByThread` anchors today):
  * - **Final assistant text and user text are NOT emitted here** — they stay
  *   rendered from the thread message list (`threads_messages_list`). This
  *   mapper only produces the *process trail* (reasoning, interim narration,
@@ -32,6 +31,8 @@ import type {
 } from '../../../store/chatRuntimeSlice';
 import type {
   DerivedDisplayItem,
+  DerivedSubagent,
+  DerivedSubagentStatus,
   DerivedToolCall,
   DerivedToolCallStatus,
   DerivedToolFailure,
@@ -138,7 +139,8 @@ function stringifyArgs(args: unknown): string | undefined {
  * projects onto the sub-agent transcript (`thinking` / `text` / `tool`) plus a
  * flat `toolCalls` list — exactly what the assistant-ui delegation card reads.
  */
-function buildSubagentActivity(id: string, items: DerivedDisplayItem[]): SubagentActivity {
+function buildSubagentActivity(item: DerivedSubagent): SubagentActivity {
+  const { items } = item;
   const toolCalls: SubagentToolCallEntry[] = [];
   const transcript: SubagentTranscriptItem[] = [];
 
@@ -183,7 +185,47 @@ function buildSubagentActivity(id: string, items: DerivedDisplayItem[]): Subagen
     }
   }
 
-  return { taskId: id, agentId: id, status: 'completed', toolCalls, transcript };
+  return {
+    taskId: item.taskId ?? item.id,
+    agentId: item.agentId ?? item.id,
+    status: subagentActivityStatus(item.status),
+    toolCalls,
+    transcript,
+  };
+}
+
+/** The delegation card's activity status for a settled sub-agent run. An
+ *  older core sent no status; it only ever reported finished runs. */
+function subagentActivityStatus(status: DerivedSubagentStatus | undefined): string {
+  switch (status) {
+    case 'failed':
+      return 'failed';
+    case 'incomplete':
+    case 'interrupted':
+    case 'running':
+      return status;
+    case 'completed':
+    default:
+      return 'completed';
+  }
+}
+
+/** The timeline row status for a settled sub-agent run — the same settling
+ *  rule as a tool row: a run with no terminal record is `cancelled`. */
+function subagentEntryStatus(status: DerivedSubagentStatus | undefined): ToolTimelineEntryStatus {
+  switch (status) {
+    case 'failed':
+      return 'error';
+    // Stopped without a complete answer (timeout or exhausted budget): not a
+    // success, but not a hard failure either, so it settles like a cancel.
+    case 'incomplete':
+    case 'interrupted':
+    case 'running':
+      return 'cancelled';
+    case 'completed':
+    default:
+      return 'success';
+  }
 }
 
 /** Mutable per-turn accumulator. */
@@ -268,6 +310,10 @@ export function mapDisplayItems(
         }
         if (!item.text.trim()) break;
         const turn = ensureTurn(turns, currentRequestId);
+        // Reasoning is projected *before* the message of its step, so the
+        // round must come from the reasoning itself — waiting for the
+        // following assistantMessage filed it under the previous step.
+        if (item.iteration !== undefined) turn.round = item.iteration;
         turn.transcript.push({
           kind: 'thinking',
           round: turn.round,
@@ -283,29 +329,40 @@ export function mapDisplayItems(
           break;
         }
         const turn = ensureTurn(turns, currentRequestId);
+        // A step with no visible narration emits no assistantMessage, so the
+        // call carries its own step number.
+        if (item.iteration !== undefined) turn.round = item.iteration;
         pushToolCall(turn, item);
         break;
       }
 
       case 'subagent': {
-        // Anchor to the turn the sub-agent was spawned in (core-derived
-        // `requestId`), not the current cursor — sub-agent items are appended
-        // after all root items, so the cursor is the last turn by then.
+        // The core places a sub-agent right after its spawning call (or at the
+        // end of its turn), so it arrives in order; its own `requestId` still
+        // wins over the cursor for payloads from an older core, which
+        // appended every sub-agent after all root items.
         const anchorRequestId = item.requestId ?? currentRequestId;
         if (!anchorRequestId || skip.has(anchorRequestId)) {
           if (anchorRequestId) skipped.add(anchorRequestId);
           break;
         }
         const turn = ensureTurn(turns, anchorRequestId);
-        const activity = buildSubagentActivity(item.id, item.items);
-        turn.entries.push({
-          id: `subagent:${item.id}`,
-          name: `subagent:${item.id}`,
-          round: turn.round,
-          seq: turn.seq++,
-          status: 'success',
-          subagent: activity,
-        });
+        const activity = buildSubagentActivity(item);
+        const agentId = activity.agentId;
+        placeSubagentRow(
+          turn,
+          {
+            // `item.id` is unique per run (task id) on a current core; an older
+            // core sends the agent name, so it is still disambiguated per turn.
+            id: uniqueSubagentRowId(turn, item.id),
+            name: `subagent:${agentId}`,
+            round: turn.round,
+            seq: 0,
+            status: subagentEntryStatus(item.status),
+            subagent: activity,
+          },
+          item.callId
+        );
         break;
       }
 
@@ -343,6 +400,71 @@ export function mapDisplayItems(
   );
 
   return { timelines, transcripts, interrupted };
+}
+
+/** Tool names that open a delegation — mirrors `findPendingDelegationContext`. */
+function isDelegationToolName(name: string): boolean {
+  return (
+    name === 'spawn_subagent' || name === 'spawn_async_subagent' || name.startsWith('delegate_')
+  );
+}
+
+/** `subagent:<id>`, disambiguated when one turn delegates to the same agent twice. */
+function uniqueSubagentRowId(turn: TurnAccumulator, agentId: string): string {
+  const base = `subagent:${agentId}`;
+  let id = base;
+  for (let n = 2; turn.callIds.has(id); n += 1) id = `${base}#${n}`;
+  turn.callIds.add(id);
+  return id;
+}
+
+/**
+ * Put a sub-agent row where the live stream puts it: in the slot of the call
+ * that spawned it.
+ *
+ * The projection nests sub-agents as sibling items after every root item (the
+ * transcript records no link from a delegation call to the child's file), so
+ * appending them gave every reopened turn a different shape from the one the
+ * user watched stream: the spawn call rendered as a plain tool card and the
+ * delegation card sat at the bottom of the turn. Children are ordered by spawn
+ * time, and so are the turn's delegation calls, so the Nth child takes the Nth
+ * not-yet-claimed delegation row — its `seq` and its transcript pointer —
+ * exactly as `subagentSpawned` does live. With no such row (an older
+ * transcript, or a spawn outside this turn's page) it is appended as before.
+ */
+function placeSubagentRow(
+  turn: TurnAccumulator,
+  row: ToolTimelineEntry,
+  spawnCallId: string | undefined
+): void {
+  // A current core names the spawning call and has already placed the child
+  // right after it in the stream. An older core names none and appends every
+  // child after all root items, so the Nth child pairs with the Nth unclaimed
+  // delegation row.
+  const spawnIdx = spawnCallId
+    ? turn.entries.findIndex(entry => entry.subagent === undefined && entry.id === spawnCallId)
+    : turn.entries.findIndex(
+        entry => entry.subagent === undefined && isDelegationToolName(entry.name)
+      );
+  const spawn = spawnIdx >= 0 ? turn.entries[spawnIdx] : undefined;
+  // Only a delegation-shaped call is folded into its card, exactly the calls
+  // `findPendingDelegationContext` folds live; any other spawning call (an
+  // agent exposed as a tool) stays a card of its own with the child after it.
+  if (!spawn || !isDelegationToolName(spawn.name)) {
+    turn.entries.push({ ...row, seq: turn.seq++ });
+    return;
+  }
+  turn.entries[spawnIdx] = {
+    ...row,
+    seq: spawn.seq,
+    detail: spawn.detail,
+    sourceToolName: spawn.name,
+    subagent: row.subagent ? { ...row.subagent, prompt: spawn.detail } : row.subagent,
+  };
+  const pointer = turn.transcript.find(
+    item => item.kind === 'toolCall' && item.callId === spawn.id
+  );
+  if (pointer && pointer.kind === 'toolCall') pointer.callId = row.id;
 }
 
 /**
@@ -409,12 +531,12 @@ function pushToolCall(turn: TurnAccumulator, item: DerivedToolCall): void {
   // A failed tool renders its "why / next" explanation via `ToolFailureLines`.
   const failure = toFailureExplanation(item.failure, item.result);
   if (failure) entry.failure = failure;
-  // Derive the human label + detail from tool name + args (the same TS
-  // formatter the live path runs), so settled rows carry `displayName`/`detail`
-  // at parity with `turn_state` rows instead of being unlabelled.
+  // Derive the detail from tool name + args (the same registry the live path
+  // runs). The title is *not* baked into `displayName`: that field carries
+  // only a server label, and a baked title froze its tense at "Reading file"
+  // on a finished row. Surfaces resolve the title at render time.
   const formatted = formatTimelineEntry(entry);
-  entry.displayName = formatted.title;
-  if (formatted.detail !== undefined) entry.detail = formatted.detail;
+  if (entry.detail === undefined && formatted.detail !== undefined) entry.detail = formatted.detail;
   turn.entries.push(entry);
   turn.transcript.push({ kind: 'toolCall', round: turn.round, seq, callId });
 }

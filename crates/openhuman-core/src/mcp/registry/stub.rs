@@ -90,7 +90,7 @@ pub mod oauth {
 
     /// Always errors: no pending-authorization map exists in this build, so a
     /// callback can only be a stale/blind hit. The real function returns the
-    /// same `Err(String)` shape for an unknown state, and its `core/jsonrpc.rs`
+    /// same `Err(String)` shape for an unknown state, and its `openhuman-rpc/src/server/http/oauth_mcp.rs`
     /// caller already renders that as an error page.
     pub async fn complete(_config: &Config, _state: &str, _code: &str) -> Result<String, String> {
         Err(DISABLED_MSG.to_string())

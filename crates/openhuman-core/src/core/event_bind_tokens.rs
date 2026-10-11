@@ -18,7 +18,7 @@
 //!
 //! This module owns only the in-memory store; the RPC handler that mints
 //! tokens lives in `crates/openhuman-core/src/core/dispatch.rs` (the `core.*` namespace),
-//! and the `/events` handler in `crates/openhuman-core/src/core/jsonrpc.rs` consumes them.
+//! and the `/events` handler in `crates/openhuman-rpc/src/server/http/events.rs` consumes them.
 
 use std::collections::HashMap;
 use std::sync::RwLock;

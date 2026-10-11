@@ -9,8 +9,8 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 use crate::core::all;
-use crate::core::jsonrpc::{default_state, invoke_method, parse_json_params};
-use crate::core::logging::CliLogDefault;
+use crate::core::invoke::{default_state, invoke_method};
+use crate::core::params::parse_json_params;
 use crate::core::{ControllerSchema, TypeSchema};
 
 /// The ASCII banner displayed when the CLI starts.
@@ -43,6 +43,44 @@ Contribute & Star us on GitHub: https://github.com/tinyhumansai/openhuman
 /// Returns an error if the command fails, parameters are invalid, or if
 /// the subcommand/namespace is unknown.
 pub fn run_from_cli_args(args: &[String]) -> Result<()> {
+    run_from_cli_args_with(args, None)
+}
+
+/// Whether the parsed invocation only asks the CLI to print help.
+///
+/// Hosts use this before startup work that may access user credentials so
+/// `--help` remains available on a machine whose keyring is unavailable.
+pub(crate) fn is_help_only(args: &[String]) -> bool {
+    let Ok(launch) = parse_launch_options(args) else {
+        return false;
+    };
+    let Some(command) = launch.args.first() else {
+        return true;
+    };
+    if is_help(command) {
+        return true;
+    }
+    let tail = &launch.args[1..];
+    match command.as_str() {
+        "call" | "agent" => tail.is_empty() || tail.iter().any(|arg| is_help(arg)),
+        "mcp" | "mcp-server" | "run" | "serve" | "sentry-test" => {
+            tail.iter().any(|arg| is_help(arg))
+        }
+        _namespace => {
+            matches!(
+                tail,
+                [function, ..] if is_help(function)
+            ) || matches!(tail, [_, slot, ..] if is_help(slot))
+        }
+    }
+}
+
+/// [`run_from_cli_args`] with a host-supplied boot description for `run` /
+/// `serve`; see [`crate::run_core_from_args_with`].
+pub fn run_from_cli_args_with(
+    args: &[String],
+    host_boot: Option<crate::core::server_launcher::HostBoot>,
+) -> Result<()> {
     load_dotenv_for_cli()?;
 
     let launch = parse_launch_options(args)?;
@@ -68,16 +106,12 @@ pub fn run_from_cli_args(args: &[String]) -> Result<()> {
 
     // Match on the first argument to determine the subcommand.
     match args[0].as_str() {
-        "run" | "serve" => run_server_command(&args[1..]),
+        "run" | "serve" => super::cli_serve::run_server_command(&args[1..], host_boot),
         "mcp" | "mcp-server" => crate::mcp::server::run_stdio_from_cli(&args[1..]),
         // Keep the historical names as a migration diagnostic now that the
         // terminal frontend is its own workspace crate and executable.
         "tui" | "chat" => run_moved_tui_diagnostic(),
         "call" => run_call_command(&args[1..]),
-        "tree-summarizer" => {
-            crate::memory::tree::tree_runtime::cli::run_tree_summarizer_command(&args[1..])
-        }
-        "memory" => crate::core::memory_cli::run_memory_command(&args[1..]),
         "agent" => {
             log::debug!(
                 "[cli] dispatching to agent subcommand, args={:?}",
@@ -306,103 +340,6 @@ pub fn load_dotenv_for_cli() -> Result<()> {
     Ok(())
 }
 
-/// Handles the `run` subcommand to start the core HTTP/JSON-RPC server.
-///
-/// This command boots the main application server, including its JSON-RPC
-/// endpoint, Socket.IO bridge, and background services (voice, vision, etc.).
-///
-/// # Arguments
-///
-/// * `args` - Command-line arguments for the `run` command (e.g., `--port`).
-fn run_server_command(args: &[String]) -> Result<()> {
-    let mut port: Option<u16> = None;
-    let mut host: Option<String> = None;
-    let mut socketio_enabled = true;
-    let mut headless_api = false;
-    let mut verbose = false;
-    let log_scope = CliLogDefault::Global;
-    let mut i = 0usize;
-
-    // Manual argument parsing loop for specific flags.
-    while i < args.len() {
-        match args[i].as_str() {
-            "--port" => {
-                let raw = args
-                    .get(i + 1)
-                    .ok_or_else(|| anyhow::anyhow!("missing value for --port"))?;
-                port = Some(
-                    raw.parse::<u16>()
-                        .map_err(|e| anyhow::anyhow!("invalid --port: {e}"))?,
-                );
-                i += 2;
-            }
-            "--host" => {
-                host = Some(
-                    args.get(i + 1)
-                        .ok_or_else(|| anyhow::anyhow!("missing value for --host"))?
-                        .clone(),
-                );
-                i += 2;
-            }
-            "--jsonrpc-only" => {
-                socketio_enabled = false;
-                i += 1;
-            }
-            "--headless-api" => {
-                socketio_enabled = false;
-                headless_api = true;
-                i += 1;
-            }
-            "-v" | "--verbose" => {
-                verbose = true;
-                i += 1;
-            }
-            "-h" | "--help" => {
-                println!("Usage: openhuman run [--host <addr>] [--port <u16>] [--jsonrpc-only|--headless-api] [-v|--verbose]");
-                println!();
-                println!(
-                    "  --host <addr>    Bind address (default: 127.0.0.1 or OPENHUMAN_CORE_HOST)"
-                );
-                println!(
-                    "  --port <u16>     Listen address port (default: 7788 or OPENHUMAN_CORE_PORT)"
-                );
-                println!("  --jsonrpc-only   HTTP JSON-RPC only; disable Socket.IO");
-                println!("  --headless-api   HTTP JSON-RPC only; disable all background services");
-                println!("  -v, --verbose    Shorthand for RUST_LOG=debug when RUST_LOG is unset");
-                println!();
-                println!("Logging: set RUST_LOG (e.g. RUST_LOG=debug openhuman run). Default level is info.");
-                return Ok(());
-            }
-            other => return Err(anyhow::anyhow!("unknown run arg: {other}")),
-        }
-    }
-
-    crate::core::logging::init_for_cli_run(verbose, log_scope);
-
-    // Initialize the Tokio multi-threaded runtime.
-    //
-    // A single agent turn is a very large async state machine (system prompt +
-    // hundreds of tool specs + the nested provider/tool loop), and delegating
-    // to a sub-agent runs another full turn one level down. Even with the inner
-    // sub-agent future boxed (`subagent_host::ops`), that nesting overflows
-    // tokio's default 2 MiB worker-thread stack and aborts the whole process
-    // (SIGABRT: "thread 'tokio-rt-worker' has overflowed its stack"), taking
-    // the JSON-RPC server down mid-request. Give workers a roomier stack.
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_stack_size(crate::core::runtime::AGENT_WORKER_STACK_BYTES)
-        .max_blocking_threads(crate::core::runtime::MAX_BLOCKING_THREADS)
-        .build()?;
-    rt.block_on(async {
-        if headless_api {
-            crate::core::jsonrpc::run_server_headless(host.as_deref(), port).await
-        } else {
-            crate::core::jsonrpc::run_server(host.as_deref(), port, socketio_enabled).await
-        }
-    })?;
-    Ok(())
-}
-
 /// Handles the `call` subcommand to invoke a JSON-RPC method directly from the CLI.
 ///
 /// This is used for one-off commands and debugging, bypassing the HTTP transport
@@ -469,15 +406,6 @@ fn run_call_command(args: &[String]) -> Result<()> {
     let params =
         parse_json_params(params.as_deref().unwrap_or("{}")).map_err(anyhow::Error::msg)?;
 
-    // Raw calls bypass namespace parsing, but not the configured memory-driver
-    // binding. Without this gate an absent capability could still reach a
-    // destructive embedded handler because plain CLI invocations have no
-    // ambient CoreContext to filter the registry.
-    crate::core::cli_capability::ensure_capability_blocking(
-        all::capability_for_rpc_method(&method).flatten(),
-        &format!("openhuman call --method {method}"),
-    )?;
-
     // `call` invokes a JSON-RPC method that may run an orchestrator turn
     // (e.g. `agent.chat`), so it needs the same roomy stack as the server.
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -486,20 +414,7 @@ fn run_call_command(args: &[String]) -> Result<()> {
         .max_blocking_threads(crate::core::runtime::MAX_BLOCKING_THREADS)
         .build()?;
     let value = rt
-        .block_on(async {
-            // A raw call is its own process: the server publishes the module
-            // host policy during boot, and a method that crosses the memory
-            // module binding (since the round-2 migration, most of them)
-            // fails with "the module host policy was never published"
-            // without this — the same per-process publish the memory and
-            // tree-summarizer subcommand families already do.
-            // One line by design: `crates/openhuman-core/src/core/` is transport, and the load-
-            // config-install-sink-publish-policy sequence lives with the
-            // module host in the openhuman layer (review finding on #5932).
-            #[cfg(feature = "modules")]
-            crate::modules::memory::publish_cli_boot_policy().await?;
-            invoke_method(default_state(), &method, params).await
-        })
+        .block_on(async { invoke_method(default_state(), &method, params).await })
         .map_err(anyhow::Error::msg)?;
 
     // Output the result as pretty-printed JSON to stdout.
@@ -522,20 +437,6 @@ fn run_namespace_command(
     grouped: &BTreeMap<String, Vec<ControllerSchema>>,
 ) -> Result<()> {
     let Some(schemas) = grouped.get(namespace) else {
-        // Reachable only when `grouped` really was filtered — i.e. under
-        // `run`/`serve`/TUI, which build a `CoreContext`. On a plain CLI
-        // invocation there is no ambient context, so nothing is filtered and a
-        // gated namespace is still present; the per-function gate below is what
-        // fires there. Consult the UNFILTERED registry before reporting a typo:
-        // silence reads as a mistyped command and sends the user off debugging
-        // their own command line, which is exactly what `docs/specs/kernel.md`
-        // §3.3 carves the CLI out of. Same reasoning as the retained `mcp` and
-        // explicit compatibility arms above. A namespace that does not exist at all yields `None`
-        // and still reports unknown.
-        crate::core::cli_capability::ensure_capability_blocking(
-            all::sole_capability_for_namespace(namespace),
-            &format!("openhuman {namespace}"),
-        )?;
         return Err(anyhow::anyhow!(
             "unknown namespace '{namespace}'. Run `openhuman --help` to see available namespaces."
         ));
@@ -551,29 +452,6 @@ fn run_namespace_command(
     }
 
     let function = args[0].as_str();
-
-    // Gate BEFORE resolving the schema, not in the not-found arm below.
-    //
-    // `grouped` comes from `all_controller_schemas()`, which filters through the
-    // ambient `CoreContext` — and no plain CLI subcommand builds one, since
-    // `DEFAULT_CONTEXT` is set only in `CoreContext::init` (reached by
-    // `run`/`serve` and the TUI). So on a real `openhuman <ns> <fn>` invocation
-    // *nothing* is filtered, a gated function is still found here, and a check
-    // placed only in the not-found arm would never execute — the command would
-    // simply run. Gating the resolved function instead makes this fire on the
-    // path users actually take, and it stays correct under `run`/`serve` where
-    // `grouped` genuinely is filtered.
-    //
-    // `capability_for_parts` consults the UNFILTERED registry and yields `None`
-    // for a function registered nowhere, so a genuine typo short-circuits the
-    // gate and falls through to the unknown-function message below. Keeping the
-    // two distinguishable is the point: collapsing them would make real typos
-    // harder to diagnose, which is the failure `docs/specs/kernel.md` §3.3
-    // carves the CLI out of.
-    crate::core::cli_capability::ensure_capability_blocking(
-        all::capability_for_parts(namespace, function).flatten(),
-        &format!("openhuman {namespace} {function}"),
-    )?;
 
     let Some(schema) = schemas.iter().find(|s| s.function == function).cloned() else {
         return Err(anyhow::anyhow!(
@@ -677,6 +555,19 @@ fn parse_input_value(ty: &TypeSchema, raw: &str) -> Result<Value, String> {
             .parse::<u64>()
             .map(|n| Value::Number(n.into()))
             .map_err(|e| format!("expected u64, got '{raw}': {e}")),
+        TypeSchema::BoundedU64 { min, max } => {
+            let n = raw
+                .parse::<u64>()
+                .map_err(|e| format!("expected unsigned integer, got '{raw}': {e}"))?;
+            // Name the crossed limit, matching `validate_params`.
+            if n > *max {
+                Err(format!("expected unsigned integer <= {max}, got '{raw}'"))
+            } else if n < *min {
+                Err(format!("expected unsigned integer >= {min}, got '{raw}'"))
+            } else {
+                Ok(Value::Number(n.into()))
+            }
+        }
         TypeSchema::F64 => {
             let n = raw
                 .parse::<f64>()
@@ -719,14 +610,11 @@ fn print_general_help(grouped: &BTreeMap<String, Vec<ControllerSchema>>) {
     println!("  openhuman [OPTIONS]                     (show this help)");
     println!("  openhuman run [--host <addr>] [--port <u16>] [--jsonrpc-only] [--verbose]");
     println!("  openhuman call --method <name> [--params '<json>' | --params-stdin]");
-    println!(
-        "  openhuman mcp [-v|--verbose]              (stdio MCP server; read-only memory tools)"
-    );
+    println!("  openhuman mcp [-v|--verbose]              (stdio MCP server)");
     println!("  openhuman-tui [--thread <id>|--new]       (terminal UI; separate executable)");
     println!("  openhuman skills <subcommand> [options]   (skill development runtime)");
     println!("  openhuman agent <subcommand> [options]    (inspect agent definitions & prompts)");
     println!("  openhuman voice [--hotkey <combo>] [--mode <tap|push>]  (voice dictation server)");
-    println!("  openhuman tree-summarizer <subcommand> [options]  (summary tree CLI)");
     println!("  openhuman sentry-test [--message <text>] [--panic]  (verify Sentry wiring)");
     println!("  openhuman <namespace> <function> [--param value ...]\n");
     println!("Global options (place before the command):");

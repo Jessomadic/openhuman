@@ -32,13 +32,11 @@ function relativeTime(isoString: string): string {
  * are parked on), not reaching back for a stock Tailwind ramp.
  * See `gitbooks/developing/theming.md`.
  */
-const PROVIDER_BADGE_CLASS = 'bg-surface-subtle text-content-secondary border-line';
-
 /** Importance badge tone: high / medium / low on coral / amber / sage. */
-function scoreBadgeClass(score: number): string {
-  if (score >= 0.75) return 'bg-coral-100 text-coral-700 border-coral-200';
-  if (score >= 0.4) return 'bg-amber-100 text-amber-700 border-amber-200';
-  return 'bg-sage-100 text-sage-700 border-sage-200';
+function scoreBadgeVariant(score: number): 'danger' | 'warning' | 'success' {
+  if (score >= 0.75) return 'danger';
+  if (score >= 0.4) return 'warning';
+  return 'success';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,11 +96,11 @@ const NotificationCard = ({ notification: n, onMarkRead, onNavigate, onDismiss }
           className="flex-1 min-w-0 text-left focus:outline-hidden focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-1 rounded-sm">
           {/* Header row: provider badge + timestamp */}
           <div className="flex items-center gap-2 mb-1">
-            <Badge className={PROVIDER_BADGE_CLASS}>{n.provider}</Badge>
+            <Badge>{n.provider}</Badge>
 
             {n.importance_score !== undefined && (
               <Badge
-                className={scoreBadgeClass(n.importance_score)}
+                variant={scoreBadgeVariant(n.importance_score)}
                 title={t('notifications.card.importanceTitle').replace(
                   '{pct}',
                   (n.importance_score * 100).toFixed(0)

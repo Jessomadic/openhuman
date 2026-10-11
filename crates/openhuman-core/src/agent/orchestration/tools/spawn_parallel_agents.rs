@@ -62,7 +62,7 @@ impl ToolDispatch<(), crate::agent::tinyagents::host::OpenHumanRunContext>
     async fn execute(
         &self,
         _state: &(),
-        _call_id: tinyagents_harness::CallId,
+        call_id: tinyagents_harness::CallId,
         arguments: serde_json::Value,
         _options: ToolCallOptions,
         parent: &RunContext<crate::agent::tinyagents::host::OpenHumanRunContext>,
@@ -73,6 +73,7 @@ impl ToolDispatch<(), crate::agent::tinyagents::host::OpenHumanRunContext>
             parent.workspace.clone(),
             parent.data.child(),
             Some(parent),
+            Some(call_id.as_str().to_string()),
         )
         .await
     }
@@ -88,6 +89,7 @@ pub(crate) async fn execute_spawn_parallel_agents(
     workspace_descriptor: Option<tinytools::WorkspaceDescriptor>,
     run_context: crate::agent::tinyagents::host::OpenHumanRunContext,
     live_parent: Option<&RunContext<crate::agent::tinyagents::host::OpenHumanRunContext>>,
+    parent_call_id: Option<String>,
 ) -> anyhow::Result<ToolResult> {
     tracing::debug!("[spawn_parallel_agents] execute entry");
     let tasks = match parse_parallel_agent_tasks(&args) {
@@ -111,6 +113,7 @@ pub(crate) async fn execute_spawn_parallel_agents(
         workspace_descriptor,
         run_context,
         live_parent,
+        parent_call_id,
     )
     .await
     .map_err(|e| anyhow::anyhow!(e))?;
@@ -126,8 +129,8 @@ pub(crate) async fn execute_spawn_parallel_agents(
 /// Decode the tool's JSON request before it reaches host execution policy.
 ///
 /// This remains beside the tool rather than becoming a TinyAgents API: the
-/// parameter shape includes OpenHuman-specific ownership, toolkit, and
-/// worktree-policy fields.
+/// parameter shape includes OpenHuman-specific ownership and worktree-policy
+/// fields.
 fn parse_parallel_agent_tasks(
     args: &serde_json::Value,
 ) -> Result<Vec<ParallelAgentTask>, ParallelAgentTaskRequestError> {
@@ -161,11 +164,11 @@ impl Tool for SpawnParallelAgentsTool {
         "Run two or more independent sub-agent tasks concurrently and collect their results. \
          Read-only and worktree-isolated workers run in parallel; shared-workspace workers with \
          write-capable tools require disjoint `files:` ownership and run through a serial fallback. \
-         Each task has `{agent_id, prompt, context?, toolkit?, ownership?, isolation?, base_ref?}`."
+         Each task has `{agent_id, prompt, context?, ownership?, isolation?, base_ref?}`."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
-        let agent_ids: Vec<String> = AgentDefinitionRegistry::global()
+        let agent_ids: Vec<String> = AgentDefinitionRegistry::current()
             .map(|reg| reg.list().iter().map(|d| d.id.clone()).collect())
             .unwrap_or_default();
         let agent_id_schema = if agent_ids.is_empty() {
@@ -187,7 +190,6 @@ impl Tool for SpawnParallelAgentsTool {
                             "agent_id": agent_id_schema,
                             "prompt": { "type": "string" },
                             "context": { "type": "string" },
-                            "toolkit": { "type": "string" },
                             "ownership": {
                                 "type": "string",
                                 "description": "Disjoint file/module/responsibility boundary for this worker."
@@ -222,7 +224,7 @@ impl Tool for SpawnParallelAgentsTool {
     /// each worker's research is cut short. The fan-out is already bounded
     /// internally — by `max_concurrency`, the run cancellation token, and each
     /// sub-agent's own iteration/turn caps — so it governs its own lifetime,
-    /// like the long-running scripting tools (`shell`, `node_exec`).
+    /// like the long-running shell tool.
     fn timeout_policy(&self, _args: &serde_json::Value) -> ToolTimeout {
         ToolTimeout::Unbounded
     }
@@ -238,6 +240,7 @@ impl Tool for SpawnParallelAgentsTool {
         _options: ToolCallOptions,
         tool_context: Option<&dyn ToolRunContext>,
     ) -> anyhow::Result<ToolResult> {
+        let parent_call_id = crate::tools::host_extensions::tool_call_id(tool_context);
         if let Some(live_parent) = super::ambient_parent_run_context("direct-spawn-parallel") {
             return execute_spawn_parallel_agents(
                 args,
@@ -245,6 +248,7 @@ impl Tool for SpawnParallelAgentsTool {
                 live_parent.workspace.clone(),
                 live_parent.data.child(),
                 Some(&live_parent),
+                parent_call_id,
             )
             .await;
         }
@@ -255,6 +259,7 @@ impl Tool for SpawnParallelAgentsTool {
             workspace_descriptor,
             crate::agent::tinyagents::host::OpenHumanRunContext::new(),
             None,
+            parent_call_id,
         )
         .await
     }

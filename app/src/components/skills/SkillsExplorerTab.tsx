@@ -9,29 +9,48 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { LuLibrary, LuSparkles } from 'react-icons/lu';
 import { useNavigate } from 'react-router-dom';
 
 import { useT } from '../../lib/i18n/I18nContext';
-import { type CatalogEntry, skillRegistryApi } from '../../services/api/skillRegistryApi';
+import {
+  type CatalogDetail,
+  type CatalogEntry,
+  type CatalogPage,
+  isInstallable,
+  type ParsedRegistryError,
+  parseRegistryError,
+  type ScanBlocked,
+  skillRegistryApi,
+} from '../../services/api/skillRegistryApi';
 import {
   type InstallWorkflowFromUrlResult,
   skillsApi,
   type WorkflowSummary,
 } from '../../services/api/skillsApi';
 import McpIconButton from '../channels/mcp/McpIconButton';
+import RowIcon from '../channels/mcp/RowIcon';
 import EmptyStateCard from '../EmptyStateCard';
-import { Badge, DataTableFilterMenu, ModalShell } from '../ui';
+import { Alert, AlertDescription, Badge, type BadgeVariant, ModalShell } from '../ui';
 import Button from '../ui/Button';
-import Card from '../ui/Card';
-import TextField from '../ui/TextField';
+import DataTable, { type DataTableColumn } from '../ui/DataTable';
+import { TableCell, TableRow } from '../ui/Table';
 import CreateSkillModal from './CreateSkillModal';
 import InstallSkillDialog from './InstallSkillDialog';
+import { RegistryErrorNotice, RegistryStatusNotice } from './RegistryStatusNotice';
+import ScanBlockedDialog from './ScanBlockedDialog';
 import UninstallSkillConfirmDialog from './UninstallSkillConfirmDialog';
 
 const log = debug('skills:explorer-tab');
-const CATALOG_PAGE_SIZE = 60;
+const PAGE_SIZE = 25;
 const SEARCH_DEBOUNCE_MS = 300;
 
 function slugifyInstallKey(value: string | null | undefined): string | null {
@@ -86,64 +105,51 @@ function isCatalogEntryInstalled(entry: CatalogEntry, installedKeys: Set<string>
 }
 
 /**
- * Source tone table. Six sources, four themeable ramps — so the hue encodes the
- * distinction a reader acts on (where does this skill come from: shipped with
- * the app, or fetched from a remote catalogue) rather than naming each
- * catalogue twice. The badge already prints the catalogue's name, so the four
- * remote rows fall through to the shared neutral tone instead of reaching for
- * unthemeable ramps. See `gitbooks/developing/theming.md`.
+ * Source tone table: where a skill comes from (shipped with the app, or
+ * fetched from a remote catalogue) maps to a `Badge` variant instead of a
+ * bespoke tint. See `gitbooks/developing/theming.md`.
  */
-const BADGE_NEUTRAL_TONE = 'bg-surface-muted text-content-secondary border-line';
+const SOURCE_VARIANT: Record<string, BadgeVariant> = {
+  'built-in': 'success',
+  optional: 'primary',
+};
 
 function SourceBadge({ source }: { source: string }) {
-  const SOURCE_COLORS: Record<string, string> = {
-    'built-in':
-      'bg-sage-50 text-sage-700 border-sage-200 dark:bg-sage-500/10 dark:text-sage-300 dark:border-sage-500/30',
-    optional:
-      'bg-primary-50 text-primary-700 border-primary-200 dark:bg-primary-500/10 dark:text-primary-300 dark:border-primary-500/30',
-  };
-  const colors = SOURCE_COLORS[source] ?? BADGE_NEUTRAL_TONE;
   return (
-    <span
-      className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${colors}`}>
+    <Badge variant={SOURCE_VARIANT[source] ?? 'neutral'} dot={false}>
       {source}
-    </span>
+    </Badge>
   );
 }
 
 /**
- * Format tone table. Three distinct tones for five formats, so it fits inside
- * the four themeable ramps with no collision and every distinction survives:
- * the Hermes family on `primary`, the ClawHub family on `sage`, and `legacy`
- * on `amber` because it is the one row that means "deprecated".
+ * Format tone table. Three distinct variants for five formats, with no
+ * collision: the Hermes family on `primary`, the ClawHub family on
+ * `success`, and `legacy` on `warning` because it is the one row that means
+ * "deprecated".
  */
-const FORMAT_TONE = {
-  hermes:
-    'bg-primary-50 text-primary-700 border-primary-200 dark:bg-primary-500/10 dark:text-primary-300 dark:border-primary-500/30',
-  clawhub:
-    'bg-sage-50 text-sage-700 border-sage-200 dark:bg-sage-500/10 dark:text-sage-300 dark:border-sage-500/30',
-  legacy:
-    'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-500/30',
-} as const;
+const FORMAT_VARIANT: Record<string, BadgeVariant> = {
+  hermes: 'primary',
+  agentskills: 'primary',
+  openclaw: 'success',
+  clawhub: 'success',
+  legacy: 'warning',
+};
 
 function SkillFormatBadge({ format }: { format: string }) {
   const lower = format.toLowerCase();
-  const FORMAT_MAP: Record<string, { label: string; colors: string }> = {
-    hermes: { label: 'Hermes', colors: FORMAT_TONE.hermes },
-    agentskills: { label: 'AgentSkills', colors: FORMAT_TONE.hermes },
-    openclaw: { label: 'OpenClaw', colors: FORMAT_TONE.clawhub },
-    clawhub: { label: 'ClawHub', colors: FORMAT_TONE.clawhub },
-    legacy: { label: 'Legacy', colors: FORMAT_TONE.legacy },
+  const FORMAT_LABELS: Record<string, string> = {
+    hermes: 'Hermes',
+    agentskills: 'AgentSkills',
+    openclaw: 'OpenClaw',
+    clawhub: 'ClawHub',
+    legacy: 'Legacy',
   };
-  const entry = FORMAT_MAP[lower] ?? {
-    label: format || 'Skill',
-    colors: BADGE_NEUTRAL_TONE,
-  };
+  const label = FORMAT_LABELS[lower] ?? (format || 'Skill');
   return (
-    <span
-      className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${entry.colors}`}>
-      {entry.label}
-    </span>
+    <Badge variant={FORMAT_VARIANT[lower] ?? 'neutral'} dot={false}>
+      {label}
+    </Badge>
   );
 }
 
@@ -155,11 +161,7 @@ function SkillScopeBadge({ scope }: { scope: string }) {
       : scope === 'project'
         ? t('skills.explorer.scopeProject')
         : t('skills.explorer.scopeLegacy');
-  return (
-    <span className="inline-flex items-center rounded-full border border-line bg-surface-muted px-1.5 py-0.5 text-[9px] font-medium text-content-muted">
-      {label}
-    </span>
-  );
+  return <Badge dot={false}>{label}</Badge>;
 }
 
 interface SkillTileProps {
@@ -170,71 +172,95 @@ interface SkillTileProps {
   onEdit: () => void;
 }
 
+/** Enter / Space on a focused row opens it, like a click. */
+const activateOnKey = (onActivate: () => void) => (event: KeyboardEvent<HTMLElement>) => {
+  if (event.target !== event.currentTarget) return;
+  if (event.key === 'Enter' || event.key === ' ' || event.key === 'Space') {
+    event.preventDefault();
+    onActivate();
+  }
+};
+
+/** The name as the row's handle on its detail dialog (chevron = "opens"). */
+function RowName({
+  name,
+  testId,
+  onOpen,
+}: {
+  name: string;
+  testId: string;
+  onOpen: () => void;
+}) {
+  const { t } = useT();
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      aria-label={t('skills.rows.open').replace('{name}', name)}
+      onClick={event => {
+        event.stopPropagation();
+        onOpen();
+      }}
+      className="inline-flex max-w-full cursor-pointer items-center gap-0.5 rounded-sm text-sm font-medium text-content transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500">
+      <span className="truncate">{name}</span>
+      <ChevronRight className="size-3.5 shrink-0 text-content-muted" aria-hidden="true" />
+    </button>
+  );
+}
+
 /**
- * One installed skill: an identity on the left (name, format, scope, version,
- * description, tags) and its controls as icons on the right — run, edit,
- * remove — the same row the MCP page uses. The name opens the detail dialog.
+ * One installed skill as a table row: identity (name, description, tags),
+ * format, scope, version, and run / edit / remove as icons — the same row
+ * grammar as the MCP servers table. The row (and its name) opens the detail.
  */
 function InstalledSkillRow({ skill, onUninstall, onClick, onRun, onEdit }: SkillTileProps) {
   const { t } = useT();
   const editable = skill.scope === 'user';
   return (
-    <li
+    <TableRow
       data-testid={`skill-explorer-tile-${skill.id}`}
-      role="button"
       tabIndex={0}
       onClick={onClick}
-      onKeyDown={event => {
-        if (event.target !== event.currentTarget) return;
-        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Space') {
-          event.preventDefault();
-          onClick();
-        }
-      }}
-      className="cursor-pointer space-y-2 py-3 first:pt-0 last:pb-0">
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border border-line bg-surface-muted">
-          <Sparkles className="size-4 text-content-muted" aria-hidden="true" />
-        </span>
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              data-testid={`skill-open-${skill.id}`}
-              aria-label={t('skills.rows.open').replace('{name}', skill.name)}
-              onClick={event => {
-                event.stopPropagation();
-                onClick();
-              }}
-              className="inline-flex cursor-pointer items-center gap-0.5 rounded-sm text-sm font-medium text-content transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500">
-              {skill.name}
-              <ChevronRight className="size-3.5 text-content-muted" aria-hidden="true" />
-            </button>
-            <SkillFormatBadge format={skill.sourceFormat} />
-            <SkillScopeBadge scope={skill.scope} />
-            {skill.version && (
-              <span className="text-[10px] font-mono text-content-faint">v{skill.version}</span>
+      onKeyDown={activateOnKey(onClick)}
+      className="cursor-pointer focus-visible:bg-surface-hover focus-visible:outline-hidden">
+      <TableCell className="w-full max-w-0">
+        <div className="flex min-w-0 items-center gap-3">
+          <RowIcon>
+            <Sparkles className="size-4 text-content-muted" aria-hidden="true" />
+          </RowIcon>
+          <div className="min-w-0 space-y-0.5">
+            <RowName name={skill.name} testId={`skill-open-${skill.id}`} onOpen={onClick} />
+            <p className="truncate text-xs text-content-muted" title={skill.description}>
+              {skill.description || t('skills.explorer.noDescription')}
+            </p>
+            {(skill.tags.length > 0 || skill.warnings.length > 0) && (
+              <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                {skill.tags.map(tag => (
+                  <Badge key={tag} variant="neutral">
+                    {tag}
+                  </Badge>
+                ))}
+                {skill.warnings.map(warning => (
+                  <Badge key={warning} variant="warning">
+                    {warning}
+                  </Badge>
+                ))}
+              </div>
             )}
           </div>
-          <p className="line-clamp-2 text-xs text-content-muted">
-            {skill.description || t('skills.explorer.noDescription')}
-          </p>
-          {(skill.tags.length > 0 || skill.warnings.length > 0) && (
-            <div className="flex flex-wrap items-center gap-1">
-              {skill.tags.map(tag => (
-                <Badge key={tag} variant="neutral">
-                  {tag}
-                </Badge>
-              ))}
-              {skill.warnings.map(warning => (
-                <span key={warning} className="text-[10px] text-amber-700 dark:text-amber-300">
-                  {warning}
-                </span>
-              ))}
-            </div>
-          )}
         </div>
-        <span className="flex shrink-0 items-center gap-0.5">
+      </TableCell>
+      <TableCell className="w-px whitespace-nowrap">
+        <SkillFormatBadge format={skill.sourceFormat} />
+      </TableCell>
+      <TableCell className="w-px whitespace-nowrap">
+        <SkillScopeBadge scope={skill.scope} />
+      </TableCell>
+      <TableCell className="w-px whitespace-nowrap font-mono text-xs text-content-muted">
+        {skill.version ? `v${skill.version}` : '—'}
+      </TableCell>
+      <TableCell className="w-px whitespace-nowrap text-right">
+        <span className="inline-flex items-center gap-0.5">
           <McpIconButton
             label={t('skills.rows.run').replace('{name}', skill.name)}
             icon={Play}
@@ -259,11 +285,13 @@ function InstalledSkillRow({ skill, onUninstall, onClick, onRun, onEdit }: Skill
               onClick={onUninstall}
             />
           ) : (
-            <Badge variant="neutral">{t('skills.explorer.installed')}</Badge>
+            <Badge variant="neutral" dot={false}>
+              {t('skills.explorer.installed')}
+            </Badge>
           )}
         </span>
-      </div>
-    </li>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -277,6 +305,7 @@ interface CatalogTileProps {
 
 interface SkillDetailDialogProps {
   entry: CatalogEntry | null;
+  detail?: CatalogDetail | null;
   skill: WorkflowSummary | null;
   installed: boolean;
   onClose: () => void;
@@ -284,75 +313,85 @@ interface SkillDetailDialogProps {
   installing?: boolean;
 }
 
+function SourceLink({ url, testId }: { url: string; testId: string }) {
+  const { t } = useT();
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      data-testid={testId}
+      onClick={event => event.stopPropagation()}
+      className="text-xs font-medium text-primary-600 hover:underline dark:text-primary-300">
+      {t('skills.registry.viewSource')}
+    </a>
+  );
+}
+
 function CatalogRow({ entry, installed, installing, onInstall, onClick }: CatalogTileProps) {
   const { t } = useT();
   return (
-    <li
+    <TableRow
       data-testid={`registry-tile-${entry.id}`}
-      role="button"
       tabIndex={0}
       onClick={onClick}
-      onKeyDown={event => {
-        if (event.target !== event.currentTarget) return;
-        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Space') {
-          event.preventDefault();
-          onClick();
-        }
-      }}
-      className="cursor-pointer space-y-2 py-3 first:pt-0 last:pb-0">
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border border-line bg-surface-muted text-xs font-semibold text-content-muted">
-          {entry.name.charAt(0).toUpperCase()}
-        </span>
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              data-testid={`registry-open-${entry.id}`}
-              aria-label={t('skills.rows.open').replace('{name}', entry.name)}
-              onClick={event => {
-                event.stopPropagation();
-                onClick();
-              }}
-              className="inline-flex cursor-pointer items-center gap-0.5 rounded-sm text-sm font-medium text-content transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500">
-              {entry.name}
-              <ChevronRight className="size-3.5 text-content-muted" aria-hidden="true" />
-            </button>
-            <SourceBadge source={entry.source} />
-            {installed && <Badge variant="success">{t('skills.explorer.installed')}</Badge>}
+      onKeyDown={activateOnKey(onClick)}
+      className="cursor-pointer focus-visible:bg-surface-hover focus-visible:outline-hidden">
+      <TableCell className="w-full max-w-0">
+        <div className="flex min-w-0 items-center gap-3">
+          <RowIcon>
+            <span className="text-xs font-semibold text-content-muted">
+              {entry.name.charAt(0).toUpperCase()}
+            </span>
+          </RowIcon>
+          <div className="min-w-0 space-y-0.5">
+            <RowName name={entry.name} testId={`registry-open-${entry.id}`} onOpen={onClick} />
+            <p className="truncate text-xs text-content-muted" title={entry.description}>
+              {entry.description}
+            </p>
           </div>
-          <p className="line-clamp-2 text-xs text-content-muted">{entry.description}</p>
         </div>
-        <span className="flex shrink-0 items-center">
-          {installed ? null : !entry.download_url ? (
+      </TableCell>
+      <TableCell className="w-px whitespace-nowrap">
+        <SourceBadge source={entry.source} />
+      </TableCell>
+      <TableCell className="w-px whitespace-nowrap text-right">
+        {installed ? (
+          <Badge variant="success">{t('skills.explorer.installed')}</Badge>
+        ) : !isInstallable(entry) ? (
+          <span className="inline-flex items-center gap-2">
             <Badge
               variant="neutral"
               title={t('skills.explorer.notInstallableHint')}
               data-testid={`registry-not-installable-${entry.id}`}>
               {t('skills.explorer.notInstallable')}
             </Badge>
-          ) : (
-            <Button
-              variant="secondary"
-              size="sm"
-              data-testid={`registry-install-${entry.id}`}
-              disabled={installing}
-              leadingIcon={<Download className="size-3.5" aria-hidden="true" />}
-              onClick={event => {
-                event.stopPropagation();
-                onInstall();
-              }}>
-              {installing ? t('skills.explorer.installing') : t('skills.explorer.install')}
-            </Button>
-          )}
-        </span>
-      </div>
-    </li>
+            {entry.source_url && (
+              <SourceLink url={entry.source_url} testId={`registry-source-link-${entry.id}`} />
+            )}
+          </span>
+        ) : (
+          <Button
+            variant="secondary"
+            size="sm"
+            data-testid={`registry-install-${entry.id}`}
+            disabled={installing}
+            leadingIcon={<Download className="size-3.5" aria-hidden="true" />}
+            onClick={event => {
+              event.stopPropagation();
+              onInstall();
+            }}>
+            {installing ? t('skills.explorer.installing') : t('skills.explorer.install')}
+          </Button>
+        )}
+      </TableCell>
+    </TableRow>
   );
 }
 
 function SkillDetailDialog({
   entry,
+  detail,
   skill,
   installed,
   onClose,
@@ -367,8 +406,11 @@ function SkillDetailDialog({
   const author = entry?.author ?? '';
   const source = entry?.source ?? '';
   const category = entry?.category ?? '';
-  const downloadUrl = entry?.download_url ?? '';
-  const license = entry?.license ?? '';
+  const downloadUrl = detail?.download_url || entry?.download_url || '';
+  const license = detail?.license ?? entry?.license ?? '';
+  const overview = detail?.overview?.trim() ?? '';
+  const sourceUrl = detail?.source_url ?? entry?.source_url ?? '';
+  const installable = entry ? isInstallable(entry) : false;
 
   return (
     <ModalShell
@@ -380,32 +422,29 @@ function SkillDetailDialog({
         <span className="flex items-center gap-2">
           <span className="truncate">{name}</span>
           {installed && (
-            <span className="shrink-0 rounded-full border border-sage-200 dark:border-sage-500/30 bg-sage-50 dark:bg-sage-500/10 px-2 py-0.5 text-[10px] font-medium text-sage-700 dark:text-sage-300">
+            <Badge variant="success" className="shrink-0" dot={false}>
               {t('skills.explorer.installed')}
-            </span>
+            </Badge>
           )}
         </span>
       }
       subtitle={
         <span className="mt-1.5 flex items-center gap-1.5">
           {source && <SourceBadge source={source} />}
-          {category && (
-            <span className="inline-flex items-center rounded-full border border-line bg-surface-muted px-1.5 py-0.5 text-[9px] font-medium text-content-muted">
-              {category}
-            </span>
-          )}
+          {category && <Badge dot={false}>{category}</Badge>}
         </span>
       }
       footer={
         !installed && onInstall ? (
           <div className="flex justify-end">
-            {downloadUrl ? (
+            {installable ? (
               <Button variant="secondary" size="sm" disabled={installing} onClick={onInstall}>
                 {installing ? t('skills.explorer.installing') : t('skills.explorer.install')}
               </Button>
             ) : (
-              <p className="text-xs text-content-muted">
-                {t('skills.explorer.notInstallableHint')}
+              <p className="flex flex-wrap items-center gap-2 text-xs text-content-muted">
+                <span>{t('skills.explorer.notInstallableHint')}</span>
+                {sourceUrl && <SourceLink url={sourceUrl} testId="skill-detail-source-link" />}
               </p>
             )}
           </div>
@@ -419,6 +458,17 @@ function SkillDetailDialog({
             </h3>
             <p className="text-sm text-content-secondary leading-relaxed whitespace-pre-wrap">
               {description}
+            </p>
+          </div>
+        )}
+
+        {overview && overview !== description && (
+          <div data-testid="skill-detail-overview">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-content-faint mb-1">
+              {t('skills.detail.overview')}
+            </h3>
+            <p className="text-sm text-content-secondary leading-relaxed whitespace-pre-wrap">
+              {overview}
             </p>
           </div>
         )}
@@ -457,11 +507,9 @@ function SkillDetailDialog({
             </h3>
             <div className="flex flex-wrap gap-1.5">
               {tags.map(tag => (
-                <span
-                  key={tag}
-                  className="rounded-full bg-surface-subtle px-2 py-0.5 text-[10px] font-medium text-content-secondary">
+                <Badge key={tag} dot={false}>
                   {tag}
-                </span>
+                </Badge>
               ))}
             </div>
           </div>
@@ -496,14 +544,19 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
   const [skillsLoading, setSkillsLoading] = useState(true);
   const [skillsError, setSkillsError] = useState<string | null>(null);
 
-  const [catalogEntries, setCatalogEntries] = useState<CatalogEntry[]>([]);
-  // How many catalog entries are currently revealed. We fetch the whole list
-  // up front, then page through it client-side via the "Show more" control.
-  const [visibleCount, setVisibleCount] = useState(CATALOG_PAGE_SIZE);
+  const [catalogPage, setCatalogPage] = useState<CatalogPage | null>(null);
+  const [catalogPageNum, setCatalogPageNum] = useState(1);
+  const [catalogPageSize, setCatalogPageSize] = useState(PAGE_SIZE);
   const [catalogLoading, setCatalogLoading] = useState(false);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogError, setCatalogError] = useState<ParsedRegistryError | null>(null);
   const [catalogInitialized, setCatalogInitialized] = useState(false);
+  const catalogRequestRef = useRef(0);
   const [installingId, setInstallingId] = useState<string | null>(null);
+  const [scanBlocked, setScanBlocked] = useState<{
+    entry: CatalogEntry;
+    scan: ScanBlocked;
+  } | null>(null);
+  const [scanOverrideError, setScanOverrideError] = useState<string | null>(null);
   // Catalog entry ids we just installed this session. The "installed" badge is
   // otherwise derived purely from `isCatalogEntryInstalled`, a heuristic that
   // maps a refetched installed skill (whose post-install id/location can differ
@@ -516,12 +569,15 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
   const [sources, setSources] = useState<string[]>([]);
   const [activeSources, setActiveSources] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
+  // Scope facet on the Installed table (user / project / legacy).
+  const [activeScopes, setActiveScopes] = useState<ReadonlySet<string>>(new Set());
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [installDialogOpen, setInstallDialogOpen] = useState(false);
   // `null` closed, `undefined` creating, a skill editing.
   const [createOpen, setCreateOpen] = useState<WorkflowSummary | null | undefined>(null);
   const [uninstallTarget, setUninstallTarget] = useState<WorkflowSummary | null>(null);
   const [detailEntry, setDetailEntry] = useState<CatalogEntry | null>(null);
+  const [entryDetail, setEntryDetail] = useState<CatalogDetail | null>(null);
   const [detailSkill, setDetailSkill] = useState<WorkflowSummary | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -556,43 +612,55 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
     }
   }, []);
 
-  // Compute the active source filter for RPC calls.
-  // Only apply when the user has deselected at least one source.
   const activeSourceFilter = useMemo(() => {
     if (activeSources.size === 0 || activeSources.size >= sources.length) return undefined;
-    // If exactly one source is active, pass it as the filter
-    if (activeSources.size === 1) return [...activeSources][0];
-    return undefined;
+    return [...activeSources].sort();
   }, [activeSources, sources.length]);
+  const activeSourceKey = activeSourceFilter?.join('\u0000') ?? '';
 
-  // Fetch catalog via RPC search (handles both browse and search).
-  // When query is empty and no source filter, uses browse; otherwise uses search.
   const fetchCatalog = useCallback(
-    async (query: string, sourceFilter: string | undefined, forceRefresh: boolean) => {
-      log('fetchCatalog: query=%s source=%s forceRefresh=%s', query, sourceFilter, forceRefresh);
+    async (
+      query: string,
+      sourceFilter: string[] | undefined,
+      page: number,
+      pageSize: number,
+      forceRefresh: boolean
+    ) => {
+      const request = ++catalogRequestRef.current;
+      log(
+        'fetchCatalog: query=%s sources=%d page=%d size=%d forceRefresh=%s',
+        query,
+        sourceFilter?.length ?? 0,
+        page,
+        pageSize,
+        forceRefresh
+      );
       setCatalogLoading(true);
       setCatalogError(null);
       try {
-        let entries: CatalogEntry[];
-        if (!query && !sourceFilter && !forceRefresh) {
-          entries = await skillRegistryApi.browse(false);
-        } else if (!query && !sourceFilter && forceRefresh) {
-          entries = await skillRegistryApi.browse(true);
-        } else {
-          entries = await skillRegistryApi.search(query || '', sourceFilter);
-        }
-        log('fetchCatalog: total=%d', entries.length);
-        // Keep the full list so "Show more" can page through it without another
-        // RPC; only a window of it is rendered (see displayedCatalog).
-        setCatalogEntries(entries);
-        setVisibleCount(CATALOG_PAGE_SIZE);
+        const result = await skillRegistryApi.browsePage({
+          query,
+          sources: sourceFilter,
+          page,
+          pageSize,
+          forceRefresh,
+        });
+        if (request !== catalogRequestRef.current) return;
+        log(
+          'fetchCatalog: total=%d page=%d freshness=%s',
+          result.total,
+          result.page,
+          result.freshness
+        );
+        setCatalogPage(result);
         setCatalogInitialized(true);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log('fetchCatalog: error=%s', msg);
-        setCatalogError(msg);
+        if (request !== catalogRequestRef.current) return;
+        const parsed = parseRegistryError(err);
+        log('fetchCatalog: error kind=%s msg=%s', parsed.kind, parsed.message);
+        setCatalogError(parsed);
       } finally {
-        setCatalogLoading(false);
+        if (request === catalogRequestRef.current) setCatalogLoading(false);
       }
     },
     []
@@ -609,12 +677,41 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
       .catch(() => {});
   }, [fetchSkills]);
 
-  // Trigger catalog search when debounced query or source filter changes
+  useEffect(() => {
+    setCatalogPageNum(1);
+  }, [debouncedQuery, activeSourceKey]);
+
   useEffect(() => {
     if (view === 'registry') {
-      void fetchCatalog(debouncedQuery, activeSourceFilter, false);
+      void fetchCatalog(debouncedQuery, activeSourceFilter, catalogPageNum, catalogPageSize, false);
     }
-  }, [view, debouncedQuery, activeSourceFilter, fetchCatalog]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, debouncedQuery, activeSourceKey, catalogPageNum, catalogPageSize, fetchCatalog]);
+
+  const refreshCatalog = useCallback(
+    () =>
+      void fetchCatalog(debouncedQuery, activeSourceFilter, catalogPageNum, catalogPageSize, true),
+    [fetchCatalog, debouncedQuery, activeSourceFilter, catalogPageNum, catalogPageSize]
+  );
+
+  useEffect(() => {
+    if (!detailEntry) {
+      setEntryDetail(null);
+      return;
+    }
+    let cancelled = false;
+    skillRegistryApi
+      .detail(detailEntry.id)
+      .then(detail => {
+        if (!cancelled) setEntryDetail(detail);
+      })
+      .catch(err => {
+        log('detail: error=%s', parseRegistryError(err).message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailEntry]);
 
   const installedKeys = useMemo(
     () => new Set(skills.flatMap(skill => workflowInstallKeys(skill))),
@@ -633,15 +730,16 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
 
   const filteredSkills = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-    if (!q) return skills;
-    return skills.filter(
+    const inScope = skills.filter(s => activeScopes.size === 0 || activeScopes.has(s.scope));
+    if (!q) return inScope;
+    return inScope.filter(
       s =>
         s.name.toLowerCase().includes(q) ||
         s.description.toLowerCase().includes(q) ||
         s.tags.some(tag => tag.toLowerCase().includes(q)) ||
         s.sourceFormat.toLowerCase().includes(q)
     );
-  }, [skills, searchQuery]);
+  }, [skills, searchQuery, activeScopes]);
 
   const sortedSkills = useMemo(() => {
     return [...filteredSkills].sort((a, b) => {
@@ -651,25 +749,7 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
     });
   }, [filteredSkills]);
 
-  // When multiple sources are active (but not all), do client-side filtering
-  // on the already-fetched results since the RPC only supports single source filter.
-  const filteredCatalog = useMemo(() => {
-    if (
-      activeSources.size === 0 ||
-      activeSources.size >= sources.length ||
-      activeSources.size === 1
-    ) {
-      return catalogEntries;
-    }
-    return catalogEntries.filter(e => activeSources.has(e.source));
-  }, [catalogEntries, activeSources, sources.length]);
-
-  // Client-side pagination window: we already hold the full fetched list, so
-  // "Show more" reveals the next page instantly with no extra RPC.
-  const displayedCatalog = useMemo(
-    () => filteredCatalog.slice(0, visibleCount),
-    [filteredCatalog, visibleCount]
-  );
+  const catalogEntries = catalogPage?.entries ?? [];
 
   const handleInstalled = useCallback(
     (result: InstallWorkflowFromUrlResult) => {
@@ -695,34 +775,55 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
     onToast?.({ type: 'success', title: t('skills.explorer.uninstallSuccess') });
   }, [fetchSkills, onToast, t]);
 
-  const handleRegistryInstall = useCallback(
-    async (entry: CatalogEntry) => {
-      log('handleRegistryInstall: id=%s source=%s', entry.id, entry.source);
+  const registryInstallErrorMessage = useCallback(
+    (entry: CatalogEntry, err: unknown): string => {
+      const parsed = parseRegistryError(err);
+      log('registryInstall: error kind=%s msg=%s', parsed.kind, parsed.message);
+      if (parsed.kind === 'no_direct_download') {
+        return entry.source_url
+          ? `${t('skills.registry.noDirectDownload')} ${entry.source_url}`
+          : t('skills.registry.noDirectDownload');
+      }
+      if (parsed.kind === 'upstream_ambiguous') return t('skills.registry.upstreamAmbiguous');
+      if (parsed.kind === 'rate_limited') {
+        return parsed.retryAfterSecs != null
+          ? t('skills.registry.rateLimited').replace('{seconds}', String(parsed.retryAfterSecs))
+          : t('skills.registry.rateLimitedShortly');
+      }
+      return parsed.message;
+    },
+    [t]
+  );
+
+  const runRegistryInstall = useCallback(
+    async (entry: CatalogEntry, acknowledgedDigest?: string): Promise<boolean> => {
+      log(
+        'runRegistryInstall: id=%s source=%s acknowledged=%s',
+        entry.id,
+        entry.source,
+        Boolean(acknowledgedDigest)
+      );
       setInstallingId(entry.id);
       try {
-        const result = await skillRegistryApi.install(entry.id);
-        // Authoritatively mark this entry installed so the card flips to
-        // "Installed" on success regardless of whether the refetched list maps
-        // back to it via the install-key heuristic (#4150).
+        const result = await skillRegistryApi.install(entry.id, { acknowledgedDigest });
+        if (result.status === 'scan_blocked') {
+          log('runRegistryInstall: scan_blocked findings=%d', result.scan.findings.length);
+          setScanOverrideError(null);
+          setScanBlocked({ entry, scan: result.scan });
+          return false;
+        }
         setInstalledEntryIds(prev => {
           const next = new Set(prev);
           next.add(entry.id);
           return next;
         });
-        // Await the refetch so `installedKeys` is fresh before the button
-        // re-renders — otherwise it briefly flips back to "Install" between
-        // clearing the installing state and the list updating. `fetchSkills`
-        // swallows its own errors, so this never throws into the catch below.
         await fetchSkills();
         onToast?.({
           type: 'success',
           title: t('skills.install.installComplete'),
           message: `Installed ${entry.name}${result.newSkills.length > 0 ? ` (${result.newSkills.join(', ')})` : ''}`,
         });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log('handleRegistryInstall: error=%s', msg);
-        onToast?.({ type: 'error', title: t('skills.install.errors.genericTitle'), message: msg });
+        return true;
       } finally {
         setInstallingId(null);
       }
@@ -730,48 +831,84 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
     [fetchSkills, onToast, t]
   );
 
+  const handleRegistryInstall = useCallback(
+    async (entry: CatalogEntry) => {
+      try {
+        await runRegistryInstall(entry);
+      } catch (err) {
+        onToast?.({
+          type: 'error',
+          title: t('skills.install.errors.genericTitle'),
+          message: registryInstallErrorMessage(entry, err),
+        });
+      }
+    },
+    [onToast, registryInstallErrorMessage, runRegistryInstall, t]
+  );
+
+  const handleScanBlock = useCallback(() => {
+    log('scanBlocked: user kept %s uninstalled', scanBlocked?.entry.id);
+    setScanBlocked(null);
+    setScanOverrideError(null);
+    onToast?.({
+      type: 'error',
+      title: t('skills.scan.declinedTitle'),
+      message: t('skills.scan.declinedHint'),
+    });
+  }, [onToast, scanBlocked, t]);
+
+  const handleScanInstallAnyway = useCallback(async () => {
+    if (!scanBlocked) return;
+    const { entry, scan } = scanBlocked;
+    try {
+      const installed = await runRegistryInstall(entry, scan.digest);
+      if (installed) setScanBlocked(null);
+    } catch (err) {
+      setScanOverrideError(registryInstallErrorMessage(entry, err));
+    }
+  }, [registryInstallErrorMessage, runRegistryInstall, scanBlocked]);
+
   const loading = view === 'installed' ? skillsLoading : catalogLoading;
-  const error = view === 'installed' ? skillsError : catalogError;
 
   const runSkill = (skill: WorkflowSummary) =>
     navigate(`/workflows/run?workflow=${encodeURIComponent(skill.id)}&lock=1`);
 
-  const errorNode =
-    !loading && error ? (
-      <div className="rounded-xl border border-coral-200 bg-coral-50 p-3 dark:border-coral-500/30 dark:bg-coral-500/10">
-        <p className="text-xs font-medium text-coral-700 dark:text-coral-300">{error}</p>
-        <Button
-          variant="secondary"
-          tone="danger"
-          size="xs"
-          onClick={() =>
-            void (view === 'installed'
-              ? fetchSkills()
-              : fetchCatalog(debouncedQuery, activeSourceFilter, true))
-          }
-          className="mt-2">
-          {t('common.retry')}
-        </Button>
-      </div>
-    ) : null;
+  const installedErrorNode =
+    !skillsLoading && skillsError ? (
+      <Alert variant="destructive" density="compact">
+        <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+          <span>{skillsError}</span>
+          <Button variant="secondary" tone="danger" size="xs" onClick={() => void fetchSkills()}>
+            {t('common.retry')}
+          </Button>
+        </AlertDescription>
+      </Alert>
+    ) : undefined;
 
-  const search = (
-    <TextField
-      type="search"
-      value={searchQuery}
-      onChange={e => setSearchQuery(e.target.value)}
-      placeholder={t('skills.explorer.searchPlaceholder')}
-      aria-label={t('skills.explorer.title')}
-      data-testid="skill-search-input"
-      className="min-w-48 flex-1"
-    />
-  );
+  const registryErrorNode =
+    !catalogLoading && catalogError ? (
+      <RegistryErrorNotice error={catalogError} onRetry={refreshCatalog} />
+    ) : (
+      <RegistryStatusNotice
+        page={catalogPage}
+        firstLoad={catalogLoading && !catalogInitialized}
+        onRetry={refreshCatalog}
+      />
+    );
+
+  const search = {
+    value: searchQuery,
+    onChange: setSearchQuery,
+    placeholder: t('skills.explorer.searchPlaceholder'),
+    ariaLabel: t('skills.explorer.title'),
+    testId: 'skill-search-input',
+  };
 
   const installedEmpty =
     // A search that matched nothing is not the same as having no skills — the
     // second offers an install CTA, the first would be nonsense.
     skills.length > 0 ? (
-      <p className="py-4 text-center text-xs text-content-faint">{t('skills.noResults')}</p>
+      <p className="text-center text-sm text-content-muted">{t('skills.noResults')}</p>
     ) : (
       <EmptyStateCard
         className="py-6"
@@ -790,7 +927,7 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
       title={debouncedQuery ? t('skills.noResults') : t('skills.explorer.registryEmptyTitle')}
       description={debouncedQuery ? '' : t('skills.explorer.registryEmptyDescription')}
       actionLabel={debouncedQuery ? undefined : t('skills.explorer.refreshRegistry')}
-      onAction={debouncedQuery ? undefined : () => void fetchCatalog('', undefined, true)}
+      onAction={debouncedQuery ? undefined : refreshCatalog}
     />
   ) : null;
 
@@ -814,6 +951,17 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
         />
       )}
 
+      {scanBlocked && (
+        <ScanBlockedDialog
+          skillName={scanBlocked.entry.name}
+          scan={scanBlocked.scan}
+          installing={installingId === scanBlocked.entry.id}
+          error={scanOverrideError}
+          onBlock={handleScanBlock}
+          onInstallAnyway={() => void handleScanInstallAnyway()}
+        />
+      )}
+
       {uninstallTarget && (
         <UninstallSkillConfirmDialog
           skill={uninstallTarget}
@@ -825,6 +973,7 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
       {(detailEntry || detailSkill) && (
         <SkillDetailDialog
           entry={detailEntry}
+          detail={entryDetail}
           skill={detailSkill}
           installed={detailEntry ? entryInstalled(detailEntry) : true}
           onClose={() => {
@@ -845,132 +994,162 @@ export default function SkillsExplorerTab({ onToast, view }: SkillsExplorerTabPr
     </>
   );
 
+  const installedColumns: DataTableColumn<WorkflowSummary>[] = [
+    { id: 'name', header: t('common.name'), className: 'w-full max-w-0' },
+    { id: 'format', header: t('dataTable.column.format'), className: 'w-px whitespace-nowrap' },
+    { id: 'scope', header: t('dataTable.column.scope'), className: 'w-px whitespace-nowrap' },
+    { id: 'version', header: t('dataTable.column.version'), className: 'w-px whitespace-nowrap' },
+    {
+      id: 'actions',
+      header: <span className="sr-only">{t('dataTable.column.actions')}</span>,
+      align: 'right',
+      className: 'w-px whitespace-nowrap',
+    },
+  ];
+
+  const catalogColumns: DataTableColumn<CatalogEntry>[] = [
+    { id: 'name', header: t('common.name'), className: 'w-full max-w-0' },
+    { id: 'source', header: t('dataTable.column.source'), className: 'w-px whitespace-nowrap' },
+    {
+      id: 'action',
+      header: <span className="sr-only">{t('dataTable.column.actions')}</span>,
+      align: 'right',
+      className: 'w-px whitespace-nowrap',
+    },
+  ];
+
   if (view === 'installed') {
     return (
-      <section className="space-y-3 animate-fade-up" data-testid="skills-installed-section">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-xs font-medium uppercase tracking-wide text-content-muted">
-            {t('skills.rows.installedTitle')}
-          </h2>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              data-testid="skill-install-from-url-btn"
-              onClick={() => setInstallDialogOpen(true)}
-              leadingIcon={<Download className="size-4" aria-hidden="true" />}>
-              {t('skills.explorer.installFromUrl')}
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              data-testid="skill-new-btn"
-              onClick={() => setCreateOpen(undefined)}
-              leadingIcon={<Plus className="size-4" aria-hidden="true" />}>
-              {t('skills.explorer.newSkill')}
-            </Button>
-          </div>
-        </div>
-        <p className="text-sm text-content-muted">{t('skills.rows.installedIntro')}</p>
-        {search}
-        {errorNode}
-        <Card padded divided={false}>
-          {loading ? (
-            <p className="text-xs text-content-muted">{t('common.loading')}</p>
-          ) : sortedSkills.length === 0 ? (
-            installedEmpty
-          ) : (
-            <ul className="divide-y divide-line-subtle">
-              {sortedSkills.map(skill => (
-                <InstalledSkillRow
-                  key={skill.id}
-                  skill={skill}
-                  onClick={() => setDetailSkill(skill)}
-                  onRun={() => runSkill(skill)}
-                  onEdit={() => setCreateOpen(skill)}
-                  onUninstall={() => setUninstallTarget(skill)}
-                />
-              ))}
-            </ul>
+      <section
+        className="flex h-full min-h-0 animate-fade-up flex-col"
+        data-testid="skills-installed-section">
+        <DataTable<WorkflowSummary>
+          title={t('skills.rows.installedTitle')}
+          description={t('skills.rows.installedIntro')}
+          actions={
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                data-testid="skill-install-from-url-btn"
+                onClick={() => setInstallDialogOpen(true)}
+                leadingIcon={<Download className="size-4" aria-hidden="true" />}>
+                {t('skills.explorer.installFromUrl')}
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                data-testid="skill-new-btn"
+                onClick={() => setCreateOpen(undefined)}
+                leadingIcon={<Plus className="size-4" aria-hidden="true" />}>
+                {t('skills.explorer.newSkill')}
+              </Button>
+            </>
+          }
+          columns={installedColumns}
+          rows={sortedSkills}
+          rowKey={skill => skill.id}
+          renderRow={skill => (
+            <InstalledSkillRow
+              key={skill.id}
+              skill={skill}
+              onClick={() => setDetailSkill(skill)}
+              onRun={() => runSkill(skill)}
+              onEdit={() => setCreateOpen(skill)}
+              onUninstall={() => setUninstallTarget(skill)}
+            />
           )}
-        </Card>
+          search={search}
+          filters={[
+            {
+              id: 'scope',
+              label: t('dataTable.column.scope'),
+              options: [
+                { value: 'user', label: t('skills.explorer.scopeUser') },
+                { value: 'project', label: t('skills.explorer.scopeProject') },
+                { value: 'legacy', label: t('skills.explorer.scopeLegacy') },
+              ],
+              selected: activeScopes,
+              onChange: setActiveScopes,
+              testId: 'skill-scope-filter',
+            },
+          ]}
+          pagination={{ pageSize: PAGE_SIZE }}
+          loading={loading}
+          error={installedErrorNode}
+          empty={installedEmpty}
+          ariaLabel={t('skills.rows.installedTitle')}
+        />
         {dialogs}
       </section>
     );
   }
 
   return (
-    <section className="space-y-3 animate-fade-up" data-testid="skills-registry-section">
-      <h2 className="text-xs font-medium uppercase tracking-wide text-content-muted">
-        {t('skills.rows.registryTitle')}
-      </h2>
-      <p className="text-sm text-content-muted">{t('skills.rows.registryIntro')}</p>
-      <div className="flex flex-wrap items-center gap-2">
-        {search}
-        {sources.length > 0 && (
-          <DataTableFilterMenu
-            filter={{
-              id: 'source',
-              label: t('common.filter'),
-              ariaLabel: t('skills.explorer.sourceFilterAria'),
-              testId: 'skill-source-filter',
-              options: sources.map(source => ({ value: source })),
-              selected: activeSources,
-              onChange: setActiveSources,
-            }}
+    <section
+      className="flex h-full min-h-0 animate-fade-up flex-col"
+      data-testid="skills-registry-section">
+      <DataTable<CatalogEntry>
+        title={t('skills.rows.registryTitle')}
+        description={t('skills.rows.registryIntro')}
+        actions={
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={refreshCatalog}
+            disabled={catalogLoading}
+            aria-label={t('skills.explorer.refreshRegistry')}
+            leadingIcon={
+              <RefreshCw
+                className={`size-3.5 ${catalogLoading ? 'animate-spin' : ''}`}
+                aria-hidden="true"
+              />
+            }>
+            {t('skills.explorer.refreshRegistry')}
+          </Button>
+        }
+        columns={catalogColumns}
+        rows={catalogEntries}
+        rowKey={entry => `${entry.source}-${entry.id}`}
+        renderRow={entry => (
+          <CatalogRow
+            key={`${entry.source}-${entry.id}`}
+            entry={entry}
+            installed={entryInstalled(entry)}
+            installing={installingId === entry.id}
+            onClick={() => setDetailEntry(entry)}
+            onInstall={() => void handleRegistryInstall(entry)}
           />
         )}
-        <Button
-          iconOnly
-          variant="secondary"
-          size="md"
-          onClick={() => void fetchCatalog(debouncedQuery, activeSourceFilter, true)}
-          disabled={catalogLoading}
-          title={t('skills.explorer.refreshRegistry')}
-          aria-label={t('skills.explorer.refreshRegistry')}
-          className="shrink-0 text-content-muted">
-          <RefreshCw className={`size-4 ${catalogLoading ? 'animate-spin' : ''}`} />
-        </Button>
-      </div>
-      {errorNode}
-      <Card padded divided={false}>
-        {loading && displayedCatalog.length === 0 ? (
-          <p className="text-xs text-content-muted">{t('common.loading')}</p>
-        ) : displayedCatalog.length === 0 ? (
-          registryEmpty
-        ) : (
-          <>
-            <ul className="divide-y divide-line-subtle">
-              {displayedCatalog.map(entry => (
-                <CatalogRow
-                  key={`${entry.source}-${entry.id}`}
-                  entry={entry}
-                  installed={entryInstalled(entry)}
-                  installing={installingId === entry.id}
-                  onClick={() => setDetailEntry(entry)}
-                  onInstall={() => void handleRegistryInstall(entry)}
-                />
-              ))}
-            </ul>
-            {filteredCatalog.length > displayedCatalog.length && (
-              <div className="mt-3 flex flex-col items-center gap-1 border-t border-line-subtle pt-3">
-                <Button
-                  variant="tertiary"
-                  size="xs"
-                  data-testid="registry-show-more"
-                  onClick={() => setVisibleCount(c => c + CATALOG_PAGE_SIZE)}
-                  className="text-primary-600 hover:underline dark:text-primary-400">
-                  {t('common.showMore')}
-                </Button>
-                <p className="text-[11px] text-content-faint">
-                  {displayedCatalog.length.toLocaleString()} /{' '}
-                  {filteredCatalog.length.toLocaleString()}
-                </p>
-              </div>
-            )}
-          </>
-        )}
-      </Card>
+        search={search}
+        filters={
+          sources.length > 0
+            ? [
+                {
+                  id: 'source',
+                  label: t('dataTable.column.source'),
+                  ariaLabel: t('skills.explorer.sourceFilterAria'),
+                  testId: 'skill-source-filter',
+                  options: sources.map(source => ({ value: source })),
+                  selected: activeSources,
+                  onChange: setActiveSources,
+                },
+              ]
+            : undefined
+        }
+        pagination={{
+          page: catalogPageNum,
+          pageSize: catalogPageSize,
+          total: catalogPage?.total,
+          onPageChange: setCatalogPageNum,
+          onPageSizeChange: setCatalogPageSize,
+          testId: 'registry-pagination',
+        }}
+        loading={loading && catalogEntries.length === 0}
+        error={registryErrorNode}
+        empty={registryEmpty ?? undefined}
+        ariaLabel={t('skills.rows.registryTitle')}
+      />
       {dialogs}
     </section>
   );

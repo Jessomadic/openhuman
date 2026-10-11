@@ -49,10 +49,19 @@ describe('Web → frontend JSON-RPC → Core bridge', () => {
     expect(response.result.url).toContain('127.0.0.1');
   });
 
-  test('fails fast in web-only mode without Tauri runtime', async () => {
+  test('routes service status via JSON-RPC in web-only mode without Tauri runtime', async () => {
     mockIsTauri.mockReturnValue(false);
+    const rpcResponse = { result: { state: 'Running' as ServiceState }, logs: [] };
+    mockCallCoreRpc.mockResolvedValueOnce(rpcResponse);
 
-    await expect(openhumanServiceStatus()).rejects.toThrow('Not running in Tauri');
-    expect(mockCallCoreRpc).not.toHaveBeenCalled();
+    await expect(openhumanServiceStatus()).resolves.toEqual(rpcResponse);
+    expect(mockCallCoreRpc).toHaveBeenCalledWith({ method: 'openhuman.service_status' });
+  });
+
+  test('surfaces the RPC error without the Tauri CLI fallback in web-only mode', async () => {
+    mockIsTauri.mockReturnValue(false);
+    mockCallCoreRpc.mockRejectedValueOnce(new Error('core unreachable'));
+
+    await expect(openhumanServiceStatus()).rejects.toThrow('core unreachable');
   });
 });

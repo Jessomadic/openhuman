@@ -34,7 +34,6 @@ mod repair_http_request_limits;
 mod retire_chat_v1_model;
 mod retire_local_whisper_stt;
 mod retire_managed_tier_slugs;
-mod retire_subconscious_medulla;
 mod unify_ai_provider_settings;
 
 /// Current target schema version. Bumped alongside every new migration.
@@ -423,7 +422,7 @@ pub async fn run_pending(config: &mut Config) {
     // 7 -> 8: retire the two stale OpenHuman reasoning-tier `default_model`
     // defaults to `chat-v1`. `reasoning-v1` (a former DEFAULT_MODEL) and the
     // deprecated `reasoning-quick-v1` alias were the persisted default for older
-    // builds and drive the implicit managed turns (triage, the subconscious tick,
+    // builds and drive the implicit managed turns (triage,
     // escalation base, chat-fallback) onto a stale tier, since app updates never
     // refresh `default_model`. Only those two values are rewritten — `default_model`
     // round-trips arbitrary custom/BYOK ids (config-mutation contract), so anything
@@ -603,37 +602,18 @@ pub async fn run_pending(config: &mut Config) {
         );
     }
 
-    // 11 -> 12: rewrite the removed Medulla subconscious engine to the
-    // supported local engine. The enum retains the legacy variant so old
-    // config files can be parsed before this migration runs.
+    // 11 -> 12: reserialize the config. This step once rewrote a retired
+    // background-engine name; that config block no longer exists, so the save
+    // now just drops it. Kept so the schema_version sequence stays contiguous.
     if config.schema_version == 11 {
-        let previous_engine = config.subconscious.engine;
-        match retire_subconscious_medulla::run(config) {
-            Ok(migrated) => {
-                let previous_version = config.schema_version;
-                config.schema_version = 12;
-                if let Err(err) = config.save().await {
-                    config.subconscious.engine = previous_engine;
-                    config.schema_version = previous_version;
-                    log::warn!(
-                        "[migrations] retire_subconscious_medulla ran but config.save failed: \
-                         {err:#} — rolled in-memory schema_version back to {previous_version}, \
-                         will retry on next launch"
-                    );
-                    return;
-                }
-                log::info!(
-                    "[migrations] schema_version bumped to 12 (retire_subconscious_medulla \
-                     engine_migrated={migrated})"
-                );
-            }
-            Err(err) => {
-                log::warn!(
-                    "[migrations] retire_subconscious_medulla failed: {err:#} — \
-                     will retry on next launch"
-                );
-            }
+        let previous_version = config.schema_version;
+        config.schema_version = 12;
+        if let Err(err) = config.save().await {
+            config.schema_version = previous_version;
+            log::warn!("[migrations] schema_version 12 save failed: {err:#}");
+            return;
         }
+        log::info!("[migrations] schema_version bumped to 12");
     }
 
     // 12 -> 13: retire the managed tier slugs (`chat-v1`, `agentic-v1`, …).

@@ -57,10 +57,6 @@ pub(crate) fn all_graph_topologies() -> Vec<GraphTopologyReport> {
         out.push(describe("workflow_runs:scheduler_preview", &t));
     }
 
-    if let Ok(t) = crate::agent::registry::agents::researcher::graph::topology() {
-        out.push(describe("agent:researcher", &t));
-    }
-
     // Not exported: item-count-driven `map_reduce` fan-outs whose node set is
     // determined per run rather than by a fixed named topology.
 

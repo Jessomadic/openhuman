@@ -17,7 +17,9 @@
 // reached zero gates — silently re-arming the exact failure described below.
 // That is why assertion 1 exists and why it compares an explicit list.
 //
-// Why this exists (#4919): the shell declares `openhuman_core` with
+// Why this exists (#4919): the shell declares its one openhuman dependency
+// (`openhuman_core` then; `openhuman-rpc` now, which forwards each gate down
+// the chain rpc -> tinyhumans -> embed -> core) with
 // `default-features = false`, so it does NOT inherit the core's `default` list.
 // Every default-ON gate must be forwarded by hand, and nothing enforced that.
 // When the two drift, the domain is compiled out of the shipped desktop app and
@@ -50,7 +52,20 @@
  */
 export const INTENTIONALLY_NOT_FORWARDED = {
   // 'some-gate': 'Reason it must not ship in the desktop build.',
-  medulla: 'Medulla orchestration-backend client; the desktop app is OpenHuman\'s own product and never dials a Medulla backend. Consumed by the Medulla TUI, which embeds this crate directly.',
+};
+
+/**
+ * Gates the shell turns on on its `openhuman-rpc` dependency that are NOT
+ * core gates, mapped to why. They are rpc's (and, for `jev`, tinyhumans')
+ * own, so they never appear in `scripts/ci/product-features.txt`, and the
+ * product assertion must not read them as "unexpected".
+ */
+export const SHELL_RPC_LOCAL_GATES = {
+  'http-client':
+    "openhuman-rpc's authenticated JSON-RPC client; the shell relays non-loopback runtimes through it.",
+  server:
+    "openhuman-rpc's JSON-RPC server and `host::desktop`, which the shell boots its embedded core with.",
+  jev: 'The Jev-backed `tool_search` ranker (openhuman-tinyhumans), shipped by the product.',
 };
 
 /**
@@ -133,13 +148,14 @@ export function parseCoreDefaultFeatures(coreToml) {
 }
 
 /**
- * What the shell forwards on its `openhuman_core` dependency.
+ * What the shell forwards on its `openhuman-rpc` dependency — the only
+ * openhuman crate it names (`scripts/ci/check-crate-chain.mjs`).
  *
  * Returns `{ defaultFeatures, features }`. `defaultFeatures: true` means the
  * shell inherits the core's defaults and forwarding is moot — there is nothing
  * to drift.
  */
-export function parseShellForwardedFeatures(shellToml, depName = 'openhuman_core') {
+export function parseShellForwardedFeatures(shellToml, depName = 'openhuman-rpc') {
   const text = stripComments(shellToml);
   // `[ \t]` not `\s`, for the same newline-matching reason as above.
   const declAt = text.search(new RegExp(`^[ \\t]*${depName}[ \\t]*=[ \\t]*\\{`, 'm'));
@@ -261,7 +277,12 @@ export function parseProductFeatures(text) {
  * dropping a gate from the shell fails on `missing`, and adding one the
  * product never agreed to fails on `unexpected`.
  */
-export function checkProductForwarding({ productFeatures, coreFeatureNames, shell }) {
+export function checkProductForwarding({
+  productFeatures,
+  coreFeatureNames,
+  shell,
+  localGates = SHELL_RPC_LOCAL_GATES,
+}) {
   const empty = { missing: [], unexpected: [], unknown: [] };
   if (shell === null) return { ok: false, reason: 'dependency-not-found', ...empty };
   if (shell.defaultFeatures) {
@@ -277,7 +298,11 @@ export function checkProductForwarding({ productFeatures, coreFeatureNames, shel
   const missing = productFeatures.filter(gate => !forwarded.has(gate));
   // Forwarded by the shell but not in the product set → the product grew a
   // gate without anyone editing the file that says what the product is.
-  const unexpected = shell.features.filter(gate => !product.has(gate));
+  // `openhuman-rpc`'s own gates (server, client, Jev ranker) are not core
+  // gates and never belong in the product file; they are exempt by name.
+  const unexpected = shell.features.filter(
+    gate => !product.has(gate) && !Object.prototype.hasOwnProperty.call(localGates, gate)
+  );
   // Named in the product set but not declared by the core → typo, or a gate
   // renamed/deleted without updating this list.
   const unknown = productFeatures.filter(gate => !known.has(gate));
@@ -292,11 +317,11 @@ export function checkProductForwarding({ productFeatures, coreFeatureNames, shel
 
 export function formatProductReport(result, { productFeatures, shell }) {
   if (result.reason === 'dependency-not-found') {
-    return 'FAIL: could not find the `openhuman_core` dependency in the shell manifest.\nThe guard cannot verify forwarding — fix the parser or the manifest.';
+    return 'FAIL: could not find the `openhuman-rpc` dependency in the shell manifest.\nThe guard cannot verify forwarding — fix the parser or the manifest.';
   }
   if (result.reason === 'shell-inherits-defaults') {
     return [
-      'FAIL: the shell no longer sets `default-features = false` on `openhuman_core`.',
+      'FAIL: the shell no longer sets `default-features = false` on `openhuman-rpc`.',
       'It would inherit `[features] default`, which is the CONTRIBUTOR set and is',
       'deliberately smaller than the product — voice, web3, documents, meet, contacts',
       'and crash-reporting would vanish from the shipped app.',
@@ -317,7 +342,7 @@ export function formatProductReport(result, { productFeatures, shell }) {
     lines.push(
       '',
       'Each of these is compiled OUT of the shipped desktop app, silently.',
-      'Add it to the `openhuman_core` features list in crates/openhuman-app/Cargo.toml.',
+      'Add it to the `openhuman-rpc` features list in crates/openhuman-app/Cargo.toml.',
       'See #4901 (voice, 56 users) and #4918 (tokenjuice-treesitter).'
     );
   }
@@ -367,7 +392,7 @@ export function diffForwarding({ coreDefaults, shell, allowlist = {} }) {
 
 export function formatReport(result, { coreDefaults, shell, allowlist = {} }) {
   if (result.reason === 'dependency-not-found') {
-    return 'FAIL: could not find the `openhuman_core` dependency in the shell manifest.\nThe guard cannot verify forwarding — fix the parser or the manifest.';
+    return 'FAIL: could not find the `openhuman-rpc` dependency in the shell manifest.\nThe guard cannot verify forwarding — fix the parser or the manifest.';
   }
   if (result.reason === 'inherits-defaults') {
     return 'OK: the shell inherits the core default features (no `default-features = false`), so no forwarding is required.';
@@ -389,7 +414,7 @@ export function formatReport(result, { coreDefaults, shell, allowlist = {} }) {
     lines.push(
       '',
       'Each of these is compiled OUT of the shipped desktop app, silently.',
-      'Fix by adding the gate to the `openhuman_core` features list in',
+      'Fix by adding the gate to the `openhuman-rpc` features list in',
       'crates/openhuman-app/Cargo.toml — or, if the exclusion is deliberate, add it to',
       'INTENTIONALLY_NOT_FORWARDED in scripts/ci/check-feature-forwarding.mjs',
       'with a reason. See #4901 (voice) and #4918 (tokenjuice-treesitter).'
@@ -398,4 +423,256 @@ export function formatReport(result, { coreDefaults, shell, allowlist = {} }) {
   if (result.ok)
     lines.push('', 'OK: every default-ON core gate is forwarded to the desktop shell.');
   return lines.join('\n');
+}
+
+// ── the library chain: core → embed → tinyhumans → rpc → cli/tui (#6364) ──
+//
+// The shell is not the only manifest that re-declares the core's gates. The
+// library layers and the other hosts forward them 1:1:
+//
+//   openhuman-embed       <gate> = ["openhuman-core/<gate>"]
+//   openhuman-tinyhumans  <gate> = ["openhuman-embed/<gate>"]
+//   openhuman-rpc         <gate> = ["openhuman-tinyhumans/<gate>"]
+//   openhuman-cli         <gate> = ["openhuman-rpc/<gate>"]
+//   openhuman-tui         <gate> = ["openhuman-rpc/<gate>"]
+//
+// (The desktop shell forwards on its `openhuman-rpc` dependency line instead
+// of a features table; `checkProductForwarding` covers it.)
+//
+// Nothing enforced those three lists, and they fail in both directions:
+//
+//   - A gate REMOVED from the core and left in a layer is a hard cargo error
+//     ("package openhuman-cli depends on openhuman with feature peripheral-rpi
+//     but openhuman does not have that feature") — loud, but only once someone
+//     builds that crate, and it reads as a dependency problem rather than
+//     drift. That is #6360.
+//   - A gate ADDED to the core and forgotten by a layer fails SILENTLY. The
+//     product lanes pass `--features "$(scripts/ci/product-features.sh)"` to
+//     `openhuman-cli`, where the name still resolves, so CI stays green while
+//     the gate is off for every embedder.
+//
+// Same failure shape as #4901/#4918 one layer down, so it gets the same
+// treatment: an explicit list, and an exclusion that must carry a reason.
+
+/**
+ * Core gates a layer deliberately does NOT carry, mapped to why.
+ *
+ * Keyed by the crate that omits the gate. Like `INTENTIONALLY_NOT_FORWARDED`,
+ * the reason string is the whole point: it is what lets a reviewer tell
+ * "excluded on purpose" from "forgotten" without going archaeology.
+ */
+export const CHAIN_GATES_NOT_FORWARDED = {
+  'openhuman-embed': {
+    'rss-bench':
+      'Library-side hook for the embedded-RSS benchmark (#5046). Its binaries live in tinyhumansai/openhuman-benchmarks (`profile/`, #6944), which enables the core gate directly; no host in this repository turns it on.',
+  },
+};
+
+/**
+ * Gates a crate declares that belong to it alone, mapped to why.
+ *
+ * These have no twin upstream, so the chain check would otherwise read them as
+ * a stale forward of a deleted core gate — the exact #6360 symptom it exists to
+ * catch. An entry here says "this one is local by design".
+ */
+export const CHAIN_LOCAL_GATES = {
+  'openhuman-tinyhumans': {
+    jev: 'This crate owns the gate: the Jev-backed `tool_search` ranker (`tinytools-jev` over the TinyHumans System One proxy).',
+  },
+  'openhuman-rpc': {
+    'http-client':
+      'The authenticated JSON-RPC HTTP client (`post_json_rpc`); transport code this crate owns, with no core twin.',
+    server:
+      "The core's JSON-RPC server (router, Socket.IO, listener) and the shared host boot; lives only in this crate.",
+    'session-store':
+      'The on-disk session store (`session_store`) behind the TinyAgents port; a host-side provider, not a core gate.',
+  },
+  'openhuman-cli': {
+    'bin-tools': 'CLI argument parsing + logger init for the `openhuman-fleet` binary.',
+  },
+};
+
+/**
+ * The `[features]` table of any manifest, as `name -> [items]`.
+ *
+ * Same scanner as `parseCoreFeatureGraph` (which now delegates here) — the
+ * shape is not core-specific, and the chain check reads three more manifests
+ * with it.
+ */
+export function parseFeatureTable(toml) {
+  return parseCoreFeatureGraph(toml);
+}
+
+/**
+ * Assertion 4: one link of the chain forwards its sources' gates.
+ *
+ * `sources` are the crates this one sits on top of:
+ *
+ *   `{ crate, gates, required: true }`  — every gate must be declared here and
+ *      must forward to `<crate>/<gate>`. That is core → embed, embed →
+ *      tinyhumans, tinyhumans → rpc, rpc → cli and rpc → tui.
+ *   `{ crate, gates, required: false }` — only gates this crate ALREADY
+ *      declares have to carry the forward: for a crate that forwards to a
+ *      second parent only where that parent has the gate.
+ *
+ * A forward is checked by TARGET, not just by name: a gate declared as
+ * `voice = ["openhuman-core/web3"]` is as broken as a missing one and looks
+ * identical to a name-only check.
+ */
+export function diffChainForwarding({
+  crate,
+  features,
+  sources,
+  notForwarded = {},
+  localGates = {},
+}) {
+  const declared = new Set([...features.keys()].filter(name => name !== 'default'));
+  const missing = [];
+  const misrouted = [];
+  const allowed = [];
+  for (const source of sources) {
+    for (const gate of source.gates) {
+      if (gate === 'default') continue;
+      if (!declared.has(gate)) {
+        // Only a required source can be missing from here: an optional source
+        // (tinyhumans → cli) says nothing about gates this crate never took.
+        if (!source.required) continue;
+        if (Object.prototype.hasOwnProperty.call(notForwarded, gate)) allowed.push(gate);
+        else missing.push({ gate, source: source.crate });
+        continue;
+      }
+      const forward = `${source.crate}/${gate}`;
+      if (!(features.get(gate) ?? []).includes(forward)) {
+        misrouted.push({ gate, source: source.crate, expected: forward });
+      }
+    }
+  }
+  // A forward to a gate the crate below does not declare. This is the #6360
+  // error verbatim — cargo refuses it — but it surfaces there as a dependency
+  // resolution failure on whoever builds that crate first, with nothing naming
+  // it as forwarding drift. Catching it here says what it is.
+  const dangling = [];
+  for (const gate of declared) {
+    for (const item of features.get(gate) ?? []) {
+      const slash = item.indexOf('/');
+      if (slash === -1) continue;
+      const source = sources.find(candidate => candidate.crate === item.slice(0, slash));
+      if (!source) continue;
+      const target = item.slice(slash + 1);
+      if (!source.gates.includes(target)) dangling.push({ gate, item });
+    }
+  }
+  const upstream = new Set(sources.flatMap(source => source.gates));
+  // Declared here, in no source, and not claimed as local: either a gate the
+  // core dropped (the #6360 shape) or a local gate nobody documented.
+  const unknown = [...declared].filter(
+    gate =>
+      !upstream.has(gate) && !Object.prototype.hasOwnProperty.call(localGates, gate)
+  );
+  // A "local" gate an upstream crate now declares is no longer local, and the
+  // entry would hide a genuinely missing forward for it. One this crate has
+  // since dropped is stale for the opposite reason: it describes nothing, and
+  // would silently excuse a gate by that name the day one reappears.
+  const staleLocal = Object.keys(localGates).filter(
+    gate => upstream.has(gate) || !declared.has(gate)
+  );
+  // Mirrors `diffForwarding`'s stale check, in both directions: an exclusion
+  // for a gate that IS carried here is wrong and would mask the day it gets
+  // dropped, and an exclusion for a gate no source declares any more excuses a
+  // name that no longer exists — it also stops appearing in the `allowed:`
+  // report, so nothing draws attention to it.
+  const requiredUpstream = new Set(
+    sources.filter(source => source.required).flatMap(source => source.gates)
+  );
+  const staleExclusion = Object.keys(notForwarded).filter(
+    gate => declared.has(gate) || !requiredUpstream.has(gate)
+  );
+  return {
+    ok:
+      missing.length === 0 &&
+      misrouted.length === 0 &&
+      dangling.length === 0 &&
+      unknown.length === 0 &&
+      staleLocal.length === 0 &&
+      staleExclusion.length === 0,
+    crate,
+    missing,
+    misrouted,
+    dangling,
+    unknown,
+    staleLocal,
+    staleExclusion,
+    allowed,
+  };
+}
+
+export function formatChainReport(result, { notForwarded = {} } = {}) {
+  const lines = [`${result.crate}:`];
+  for (const gate of result.allowed) {
+    lines.push(`  allowed: ${gate} — ${notForwarded[gate]}`);
+  }
+  if (result.missing.length > 0) {
+    lines.push('', `Gates ${result.crate} does not forward:`);
+    for (const { gate, source } of result.missing) lines.push(`  - ${gate} (declared by ${source})`);
+    lines.push(
+      '',
+      `Add \`${result.missing[0].gate} = ["${result.missing[0].source}/${result.missing[0].gate}"]\` to that crate's [features] table,`,
+      'or, if the omission is deliberate, add it to CHAIN_GATES_NOT_FORWARDED in',
+      'scripts/lib/feature-forwarding.mjs with a reason. A gate missing here is off',
+      'for every embedder while the CLI product lanes still resolve the name.'
+    );
+  }
+  if (result.misrouted.length > 0) {
+    lines.push('', `Gates ${result.crate} declares but does not forward to their source:`);
+    for (const { gate, expected } of result.misrouted) lines.push(`  - ${gate} (expected "${expected}")`);
+  }
+  if (result.dangling.length > 0) {
+    lines.push('', `Forwards from ${result.crate} to a gate that no longer exists:`);
+    for (const { gate, item } of result.dangling) lines.push(`  - ${gate} -> "${item}"`);
+    lines.push(
+      '',
+      'cargo rejects this outright ("depends on <crate> with feature <gate> but',
+      '<crate> does not have that feature"), but only for whoever builds that crate',
+      'first, and it reads as a dependency problem rather than forwarding drift (#6360).'
+    );
+  }
+  if (result.unknown.length > 0) {
+    lines.push('', `Gates ${result.crate} declares that no crate below it has:`);
+    for (const gate of result.unknown) lines.push(`  - ${gate}`);
+    lines.push(
+      '',
+      'Either the gate was removed from the core and this forward is stale (#6360:',
+      'a `cargo check` error, not a gate check), or it is local to this crate and',
+      'belongs in CHAIN_LOCAL_GATES with a reason.'
+    );
+  }
+  if (result.staleLocal.length > 0) {
+    lines.push(
+      '',
+      `Stale CHAIN_LOCAL_GATES entries (a crate below now declares the gate, or ${result.crate} no longer does):`
+    );
+    for (const gate of result.staleLocal) lines.push(`  - ${gate}`);
+  }
+  if (result.staleExclusion.length > 0) {
+    lines.push(
+      '',
+      'Stale CHAIN_GATES_NOT_FORWARDED entries (the gate IS forwarded, or no crate below declares it any more):'
+    );
+    for (const gate of result.staleExclusion) lines.push(`  - ${gate}`);
+  }
+  if (result.ok) lines.push(`  OK: forwards every gate of the crates below it.`);
+  return lines.join('\n');
+}
+
+/**
+ * The gates a host must forward from `openhuman-rpc`: rpc's gates minus its
+ * own local ones (`http-client`, `server`, `session-store`). A host turns those
+ * on on its dependency line when it needs them; they are not product gates and
+ * there is nothing to forward.
+ */
+export function rpcForwardedGates(rpcFeatures) {
+  const local = CHAIN_LOCAL_GATES['openhuman-rpc'] ?? {};
+  return [...rpcFeatures.keys()].filter(
+    name => name !== 'default' && !Object.prototype.hasOwnProperty.call(local, name)
+  );
 }

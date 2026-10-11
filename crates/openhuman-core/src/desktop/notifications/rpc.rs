@@ -19,7 +19,7 @@ use crate::agent::turn_origin::with_origin;
 use crate::config::rpc as config_rpc;
 use crate::core::bus::BUS;
 use crate::core::events::DomainEvent;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::store;
 use super::types::{
@@ -45,7 +45,7 @@ pub async fn handle_ingest(params: Map<String, Value>) -> Result<Value, String> 
     let provider_settings = store::get_settings(&config, &req.provider)
         .map_err(|e| format!("[notification_intel] get_settings failed: {e}"))?;
     if !provider_settings.enabled {
-        let outcome = RpcOutcome::new(
+        let outcome = Outcome::new(
             json!({ "skipped": true, "reason": "provider_disabled" }),
             vec![],
         );
@@ -75,7 +75,7 @@ pub async fn handle_ingest(params: Map<String, Value>) -> Result<Value, String> 
             title_chars = req.title.chars().count(),
             "[notification_intel] skipping duplicate notification"
         );
-        let outcome = RpcOutcome::new(json!({ "skipped": true, "reason": "duplicate" }), vec![]);
+        let outcome = Outcome::new(json!({ "skipped": true, "reason": "duplicate" }), vec![]);
         return outcome.into_cli_compatible_json();
     }
 
@@ -88,7 +88,7 @@ pub async fn handle_ingest(params: Map<String, Value>) -> Result<Value, String> 
     // Spawn background triage — the ingest RPC returns immediately.
     let id_for_triage = id.clone();
     let config_for_triage = config.clone();
-    tokio::spawn(async move {
+    crate::core::runtime::spawn_scoped(async move {
         let envelope = TriggerEnvelope {
             source: TriggerSource::WebviewIntegration {
                 provider: req.provider.clone(),
@@ -228,6 +228,13 @@ pub async fn handle_ingest(params: Map<String, Value>) -> Result<Value, String> 
                     "[notification_intel] triage deferred"
                 );
             }
+            Ok(TriageOutcome::Terminal { reason }) => {
+                tracing::warn!(
+                    id = %id_for_triage,
+                    reason = %reason,
+                    "[notification_intel] triage reached terminal state"
+                );
+            }
             Err(e) => {
                 tracing::warn!(
                     id = %id_for_triage,
@@ -238,7 +245,7 @@ pub async fn handle_ingest(params: Map<String, Value>) -> Result<Value, String> 
         }
     });
 
-    let outcome = RpcOutcome::new(json!({ "id": id, "skipped": false }), vec![]);
+    let outcome = Outcome::new(json!({ "id": id, "skipped": false }), vec![]);
     outcome.into_cli_compatible_json()
 }
 
@@ -278,7 +285,7 @@ pub async fn handle_list(params: Map<String, Value>) -> Result<Value, String> {
     let unread = store::unread_count(&config)
         .map_err(|e| format!("[notification_intel] unread_count failed: {e}"))?;
 
-    let outcome = RpcOutcome::new(json!({ "items": items, "unread_count": unread }), vec![]);
+    let outcome = Outcome::new(json!({ "items": items, "unread_count": unread }), vec![]);
     outcome.into_cli_compatible_json()
 }
 
@@ -301,7 +308,7 @@ pub async fn handle_mark_read(params: Map<String, Value>) -> Result<Value, Strin
 
     tracing::debug!(id = %id, "[notification_intel] marked read");
 
-    let outcome = RpcOutcome::new(json!({ "ok": true }), vec![]);
+    let outcome = Outcome::new(json!({ "ok": true }), vec![]);
     outcome.into_cli_compatible_json()
 }
 
@@ -314,7 +321,7 @@ pub async fn handle_settings_get(params: Map<String, Value>) -> Result<Value, St
         .ok_or_else(|| "[notification_intel] missing required param 'provider'".to_string())?;
     let settings = store::get_settings(&config, provider)
         .map_err(|e| format!("[notification_intel] settings_get failed: {e}"))?;
-    let outcome = RpcOutcome::new(json!({ "settings": settings }), vec![]);
+    let outcome = Outcome::new(json!({ "settings": settings }), vec![]);
     outcome.into_cli_compatible_json()
 }
 
@@ -331,7 +338,7 @@ pub async fn handle_settings_set(params: Map<String, Value>) -> Result<Value, St
     };
     store::upsert_settings(&config, &clamped)
         .map_err(|e| format!("[notification_intel] settings_set failed: {e}"))?;
-    let outcome = RpcOutcome::new(json!({ "ok": true, "settings": clamped }), vec![]);
+    let outcome = Outcome::new(json!({ "ok": true, "settings": clamped }), vec![]);
     outcome.into_cli_compatible_json()
 }
 
@@ -351,7 +358,7 @@ pub async fn handle_dismiss(params: Map<String, Value>) -> Result<Value, String>
     let updated = store::mark_dismissed(&config, &id)
         .map_err(|e| format!("[notification_intel] mark_dismissed failed: {e}"))?;
     tracing::debug!(id = %id, updated = updated, "[notification_intel] notification dismissed");
-    let outcome = RpcOutcome::new(json!({ "ok": updated }), vec![]);
+    let outcome = Outcome::new(json!({ "ok": updated }), vec![]);
     outcome.into_cli_compatible_json()
 }
 
@@ -375,7 +382,7 @@ pub async fn handle_mark_acted(params: Map<String, Value>) -> Result<Value, Stri
         updated = updated,
         "[notification_intel] notification marked acted"
     );
-    let outcome = RpcOutcome::new(json!({ "ok": updated }), vec![]);
+    let outcome = Outcome::new(json!({ "ok": updated }), vec![]);
     outcome.into_cli_compatible_json()
 }
 
@@ -407,7 +414,7 @@ pub async fn handle_core_list(params: Map<String, Value>) -> Result<Value, Strin
     let unread = store::unread_core_notification_count(&config)
         .map_err(|e| format!("[notification_intel] core unread_count failed: {e}"))?;
 
-    let outcome = RpcOutcome::new(json!({ "items": items, "unread_count": unread }), vec![]);
+    let outcome = Outcome::new(json!({ "items": items, "unread_count": unread }), vec![]);
     outcome.into_cli_compatible_json()
 }
 
@@ -424,7 +431,7 @@ pub async fn handle_core_mark_read(params: Map<String, Value>) -> Result<Value, 
     let updated = store::mark_core_notification_read(&config, &id)
         .map_err(|e| format!("[notification_intel] core_mark_read failed: {e}"))?;
     tracing::debug!(id = %id, updated = updated, "[notification_intel] core notification marked read");
-    let outcome = RpcOutcome::new(json!({ "ok": updated }), vec![]);
+    let outcome = Outcome::new(json!({ "ok": updated }), vec![]);
     outcome.into_cli_compatible_json()
 }
 
@@ -439,7 +446,7 @@ pub async fn handle_stats(_params: Map<String, Value>) -> Result<Value, String> 
 
     let s = store::stats(&config).map_err(|e| format!("[notification_intel] stats failed: {e}"))?;
 
-    let outcome = RpcOutcome::new(json!(s), vec![]);
+    let outcome = Outcome::new(json!(s), vec![]);
     outcome.into_cli_compatible_json()
 }
 

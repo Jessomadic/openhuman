@@ -6,16 +6,18 @@ use serde_json::Value;
 use crate::channels::email_channel::EmailConfig;
 use crate::channels::providers::yuanbao::YuanbaoConfig;
 use crate::config::{Config, DiscordConfig, IMessageConfig, TelegramConfig};
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 use crate::security::credentials;
 
 use super::super::super::definitions::{find_channel_definition, ChannelAuthMode};
 use super::super::types::ChannelConnectionResult;
-use super::super::yuanbao::{
+use super::email::persist_email_config;
+use super::shared::{credential_provider, parse_allowed_users, parse_optional_bool};
+use tinychannels::controllers::build_email_config;
+use tinychannels::providers::verify_email_credentials;
+use tinychannels::providers::yuanbao::connect::{
     build_effective_yuanbao_config, require_yuanbao_field, verify_yuanbao_credentials,
 };
-use super::email::{build_email_config, persist_email_config, verify_email_credentials};
-use super::shared::{credential_provider, parse_allowed_users, parse_optional_bool};
 
 /// Initiate a channel connection.
 ///
@@ -26,7 +28,7 @@ pub async fn connect_channel(
     channel_id: &str,
     auth_mode: ChannelAuthMode,
     credentials_value: Value,
-) -> Result<RpcOutcome<ChannelConnectionResult>, String> {
+) -> Result<Outcome<ChannelConnectionResult>, String> {
     let def = find_channel_definition(channel_id)
         .ok_or_else(|| format!("unknown channel: {channel_id}"))?;
 
@@ -39,7 +41,7 @@ pub async fn connect_channel(
 
     // For OAuth/managed modes, return the auth action without storing credentials.
     if let Some(action) = spec.auth_action {
-        return Ok(RpcOutcome::new(
+        return Ok(Outcome::new(
             ChannelConnectionResult {
                 status: "pending_auth".to_string(),
                 restart_required: false,
@@ -68,7 +70,12 @@ pub async fn connect_channel(
         let app_secret = require_yuanbao_field(creds_map, "app_secret")?;
         let base = config.channels_config.yuanbao.clone().unwrap_or_default();
         let effective = build_effective_yuanbao_config(base, creds_map, app_key);
-        verify_yuanbao_credentials(&effective, &app_secret).await?;
+        verify_yuanbao_credentials(
+            crate::config::build_runtime_proxy_client("channel.yuanbao"),
+            &effective,
+            &app_secret,
+        )
+        .await?;
         prebuilt_yuanbao_config = Some(effective);
     }
 
@@ -102,7 +109,7 @@ pub async fn connect_channel(
             "[imessage] connect_channel: wrote channels_config.imessage; restart core for AppleScript bridge to load"
         );
 
-        return Ok(RpcOutcome::single_log(
+        return Ok(Outcome::single_log(
             ChannelConnectionResult {
                 status: "connected".to_string(),
                 restart_required: true,
@@ -300,7 +307,7 @@ pub async fn connect_channel(
         persist_email_config(config, email_cfg).await?;
     }
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         ChannelConnectionResult {
             status: "connected".to_string(),
             restart_required: true,

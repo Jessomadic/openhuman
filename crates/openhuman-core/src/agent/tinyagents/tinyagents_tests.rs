@@ -14,59 +14,6 @@ fn crate_native_turn_source_retains_only_role_and_config() {
 }
 
 #[test]
-fn crate_native_text_mode_is_recorded_without_resolving_a_model() {
-    let source =
-        TurnModelSource::new_crate_native("chat", Arc::new(crate::config::Config::default()))
-            .with_text_mode();
-
-    assert!(source
-        .crate_native
-        .as_ref()
-        .is_some_and(|native| native.force_text_mode));
-}
-
-#[test]
-fn crate_native_text_mode_disables_native_tools_on_workload_fallbacks() {
-    use crate::config::schema::cloud_providers::{AuthStyle, CloudProviderCreds};
-
-    let _guard = crate::inference::inference_test_guard();
-    let provider = "deepseek:deepseek-chat".to_string();
-    let mut config = crate::config::Config::default();
-    config.cloud_providers.push(CloudProviderCreds {
-        id: "p_deepseek".to_string(),
-        slug: "deepseek".to_string(),
-        label: "DeepSeek".to_string(),
-        endpoint: "https://api.deepseek.com/v1".to_string(),
-        auth_style: AuthStyle::Bearer,
-        default_model: Some("deepseek-chat".to_string()),
-        ..Default::default()
-    });
-    config.chat_provider = Some(provider.clone());
-    config.reasoning_provider = Some(provider.clone());
-    config.agentic_provider = Some(provider.clone());
-    config.coding_provider = Some(provider.clone());
-    config.vision_provider = Some(provider.clone());
-    config.memory_provider = Some(provider);
-
-    let models = TurnModelSource::new_crate_native("chat", Arc::new(config))
-        .with_text_mode()
-        .build("chat-v1", 0.0, Some(32_000), None)
-        .expect("text-mode turn models build");
-
-    assert!(
-        !models.routes.is_empty(),
-        "expected workload fallback models"
-    );
-    assert!(
-        models
-            .routes
-            .iter()
-            .all(|(_, model)| { model.profile().is_some_and(|profile| !profile.tool_calling) }),
-        "every workload fallback must preserve prompt-guided text mode"
-    );
-}
-
-#[test]
 fn direct_model_turn_source_builds_without_provider_adapter() {
     let model: Arc<dyn tinyinference_llm::model::ChatModel<()>> =
         Arc::new(tinyagents_harness::testkit::ScriptedModel::replies(vec![
@@ -90,9 +37,135 @@ fn run_policy_for_makes_invalid_tool_arguments_recoverable() {
     let policy = run_policy_for(10, false);
     assert_eq!(
         policy.invalid_args,
-        InvalidArgsPolicy::ReturnToolError,
-        "schema-invalid calls must return a corrective tool result instead of aborting the turn"
+        InvalidArgsPolicy::NormalizeThenReturnToolError,
+        "schema-invalid calls must be normalized, then return a corrective tool result instead of aborting the turn"
     );
+}
+
+/// Stand-in with `mcp_registry_tool_call`'s exact parameter schema; records
+/// the arguments it actually executes with.
+struct NestedArgsTool(std::sync::Mutex<Vec<serde_json::Value>>);
+
+#[async_trait::async_trait]
+impl tinytools::Tool for NestedArgsTool {
+    fn name(&self) -> &str {
+        "mcp_registry_tool_call"
+    }
+
+    fn description(&self) -> &str {
+        "call an MCP server tool"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "server_id": { "type": "string" },
+                "tool_name": { "type": "string" },
+                "arguments": { "type": "object" }
+            },
+            "required": ["server_id", "tool_name"]
+        })
+    }
+
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<tinytools::ToolResult> {
+        self.0.lock().unwrap().push(arguments);
+        Ok(tinytools::ToolResult::success("ok"))
+    }
+}
+
+fn scripted_response(
+    tool_calls: Vec<tinyinference_llm::tool::ToolCall>,
+    text: &str,
+) -> tinyinference_llm::model::ModelResponse {
+    use tinyinference_llm::message::{AssistantMessage, ContentBlock};
+    let content = if text.is_empty() {
+        Vec::new()
+    } else {
+        vec![ContentBlock::Text(text.to_string())]
+    };
+    let finish = if tool_calls.is_empty() {
+        "stop"
+    } else {
+        "tool_calls"
+    };
+    tinyinference_llm::model::ModelResponse {
+        message: AssistantMessage {
+            id: None,
+            content,
+            tool_calls,
+            usage: None,
+            origin: None,
+        },
+        usage: None,
+        finish_reason: Some(finish.to_string()),
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
+    }
+}
+
+/// Regression: DeepSeek sent `mcp_registry_tool_call` with a JSON-encoded
+/// nested `"arguments": "{}"`. Under the turn policy that string must be
+/// decoded to an object and the tool must run, instead of every call in the
+/// batch failing validation with "arguments.arguments must be object, got string".
+#[tokio::test]
+async fn run_policy_decodes_stringified_nested_object_arguments() {
+    use tinyinference_llm::message::Message;
+    use tinyinference_llm::tool::ToolCall;
+
+    let call = |id: &str, tool: &str| {
+        ToolCall::new(
+            id,
+            "mcp_registry_tool_call",
+            serde_json::json!({
+                "arguments": "{}",
+                "server_id": "21385eb2",
+                "tool_name": tool,
+            }),
+        )
+    };
+    let model = Arc::new(tinyagents_harness::testkit::ScriptedModel::new(vec![
+        scripted_response(
+            vec![call("call-1", "list_projects"), call("call-2", "list_tags")],
+            "",
+        ),
+        scripted_response(Vec::new(), "done"),
+    ]));
+    let tool = Arc::new(NestedArgsTool(std::sync::Mutex::new(Vec::new())));
+
+    let mut harness: tinyagents_harness::runtime::AgentHarness<()> =
+        tinyagents_harness::runtime::AgentHarness::new();
+    harness.register_model("mock", model);
+    harness.register_tool(tool.clone());
+    harness.with_policy(run_policy_for(10, false));
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("organize my ticktick")])
+        .await
+        .expect("turn completes");
+
+    assert_eq!(run.final_response.unwrap().text(), "done");
+    let executed = tool.0.lock().unwrap().clone();
+    assert_eq!(executed.len(), 2, "both batched calls must execute");
+    for args in &executed {
+        assert_eq!(args["arguments"], serde_json::json!({}));
+    }
+    assert!(
+        !run.messages
+            .iter()
+            .any(|m| format!("{m:?}").contains("must be object, got string")),
+        "no validation error may reach the transcript"
+    );
+}
+
+#[test]
+fn run_policy_retries_one_nontruncated_empty_completion() {
+    let policy = run_policy_for(10, false);
+    assert_eq!(policy.empty_response_retries, 1);
 }
 
 #[test]
@@ -206,7 +279,9 @@ fn run_policy_retry_schedule_outlasts_a_throttled_upstream() {
         retry.jitter,
         "identical curves keep a saturated upstream saturated"
     );
-    assert!(JITTER_FRACTION > 0.0, "jitter must actually widen the band");
+    const {
+        assert!(JITTER_FRACTION > 0.0, "jitter must actually widen the band");
+    }
 
     // Both ceilings stay bounded — this must not become an unbounded retry
     // (cf. #6412, the opposite failure in another crate).

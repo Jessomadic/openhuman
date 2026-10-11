@@ -9,15 +9,16 @@ use std::{
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use openhuman_core::agent::tinyagents::discovery::EmbeddingToolRanker;
-use openhuman_core::api::config::effective_backend_api_url;
-use openhuman_core::config::Config;
-use openhuman_core::security::credentials::session_support::resolve_backend_credential;
-use tinyjevclient::{Client, ClientConfig};
+use openhuman_embed::__host::agent::tinyagents::discovery::{
+    embedding_provider_is_usable, embedding_tool_ranker,
+};
+use openhuman_embed::__host::config::Config;
+use tinyjevclient::Client;
 use tinytools::{RankCandidate, RankContext, RankError, RankHit, ToolRanker};
 use tinytools_jev::{JevRanker, JevRankerConfig, JevStrategy};
 
 use super::evaluator::TinyJevEvaluator;
+use super::route::{self, EnvLookup};
 
 /// How the ranker reads the config a search runs under. The default is the
 /// core's own read path (the embedder's config when one is bound, else the
@@ -25,11 +26,17 @@ use super::evaluator::TinyJevEvaluator;
 pub type ConfigLoader =
     Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<Config, String>> + Send>> + Send + Sync>;
 
-/// A [`JevRanker`] bound to whichever credential and backend the process has
-/// at search time.
+/// Where the ranker reads the two env-provided Jev keys. The default is the
+/// process environment; a test hands in a fixed table.
+pub type EnvLoader = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// A [`JevRanker`] bound to the Jev route the config selects
+/// (`agent.tool_search.jev_route`) and the credential for it, resolved at
+/// search time.
 pub struct TinyHumansJevRanker {
     config: JevRankerConfig,
     load_config: ConfigLoader,
+    env: EnvLoader,
     /// Deadline for one evaluation. Measured through the TinyHumans proxy
     /// (2026-09) one evaluation takes 0.7–1.9 s at p50 and the family
     /// strategy runs its second-stage evaluations concurrently, so six
@@ -80,11 +87,19 @@ impl TinyHumansJevRanker {
         Self {
             config,
             load_config: Arc::new(|| {
-                Box::pin(openhuman_core::config::ops::load_config_with_timeout())
+                Box::pin(openhuman_embed::__host::config::ops::load_config_with_timeout())
             }),
+            env: Arc::new(route::process_env),
             deadline: DEFAULT_DEADLINE,
             cached: Mutex::new(None),
         }
+    }
+
+    /// Reads `TYPESAFE_API_KEY` / `OPENROUTER_API_KEY` through `env` instead of
+    /// the process environment.
+    pub fn with_env_loader(mut self, env: EnvLoader) -> Self {
+        self.env = env;
+        self
     }
 
     /// Sets the per-evaluation deadline.
@@ -112,14 +127,11 @@ impl TinyHumansJevRanker {
             .map_err(|error| RankError::Backend {
                 reason: format!("config unavailable: {error}"),
             })?;
-        let credential = resolve_backend_credential(&config).map_err(|reason| {
-            // The message names what is missing, never a secret.
-            RankError::Backend {
-                reason: format!("no TinyHumans credential ({reason})"),
-            }
-        })?;
-        let base_url = effective_backend_api_url(&config.api_url);
-        let fingerprint = fingerprint(credential.secret(), &base_url);
+        let env: EnvLookup<'_> = &*self.env;
+        let resolved = route::resolve(&config, env)?;
+        let base_url = resolved.client.base_url.clone();
+        let route_label = resolved.route.label();
+        let fingerprint = fingerprint(&format!("{route_label}:{}", resolved.secret), &base_url);
 
         let mut cached = self
             .cached
@@ -131,8 +143,7 @@ impl TinyHumansJevRanker {
         {
             return Ok(entry.ranker.clone());
         }
-        let mut client_config = ClientConfig::tinyhumans_openrouter(credential.into_secret());
-        client_config.base_url = base_url.clone();
+        let client_config = resolved.client;
         let client = Client::new(client_config)
             .map_err(|error| RankError::invalid_input(error.to_string()))?;
         let evaluator: Arc<dyn tinytools_jev::JevEvaluator> =
@@ -150,8 +161,8 @@ impl TinyHumansJevRanker {
             self.config.clone().with_retriever(retriever.clone()),
         );
         log::info!(
-            "[tool-search] jev ranker bound to backend {} ({})",
-            openhuman_core::util::redact::redact_url_for_log(&base_url),
+            "[tool-search] jev ranker bound to route={route_label} backend {} ({})",
+            openhuman_embed::__host::util::redact::redact_url_for_log(&base_url),
             if fingerprint_changed(cached.as_ref(), fingerprint) {
                 "credential or backend changed"
             } else {
@@ -175,8 +186,10 @@ impl TinyHumansJevRanker {
 /// round trip to the same recall.
 fn retriever_for(config: &Config) -> Result<Arc<dyn ToolRanker>, RankError> {
     let provider =
-        openhuman_core::inference::embedding_host::default_embedding_provider_with_config(config);
-    if !EmbeddingToolRanker::provider_is_usable(provider.as_ref()) {
+        openhuman_embed::__host::inference::embedding_host::default_embedding_provider_with_config(
+            config,
+        );
+    if !embedding_provider_is_usable(provider.as_ref()) {
         log::info!(
             "[tool-search] embedding provider `{}` cannot embed; jev search disabled, bm25 answers",
             provider.name()
@@ -192,7 +205,7 @@ fn retriever_for(config: &Config) -> Result<Arc<dyn ToolRanker>, RankError> {
         provider.model_id()
     );
     Ok(Arc::new(
-        EmbeddingToolRanker::new(provider).with_disk_cache(
+        embedding_tool_ranker(provider).with_disk_cache(
             config
                 .workspace_dir
                 .join("cache")

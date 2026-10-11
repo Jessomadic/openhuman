@@ -29,7 +29,7 @@ import { AssistantUiRuntimeProvider } from '../../../providers/AssistantUiRuntim
 import chatRuntimeReducer from '../../../store/chatRuntimeSlice';
 import threadReducer from '../../../store/threadSlice';
 import type { ThreadMessage } from '../../../types/thread';
-import { Thread } from '../thread';
+import { extractComposerPasteFiles, Thread } from '../thread';
 
 const THREAD_ID = 't-action-bar';
 
@@ -64,6 +64,29 @@ function renderThreadWithOneUserMessage() {
 }
 
 describe('User-message action bar — capability-gated Edit (#5897)', () => {
+  it('extracts media from either clipboard representation', () => {
+    const file = new File(['x'], 'clip.png', { type: 'image/png' });
+    expect(
+      extractComposerPasteFiles({ items: [], files: [file] } as unknown as DataTransfer)
+    ).toEqual([file]);
+    expect(
+      extractComposerPasteFiles({
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }],
+        files: [],
+      } as unknown as DataTransfer)
+    ).toEqual([file]);
+  });
+
+  it('extracts arbitrary clipboard files with empty item MIME', () => {
+    const file = new File(['original'], 'archive.zip');
+    expect(
+      extractComposerPasteFiles({
+        items: [{ kind: 'file', type: '', getAsFile: () => file }],
+        files: [],
+      } as unknown as DataTransfer)
+    ).toEqual([file]);
+  });
+
   it('renders the user message and its action bar', async () => {
     const { container } = renderThreadWithOneUserMessage();
 
@@ -76,17 +99,17 @@ describe('User-message action bar — capability-gated Edit (#5897)', () => {
     expect(container.querySelector('.aui-user-action-bar-root')).not.toBeNull();
   });
 
-  it('does not offer an Edit control while the runtime cannot edit', async () => {
+  it('offers an Edit control now that the runtime can edit', async () => {
     const { container } = renderThreadWithOneUserMessage();
 
     await waitFor(() => {
       expect(screen.getByText('hover me')).toBeInTheDocument();
     });
 
-    // `useOpenHumanExternalStore` implements neither `onEdit` nor
-    // `setMessages`, so assistant-ui reports `edit: false` and the gate must
-    // withhold the button. Asserted by the class the product CSS and the
-    // browser spec both key on.
-    expect(container.querySelectorAll('.aui-user-action-edit')).toHaveLength(0);
+    // `useOpenHumanExternalStore` now implements `onEdit` (`threads.edit_message`)
+    // and `setMessages` (a no-op that only exists to un-gate `BranchPicker`),
+    // so assistant-ui reports `edit: true` and the gate renders the button.
+    // Asserted by the class the product CSS and the browser spec both key on.
+    expect(container.querySelectorAll('.aui-user-action-edit')).toHaveLength(1);
   });
 });

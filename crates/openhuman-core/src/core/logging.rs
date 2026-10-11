@@ -186,7 +186,7 @@ fn level_tag(level: &Level) -> &'static str {
     }
 }
 
-/// Shortens a Rust module path (e.g., `openhuman_core::rpc` -> `rpc`).
+/// Shortens a Rust module path (e.g., `openhuman_core::core` -> `core`).
 fn short_target(target: &str) -> &str {
     target.rsplit("::").next().unwrap_or(target)
 }

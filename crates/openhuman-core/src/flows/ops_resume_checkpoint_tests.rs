@@ -118,29 +118,14 @@ async fn flows_resume_allows_a_legacy_row_with_null_graph_hash() {
     assert_eq!(resumed.value["pending_approvals"], json!([]));
 }
 
-/// `compute_graph_hash` must hash graph *content*, not incidental JSON object
-/// key order. Node `config` is a free-form `serde_json::Value` (see
-/// `tinyflows::model::Node::config`), and this crate has the `preserve_order`
-/// feature active transitively — `Value`'s object map keeps insertion order
-/// rather than sorting automatically — so two structurally-identical graphs
-/// built with the same config keys in a different order would hash
-/// differently without the canonicalization `compute_graph_hash` applies.
+/// The stale-approval pin is a persisted format. The algorithm and its
+/// key-order / `require_approval` properties are tested in `tinyflows-catalog`;
+/// this pins the same digests in the host build, where `serde_json` has
+/// `preserve_order` active, so a feature-unification change cannot silently
+/// invalidate every parked run's pin.
 #[test]
-fn graph_hash_is_stable_across_serialization_key_order() {
-    let graph_a = structurally_valid_graph(json!({
-        "name": "order-test",
-        "nodes": [
-            { "id": "t", "kind": "trigger", "name": "Trigger" },
-            {
-                "id": "n",
-                "kind": "output_parser",
-                "name": "N",
-                "config": { "a": 1, "b": 2, "nested": { "x": 1, "y": 2 } }
-            }
-        ],
-        "edges": [ { "from_node": "t", "to_node": "n" } ]
-    }));
-    let graph_b = structurally_valid_graph(json!({
+fn graph_hash_matches_the_persisted_vector_under_preserve_order() {
+    let graph = structurally_valid_graph(json!({
         "name": "order-test",
         "nodes": [
             { "id": "t", "kind": "trigger", "name": "Trigger" },
@@ -153,34 +138,13 @@ fn graph_hash_is_stable_across_serialization_key_order() {
         ],
         "edges": [ { "from_node": "t", "to_node": "n" } ]
     }));
-
-    let hash_a = compute_graph_hash(&graph_a, false).expect("graph_a should hash");
-    let hash_b = compute_graph_hash(&graph_b, false).expect("graph_b should hash");
     assert_eq!(
-        hash_a, hash_b,
-        "the same graph content in a different key order must hash identically"
+        compute_graph_hash(&graph, false).as_deref(),
+        Some("33ff2f572641fba1b81c6726161314f8a9e725a6b8c33a0a119cbe0564b57ad2")
     );
-
-    // Sanity: an actually-different graph must NOT collide.
-    let mut graph_c_value = json!({
-        "name": "order-test",
-        "nodes": [
-            { "id": "t", "kind": "trigger", "name": "Trigger" },
-            {
-                "id": "n",
-                "kind": "output_parser",
-                "name": "N",
-                "config": { "a": 1, "b": 2, "nested": { "x": 1, "y": 2 } }
-            }
-        ],
-        "edges": [ { "from_node": "t", "to_node": "n" } ]
-    });
-    graph_c_value["nodes"][1]["config"]["a"] = json!(999);
-    let graph_c = structurally_valid_graph(graph_c_value);
-    let hash_c = compute_graph_hash(&graph_c, false).expect("graph_c should hash");
-    assert_ne!(
-        hash_a, hash_c,
-        "a genuinely different graph must not collide"
+    assert_eq!(
+        compute_graph_hash(&graph, true).as_deref(),
+        Some("a13666dfbcff29a5509b0ee4d0bc50199b47eb11cb32f5ba2b00c7ae626cd179")
     );
 }
 

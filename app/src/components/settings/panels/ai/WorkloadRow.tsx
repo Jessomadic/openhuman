@@ -13,15 +13,14 @@
  * writes its own `data-slot` before spreading props, so ours wins.
  */
 import { useT } from '../../../../lib/i18n/I18nContext';
-import Button from '../../../ui/Button';
+import { TableCell, TableRow } from '../../../ui/Table';
 import {
   type CloudProvider,
   type ProviderRef,
-  slugTone,
   type Workload,
   WORKLOAD_MODEL_HINT_KEYS,
 } from './aiPanelTypes';
-import { ProviderSwatch } from './ProviderListRow';
+import { RouteButton } from './RouteButton';
 
 export type WorkloadRowProps = {
   workload: Workload;
@@ -88,39 +87,26 @@ export const WorkloadRow = ({
   const { provider, providerSlug, model } = resolveTarget(ref_, cloudProviders, t);
 
   return (
-    <li
-      data-slot="workload-row"
-      data-pinned={isPinned}
-      className="flex flex-wrap items-center gap-3 px-4 py-3">
-      <div className="min-w-0 flex-1">
+    <TableRow data-slot="workload-row" data-pinned={isPinned}>
+      <TableCell className="py-3 pl-4">
         <div className="flex min-w-0 flex-col gap-0.5">
           <span className="text-sm font-medium text-content">{t(workload.labelKey)}</span>
-          <span className="text-xs leading-5 text-content-muted">{t(workload.descriptionKey)}</span>
-          <span className="text-[11px] leading-5 text-content-faint">
+          <span className="text-xs text-content-muted">{t(workload.descriptionKey)}</span>
+          <span className="text-[11px] text-content-faint">
             {t(WORKLOAD_MODEL_HINT_KEYS[workload.id])}
           </span>
         </div>
-      </div>
-
-      <Button
-        type="button"
-        variant="secondary"
-        size="xs"
-        onClick={onCustomClick}
-        className="h-auto min-w-52 max-w-60 justify-start gap-2 px-3 py-2 text-left">
-        {provider && providerSlug ? (
-          <ProviderSwatch slug={providerSlug} label={provider} tone={slugTone(providerSlug)} />
-        ) : null}
-        <span className="flex min-w-0 flex-col gap-0.5">
-          <span className="truncate text-[10px] font-medium text-content-muted">
-            {provider ?? 'Select provider and model'}
-          </span>
-          <span className="max-w-full truncate font-mono text-xs text-content">
-            {model || 'Choose a model'}
-          </span>
-        </span>
-      </Button>
-    </li>
+      </TableCell>
+      <TableCell className="py-3 pr-4">
+        <RouteButton
+          providerSlug={provider ? providerSlug : null}
+          provider={provider ?? t('settings.ai.routing.selectProvider')}
+          model={model || null}
+          placeholder={t('settings.ai.routing.chooseModel')}
+          onClick={onCustomClick}
+        />
+      </TableCell>
+    </TableRow>
   );
 };
 

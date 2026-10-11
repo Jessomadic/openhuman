@@ -16,8 +16,6 @@ use tinyagents_harness::store::StoreRegistry;
 use tinyagents_registry::DiagnosticSeverity;
 
 use crate::agent::harness::tool_result_artifacts::TINYAGENTS_TOOL_RESULT_ARTIFACT_STORE;
-use crate::agent::harness::MAX_SPAWN_DEPTH;
-use crate::agent::messages::ChatMessage;
 use crate::agent::tinyagents::harness_assembly::{assemble_turn_harness, AssembledTurnHarness};
 use crate::agent::tinyagents::host::steering::shared_steering_registry;
 use crate::agent::tinyagents::host::OpenHumanRunContext;
@@ -31,7 +29,9 @@ use crate::agent::tinyagents::turn_run_finalize::finalize_turn_outcome;
 use crate::agent::tinyagents::{journal, routes, steering_forwarder};
 use tinyagents_harness::ids::TaskId;
 use tinyagents_harness::run_queue::RunQueue;
+use tinyagents_session::transcript::TranscriptMessage;
 
+use super::turn_runner_boxed::run_turn_via_tinyagents_inner;
 use super::ToolPolicyEnforcement;
 
 /// The durable root entry point for hosted turns.  It intentionally carries no
@@ -46,11 +46,10 @@ use turn_runner_hosted::{root_hosted_harness, PrecomposedRootContext};
 #[cfg(test)]
 #[path = "turn_runner_tests.rs"]
 mod tests;
+
 #[cfg(test)]
-#[path = "turn_runner_thin.rs"]
-mod thin;
-#[cfg(test)]
-pub(crate) use thin::run_turn_via_tinyagents;
+#[path = "budget_stop_turn_tests.rs"]
+mod budget_stop_tests;
 
 /// Drive a turn through the tinyagents harness over the routes' **shared**,
 /// `Arc`-owned tool registry sets (`Arc<Vec<Box<dyn Tool>>>`), advertising
@@ -91,7 +90,7 @@ pub(crate) async fn run_turn_via_tinyagents_shared(
     turn_models: TurnModels,
     provider_id: String,
     model: &str,
-    history: Vec<ChatMessage>,
+    history: Vec<TranscriptMessage>,
     tool_sets: Vec<Arc<Vec<Box<dyn tinytools::Tool>>>>,
     allowed: Option<HashSet<String>>,
     max_iterations: usize,
@@ -152,7 +151,7 @@ pub(crate) async fn run_root_turn_via_hosted_agent(
     turn_models: TurnModels,
     provider_id: String,
     model: &str,
-    history: Vec<ChatMessage>,
+    history: Vec<TranscriptMessage>,
     tool_sets: Vec<Arc<Vec<Box<dyn tinytools::Tool>>>>,
     allowed: Option<HashSet<String>>,
     max_iterations: usize,
@@ -190,12 +189,12 @@ pub(crate) async fn run_root_turn_via_hosted_agent(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_turn_via_tinyagents_inner(
+pub(super) async fn run_turn_via_tinyagents_body(
     mut run_context: OpenHumanRunContext,
     turn_models: TurnModels,
     provider_id: String,
     model: &str,
-    history: Vec<ChatMessage>,
+    history: Vec<TranscriptMessage>,
     tool_sets: Vec<Arc<Vec<Box<dyn tinytools::Tool>>>>,
     allowed: Option<HashSet<String>>,
     max_iterations: usize,
@@ -222,9 +221,8 @@ async fn run_turn_via_tinyagents_inner(
     // otherwise the harness model-call cap would be zero and abort the run before
     // the first provider call.
     let max_iterations = effective_max_iterations(max_iterations);
-    // Hosted resolution must expose this turn's already-selected primary and
-    // fallback models.  Build the resolver before assembly consumes the model
-    // bundle; it is installed only on the invocation-local host bundle.
+    // Wrap concrete routes before the invocation-local hosted resolver captures them.
+    let turn_models = turn_models.with_budget(run_context.model_budget.as_ref());
     let hosted_model_resolver = hosted_root.as_ref().map(|_| {
         Arc::new(
             crate::agent::tinyagents::turn_models::TurnModelResolver::from_turn_models(
@@ -236,12 +234,20 @@ async fn run_turn_via_tinyagents_inner(
     // the exact same `Arc`-shared instances, so retain only the cheap Arc clone
     // for a hosted invocation (never clone the tools themselves).
     let hosted_tool_sets = hosted_root.as_ref().map(|_| tool_sets.clone());
-    // The turn's crate `ChatModel` set (`turn_models`) and the provider telemetry
-    // id are built by the caller via `build_turn_models` — the seam entry is
-    // crate-native and no longer names `Provider` (issue #4249, Phase 5). The
-    // telemetry id (`{provider_id}.{model}` in Langfuse) rides in as a param.
+    // Retained for the event bridge (cheap `Arc` clones — never the tools
+    // themselves) so it can resolve a live `&dyn Tool` by name and call the
+    // tool's OWN `display_label`/`display_detail` instead of only ever
+    // guessing from the bare name (issue: tool-call presentation).
+    let bridge_tool_sets = tool_sets.clone();
+    // A turn runs on a chat thread exactly when its run context carries one;
+    // `into_tinyagents` stamps that id onto the `RunConfig` the tools read.
+    // Thread-scoped tools (`goal_*`) are only registered when it is `Some`.
+    let has_thread = run_context.thread_id.is_some();
+    // The turn's crate `ChatModel` set (`turn_models`) and the provider telemetry id are built by
+    // the caller via `build_turn_models`: the seam is crate-native and names no `Provider` (#4249,
+    // Phase 5). The telemetry id (`{provider_id}.{model}` in Langfuse) rides in as a param.
     let AssembledTurnHarness {
-        harness,
+        mut harness,
         cursor,
         tool_names,
         failure_map,
@@ -276,8 +282,23 @@ async fn run_turn_via_tinyagents_inner(
         hosted_root.is_some(),
         pause_at_cap,
         run_context.tool_dialect,
+        Arc::clone(&run_context.deferred_tool_names),
+        run_context
+            .thread_id
+            .as_deref()
+            .map(crate::agent::tinyagents::run_mode::handle_for_thread),
+        crate::agent::tinyagents::reasoning::turn_reasoning_for(
+            &run_context,
+            hosted_root.as_ref().map(|(base, _)| base.config.as_ref()),
+            max_output_tokens,
+        ),
+        has_thread,
+        run_context.memory_turn.clone(),
+        run_context.tool_rules.clone(),
     );
-
+    super::response_shape::install(&mut harness, hosted_root.is_some());
+    super::budget::install_depth(&mut harness, &run_context);
+    super::deadline_wind_down::install(&mut harness, &handle, &run_context, &subagent_scope);
     // Fail-closed registry validation gate (issue #4249, Workstream 10 — registry).
     // The projected `CapabilityRegistry` produced these diagnostics during
     // assembly; enforce them here, *before* the first model dispatch, so an
@@ -334,8 +355,8 @@ async fn run_turn_via_tinyagents_inner(
             "openhuman-agent-turn"
         })
         .with_max_model_calls(max_iterations)
-        .with_max_tool_calls(max_iterations.saturating_mul(8).max(8))
-        .with_max_depth(MAX_SPAWN_DEPTH)
+        .with_max_tool_calls(crate::agent::stop_hooks::tool_call_limit(max_iterations))
+        .with_max_depth(super::budget::depth(&run_context))
         .with_tag("openhuman")
         .with_tag(if subagent_scope.is_some() {
             "scope:subagent"
@@ -379,6 +400,7 @@ async fn run_turn_via_tinyagents_inner(
     run_context.tool_result_artifact_index = tool_result_artifact_index.clone();
     run_context.tool_outcomes = Some(tool_outcome_sink.clone());
     let mut ctx = run_context.clone().into_tinyagents(config);
+    let run_instance_id = ctx.instance_id();
     // Assemble the run's store registry: the tool-result artifact index (when
     // present) and — behind the default-ON session dual-write flag — the
     // session KV store, so the harness carries a handle to the same
@@ -431,9 +453,18 @@ async fn run_turn_via_tinyagents_inner(
     // with it (`with_stream_id`), so every persisted observation's `event_id` is
     // the restart-stable `{run_id}-evt-{offset}` a late-attach replay
     // reconstructs the timeline from (05.1). The same id keys the journal + status.
-    let journal_run_id = journal::mint_run_id();
-    let events = Some(EventSink::with_stream_id(journal_run_id.as_str()));
-
+    let journal_run_id = tinyagents_harness::observability::mint_run_id();
+    if let Some(scope) = &subagent_scope {
+        if let Some(slot) = &scope.journal_run_id {
+            *slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some(journal_run_id.as_str().to_string());
+        }
+    }
+    let sink = EventSink::with_stream_id(journal_run_id.as_str());
+    super::turn_observer::install(&mut harness, &sink, hosted_root.is_some());
+    let events = Some(sink);
     // Attach the event bridge for EVERY turn — including an unobserved
     // (`on_progress = None`) background/cron turn (#4467, item 3). The bridge's
     // `record_usage` feeds the global cost tracker on each `UsageRecorded` event
@@ -442,8 +473,7 @@ async fn run_turn_via_tinyagents_inner(
     // `record_unobserved_turn_usage` fallback below only runs on the success path
     // and never sees a failed run's usage. With `on_progress = None` the bridge
     // still records cost but its progress `send`s are inert no-ops, so there is
-    // no spurious streaming. `events` is created unconditionally above, so the
-    // bridge is always present.
+    // no spurious streaming; every turn has an event sink.
     let bridge = events.as_ref().map(|events| {
         let bridge = OpenhumanEventBridge::with_scope(
             on_progress,
@@ -455,6 +485,7 @@ async fn run_turn_via_tinyagents_inner(
             tool_names.clone(),
             failure_map.clone(),
             provider_usage_carry.clone(),
+            bridge_tool_sets,
         );
         events.subscribe(bridge.clone());
         bridge
@@ -576,7 +607,7 @@ async fn run_turn_via_tinyagents_inner(
             steering_forwarder::forward_collects(&queue, &handle, &steer_thread_label).await;
         }
         ctx = ctx.with_steering(handle.clone());
-        Some(steering_forwarder::SteeringForwarderGuard::new(
+        Some(steering_forwarder::arm_guard(
             handle,
             run_queue,
             registry_task_id,
@@ -624,43 +655,29 @@ async fn run_turn_via_tinyagents_inner(
             AgentTurnRequest::new(agent_id, input),
             ctx,
         )
+        .with_replayed_prefix(request_base_len.saturating_sub(1)) // #6710: only the new input is screened
         .with_runtime(InvocationRuntime::new(harness));
         let state = ();
-        if streaming {
-            let stream = root_hosted_harness()
-                .invoke_agent_stream(invocation, &state)
-                .await;
-            match stream {
-                Ok(mut stream) => {
-                    let mut terminal = None;
-                    while let Some(item) = stream.next().await {
-                        match item {
-                            AgentStreamItem::Event(_) => {}
-                            AgentStreamItem::Completed(run) => {
-                                terminal = Some(Ok(*run));
-                                break;
-                            }
-                            AgentStreamItem::Failed { error, .. } => {
-                                terminal =
-                                    Some(Err(tinyagents_harness::TinyAgentsError::Model(error)));
-                                break;
-                            }
-                        }
-                    }
-                    terminal.unwrap_or_else(|| {
-                        Err(tinyagents_harness::TinyAgentsError::Model(
-                            "hosted agent stream ended without terminal run".to_string(),
-                        ))
-                    })
-                }
-                Err(error) => Err(error),
-            }
+        // Both surfaces return the harness's typed `HostedError`, so a timeout,
+        // a limit and a provider failure keep their kind through the turn error
+        // and `web_errors` can classify them (#6375). Draining
+        // `invoke_agent_stream` instead would collapse every failure to one
+        // sanitized string. Streaming still drives every model call through
+        // `ChatModel::stream`; this path reads only the terminal run.
+        let hosted = root_hosted_harness();
+        let outcome = if streaming {
+            hosted.invoke_agent_streaming(invocation, &state).await
         } else {
-            root_hosted_harness()
-                .invoke_agent(invocation, &state)
-                .await
-                .map_err(|error| tinyagents_harness::TinyAgentsError::Model(error.to_string()))
-        }
+            hosted.invoke_agent(invocation, &state).await
+        };
+        outcome.map_err(|error| {
+            tracing::debug!(
+                kind = ?error.kind,
+                streaming,
+                "[tinyagents] hosted root turn failed; keeping the typed kind"
+            );
+            super::hosted_error::run_error_from_hosted(error)
+        })
     } else if streaming {
         let mut stream = Box::pin(harness.invoke_stream_in_context(&(), ctx, input));
         let mut terminal = None;
@@ -723,6 +740,7 @@ async fn run_turn_via_tinyagents_inner(
         early_exit_hook,
         &halt_summary,
         &wrap_up_fired,
+        run_instance_id,
         &tool_outcome_sink,
         resolved_route,
         request_base_len,

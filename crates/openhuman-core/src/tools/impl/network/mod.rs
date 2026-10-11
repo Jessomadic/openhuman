@@ -1,12 +1,15 @@
-//! Network tools: HTTP request/fetch/curl, GitBooks docs lookup, Gmail
-//! unsubscribe, and (under the `mcp` feature) the MCP client/setup tools.
-//! `url_guard` is the shared SSRF/allowlist validator. Registration gates are
-//! documented in `tools/impl/README.md`.
+//! Network tools: GitBooks docs lookup, Gmail unsubscribe, and (under the
+//! `mcp` feature) the MCP client/setup tools, plus the host adapter for the
+//! tools that live in `tinytools_std::network` (`http_request`, `web_fetch`,
+//! `curl`, `pushover`). [`gate`] implements `NetGate` for `SecurityPolicy` and
+//! [`host`] supplies the limits, HTML engine and x402 payment hook those tools
+//! are handed. `url_guard` (in `tinytools_std`) is the shared SSRF/allowlist
+//! validator. Registration gates are documented in `tools/impl/README.md`.
 
-mod curl;
+mod gate;
 mod gitbooks;
 mod gmail_unsubscribe;
-mod http_request;
+mod host;
 // Leaf-gated: the only consumers of these two are the `#[cfg(feature = "mcp")]`
 // blocks in `tools/ops.rs`, so no stub is needed — nothing names them when the
 // feature is off. (`gitbooks` is deliberately NOT gated: it dials `McpHttpClient`
@@ -14,22 +17,16 @@ mod http_request;
 // facade.)
 #[cfg(feature = "mcp")]
 mod mcp;
-mod url_guard;
-mod web_fetch;
+#[cfg(feature = "mcp")]
+mod mcp_server_tools;
 
-pub use curl::CurlTool;
 pub use gitbooks::{GitbooksGetPageTool, GitbooksSearchTool};
 pub use gmail_unsubscribe::GmailUnsubscribeTool;
-pub use http_request::HttpRequestTool;
+pub use host::{http_request_tool, web_fetch_tool};
 #[cfg(feature = "mcp")]
-pub use mcp::{McpCallTool, McpListServersTool, McpListToolsTool};
-/// The SSRF guard the network tools apply, so a host outside this crate can
-/// hold user-supplied URLs to the same rule rather than writing a second one.
-pub use url_guard::{
-    extract_host, extract_port, host_matches_allowlist, is_non_global_v4, is_non_global_v6,
-    is_private_or_local_host, normalize_allowed_domains, normalize_domain, validate_url,
-};
-pub use web_fetch::WebFetchTool;
+pub use mcp::{mcp_call_tool, McpListServersTool, McpListToolsTool};
+#[cfg(feature = "mcp")]
+pub use mcp_server_tools::{configured_server_tools, ConfiguredMcpServerTool};
 
 /// Shared test helper for the network tools' local-only enforcement tests
 /// (privacy epic S7, #4441). Returns a thread-scoped `LocalOnly` privacy

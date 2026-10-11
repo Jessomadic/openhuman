@@ -127,6 +127,7 @@ describe('<Feedback /> keeps the board in sync after local mutations', () => {
     userRole.current = 'user';
   });
 
+  /** The status filter is still a Radix `Select`; its items carry role="option". */
   async function openFilter(
     user: ReturnType<typeof userEvent.setup>,
     triggerLabel: string,
@@ -134,14 +135,20 @@ describe('<Feedback /> keeps the board in sync after local mutations', () => {
   ) {
     await user.click(screen.getByLabelText(triggerLabel));
     const listbox = await screen.findByRole('listbox');
-    // FeedbackFilterSelect now renders Radix `Select`, whose items carry
-    // role="option" (not "button" — that was the hand-rolled listbox this
-    // component used before adopting the shared primitive).
     await user.click(within(listbox).getByRole('option', { name: optionName }));
   }
 
+  /** The type filter is a `ToggleGroup` radiogroup — click the option directly,
+   *  no dropdown to open. */
+  async function clickTypeFilter(user: ReturnType<typeof userEvent.setup>, optionName: string) {
+    const group = screen.getByRole('radiogroup', { name: 'All types' });
+    await user.click(within(group).getByRole('radio', { name: optionName }));
+  }
+
   async function submitFeature(user: ReturnType<typeof userEvent.setup>, title: string) {
-    await user.type(screen.getByPlaceholderText('Title'), title);
+    // The submit form now lives in a dialog behind the header's compose button.
+    await user.click(screen.getByTestId('feedback-compose'));
+    await user.type(await screen.findByPlaceholderText('Title'), title);
     await user.type(
       screen.getByPlaceholderText('Describe your idea or the problem you hit'),
       'Some supporting detail'
@@ -208,7 +215,7 @@ describe('<Feedback /> keeps the board in sync after local mutations', () => {
     renderWithProviders(<Feedback />, { initialEntries: ['/?view=main'] });
     await screen.findByText('A bug');
 
-    await openFilter(user, 'All types', 'Bug');
+    await clickTypeFilter(user, 'Bug');
     await waitFor(() => expect(mockList).toHaveBeenCalledTimes(2));
 
     await submitFeature(user, 'New feature idea');

@@ -1,13 +1,13 @@
 //! RPC handler implementations for keyring consent.
 
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::policy;
 use super::types::{ConsentPreference, KeyringStatus};
 
 const LOG_PREFIX: &str = "[keyring_consent]";
 
-pub async fn keyring_status() -> Result<RpcOutcome<KeyringStatus>, String> {
+pub async fn keyring_status() -> Result<Outcome<KeyringStatus>, String> {
     let status = policy::current_status();
     log::debug!(
         "{LOG_PREFIX} keyring_status available={} mode={} backend={}",
@@ -15,10 +15,10 @@ pub async fn keyring_status() -> Result<RpcOutcome<KeyringStatus>, String> {
         status.active_mode,
         status.backend_name,
     );
-    Ok(RpcOutcome::single_log(status, "keyring status fetched"))
+    Ok(Outcome::single_log(status, "keyring status fetched"))
 }
 
-pub async fn keyring_consent_decide(mode: String) -> Result<RpcOutcome<ConsentPreference>, String> {
+pub async fn keyring_consent_decide(mode: String) -> Result<Outcome<ConsentPreference>, String> {
     if mode != "local_encrypted" && mode != "declined" {
         return Err(format!(
             "invalid mode '{mode}': expected 'local_encrypted' or 'declined'"
@@ -36,16 +36,16 @@ pub async fn keyring_consent_decide(mode: String) -> Result<RpcOutcome<ConsentPr
     // Only update the in-memory cache after a successful persist.
     policy::apply_consent(&pref);
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         pref,
         format!("keyring consent recorded: {mode}"),
     ))
 }
 
-pub async fn keyring_retry_probe() -> Result<RpcOutcome<KeyringStatus>, String> {
+pub async fn keyring_retry_probe() -> Result<Outcome<KeyringStatus>, String> {
     log::info!("{LOG_PREFIX} keyring_retry_probe");
     let status = policy::retry_probe();
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         status,
         "keyring probe retried".to_string(),
     ))

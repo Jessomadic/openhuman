@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use crate::config::{self, UpdateConfig, UpdateRestartStrategy};
+use crate::core::Outcome;
 use crate::platform::update;
 use crate::platform::update::types::{UpdateApplyResult, UpdateInfo, UpdateRunResult, VersionInfo};
-use crate::rpc::RpcOutcome;
 
 async fn load_update_policy() -> Result<UpdateConfig, String> {
     config::rpc::load_config_with_timeout()
@@ -155,7 +155,7 @@ async fn build_run_result_from_staged_update(
 ///
 /// Cheap, no-network — the frontend uses this to decide whether to
 /// invoke the heavier `update.check` or `update.run` RPCs.
-pub async fn update_version() -> RpcOutcome<Value> {
+pub async fn update_version() -> Outcome<Value> {
     let info = VersionInfo {
         version: update::current_version().to_string(),
         target_triple: update::platform_triple().to_string(),
@@ -168,7 +168,7 @@ pub async fn update_version() -> RpcOutcome<Value> {
     );
     let value = serde_json::to_value(&info)
         .unwrap_or_else(|e| serde_json::json!({ "error": format!("serialization failed: {e}") }));
-    RpcOutcome::single_log(value, "update_version completed")
+    Outcome::single_log(value, "update_version completed")
 }
 
 /// Orchestrated update flow: check → apply (if newer) → restart.
@@ -177,12 +177,12 @@ pub async fn update_version() -> RpcOutcome<Value> {
 /// update was applied the function publishes a restart request before
 /// returning, so the caller will see `restart_requested: true` and the
 /// core process will exit shortly afterwards.
-pub async fn update_run() -> RpcOutcome<Value> {
+pub async fn update_run() -> Outcome<Value> {
     log::info!("[update:rpc] update_run invoked");
     let policy = match enforce_update_mutation_policy("openhuman.update_run").await {
         Ok(policy) => policy,
         Err(error) => {
-            return RpcOutcome::single_log(
+            return Outcome::single_log(
                 serde_json::json!({
                     "error": error,
                     "applied": false,
@@ -198,7 +198,7 @@ pub async fn update_run() -> RpcOutcome<Value> {
         Ok(i) => i,
         Err(e) => {
             log::error!("[update:rpc] update_run check failed: {e}");
-            return RpcOutcome::single_log(
+            return Outcome::single_log(
                 serde_json::json!({
                     "error": e,
                     "applied": false,
@@ -215,7 +215,7 @@ pub async fn update_run() -> RpcOutcome<Value> {
             "[update:rpc] update_run: already up to date ({})",
             result.current_version
         );
-        return RpcOutcome::single_log(
+        return Outcome::single_log(
             serde_json::to_value(&result).unwrap_or(Value::Null),
             "update_run: already up to date",
         );
@@ -229,7 +229,7 @@ pub async fn update_run() -> RpcOutcome<Value> {
             update::platform_triple()
         );
         let result = missing_asset_result(info, restart_strategy);
-        return RpcOutcome::single_log(
+        return Outcome::single_log(
             serde_json::to_value(&result).unwrap_or(Value::Null),
             "update_run: missing platform asset",
         );
@@ -240,14 +240,14 @@ pub async fn update_run() -> RpcOutcome<Value> {
     // this orchestrator can't accidentally bypass the safety net.
     if let Err(e) = validate_download_url(&download_url) {
         log::error!("[update:rpc] update_run rejected download URL: {e}");
-        return RpcOutcome::single_log(
+        return Outcome::single_log(
             serde_json::json!({ "error": e, "applied": false, "restart_requested": false }),
             format!("update_run rejected: {e}"),
         );
     }
     if let Err(e) = validate_asset_name(&asset_name) {
         log::error!("[update:rpc] update_run rejected asset name: {e}");
-        return RpcOutcome::single_log(
+        return Outcome::single_log(
             serde_json::json!({ "error": e, "applied": false, "restart_requested": false }),
             format!("update_run rejected: {e}"),
         );
@@ -258,7 +258,7 @@ pub async fn update_run() -> RpcOutcome<Value> {
         Err(e) => {
             log::error!("[update:rpc] update_run apply failed: {e}");
             let result = apply_failure_result(info, restart_strategy, &e);
-            return RpcOutcome::single_log(
+            return Outcome::single_log(
                 serde_json::to_value(&result).unwrap_or(Value::Null),
                 format!("update_run: apply failed: {e}"),
             );
@@ -271,25 +271,25 @@ pub async fn update_run() -> RpcOutcome<Value> {
         result.restart_requested,
         result.restart_strategy
     );
-    RpcOutcome::single_log(
+    Outcome::single_log(
         serde_json::to_value(&result).unwrap_or(Value::Null),
         "update_run completed",
     )
 }
 
 /// Check GitHub Releases for a newer version of the core binary.
-pub async fn update_check() -> RpcOutcome<Value> {
+pub async fn update_check() -> Outcome<Value> {
     log::info!("[update:rpc] update_check invoked");
     match update::check_available().await {
         Ok(info) => {
             let value = serde_json::to_value(&info).unwrap_or_else(
                 |e| serde_json::json!({ "error": format!("serialization failed: {e}") }),
             );
-            RpcOutcome::single_log(value, "update_check completed")
+            Outcome::single_log(value, "update_check completed")
         }
         Err(e) => {
             log::error!("[update:rpc] update_check failed: {e}");
-            RpcOutcome::single_log(
+            Outcome::single_log(
                 serde_json::json!({ "error": e }),
                 format!("update_check failed: {e}"),
             )
@@ -345,7 +345,7 @@ pub async fn update_apply(
     download_url: String,
     asset_name: String,
     _staging_dir: Option<String>,
-) -> RpcOutcome<Value> {
+) -> Outcome<Value> {
     log::info!(
         "[update:rpc] update_apply invoked — url={} asset={}",
         download_url,
@@ -354,7 +354,7 @@ pub async fn update_apply(
     let policy = match enforce_update_mutation_policy("openhuman.update_apply").await {
         Ok(policy) => policy,
         Err(error) => {
-            return RpcOutcome::single_log(
+            return Outcome::single_log(
                 serde_json::json!({ "error": error }),
                 "update_apply rejected by policy",
             );
@@ -364,14 +364,14 @@ pub async fn update_apply(
     // Validate inputs at the RPC boundary.
     if let Err(e) = validate_download_url(&download_url) {
         log::error!("[update:rpc] rejected download URL: {e}");
-        return RpcOutcome::single_log(
+        return Outcome::single_log(
             serde_json::json!({ "error": e }),
             format!("update_apply rejected: {e}"),
         );
     }
     if let Err(e) = validate_asset_name(&asset_name) {
         log::error!("[update:rpc] rejected asset name: {e}");
-        return RpcOutcome::single_log(
+        return Outcome::single_log(
             serde_json::json!({ "error": e }),
             format!("update_apply rejected: {e}"),
         );
@@ -385,11 +385,11 @@ pub async fn update_apply(
             let value = serde_json::to_value(&result).unwrap_or_else(
                 |e| serde_json::json!({ "error": format!("serialization failed: {e}") }),
             );
-            RpcOutcome::single_log(value, "update_apply completed")
+            Outcome::single_log(value, "update_apply completed")
         }
         Err(e) => {
             log::error!("[update:rpc] update_apply failed: {e}");
-            RpcOutcome::single_log(
+            Outcome::single_log(
                 serde_json::json!({ "error": e }),
                 format!("update_apply failed: {e}"),
             )

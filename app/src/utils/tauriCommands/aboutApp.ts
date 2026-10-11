@@ -45,7 +45,7 @@ export async function listCapabilities(category?: CapabilityCategory): Promise<C
     method: 'openhuman.about_app_list',
     params: category ? { category } : {},
   });
-  // RpcOutcome::single_log emits {result, logs}; bare arrays are handled too
+  // Outcome::single_log emits {result, logs}; bare arrays are handled too
   // for forward-compat if logs ever go away.
   if (Array.isArray(response)) {
     return response;

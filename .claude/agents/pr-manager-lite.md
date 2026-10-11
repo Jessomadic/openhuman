@@ -80,7 +80,7 @@ Classify each comment:
 
 Also do a standards pass against `AGENTS.md` (`CLAUDE.md` is a symlink to it) on the diff:
 - New Rust functionality lives under `crates/openhuman-core/src/<domain>/`, not flat `crates/openhuman-core/src/*.rs` files or `crates/openhuman-core/src/core/`.
-- Domain exposure via `schemas.rs` + registry — not ad-hoc branches in `crates/openhuman-core/src/core/cli.rs` / `crates/openhuman-core/src/core/jsonrpc.rs`.
+- Domain exposure via `schemas.rs` + registry — not ad-hoc branches in `crates/openhuman-core/src/core/cli.rs` / `crates/openhuman-rpc/src/server/`.
 - No dynamic `import()` in production `app/src` code.
 - Frontend `VITE_*` reads go through `app/src/utils/config.ts`.
 - `crates/openhuman-app` is desktop-only.

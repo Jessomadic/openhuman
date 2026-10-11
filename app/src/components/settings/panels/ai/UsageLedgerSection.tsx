@@ -3,8 +3,10 @@
  * BackgroundLoopControls. Pure presentational component: all figures are
  * precomputed by the parent hook.
  */
+import { RefreshCw } from 'lucide-react';
+
 import type { CreditTransaction, TeamUsage } from '../../../../services/api/creditsApi';
-import Button from '../../../ui/Button';
+import { Button, Card, EmptyState } from '../../../ui';
 import {
   formatCount,
   formatDateTime,
@@ -29,9 +31,7 @@ export const UsageLedgerSection = ({
   formatSpendAmount,
   backgroundApiReadsPerWeek,
   backgroundWakeupsPerWeek,
-  calendarPlannerCallsPerWeek,
   composioConnectionScansPerWeek,
-  memoryPollsPerWeek,
   estimatedRowsLeft,
   estimatedRowsPerBudget,
   projectedExhaustAt,
@@ -54,9 +54,7 @@ export const UsageLedgerSection = ({
   formatSpendAmount: (tx: CreditTransaction) => number;
   backgroundApiReadsPerWeek: number;
   backgroundWakeupsPerWeek: number;
-  calendarPlannerCallsPerWeek: number;
   composioConnectionScansPerWeek: number;
-  memoryPollsPerWeek: number;
   estimatedRowsLeft: number | null;
   estimatedRowsPerBudget: number | null;
   projectedExhaustAt: string;
@@ -64,72 +62,83 @@ export const UsageLedgerSection = ({
   scheduledCallsPerRemainingDollar: number | null;
   activeConnectionsCount: number;
 }) => (
-  <div className="rounded-lg border border-line bg-surface p-3">
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <div className="text-sm font-semibold text-content">
-          {t('settings.ai.recentUsageLedger')}
+  <div className="space-y-4">
+    <Card
+      title={t('settings.ai.recentUsageLedger')}
+      description={t('settings.ai.recentUsageLedgerDesc')}
+      headerRight={
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          leadingIcon={<RefreshCw className="h-3.5 w-3.5" aria-hidden />}
+          onClick={onRefresh}
+          disabled={loading}>
+          {t('common.reload')}
+        </Button>
+      }>
+      <div className="grid grid-cols-2 gap-2 p-4 lg:grid-cols-3">
+        <MetricTile
+          label={t('settings.ai.weekBudget')}
+          value={usage ? formatUsd(usage.cycleBudgetUsd) : t('common.notAvailable')}
+          detail={t('settings.ai.resetsAt').replace('{time}', formatDateTime(usage?.cycleEndsAt))}
+        />
+        <MetricTile
+          label={t('settings.ai.cycleRemaining')}
+          value={usage ? formatUsd(usage.remainingUsd) : t('common.notAvailable')}
+          detail={
+            usage
+              ? t('settings.ai.usedAmount').replace('{amount}', formatUsd(usage.cycleSpentUsd))
+              : undefined
+          }
+        />
+        <MetricTile
+          label={t('settings.ai.cycleTotalSpend')}
+          value={usage ? formatUsd(usage.insights.totals.totalUsd) : t('common.notAvailable')}
+          detail={
+            usage
+              ? t('settings.ai.inferenceIntegrationsBreakdown')
+                  .replace('{inference}', formatUsd(usage.insights.totals.inferenceUsd))
+                  .replace('{integrations}', formatUsd(usage.insights.totals.integrationsUsd))
+              : undefined
+          }
+        />
+        <MetricTile
+          label={t('settings.ai.avgSpendRow')}
+          value={spendAvgRowUsd > 0 ? formatUsd(spendAvgRowUsd) : t('common.notAvailable')}
+          detail={t('settings.ai.recentSpendRowsCount').replace(
+            '{count}',
+            String(spendRows.length)
+          )}
+        />
+        <MetricTile
+          label={t('settings.ai.backgroundApiReads')}
+          value={t('settings.ai.perWeek').replace(
+            '{count}',
+            formatCount(backgroundApiReadsPerWeek)
+          )}
+          detail={t('settings.ai.connectionSyncBreakdown').replace(
+            '{sync}',
+            formatCount(composioConnectionScansPerWeek)
+          )}
+        />
+        <MetricTile
+          label={t('settings.ai.backgroundWakeups')}
+          value={t('settings.ai.perWeek').replace('{count}', formatCount(backgroundWakeupsPerWeek))}
+        />
+      </div>
+      {latestSpend && (
+        <div className="px-4 py-3 text-xs text-content-secondary">
+          {t('settings.ai.latestSpend')
+            .replace('{amount}', formatUsd(formatSpendAmount(latestSpend)))
+            .replace('{time}', new Date(latestSpend.createdAt).toLocaleString())
+            .replace('{action}', latestSpend.action)}
         </div>
-        <div className="text-xs text-content-muted">{t('settings.ai.recentUsageLedgerDesc')}</div>
-      </div>
-      <Button type="button" variant="secondary" size="xs" onClick={onRefresh} disabled={loading}>
-        {t('common.reload')}
-      </Button>
-    </div>
+      )}
+    </Card>
 
-    <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3">
-      <MetricTile
-        label={t('settings.ai.weekBudget')}
-        value={usage ? formatUsd(usage.cycleBudgetUsd) : t('common.notAvailable')}
-        detail={t('settings.ai.resetsAt').replace('{time}', formatDateTime(usage?.cycleEndsAt))}
-      />
-      <MetricTile
-        label={t('settings.ai.cycleRemaining')}
-        value={usage ? formatUsd(usage.remainingUsd) : t('common.notAvailable')}
-        detail={
-          usage
-            ? t('settings.ai.usedAmount').replace('{amount}', formatUsd(usage.cycleSpentUsd))
-            : undefined
-        }
-      />
-      <MetricTile
-        label={t('settings.ai.cycleTotalSpend')}
-        value={usage ? formatUsd(usage.insights.totals.totalUsd) : t('common.notAvailable')}
-        detail={
-          usage
-            ? t('settings.ai.inferenceIntegrationsBreakdown')
-                .replace('{inference}', formatUsd(usage.insights.totals.inferenceUsd))
-                .replace('{integrations}', formatUsd(usage.insights.totals.integrationsUsd))
-            : undefined
-        }
-      />
-      <MetricTile
-        label={t('settings.ai.avgSpendRow')}
-        value={spendAvgRowUsd > 0 ? formatUsd(spendAvgRowUsd) : t('common.notAvailable')}
-        detail={t('settings.ai.recentSpendRowsCount').replace('{count}', String(spendRows.length))}
-      />
-      <MetricTile
-        label={t('settings.ai.backgroundApiReads')}
-        value={t('settings.ai.perWeek').replace('{count}', formatCount(backgroundApiReadsPerWeek))}
-        detail={t('settings.ai.plannerSyncBreakdown')
-          .replace('{planner}', formatCount(calendarPlannerCallsPerWeek))
-          .replace('{sync}', formatCount(composioConnectionScansPerWeek))}
-      />
-      <MetricTile
-        label={t('settings.ai.backgroundWakeups')}
-        value={t('settings.ai.perWeek').replace('{count}', formatCount(backgroundWakeupsPerWeek))}
-        detail={t('settings.ai.memoryPollsDetail').replace(
-          '{count}',
-          formatCount(memoryPollsPerWeek)
-        )}
-      />
-    </div>
-
-    <div className="mt-3 rounded-lg border border-line bg-surface-muted p-3">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-content-faint">
-        {t('settings.ai.budgetMath')}
-      </div>
-      <div className="mt-2 grid gap-2">
+    <div className="grid gap-4 xl:grid-cols-2">
+      <Card title={t('settings.ai.budgetMath')}>
         <FormulaRow
           label={t('settings.ai.rowsLeft')}
           value={
@@ -203,14 +212,9 @@ export const UsageLedgerSection = ({
               : t('settings.ai.needUsageToEstimate')
           }
         />
-      </div>
-    </div>
+      </Card>
 
-    <div className="mt-3 rounded-lg border border-line bg-surface-muted p-3">
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-content-faint">
-        {t('settings.ai.loopCallBudget')}
-      </div>
-      <div className="mt-2 grid gap-2">
+      <Card title={t('settings.ai.loopCallBudget')}>
         <FormulaRow
           label={t('settings.ai.composioSyncScans')}
           value={t('settings.ai.perWeek').replace(
@@ -230,65 +234,41 @@ export const UsageLedgerSection = ({
           )}
           detail={t('settings.ai.totalApiReadBudgetDetail')}
         />
-        <FormulaRow
-          label={t('settings.ai.memoryWorkerPolls')}
-          value={t('settings.ai.perWeekMax').replace('{count}', formatCount(memoryPollsPerWeek))}
-          detail={t('settings.ai.memoryWorkerPollsDetail')}
-        />
-      </div>
+      </Card>
     </div>
 
-    {latestSpend && (
-      <div className="mt-3 rounded-md border border-line bg-surface-muted px-3 py-2 text-xs text-content-secondary">
-        {t('settings.ai.latestSpend')
-          .replace('{amount}', formatUsd(formatSpendAmount(latestSpend)))
-          .replace('{time}', new Date(latestSpend.createdAt).toLocaleString())
-          .replace('{action}', latestSpend.action)}
-      </div>
-    )}
+    <div className="grid gap-4 md:grid-cols-2">
+      <Card title={t('settings.ai.topActions')}>
+        {actionSummary.length > 0 ? (
+          actionSummary.map(([action, count, total]) => (
+            <div
+              key={action}
+              className="flex items-center justify-between gap-3 px-4 py-2.5 text-xs text-content-secondary">
+              <span className="truncate font-mono">{action}</span>
+              <span className="shrink-0 tabular-nums text-content-muted">
+                {count} / {formatUsd(total)}
+              </span>
+            </div>
+          ))
+        ) : (
+          <EmptyState label={t('settings.ai.noSpendRows')} />
+        )}
+      </Card>
 
-    <div className="mt-3 space-y-3">
-      <div>
-        <div className="text-[10px] font-semibold uppercase tracking-wide text-content-faint">
-          {t('settings.ai.topActions')}
-        </div>
-        <div className="mt-1 space-y-1">
-          {actionSummary.length > 0 ? (
-            actionSummary.map(([action, count, total]) => (
-              <div
-                key={action}
-                className="flex items-center justify-between gap-2 text-xs text-content-secondary">
-                <span className="truncate font-mono">{action}</span>
-                <span className="shrink-0 text-content-muted">
-                  {count} / {formatUsd(total)}
-                </span>
-              </div>
-            ))
-          ) : (
-            <div className="text-xs text-content-muted">{t('settings.ai.noSpendRows')}</div>
-          )}
-        </div>
-      </div>
-
-      <div>
-        <div className="text-[10px] font-semibold uppercase tracking-wide text-content-faint">
-          {t('settings.ai.topHours')}
-        </div>
-        <div className="mt-1 space-y-1">
-          {hourSummary.length > 0 ? (
-            hourSummary.map(([hour, total]) => (
-              <div
-                key={hour}
-                className="flex items-center justify-between gap-2 text-xs text-content-secondary">
-                <span>{hour}</span>
-                <span className="font-mono text-content-muted">{formatUsd(total)}</span>
-              </div>
-            ))
-          ) : (
-            <div className="text-xs text-content-muted">{t('settings.ai.noHourlySpend')}</div>
-          )}
-        </div>
-      </div>
+      <Card title={t('settings.ai.topHours')}>
+        {hourSummary.length > 0 ? (
+          hourSummary.map(([hour, total]) => (
+            <div
+              key={hour}
+              className="flex items-center justify-between gap-3 px-4 py-2.5 text-xs text-content-secondary">
+              <span>{hour}</span>
+              <span className="font-mono tabular-nums text-content-muted">{formatUsd(total)}</span>
+            </div>
+          ))
+        ) : (
+          <EmptyState label={t('settings.ai.noHourlySpend')} />
+        )}
+      </Card>
     </div>
   </div>
 );

@@ -43,7 +43,7 @@ describe('WorkflowsRun', () => {
   it('falls back to /flows (not the dead /intelligence?tab=workflows route) on a cold deep-link with no history', () => {
     // No `window.history.state.idx` — matches a fresh deep-link with no
     // in-app history entry to go back to (F-m1: /intelligence redirects to
-    // /settings/notifications, so the runner must not target it).
+    // /settings/account, so the runner must not target it).
     navigateMock.mockClear();
     render_();
     fireEvent.click(screen.getByRole('button', { name: 'common.back' }));

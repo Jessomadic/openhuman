@@ -12,29 +12,37 @@ pub mod auth;
 pub mod bus;
 pub mod bus_testing;
 pub mod cli;
-pub mod cli_capability;
+mod cli_serve;
 pub mod dispatch;
+pub mod domain_group;
+pub mod envelope;
 pub mod event_bind_tokens;
 pub mod events;
 // Ungated compile-time marker for the `http-server` gate (#5048) — the desktop
 // shell asserts `HTTP_SERVER_COMPILED_IN` so a listener-less core fails the
 // build instead of shipping silently (cf. voice #4901).
 pub mod http_server_status;
-pub mod jsonrpc;
+pub mod invoke;
 pub mod legacy_aliases;
 pub mod log_redaction;
 pub mod logging;
-pub mod memory_cli;
 pub mod observability;
+pub mod outcome;
+pub mod params;
 pub mod rpc_log;
 pub mod runtime;
 #[cfg(feature = "crash-reporting")]
 pub mod sentry_transport;
+pub mod server_launcher;
+pub mod session_expiry;
 pub mod shutdown;
-pub mod socketio;
+pub mod structured_error;
 pub mod subsystem;
 pub mod subsystems_cli;
 pub mod types;
+
+pub use outcome::{apply_log_envelope, unwrap_rpc, Outcome};
+pub use structured_error::{StructuredRpcError, STRUCTURED_RPC_ERROR_SENTINEL};
 
 /// Canonical function contract for domain controllers.
 ///
@@ -97,6 +105,19 @@ pub enum TypeSchema {
     I64,
     /// A 64-bit unsigned integer.
     U64,
+    /// An unsigned integer confined to `min..=max` (both inclusive).
+    ///
+    /// Declares the real range of a field backed by a type narrower than
+    /// `u64` (`u32`, `u16`, `u8`, `NonZero*`), so `validate_params` refuses an
+    /// out-of-range value before dispatch instead of the handler's typed
+    /// deserialization failing after it (#6137). A plain `u32` field is
+    /// `BoundedU64 { min: 0, max: u32::MAX as u64 }`.
+    BoundedU64 {
+        /// Smallest accepted value.
+        min: u64,
+        /// Largest accepted value.
+        max: u64,
+    },
     /// A 64-bit floating point number.
     F64,
     /// A UTF-8 encoded string.

@@ -9,7 +9,7 @@ use std::{
     collections::HashMap,
     fs::OpenOptions,
     path::PathBuf,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
@@ -18,9 +18,9 @@ use sha2::{Digest, Sha256};
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_orchestration::subagent::{
     ArtifactReference, PreparedSubagent, SubagentCapabilities, SubagentDriver, SubagentError,
-    SubagentExecution, SubagentExecutor, SubagentIncomplete, SubagentOutcome, SubagentPause,
-    SubagentPausePersistenceDisposition, SubagentPlanner, SubagentRequest, SubagentResume,
-    SubagentRunResult, SubagentStatus, SubagentTaskKey, SubagentTerminalPersistenceDisposition,
+    SubagentExecution, SubagentExecutor, SubagentIncomplete, SubagentOutcome, SubagentOutcomeKind,
+    SubagentPause, SubagentPausePersistenceDisposition, SubagentPlanner, SubagentRequest,
+    SubagentResume, SubagentRunResult, SubagentTaskKey, SubagentTerminalPersistenceDisposition,
 };
 use tinyagents_runtime::ToolSnapshot;
 use tinyinference_llm::{
@@ -58,9 +58,8 @@ pub async fn run_subagent_with_parent(
     input: impl Into<String>,
     options: SubagentRunOptions,
 ) -> Result<SubagentRunOutcome, SubagentRunError> {
-    OpenHumanSubagentHost::new(definition, options)
-        .run(parent, input.into())
-        .await
+    // Boxed so the nested lifecycle futures stay off this poll frame (#6379).
+    Box::pin(OpenHumanSubagentHost::new(definition, options).run(parent, input.into())).await
 }
 
 /// Root host entrypoint for callers that begin outside a retained live parent
@@ -131,7 +130,7 @@ pub struct OpenHumanSubagentHost {
 /// independently constructed host adapters. Durable persistence remains the
 /// cross-process authority; this prevents duplicate local child graphs.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct HostLifecycleKey {
+pub(super) struct HostLifecycleKey {
     checkpoint_dir: PathBuf,
     task_key: SubagentTaskKey,
 }
@@ -213,11 +212,8 @@ fn host_observer_outcome(mut outcome: SubagentRunOutcome) -> SubagentRunOutcome 
     outcome
 }
 
-static HOST_IN_FLIGHT: OnceLock<AsyncMutex<HashMap<HostLifecycleKey, Arc<HostInFlight>>>> =
-    OnceLock::new();
-
-fn host_in_flight() -> &'static AsyncMutex<HashMap<HostLifecycleKey, Arc<HostInFlight>>> {
-    HOST_IN_FLIGHT.get_or_init(|| AsyncMutex::new(HashMap::new()))
+pub(super) fn host_in_flight() -> Arc<AsyncMutex<HashMap<HostLifecycleKey, Arc<HostInFlight>>>> {
+    crate::core::runtime::current_slot()
 }
 
 fn absolute_checkpoint_dir(path: PathBuf) -> PathBuf {
@@ -260,8 +256,7 @@ impl OpenHumanSubagentHost {
             child_config,
         )
         .map_err(|error| SubagentRunError::Provider(anyhow::anyhow!(error.to_string())))?;
-        self.run_with_request(parent, task_key, child, input, false)
-            .await
+        Box::pin(self.run_with_request(parent, task_key, child, input, false)).await
     }
 
     async fn continue_with_key(
@@ -277,8 +272,7 @@ impl OpenHumanSubagentHost {
             child_config,
         )
         .map_err(|error| SubagentRunError::Provider(anyhow::anyhow!(error.to_string())))?;
-        self.run_with_request(parent, task_key, child, input, true)
-            .await
+        Box::pin(self.run_with_request(parent, task_key, child, input, true)).await
     }
 
     async fn run_with_request(
@@ -307,7 +301,7 @@ impl OpenHumanSubagentHost {
             task_key: task_key.clone(),
         };
         let (entry, is_leader) = {
-            let mut entries = host_in_flight().lock().await;
+            let mut entries = host_in_flight().lock_owned().await;
             match entries.get(&lifecycle_key) {
                 Some(entry) => (entry.clone(), false),
                 None => {
@@ -335,18 +329,17 @@ impl OpenHumanSubagentHost {
                 .await;
         }
 
-        let result = self
-            .run_leader(
-                parent,
-                task_key.clone(),
-                child,
-                input,
-                continuation,
-                checkpoint_dir,
-            )
-            .await;
+        let result = Box::pin(self.run_leader(
+            parent,
+            task_key.clone(),
+            child,
+            input,
+            continuation,
+            checkpoint_dir,
+        ))
+        .await;
         entry.complete(result.as_ref().ok().cloned()).await;
-        let mut entries = host_in_flight().lock().await;
+        let mut entries = host_in_flight().lock_owned().await;
         if entries
             .get(&lifecycle_key)
             .is_some_and(|current| Arc::ptr_eq(current, &entry))
@@ -410,7 +403,7 @@ impl OpenHumanSubagentHost {
         }
         .map_err(map_lifecycle_error)?;
         let cancellation = parent.cancellation.clone();
-        match driver.run(request, cancellation).await {
+        match Box::pin(driver.run(request, cancellation)).await {
             Ok(result) => Ok(outcome_to_host(
                 result,
                 host_outcome
@@ -492,17 +485,15 @@ impl SubagentPlanner<crate::agent::tinyagents::host::OpenHumanRunContext, HostRe
             definition: request.host_request.definition.clone(),
             options,
         });
-        Ok(PreparedSubagent {
-            task_id: request.task_key.task_id,
-            agent_key: request.host_request.definition.id,
-            input: planned_input,
-            // The host execution leaf resolves the exact filtered tool snapshot
-            // together with its executable instances and policy.  A neutral
-            // empty declaration prevents this transport plan from advertising
-            // an authority it has not resolved.
-            tools: ToolSnapshot::default(),
-            run_context: request.run_context,
-        })
+        // The host leaf resolves the real tool snapshot and policy; an empty
+        // declaration here advertises no unresolved authority.
+        Ok(PreparedSubagent::new(
+            request.task_key.task_id,
+            request.host_request.definition.id,
+            planned_input,
+            ToolSnapshot::default(),
+            request.run_context,
+        ))
     }
 }
 
@@ -534,7 +525,7 @@ impl SubagentExecutor<crate::agent::tinyagents::host::OpenHumanRunContext> for O
         // its explicit OpenHuman carrier.
         options.run_context = execution.prepared.run_context.data.clone();
         options.run_context.cancellation = execution.cancellation.clone();
-        match super::ops::run_subagent_direct(
+        match Box::pin(super::ops::run_subagent_direct(
             &definition,
             &execution
                 .prepared
@@ -543,7 +534,7 @@ impl SubagentExecutor<crate::agent::tinyagents::host::OpenHumanRunContext> for O
                 .map(Message::text)
                 .unwrap_or_default(),
             options.clone(),
-        )
+        ))
         .await
         {
             Ok(outcome) => {
@@ -874,7 +865,7 @@ impl OpenHumanPersistence {
                 .iter()
                 .map(crate::agent::message_convert::chat_message_to_message)
                 .collect(),
-            status: SubagentStatus::AwaitingInput(SubagentPause {
+            status: SubagentOutcomeKind::AwaitingInput(SubagentPause {
                 reason: checkpoint.question,
                 resume,
             }),
@@ -888,9 +879,12 @@ impl OpenHumanPersistence {
                         .input_tokens
                         .saturating_add(checkpoint.usage.output_tokens),
                     cache_read_tokens: checkpoint.usage.cached_input_tokens,
-                    charged_amount: Some(ChargedAmount::usd_micros(
-                        (checkpoint.usage.charged_amount_usd * 1_000_000.0).round() as i64,
-                    )),
+                    // An unknown cost crosses as no charge at all, never as $0.
+                    charged_amount: checkpoint
+                        .usage
+                        .cost()
+                        .usd()
+                        .map(|usd| ChargedAmount::usd_micros((usd * 1_000_000.0).round() as i64)),
                     ..Usage::default()
                 },
             },
@@ -902,6 +896,7 @@ impl OpenHumanPersistence {
                     ..ArtifactReference::default()
                 })
                 .collect(),
+            ..SubagentOutcome::cancelled(String::new())
         }
     }
 
@@ -1000,7 +995,7 @@ impl tinyagents_orchestration::subagent::SubagentPersistence for OpenHumanPersis
             return Ok(SubagentPausePersistenceDisposition::TerminalExisting);
         }
         let paused = match &pause.outcome.status {
-            SubagentStatus::AwaitingInput(paused) => paused,
+            SubagentOutcomeKind::AwaitingInput(paused) => paused,
             _ => {
                 return Err(SubagentError::Persistence(
                     "attempted to persist a non-paused subagent outcome as a pause".into(),
@@ -1027,7 +1022,6 @@ impl tinyagents_orchestration::subagent::SubagentPersistence for OpenHumanPersis
                 .collect(),
             question: paused.reason.clone(),
             options: None,
-            toolkit_override: optional_metadata("toolkit_override"),
             skill_filter_override: optional_metadata("skill_filter_override"),
             model_override: optional_metadata("model_override"),
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -1046,6 +1040,7 @@ impl tinyagents_orchestration::subagent::SubagentPersistence for OpenHumanPersis
                     .charged_amount
                     .map(|amount| amount.micros as f64 / 1_000_000.0)
                     .unwrap_or_default(),
+                cost_source: cost_source_of(pause.outcome.usage.usage.charged_amount.as_ref()),
             },
             artifact_paths: pause
                 .outcome
@@ -1144,85 +1139,9 @@ impl tinyagents_orchestration::subagent::SubagentPersistence for OpenHumanPersis
     }
 }
 
-fn host_outcome_to_neutral(
-    outcome: SubagentRunOutcome,
-    definition: &crate::agent::harness::definition::AgentDefinition,
-    options: &SubagentRunOptions,
-) -> SubagentOutcome {
-    let status = match outcome.status {
-        SubagentRunStatus::Completed => SubagentStatus::Completed,
-        SubagentRunStatus::AwaitingUser { question, .. } => {
-            SubagentStatus::AwaitingInput(SubagentPause {
-                reason: question,
-                resume: SubagentResume {
-                    history: outcome
-                        .final_history
-                        .iter()
-                        .map(crate::agent::message_convert::chat_message_to_message)
-                        .collect(),
-                    metadata: std::collections::BTreeMap::from_iter([
-                        ("agent_id".into(), definition.id.clone()),
-                        (
-                            "worker_thread_id".into(),
-                            options.worker_thread_id.clone().unwrap_or_default(),
-                        ),
-                        (
-                            "toolkit_override".into(),
-                            options.toolkit_override.clone().unwrap_or_default(),
-                        ),
-                        (
-                            "skill_filter_override".into(),
-                            options.skill_filter_override.clone().unwrap_or_default(),
-                        ),
-                        (
-                            "model_override".into(),
-                            options.model_override.clone().unwrap_or_default(),
-                        ),
-                    ]),
-                    ..SubagentResume::default()
-                },
-            })
-        }
-        SubagentRunStatus::Incomplete { reason } => {
-            SubagentStatus::Incomplete(SubagentIncomplete { reason })
-        }
-        SubagentRunStatus::Cancelled => SubagentStatus::Cancelled,
-    };
-    SubagentOutcome {
-        task_id: outcome.task_id,
-        output: outcome.output,
-        history: outcome
-            .final_history
-            .iter()
-            .map(crate::agent::message_convert::chat_message_to_message)
-            .collect(),
-        status,
-        usage: UsageTotals {
-            calls: outcome.iterations as u64,
-            usage: Usage {
-                input_tokens: outcome.usage.input_tokens,
-                output_tokens: outcome.usage.output_tokens,
-                total_tokens: outcome
-                    .usage
-                    .input_tokens
-                    .saturating_add(outcome.usage.output_tokens),
-                cache_read_tokens: outcome.usage.cached_input_tokens,
-                charged_amount: Some(ChargedAmount::usd_micros(
-                    (outcome.usage.charged_amount_usd * 1_000_000.0).round() as i64,
-                )),
-                ..Usage::default()
-            },
-        },
-        artifacts: outcome
-            .artifact_paths
-            .into_iter()
-            .map(|id| ArtifactReference {
-                id,
-                ..ArtifactReference::default()
-            })
-            .collect(),
-    }
-}
+#[path = "lifecycle_outcome.rs"]
+mod outcome;
+use outcome::host_outcome_to_neutral;
 
 fn outcome_to_host(
     result: SubagentRunResult,
@@ -1277,6 +1196,7 @@ fn outcome_to_host(
                 .charged_amount
                 .map(|amount| amount.micros as f64 / 1_000_000.0)
                 .unwrap_or_default(),
+            cost_source: cost_source_of(outcome.usage.usage.charged_amount.as_ref()),
         },
         artifact_paths: outcome
             .artifacts
@@ -1285,18 +1205,18 @@ fn outcome_to_host(
             .collect(),
         persistence_disposition,
     });
-    let is_awaiting_input = matches!(outcome.status, SubagentStatus::AwaitingInput(_));
+    let is_awaiting_input = matches!(outcome.status, SubagentOutcomeKind::AwaitingInput(_));
     let status = match outcome.status {
-        SubagentStatus::Completed => SubagentRunStatus::Completed,
-        SubagentStatus::AwaitingInput(pause) => SubagentRunStatus::AwaitingUser {
+        SubagentOutcomeKind::Completed => SubagentRunStatus::Completed,
+        SubagentOutcomeKind::AwaitingInput(pause) => SubagentRunStatus::AwaitingUser {
             question: pause.reason,
             options: None,
             checkpoint: None,
         },
-        SubagentStatus::Incomplete(incomplete) => SubagentRunStatus::Incomplete {
+        SubagentOutcomeKind::Incomplete(incomplete) => SubagentRunStatus::Incomplete {
             reason: incomplete.reason,
         },
-        SubagentStatus::Cancelled => SubagentRunStatus::Cancelled,
+        SubagentOutcomeKind::Cancelled => SubagentRunStatus::Cancelled,
     };
     host.status = status;
     host.persistence_disposition = persistence_disposition;
@@ -1315,4 +1235,13 @@ fn outcome_to_host(
 
 fn map_lifecycle_error(error: SubagentError) -> SubagentRunError {
     SubagentRunError::Provider(anyhow::anyhow!(error.to_string()))
+}
+/// A child run's cost as it comes back across the orchestration boundary.
+/// That `Usage` can only say whether a charge is present, so a present one is
+/// read as charged and an absent one as unknown (it was sent as absent).
+fn cost_source_of(charged: Option<&ChargedAmount>) -> crate::agent::cost::CostSource {
+    match charged {
+        Some(_) => crate::agent::cost::CostSource::Charged,
+        None => crate::agent::cost::CostSource::Unknown,
+    }
 }

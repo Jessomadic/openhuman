@@ -124,10 +124,9 @@ pub async fn compute_approval_manifest(config: &Config, graph: &WorkflowGraph) -
                         // error (unknown tool, etc.) degrades conservatively
                         // to Network — over-asking is safe, under-asking
                         // re-introduces the mid-run park this feature removes.
-                        let class = crate::runtime::node::ops::classify_tool_call(
-                            config, &tool_name, &args,
-                        )
-                        .unwrap_or(CommandClass::Network);
+                        let class =
+                            crate::tools::native_ops::classify_tool_call(config, &tool_name, &args)
+                                .unwrap_or(CommandClass::Network);
                         push_gated(
                             &mut entries,
                             &mut seen_tools,
@@ -227,7 +226,7 @@ pub async fn flows_approval_manifest(
     config: &Config,
     id: Option<&str>,
     graph_json: Option<Value>,
-) -> Result<RpcOutcome<Value>, String> {
+) -> Result<Outcome<Value>, String> {
     tracing::debug!(target: "flows", id = ?id, has_graph = graph_json.is_some(), "[flows] flows_approval_manifest: entry");
     let (graph, flow_id) = match (id, graph_json) {
         (Some(id), _) => {
@@ -263,7 +262,7 @@ pub async fn flows_approval_manifest(
         missing.len()
     );
     tracing::debug!(target: "flows", entries = entries.len(), missing = missing.len(), gate_installed, "[flows] flows_approval_manifest: exit");
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({
             "entries": entries,
             "missing": missing,

@@ -9,12 +9,27 @@ pub(super) fn lookup(function: &str) -> Option<ControllerSchema> {
 "update_search_settings" => Some( ControllerSchema {
             namespace: "config",
             function: "update_search_settings",
-            description: "Update search engine selection and BYO API credentials.",
+            description: "Update search providers, their routes (managed or own key), per-role provider order, limits, and the web-access allowlist. Keys are write-only.",
             inputs: vec![
+                optional_bool("enabled", "Whether web search is enabled globally."),
                 optional_string(
                     "engine",
-                    "Active engine: disabled | managed | parallel | brave | querit | exa | tavily.",
+                    "Legacy single-engine selector from older clients: disabled | managed | brave | querit | exa | tavily.",
                 ),
+                FieldSchema {
+                    name: "providers",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::Json)),
+                    comment: "Per-provider changes keyed by provider id (exa, gemini, tinyfish, brave, tavily, querit, seltz, searxng): {enabled?, route?: managed|direct, api_key? (empty clears), base_url? (searxng)}.",
+                    required: false,
+                },
+                FieldSchema {
+                    name: "roles",
+                    ty: TypeSchema::Option(Box::new(TypeSchema::Json)),
+                    comment: "Ordered provider list per role (search | answer | contents). The first usable provider serves the role; an empty list restores the default order.",
+                    required: false,
+                },
+                optional_string("presentation", "roles | all_tools | router | one_provider."),
+                optional_string("presentation_provider", "Provider for one_provider or the router default; empty clears."),
                 FieldSchema {
                     name: "max_results",
                     ty: TypeSchema::Option(Box::new(TypeSchema::U64)),
@@ -27,26 +42,6 @@ pub(super) fn lookup(function: &str) -> Option<ControllerSchema> {
                     comment: "Per-request timeout in seconds (1-120).",
                     required: false,
                 },
-                optional_string(
-                    "parallel_api_key",
-                    "Parallel API key (empty string clears the stored key).",
-                ),
-                optional_string(
-                    "brave_api_key",
-                    "Brave Search API key (empty string clears the stored key).",
-                ),
-                optional_string(
-                    "querit_api_key",
-                    "Querit API key (empty string clears the stored key).",
-                ),
-                optional_string(
-                    "exa_api_key",
-                    "Exa API key (empty string clears the stored key).",
-                ),
-                optional_string(
-                    "tavily_api_key",
-                    "Tavily API key (empty string clears the stored key).",
-                ),
                 FieldSchema {
                     name: "allowed_domains",
                     ty: TypeSchema::Option(Box::new(TypeSchema::Array(Box::new(
@@ -62,17 +57,17 @@ pub(super) fn lookup(function: &str) -> Option<ControllerSchema> {
                     required: false,
                 },
             ],
-            outputs: vec![json_output("snapshot", "Updated config snapshot.")],
+            outputs: vec![json_output("settings", "Updated search settings (same shape as get_search_settings).")],
         }),
 "get_search_settings" => Some( ControllerSchema {
             namespace: "config",
             function: "get_search_settings",
             description:
-                "Read search engine settings. API keys are surfaced as presence booleans only.",
+                "Read search settings: each provider's route, key presence and status, the per-role provider order, and which providers serve each role now. Keys are never returned.",
             inputs: vec![],
             outputs: vec![json_output(
                 "settings",
-                "Engine, effective engine, limits, and per-provider configuration flags.",
+                "enabled, presentation, limits, managed_available, providers[], roles, effective_roles, allowed_domains, allow_all.",
             )],
         }),
         "update_composio_trigger_settings" => Some(ControllerSchema {

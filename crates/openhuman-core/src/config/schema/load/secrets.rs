@@ -15,6 +15,12 @@ fn migration_flag() -> &'static AtomicBool {
     &MIGRATED
 }
 
+thread_local! {
+    /// Fields a `decrypt_config_secrets` pass on this thread could not open
+    /// (and cleared). The pass is synchronous, so a thread-local is exact.
+    static DECRYPT_FAILURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Decrypt one optional secret in place.
 ///
 /// When the stored value uses the legacy, insecure `enc:` (XOR) format this
@@ -57,10 +63,32 @@ fn decrypt_optional_secret(
                         field_name,
                         &e.to_string(),
                     );
+                    DECRYPT_FAILURES.with(|failures| failures.set(failures.get() + 1));
                     *value = None;
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// [`decrypt_config_secrets`] for a config about to be written somewhere
+/// other nodes read (the shared config document): every process-key field must
+/// open. The load path clears a field it cannot decrypt so the app stays
+/// usable; saving that cleared value over the shared document would turn a
+/// transient keychain failure into lost credentials, so this fails instead.
+pub(super) fn decrypt_config_secrets_strict(
+    config: &mut Config,
+    openhuman_dir: &Path,
+) -> Result<()> {
+    DECRYPT_FAILURES.with(|failures| failures.set(0));
+    decrypt_config_secrets(config, openhuman_dir)?;
+    let failed = DECRYPT_FAILURES.with(|failures| failures.replace(0));
+    if failed > 0 {
+        anyhow::bail!(
+            "{failed} config secret(s) are sealed under this node's key and could not be opened; \
+             not saving them to the shared config document"
+        );
     }
     Ok(())
 }
@@ -101,7 +129,17 @@ pub(super) fn decrypt_config_secrets(config: &mut Config, openhuman_dir: &Path) 
     let store = crate::security::keyring::SecretStore::new(openhuman_dir, true);
 
     decrypt_optional_secret(&store, &mut config.api_key, "api_key")?;
+    // A MongoDB URL carries the database password.
+    // Fail closed: if the sealed URL cannot be opened, keep the ciphertext so
+    // the storage backend fails to open at boot instead of the field being
+    // cleared into the "no URL" sentinel (the classic on-disk layout).
+    let sealed_storage_url = config.storage.url.clone();
+    decrypt_optional_secret(&store, &mut config.storage.url, "storage.url")?;
+    if config.storage.url.is_none() && sealed_storage_url.is_some() {
+        config.storage.url = sealed_storage_url;
+    }
 
+    decrypt_optional_secret(&store, &mut config.seltz.api_key, "seltz.api_key")?;
     decrypt_optional_secret(
         &store,
         &mut config.search.parallel.api_key,
@@ -122,6 +160,11 @@ pub(super) fn decrypt_config_secrets(config: &mut Config, openhuman_dir: &Path) 
         &store,
         &mut config.search.tavily.api_key,
         "search.tavily.api_key",
+    )?;
+    decrypt_optional_secret(
+        &store,
+        &mut config.search.gemini.api_key,
+        "search.gemini.api_key",
     )?;
 
     let ch = &mut config.channels_config;
@@ -210,7 +253,10 @@ pub(super) fn encrypt_config_secrets(config: &mut Config) -> Result<()> {
     let store = crate::security::keyring::SecretStore::new(parent_dir, true);
 
     encrypt_optional_secret(&store, &mut config.api_key, "api_key")?;
+    // A MongoDB URL carries the database password.
+    encrypt_optional_secret(&store, &mut config.storage.url, "storage.url")?;
 
+    encrypt_optional_secret(&store, &mut config.seltz.api_key, "seltz.api_key")?;
     encrypt_optional_secret(
         &store,
         &mut config.search.parallel.api_key,
@@ -231,6 +277,11 @@ pub(super) fn encrypt_config_secrets(config: &mut Config) -> Result<()> {
         &store,
         &mut config.search.tavily.api_key,
         "search.tavily.api_key",
+    )?;
+    encrypt_optional_secret(
+        &store,
+        &mut config.search.gemini.api_key,
+        "search.gemini.api_key",
     )?;
 
     let ch = &mut config.channels_config;
@@ -302,3 +353,7 @@ pub(super) fn encrypt_config_secrets(config: &mut Config) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "secrets_tests.rs"]
+mod tests;

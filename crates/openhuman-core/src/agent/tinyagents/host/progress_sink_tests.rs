@@ -1,5 +1,4 @@
 use super::*;
-use std::sync::Arc;
 use tinyagents_harness::ids::{CallId, RunId, ThreadId};
 use tinyinference_llm::usage::Usage;
 use tokio::sync::mpsc;
@@ -389,7 +388,7 @@ async fn finished_maps_to_turn_completed_carrying_the_round_count() {
     .await;
 
     match rx.try_recv().expect("event forwarded") {
-        AgentProgress::TurnCompleted { iterations } => assert_eq!(iterations, 2),
+        AgentProgress::TurnCompleted { iterations, .. } => assert_eq!(iterations, 2),
         other => panic!("unexpected event: {other:?}"),
     }
     // Usage is deliberately NOT projected onto TurnCostUpdated — see the
@@ -407,7 +406,10 @@ async fn finished_without_usage_still_completes_the_turn() {
     .await;
     assert!(matches!(
         rx.try_recv().expect("event forwarded"),
-        AgentProgress::TurnCompleted { iterations: 1 }
+        AgentProgress::TurnCompleted {
+            iterations: 1,
+            stop: None
+        }
     ));
 }
 
@@ -487,15 +489,4 @@ async fn a_closed_channel_is_survivable() {
     })
     .await;
     assert_eq!(sink.dropped(), 2);
-}
-
-#[tokio::test]
-async fn works_through_an_arc_trait_object() {
-    let (tx, mut rx) = mpsc::channel(8);
-    let dynamic: Arc<dyn ProgressSink> = Arc::new(OpenHumanProgressSink::new(tx));
-    dynamic.emit(started()).await;
-    assert!(matches!(
-        rx.try_recv().expect("event forwarded"),
-        AgentProgress::TurnStarted
-    ));
 }

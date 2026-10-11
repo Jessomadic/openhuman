@@ -75,49 +75,95 @@ fi
 # Source of truth: scripts/ci/product-features.txt.
 PRODUCT_FEATURES="$(bash "$REPO_ROOT/scripts/ci/product-features.sh")"
 
-# The product test surface exercises memory through its native module. CI builds
-# the pinned submodule and supplies this explicit override; mirror that setup
-# locally so the full runner never falls back to GitHub release metadata (which
-# makes an otherwise hermetic mock-backend suite network-bound).
-if [ -z "${TINYMEMORY_TEST_MODULE:-}" ]; then
-  memory_manifest="vendor/tinymemory/crates/tinymemory-module/Cargo.toml"
-  memory_module="vendor/tinymemory/crates/tinymemory-module/target/release/libtinymemory_module.so"
-  echo "Building TinyMemory test module from the pinned submodule ..."
-  cargo build --release --manifest-path "$memory_manifest"
-  export TINYMEMORY_TEST_MODULE="$REPO_ROOT/$memory_module"
-fi
+# Local module artifacts use the host's native library extension. The wallet
+# fixture is a published, checksum-pinned archive for that same host.
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64)
+    module_ext=dylib
+    if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 26 ]; then
+      wallet_platform=macos-26-arm64
+      wallet_sha256=6409e1bfcd542f4fba5d867bd6b06b094a24d8e9bd994aae46894dcd979d3291
+    else
+      wallet_platform=macos-15-arm64
+      wallet_sha256=06d66492a7ba9b3793810ff9e644231deacf6fbdf9e32008fcef866f8228cbd2
+    fi
+    ;;
+  Darwin:x86_64)
+    module_ext=dylib
+    if [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 26 ]; then
+      wallet_platform=macos-26-x86_64
+      wallet_sha256=3ad698d3f6ee549ee4c724717e78a2b16b5504ea4bea89af3ccf06cf3e7c88dc
+    else
+      wallet_platform=macos-15-x86_64
+      wallet_sha256=db4e6b2dae244059ef9bf3401faadb6d58bd6f70bb6279135944a41bb5e3b4f5
+    fi
+    ;;
+  Linux:x86_64)
+    module_ext=so
+    wallet_platform=ubuntu-22.04-x86_64
+    wallet_sha256=4410a0d88d49f3553c01ef6f0ced3a2997388d698d57d08bc129b82807e57016
+    ;;
+  Linux:aarch64|Linux:arm64)
+    module_ext=so
+    wallet_platform=ubuntu-22.04-arm64
+    wallet_sha256=90e391b78ebb25650d7d9cff6440869e045298d1b4976e7d61b6b20b9ca8a3d4
+    ;;
+  *)
+    echo "Unsupported native-module test host: $(uname -s) $(uname -m)" >&2
+    exit 1
+    ;;
+esac
 
 # Tokenjuice JSON-RPC coverage loads the production native module. Keep the
 # test run hermetic by building the pinned submodule instead of falling back
 # to GitHub release metadata.
 if [ -z "${TINYJUICE_TEST_MODULE:-}" ]; then
   juice_manifest="vendor/tinyjuice/crates/tinyjuice-module/Cargo.toml"
-  juice_module="vendor/tinyjuice/target/release/libtinyjuice_module.so"
+  juice_module="vendor/tinyjuice/target/release/libtinyjuice_module.$module_ext"
   echo "Building TinyJuice test module from the pinned submodule ..."
   cargo build --release --manifest-path "$juice_manifest"
   export TINYJUICE_TEST_MODULE="$REPO_ROOT/$juice_module"
 fi
 
+# Search JSON-RPC/agent coverage calls the TinySearch module against the mock
+# backend's managed Exa/Gemini routes. Build the pinned submodule so the suite
+# never depends on a published release.
+if [ -z "${TINYSEARCH_TEST_MODULE:-}" ]; then
+  search_manifest="vendor/tinysearch/crates/tinysearch/Cargo.toml"
+  search_module="vendor/tinysearch/target/release/libtinysearch.$module_ext"
+  echo "Building TinySearch test module from the pinned submodule ..."
+  cargo build --release --manifest-path "$search_manifest"
+  export TINYSEARCH_TEST_MODULE="$REPO_ROOT/$search_module"
+fi
+
 # Wallet JSON-RPC E2E sends a recovery phrase only to an attested module. Build
 # artifacts are deliberately not treated as release-pinned recipients, so use
 # the checksum-pinned release archive and its accompanying `modules.toml`.
-wallet_dir="$REPO_ROOT/target/test-modules/tinywallet"
-wallet_archive="$wallet_dir/tinywallet-module-0.5.1-ubuntu-22.04-x86_64.tar.gz"
-wallet_sha256="88b63685cab8a622416f24f1ad569153f249d6d74732ff33c79e4021cf64a611"
-if [ ! -f "$wallet_dir/libtinywallet_module.so" ]; then
+# Keyed by version: the presence check below would otherwise keep serving a
+# library from an earlier release after the pin moves, and the wallet only
+# attests the pinned release's library.
+wallet_version="0.5.3"
+wallet_dir="$REPO_ROOT/target/test-modules/tinywallet/$wallet_version"
+wallet_archive="$wallet_dir/tinywallet-module-$wallet_version-$wallet_platform.tar.gz"
+if [ ! -f "$wallet_dir/libtinywallet_module.$module_ext" ]; then
   echo "Downloading the pinned TinyWallet test module ..."
   mkdir -p "$wallet_dir"
   curl --fail --location --silent --show-error \
-    "https://github.com/tinyhumansai/tinywallet/releases/download/v0.5.1/$(basename "$wallet_archive")" \
+    "https://github.com/tinyhumansai/tinywallet/releases/download/v${wallet_version}/$(basename "$wallet_archive")" \
     --output "$wallet_archive"
-  echo "${wallet_sha256}  $wallet_archive" | sha256sum --check
+  # macOS ships a `sha256sum` that does not accept GNU's stdin check mode.
+  if command -v shasum >/dev/null 2>&1; then
+    echo "${wallet_sha256}  $wallet_archive" | shasum -a 256 -c
+  else
+    echo "${wallet_sha256}  $wallet_archive" | sha256sum --check
+  fi
   tar -xzf "$wallet_archive" -C "$wallet_dir"
 fi
 export OPENHUMAN_MODULE_PATH="$wallet_dir${OPENHUMAN_MODULE_PATH:+:$OPENHUMAN_MODULE_PATH}"
 
 if [ -z "${TINYCONNECTORS_TEST_MODULE:-}" ]; then
   connectors_manifest="vendor/tinyconnectors/crates/tinyconnectors/Cargo.toml"
-  connectors_module="$REPO_ROOT/vendor/tinyconnectors/target/release/libtinyconnectors.so"
+  connectors_module="$REPO_ROOT/vendor/tinyconnectors/target/release/libtinyconnectors.$module_ext"
   echo "Building TinyConnectors test module from the pinned submodule ..."
   cargo build --release --manifest-path "$connectors_manifest"
 fi
@@ -147,7 +193,7 @@ run_raw_coverage_modules() {
     # path. These groups verify the host-to-module round trip, so inject the
     # pinned connector only for their processes.
     if { [ "$module" = "composio_credentials_state_raw_coverage_e2e" ] ||
-         [ "$module" = "composio_ops_raw_coverage_e2e" ] ||
+         [ "$module" = "composio_tools_direct_raw_coverage_e2e" ] ||
          [ "$module" = "tools_composio_large_round25_raw_coverage_e2e" ]; } &&
        [ -z "${TINYCONNECTORS_TEST_MODULE:-}" ]; then
       TINYCONNECTORS_TEST_MODULE="$connectors_module" \
@@ -156,6 +202,24 @@ run_raw_coverage_modules() {
       cargo_test --test raw_coverage_all -- "${module}::" --test-threads=1 "$@"
     fi
   done < <(raw_coverage_modules)
+}
+
+in_process_modules() {
+  find tests/in_process -maxdepth 1 -type f -name '*.rs' -print |
+    sed -e 's#^tests/in_process/##' -e 's#\.rs$##' |
+    sort
+}
+
+run_in_process_modules() {
+  # ~20 former `tests/*.rs` targets now share the `in_process_all` binary. Run
+  # each module in its own cargo process so the process-global RPC bearer,
+  # backend transport and module singletons stay per suite, as they were.
+  while IFS= read -r module; do
+    [ -n "$module" ] || continue
+    echo "[test-rust-with-mock] in-process module: ${module}"
+    TINYCONNECTORS_TEST_MODULE="${TINYCONNECTORS_TEST_MODULE:-$connectors_module}" \
+      cargo_test --test in_process_all -- "${module}::" "$@"
+  done < <(in_process_modules)
 }
 
 run_json_rpc_e2e() {
@@ -198,6 +262,8 @@ run_full_suite() {
       # each generated module filter in its own cargo process so local
       # `pnpm test:rust` preserves the same process-global isolation as CI.
       run_raw_coverage_modules "$@"
+    elif [ "$target" = "in_process_all" ]; then
+      run_in_process_modules "$@"
     elif [ "$target" = "json_rpc_e2e" ]; then
       run_json_rpc_e2e "$@"
     else
@@ -218,6 +284,12 @@ elif [ "$#" -ge 2 ] && [ "$1" = "--test" ] && [ "$2" = "raw_coverage_all" ]; the
     shift
   fi
   run_raw_coverage_modules "$@"
+elif [ "$#" -ge 2 ] && [ "$1" = "--test" ] && [ "$2" = "in_process_all" ]; then
+  shift 2
+  if [ "${1:-}" = "--" ]; then
+    shift
+  fi
+  run_in_process_modules "$@"
 elif [ "$#" -ge 2 ] && [ "$1" = "--test" ] && [ "$2" = "json_rpc_e2e" ]; then
   shift 2
   if [ "${1:-}" = "--" ]; then

@@ -15,7 +15,6 @@ const log = debug('settings:nav');
 
 type SettingsRoute =
   | 'home'
-  | 'agents'
   | 'agent-access'
   | 'account'
   | 'privacy'
@@ -26,24 +25,21 @@ type SettingsRoute =
   | 'tools'
   | 'recovery-phrase'
   | 'wallet-balances'
-  | 'notifications'
   | 'personality'
+  | 'face'
+  | 'theme'
   | 'appearance'
   | 'approval-history'
   | 'integrations'
   | 'composio-triggers'
-  | 'mcp-server'
   | 'sandbox-settings'
   | 'permissions'
-  | 'activity-level'
-  | 'devices'
   | 'usage'
   | 'security'
   | 'migration'
   | 'meetings'
   | 'embeddings'
   | 'search'
-  | 'skills-runner'
   | 'event-log'
   | 'tool-policy-diagnostics'
   | 'about';
@@ -73,7 +69,7 @@ interface SettingsNavigationHook {
 /** Extract the settings sub-path from a full pathname. */
 const extractSettingsSlug = (pathname: string): string => {
   // Strip the leading /settings/ and take the first path segment.
-  // e.g. /settings/agents/edit/123 → 'agents'
+  // e.g. /settings/team/manage/123 → 'team'
   const match = /^\/settings\/(.+)$/.exec(pathname);
   if (!match) return '';
   return match[1];
@@ -82,9 +78,6 @@ const extractSettingsSlug = (pathname: string): string => {
 const getCurrentRoute = (pathname: string): SettingsRoute => {
   const slug = extractSettingsSlug(pathname);
   if (!slug) return 'home';
-
-  // --- agent editor sub-routes ---
-  if (/^agents\/(new|edit)/.test(slug)) return 'agents';
 
   // --- exact first-segment lookup via registry ---
   const firstSegment = slug.split('/')[0];
@@ -96,7 +89,7 @@ const getCurrentRoute = (pathname: string): SettingsRoute => {
     return entry.id as SettingsRoute;
   }
 
-  // A few routes have ids that don't match their URL segment (build-info → about).
+  // A few routes have ids that don't match their URL segment (e.g. an entry with an explicit `route`).
   // Check all registry entries whose resolved route matches.
   const byRoute = SETTINGS_ROUTE_REGISTRY.find(e => entryRoute(e) === firstSegment);
   if (byRoute) {

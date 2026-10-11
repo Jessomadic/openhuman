@@ -7,14 +7,14 @@ import PersonaTemplatePicker from './PersonaTemplatePicker';
 vi.mock('../../../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (key: string) => key }) }));
 
 describe('<PersonaTemplatePicker />', () => {
-  it('renders one button per persona template', () => {
+  it('renders one radio per persona template', () => {
     render(<PersonaTemplatePicker value="" onChange={vi.fn()} />);
-    const buttons = screen
-      .getAllByRole('button')
+    const radios = screen
+      .getAllByRole('radio')
       .filter(b => b.getAttribute('data-testid')?.startsWith('persona-template-'));
-    expect(buttons.length).toBeGreaterThan(0);
-    buttons.forEach(button => {
-      expect(button).toHaveAttribute('data-slot', 'button');
+    expect(radios.length).toBeGreaterThan(0);
+    radios.forEach(radio => {
+      expect(radio).toHaveAttribute('aria-checked');
     });
   });
 
@@ -26,11 +26,11 @@ describe('<PersonaTemplatePicker />', () => {
     expect(onChange).toHaveBeenCalledWith(expect.any(String));
   });
 
-  it('disables every template button when disabled', () => {
+  it('disables every template radio when disabled', () => {
     render(<PersonaTemplatePicker value="" onChange={vi.fn()} disabled />);
-    const buttons = screen
-      .getAllByRole('button')
+    const radios = screen
+      .getAllByRole('radio')
       .filter(b => b.getAttribute('data-testid')?.startsWith('persona-template-'));
-    buttons.forEach(button => expect(button).toBeDisabled());
+    radios.forEach(radio => expect(radio).toBeDisabled());
   });
 });

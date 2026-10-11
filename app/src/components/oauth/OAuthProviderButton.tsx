@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useT } from '../../lib/i18n/I18nContext';
 import { checkBackendHealthy } from '../../services/backendHealth';
 import {
+  beginAwaitingAuthCallback,
   beginDeepLinkAuthProcessing,
   completeDeepLinkAuthProcessing,
+  endAwaitingAuthCallback,
   getDeepLinkAuthState,
 } from '../../store/deepLinkAuthState';
 import type { OAuthProviderConfig } from '../../types/oauth';
@@ -15,12 +17,23 @@ import { startLoopbackOauthListener } from '../../utils/loopbackOauthListener';
 import { prepareOAuthLoginLaunch } from '../../utils/oauthAppVersionGate';
 import { openUrl } from '../../utils/openUrl';
 import { isTauri } from '../../utils/tauriCommands';
+import {
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogRoot,
+  AlertDialogTitle,
+} from '../ui/AlertDialog';
 
 interface OAuthProviderButtonProps {
   provider: OAuthProviderConfig;
   className?: string;
   disabled?: boolean;
   onClickOverride?: () => void;
+  /** Local profile whose data will remain on this device after cloud sign-in. */
+  localProfileId?: string | null;
 }
 
 // Reset the loading state if the OAuth round-trip never completes — covers
@@ -39,6 +52,18 @@ const OAUTH_PREFLIGHT_TIMEOUT_MS = 4_000;
 
 const BACKEND_UNAVAILABLE_MESSAGE =
   'OpenHuman cloud sign-in is temporarily unavailable. Please try again in a few minutes.';
+
+/**
+ * The `/__dev-auth` return URL for the browser dev build, or `null` when the
+ * page is not served from an http loopback origin (the only redirect targets
+ * the backend accepts besides provisioned tenant consoles).
+ */
+const getWebDevRedirectUri = (): string | null => {
+  const { protocol, hostname, origin } = window.location;
+  if (protocol !== 'http:') return null;
+  if (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(hostname)) return null;
+  return `${origin}/__dev-auth`;
+};
 
 const log = debug('oauth:button');
 const warnLog = debug('oauth:button:warn');
@@ -96,10 +121,12 @@ const OAuthProviderButton = ({
   className = '',
   disabled: externalDisabled = false,
   onClickOverride,
+  localProfileId,
 }: OAuthProviderButtonProps) => {
   const { t } = useT();
   const [isLoading, setIsLoading] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
+  const [confirmProfileSwitch, setConfirmProfileSwitch] = useState(false);
   // Tracks whether the user actually got dispatched to the system browser on
   // this attempt. Lets the focus/visibility handlers distinguish "user came
   // back from the browser" (probe for backend health) from "click never even
@@ -178,8 +205,13 @@ const OAuthProviderButton = ({
     const timer = window.setTimeout(() => {
       log('[%s] timeout -> reset isLoading', provider.id);
       reset();
-      // 90s with no deep-link is a strong "something went wrong" signal even
-      // if the user never refocused the app. Probe so we can attribute it.
+      // Stop holding the hand-off screen: after this long the browser is not
+      // coming back on its own, and a spinner with no end is worse than a
+      // screen that says so.
+      endAwaitingAuthCallback();
+      // Five minutes with no deep-link is a strong "something went wrong"
+      // signal even if the user never refocused the app. Probe so we can
+      // attribute it.
       probeBackendOnReturn('timeout');
     }, OAUTH_LOADING_TIMEOUT_MS);
 
@@ -193,7 +225,7 @@ const OAuthProviderButton = ({
     };
   }, [isLoading, provider.id]);
 
-  const handleOAuthLogin = async () => {
+  const startOAuthLogin = async () => {
     if (onClickOverride) {
       onClickOverride();
       return;
@@ -242,11 +274,22 @@ const OAuthProviderButton = ({
       const loopback = isTauri() ? await startLoopbackOauthListener() : null;
       const loginUrlBase = `${backendUrl}/auth/${provider.id}/login`;
       const params = new URLSearchParams();
+      // Browser dev build on a loopback origin (`pnpm dev:app:web`; never the
+      // Tauri webview, whose `tauri dev` origin is also localhost): the backend
+      // accepts any http loopback redirectUri, so send it back to the Vite dev
+      // server's `/__dev-auth` bounce (see `devConnectPlugin` in
+      // `app/vite.config.ts`), which lands on the `#/auth` callback route.
+      const webDevRedirectUri = !isTauri() && IS_DEV ? getWebDevRedirectUri() : null;
       // `responseType=json` makes the backend return JSON in the browser tab
       // instead of redirecting — useful as a pre-loopback dev workaround, but
       // it shortcircuits the redirect so the loopback listener never fires.
-      // Only set it when we have no loopback handle (web build, or bind failed).
-      if (IS_DEV && !loopback) params.set('responseType', 'json');
+      // Only set it when we have no redirect target at all.
+      const jsonDevFallback = IS_DEV && !loopback && !webDevRedirectUri;
+      if (jsonDevFallback) params.set('responseType', 'json');
+      if (webDevRedirectUri) {
+        log('[%s] web dev loopback redirect via /__dev-auth', provider.id);
+        params.set('redirectUri', webDevRedirectUri);
+      }
       if (loopback) {
         params.set('redirectUri', loopback.redirectUri);
         // Bind the inbound `openhuman://auth` deep link to a per-attempt state
@@ -301,7 +344,7 @@ const OAuthProviderButton = ({
           });
       }
 
-      if (IS_DEV) {
+      if (jsonDevFallback) {
         console.log(`[dev] OAuth debug mode enabled. OAuth URL: ${loginUrl}`);
         console.log('[dev] In debug mode, OAuth will return JSON response instead of redirect.');
         console.log(
@@ -317,7 +360,12 @@ const OAuthProviderButton = ({
         window.location.href = loginUrl;
       }
       browserOpenedRef.current = true;
+      // The launch step is done, but the sign-in is not: the user is now in
+      // another window. Mark that explicitly so the UI can hold a hand-off
+      // screen until the callback lands, instead of snapping back to the
+      // sign-in buttons a second after the browser opens.
       completeDeepLinkAuthProcessing();
+      beginAwaitingAuthCallback();
     } catch (error) {
       completeDeepLinkAuthProcessing();
       const message = getOAuthStartupFailureMessage(provider, error);
@@ -330,6 +378,14 @@ const OAuthProviderButton = ({
       setStartupError(message);
       setIsLoading(false);
     }
+  };
+
+  const handleOAuthLogin = async () => {
+    if (localProfileId?.startsWith('local-')) {
+      setConfirmProfileSwitch(true);
+      return;
+    }
+    await startOAuthLogin();
   };
 
   const isDisabled = externalDisabled || isLoading;
@@ -355,6 +411,26 @@ const OAuthProviderButton = ({
           {startupError}
         </p>
       ) : null}
+      <AlertDialogRoot open={confirmProfileSwitch} onOpenChange={setConfirmProfileSwitch}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogTitle>{t('auth.profileSwitch.title')}</AlertDialogTitle>
+          <AlertDialogDescription>
+            {t('auth.profileSwitch.body').replace('{profileId}', localProfileId ?? '')}
+          </AlertDialogDescription>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              tone="default"
+              onClick={event => {
+                event.preventDefault();
+                setConfirmProfileSwitch(false);
+                void startOAuthLogin();
+              }}>
+              {t('auth.profileSwitch.continue')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialogRoot>
     </div>
   );
 };

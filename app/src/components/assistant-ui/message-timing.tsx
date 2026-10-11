@@ -7,6 +7,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/assistant-ui/ui/tooltip';
+import { useT } from '@/lib/i18n/I18nContext';
 import { useMessageTiming } from '@assistant-ui/react';
 import type { FC } from 'react';
 
@@ -40,6 +41,7 @@ export const MessageTiming: FC<{
   className?: string;
   side?: 'top' | 'right' | 'bottom' | 'left';
 }> = ({ className, side = 'right' }) => {
+  const { t } = useT();
   const timing = useMessageTiming();
   if (timing?.totalStreamTime === undefined) return null;
 
@@ -51,7 +53,7 @@ export const MessageTiming: FC<{
             <button
               type="button"
               data-slot="message-timing-trigger"
-              aria-label="Message timing"
+              aria-label={t('messageTiming.ariaLabel', 'Message timing')}
               className={cn(
                 'text-muted-foreground hover:bg-accent hover:text-accent-foreground flex items-center rounded-md p-1 font-mono text-xs tabular-nums transition-colors',
                 className
@@ -68,28 +70,33 @@ export const MessageTiming: FC<{
           <div className="grid min-w-35 gap-1.5 text-xs">
             {timing.firstTokenTime !== undefined && (
               <div className="flex items-center justify-between gap-4">
-                <span className="text-muted-foreground">First token</span>
+                <span className="text-muted-foreground">
+                  {t('messageTiming.firstToken', 'First token')}
+                </span>
                 <span className="font-mono tabular-nums">
                   {formatTimingMs(timing.firstTokenTime)}
                 </span>
               </div>
             )}
             <div className="flex items-center justify-between gap-4">
-              <span className="text-muted-foreground">Total</span>
+              <span className="text-muted-foreground">{t('messageTiming.total', 'Total')}</span>
               <span className="font-mono tabular-nums">
                 {formatTimingMs(timing.totalStreamTime)}
               </span>
             </div>
             {timing.tokensPerSecond !== undefined && (
               <div className="flex items-center justify-between gap-4">
-                <span className="text-muted-foreground">Speed</span>
+                <span className="text-muted-foreground">{t('messageTiming.speed', 'Speed')}</span>
                 <span className="font-mono tabular-nums">
-                  {timing.tokensPerSecond.toFixed(1)} tok/s
+                  {t('messageTiming.tokensPerSecond', '{value} tok/s').replace(
+                    '{value}',
+                    timing.tokensPerSecond.toFixed(1)
+                  )}
                 </span>
               </div>
             )}
             <div className="flex items-center justify-between gap-4">
-              <span className="text-muted-foreground">Chunks</span>
+              <span className="text-muted-foreground">{t('messageTiming.chunks', 'Chunks')}</span>
               <span className="font-mono tabular-nums">{timing.totalChunks}</span>
             </div>
           </div>

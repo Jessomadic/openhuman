@@ -4,7 +4,7 @@ use serde_json::{json, Map, Value};
 
 use crate::config::rpc as config_rpc;
 use crate::core::all::ControllerFuture;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 pub(super) fn handle_composio_execute(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
@@ -16,44 +16,16 @@ pub(super) fn handle_composio_execute(params: Map<String, Value>) -> ControllerF
         let action_args = params.get("params").cloned();
 
         let config = config_rpc::load_config_with_timeout().await?;
-        // Route through the mode-aware factory so direct-mode users
-        // hit their personal Composio tenant when the Tauri shell
-        // calls `tools.composio_execute` (e.g. onboarding-driven
-        // flows). Pre-fix, the controller hard-bound to the
-        // backend-only `build_composio_client` and silently 4xx'd for
-        // direct-mode users (#1710). Mirrors
-        // `composio::ops::composio_execute`.
-        use crate::integrations::composio::client::{
-            create_composio_client, direct_execute, ComposioClientKind,
-        };
-        let kind =
-            create_composio_client(&config).map_err(|e| format!("tools.composio_execute: {e}"))?;
-        tracing::debug!(
-            action = %action,
-            mode = %config.composio.mode,
-            "[tools][composio_execute] executing action"
-        );
-        let resp = match kind {
-            ComposioClientKind::Backend(client) => {
-                tracing::debug!(action = %action, "[tools][composio_execute] branch=backend");
-                client
-                    .execute_tool(&action, action_args)
-                    .await
-                    .map_err(|e| format!("composio execute_tool (backend) failed: {e:#}"))?
-            }
-            ComposioClientKind::Direct(direct) => {
-                tracing::debug!(action = %action, "[tools][composio_execute] branch=direct");
-                direct_execute(
-                    &direct,
-                    &action,
-                    action_args,
-                    &config.composio.entity_id,
-                    None,
-                )
-                .await
-                .map_err(|e| format!("composio execute_tool (direct) failed: {e:#}"))?
-            }
-        };
+        // The connector module owns the mode split (backend proxy vs. the
+        // user's personal direct tenant, #1710); this only supplies the config.
+        let resp = crate::integrations::composio::execute_dispatch::execute_composio_action(
+            &config,
+            &action,
+            action_args,
+            None,
+        )
+        .await
+        .map_err(|e| format!("composio execute failed: {e}"))?;
         tracing::debug!(
             action = %action,
             successful = resp.successful,
@@ -71,6 +43,6 @@ pub(super) fn handle_composio_execute(params: Map<String, Value>) -> ControllerF
             "tools.composio_execute: action={action} successful={}",
             resp.successful
         )];
-        RpcOutcome::new(payload, log).into_cli_compatible_json()
+        Outcome::new(payload, log).into_cli_compatible_json()
     })
 }

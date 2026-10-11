@@ -62,9 +62,12 @@ vi.mock('./pages/WebCallbackPage', () => {
 vi.mock('./AppRoutesIOS', () => ({ default: () => <div /> }));
 vi.mock('./features/human/HumanPage', () => ({ default: () => <div /> }));
 vi.mock('./pages/Accounts', () => ({ default: () => <div /> }));
-vi.mock('./pages/Brain', () => ({ default: () => <div /> }));
+vi.mock('./pages/Memory', () => ({ default: () => <div /> }));
 vi.mock('./pages/dev/AgentInsightsPreview', () => ({ default: () => <div /> }));
 vi.mock('./pages/dev/UiGallery', () => ({ default: () => <div data-testid="page-ui-gallery" /> }));
+vi.mock('./pages/dev/ToolCallGallery', () => ({
+  default: () => <div data-testid="page-tool-call-gallery" />,
+}));
 vi.mock('./pages/Invites', () => ({ default: () => <div data-testid="page-invites" /> }));
 vi.mock('./pages/Notifications', () => ({
   default: () => <div data-testid="page-notifications" />,
@@ -102,6 +105,7 @@ const OWNED: Array<{ path: string; page: string; guard: Guard }> = [
   { path: '/notifications', page: 'page-notifications', guard: 'protected' },
   { path: '/ptt-overlay', page: 'page-ptt-overlay', guard: 'none' },
   { path: '/dev/ui', page: 'page-ui-gallery', guard: 'none' },
+  { path: '/dev/tools', page: 'page-tool-call-gallery', guard: 'none' },
 ];
 
 describe('AppRoutes — each route renders its page behind the right guard', () => {
@@ -178,7 +182,7 @@ describe('AppRoutes — the whole route table stays classified', () => {
     '/onboarding/*': 'protected',
     '/home': 'redirect',
     '/human': 'protected',
-    '/brain': 'protected',
+    '/brain': 'redirect',
     '/flows': 'protected',
     '/flows/draft': 'protected',
     '/flows/:id': 'protected',
@@ -200,6 +204,7 @@ describe('AppRoutes — the whole route table stays classified', () => {
     '/ptt-overlay': 'none',
     '/dev/agent-insights': 'none',
     '/dev/ui': 'none',
+    '/dev/tools': 'none',
     '/dev/assistant-ui': 'none',
     '*': 'none',
   };
@@ -221,7 +226,8 @@ describe('AppRoutes — the whole route table stays classified', () => {
       // `<Navigate>` internally after copying the query string and hash, so the
       // route body never contains the literal `<Navigate`. Matching only that
       // classified `/skills` as 'none' and silently dropped it from this table.
-      if (/<(?:Navigate|ForwardSearch)\b/.test(body)) out[match[1]] = 'redirect';
+      // `BrainRedirect` wraps a `<Navigate>` the same way.
+      if (/<(?:Navigate|ForwardSearch|BrainRedirect)\b/.test(body)) out[match[1]] = 'redirect';
       else if (/<ProtectedRoute\b[^>]*requireAuth=\{false\}/.test(body))
         out[match[1]] = 'protected-but-open';
       else if (/<ProtectedRoute\b/.test(body)) out[match[1]] = 'protected';

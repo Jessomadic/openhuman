@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::ops;
 use super::types::{
@@ -21,8 +21,8 @@ pub struct ListResponse {
     pub agents: Vec<AgentRegistryEntry>,
 }
 
-pub async fn list_rpc(req: ListRequest) -> Result<RpcOutcome<ListResponse>, String> {
-    Ok(RpcOutcome::new(
+pub async fn list_rpc(req: ListRequest) -> Result<Outcome<ListResponse>, String> {
+    Ok(Outcome::new(
         ListResponse {
             agents: ops::list_agents(req.include_disabled).await?,
         },
@@ -40,8 +40,8 @@ pub struct AvailableToolsResponse {
 
 pub async fn available_tools_rpc(
     _req: AvailableToolsRequest,
-) -> Result<RpcOutcome<AvailableToolsResponse>, String> {
-    Ok(RpcOutcome::new(
+) -> Result<Outcome<AvailableToolsResponse>, String> {
+    Ok(Outcome::new(
         AvailableToolsResponse {
             tools: ops::available_tools().await?,
         },
@@ -59,8 +59,8 @@ pub struct GetResponse {
     pub agent: Option<AgentRegistryEntry>,
 }
 
-pub async fn get_rpc(req: GetRequest) -> Result<RpcOutcome<GetResponse>, String> {
-    Ok(RpcOutcome::new(
+pub async fn get_rpc(req: GetRequest) -> Result<Outcome<GetResponse>, String> {
+    Ok(Outcome::new(
         GetResponse {
             agent: ops::get_agent(&req.id).await?,
         },
@@ -84,6 +84,8 @@ pub struct CreateCustomRequest {
     #[serde(default)]
     pub tool_denylist: Vec<String>,
     #[serde(default)]
+    pub tool_rules: Option<tinytools::ToolRules>,
+    #[serde(default)]
     pub subagents: AgentSubagentPolicy,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -103,6 +105,10 @@ impl CreateCustomRequest {
             system_prompt: self.system_prompt,
             tool_allowlist: self.tool_allowlist,
             tool_denylist: self.tool_denylist,
+            // A new entry never stores a no-op rule set. (Clearing is an
+            // `update`: `AgentRegistryPatch` passes an empty set through to
+            // `apply_patch`, which clears the field.)
+            tool_rules: self.tool_rules.filter(|rules| !rules.is_permissive()),
             subagents: self.subagents,
             tags: self.tags,
             metadata: self.metadata.unwrap_or(Value::Null),
@@ -110,10 +116,8 @@ impl CreateCustomRequest {
     }
 }
 
-pub async fn create_custom_rpc(
-    req: CreateCustomRequest,
-) -> Result<RpcOutcome<AgentResponse>, String> {
-    Ok(RpcOutcome::new(
+pub async fn create_custom_rpc(req: CreateCustomRequest) -> Result<Outcome<AgentResponse>, String> {
+    Ok(Outcome::new(
         AgentResponse {
             agent: ops::upsert_custom_agent(req.into_entry()).await?,
         },
@@ -131,10 +135,8 @@ pub struct AgentResponse {
     pub agent: AgentRegistryEntry,
 }
 
-pub async fn upsert_custom_rpc(
-    req: UpsertCustomRequest,
-) -> Result<RpcOutcome<AgentResponse>, String> {
-    Ok(RpcOutcome::new(
+pub async fn upsert_custom_rpc(req: UpsertCustomRequest) -> Result<Outcome<AgentResponse>, String> {
+    Ok(Outcome::new(
         AgentResponse {
             agent: ops::upsert_custom_agent(req.agent).await?,
         },
@@ -149,8 +151,8 @@ pub struct UpdateRequest {
     pub patch: AgentRegistryPatch,
 }
 
-pub async fn update_rpc(req: UpdateRequest) -> Result<RpcOutcome<AgentResponse>, String> {
-    Ok(RpcOutcome::new(
+pub async fn update_rpc(req: UpdateRequest) -> Result<Outcome<AgentResponse>, String> {
+    Ok(Outcome::new(
         AgentResponse {
             agent: ops::update_agent(&req.id, req.patch).await?,
         },
@@ -164,8 +166,8 @@ pub struct SetEnabledRequest {
     pub enabled: bool,
 }
 
-pub async fn set_enabled_rpc(req: SetEnabledRequest) -> Result<RpcOutcome<AgentResponse>, String> {
-    Ok(RpcOutcome::new(
+pub async fn set_enabled_rpc(req: SetEnabledRequest) -> Result<Outcome<AgentResponse>, String> {
+    Ok(Outcome::new(
         AgentResponse {
             agent: ops::set_agent_enabled(&req.id, req.enabled).await?,
         },
@@ -183,8 +185,8 @@ pub struct RemoveResponse {
     pub removed: bool,
 }
 
-pub async fn remove_rpc(req: RemoveRequest) -> Result<RpcOutcome<RemoveResponse>, String> {
-    Ok(RpcOutcome::new(
+pub async fn remove_rpc(req: RemoveRequest) -> Result<Outcome<RemoveResponse>, String> {
+    Ok(Outcome::new(
         RemoveResponse {
             removed: ops::remove_agent(&req.id).await?,
         },

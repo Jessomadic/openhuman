@@ -51,31 +51,8 @@ pub async fn preview_workspace_text(path: String) -> Result<WorkspaceTextPreview
     preview_workspace_text_from_root(&workspace, &path, DEFAULT_PREVIEW_MAX_BYTES)
 }
 
-/// Resolve a workspace-relative path to its canonical absolute path on disk,
-/// after validating it stays inside the active OpenHuman workspace.
-///
-/// This exposes the internal [`resolve_workspace_path`] helper so UI flows that
-/// need an absolute path to compose with a platform-specific URL scheme (e.g.
-/// `obsidian://open?path=<abs>`) can route through the shared workspace-link
-/// layer instead of re-implementing path normalization in the renderer.
-///
-/// Errors mirror the other workspace-path commands — empty input, parent-dir
-/// escape, NUL bytes, URI-scheme prefixes, paths outside the workspace, and
-/// missing files all surface a non-leaky message.
-#[tauri::command]
-pub async fn resolve_workspace_absolute_path(path: String) -> Result<String, String> {
-    let workspace = active_workspace_root().await?;
-    let target = resolve_workspace_path(&workspace, &path)?;
-    let workspace_label = workspace_path_label(&workspace, &target);
-    log::debug!(
-        "[workspace-paths] resolve_workspace_absolute_path: {}",
-        workspace_label
-    );
-    Ok(target.to_string_lossy().into_owned())
-}
-
 async fn active_workspace_root() -> Result<PathBuf, String> {
-    let config = openhuman_core::config::Config::load_or_init()
+    let config = openhuman_rpc::embed::config::load_or_init()
         .await
         .map_err(|err| workspace_path_error(format!("failed to load OpenHuman config: {err}")))?;
     fs::create_dir_all(&config.workspace_dir).map_err(|err| {

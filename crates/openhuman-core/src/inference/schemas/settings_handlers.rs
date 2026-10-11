@@ -1,6 +1,6 @@
 //! Handlers for model and provider settings: resolution, status, client
 //! config, model and local-runtime settings updates, model listing, device
-//! profile, auth errors, presets, and diagnostics.
+//! auth errors, and diagnostics.
 
 use serde::de::Deserializer;
 use serde::Deserialize;
@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 use super::{deserialize_params, to_json};
 use crate::config::rpc as config_rpc;
 use crate::core::all::ControllerFuture;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct InferenceResolveModelParams {
@@ -31,6 +31,8 @@ pub(super) struct InferenceCloudProviderUpdate {
     endpoint: String,
     #[serde(default)]
     auth_style: Option<String>,
+    #[serde(default)]
+    ca_cert_pem: Option<String>,
     #[serde(rename = "type", default)]
     legacy_type: Option<String>,
     #[serde(default)]
@@ -56,9 +58,6 @@ pub(super) struct InferenceUpdateModelSettingsParams {
     vision_provider: Option<String>,
     memory_provider: Option<String>,
     embeddings_provider: Option<String>,
-    heartbeat_provider: Option<String>,
-    learning_provider: Option<String>,
-    subconscious_provider: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,20 +70,12 @@ pub(super) struct InferenceUpdateLocalSettingsParams {
     model_id: Option<String>,
     chat_model_id: Option<String>,
     usage_embeddings: Option<bool>,
-    usage_heartbeat: Option<bool>,
-    usage_learning_reflection: Option<bool>,
-    usage_subconscious: Option<bool>,
     api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct InferenceListModelsParams {
     provider_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct InferenceApplyPresetParams {
-    tier: String,
 }
 
 pub(super) fn handle_inference_resolve_model(params: Map<String, Value>) -> ControllerFuture {
@@ -100,7 +91,7 @@ pub(super) fn handle_inference_resolve_model(params: Map<String, Value>) -> Cont
         // tier; custom/BYOK models are covered by the user's per-model
         // `model_registry.vision` flag.
         let vision = crate::inference::model_context::model_supports_vision(&resolved, &config);
-        to_json(RpcOutcome::new(
+        to_json(Outcome::new(
             serde_json::json!({ "model": resolved, "vision": vision }),
             vec![],
         ))
@@ -123,12 +114,24 @@ pub(super) fn handle_inference_update_model_settings(
 ) -> ControllerFuture {
     Box::pin(async move {
         let update = deserialize_params::<InferenceUpdateModelSettingsParams>(params)?;
+        let ca_certs = update
+            .cloud_providers
+            .as_ref()
+            .map(|providers| {
+                crate::config::ops::collect_provider_ca_certs(
+                    providers
+                        .iter()
+                        .map(|provider| (provider.slug.as_str(), provider.ca_cert_pem.as_deref())),
+                )
+            })
+            .transpose()?;
         let patch = config_rpc::ModelSettingsPatch {
             api_url: update.api_url,
             inference_url: update.inference_url,
             api_key: update.api_key,
             default_model: update.default_model,
             default_temperature: update.default_temperature,
+            cloud_provider_ca_certs: ca_certs,
             model_routes: update.model_routes.map(|routes| {
                 routes
                     .into_iter()
@@ -228,9 +231,6 @@ pub(super) fn handle_inference_update_model_settings(
             vision_provider: update.vision_provider,
             memory_provider: update.memory_provider,
             embeddings_provider: update.embeddings_provider,
-            heartbeat_provider: update.heartbeat_provider,
-            learning_provider: update.learning_provider,
-            subconscious_provider: update.subconscious_provider,
         };
         to_json(crate::inference::rpc::inference_update_model_settings(patch).await?)
     })
@@ -255,9 +255,6 @@ pub(super) fn handle_inference_update_local_settings(
             model_id: update.model_id,
             chat_model_id: update.chat_model_id,
             usage_embeddings: update.usage_embeddings,
-            usage_heartbeat: update.usage_heartbeat,
-            usage_learning_reflection: update.usage_learning_reflection,
-            usage_subconscious: update.usage_subconscious,
             api_key: update.api_key,
         };
         to_json(crate::inference::rpc::inference_update_local_settings(patch).await?)
@@ -271,25 +268,10 @@ pub(super) fn handle_inference_list_models(params: Map<String, Value>) -> Contro
     })
 }
 
-pub(super) fn handle_inference_device_profile(_params: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move { to_json(crate::inference::rpc::inference_device_profile().await?) })
-}
-
 pub(super) fn handle_inference_provider_auth_errors(
     _params: Map<String, Value>,
 ) -> ControllerFuture {
     Box::pin(async move { to_json(crate::inference::rpc::inference_provider_auth_errors().await?) })
-}
-
-pub(super) fn handle_inference_presets(_params: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move { to_json(crate::inference::rpc::inference_presets().await?) })
-}
-
-pub(super) fn handle_inference_apply_preset(params: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move {
-        let request = deserialize_params::<InferenceApplyPresetParams>(params)?;
-        to_json(crate::inference::rpc::inference_apply_preset(&request.tier).await?)
-    })
 }
 
 pub(super) fn handle_inference_diagnostics(_params: Map<String, Value>) -> ControllerFuture {

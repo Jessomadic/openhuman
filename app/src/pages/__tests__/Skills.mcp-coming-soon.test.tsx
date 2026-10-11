@@ -75,8 +75,10 @@ describe('Skills page — MCP Servers tab (MCP + Meeting bots)', () => {
     });
 
     expect(screen.getByRole('heading', { level: 1, name: 'MCP Servers' })).toBeInTheDocument();
+    // The rows table's own title ("Installed servers") is the DataTable
+    // card's h3, not a page-level h2.
     expect(
-      screen.getByRole('heading', { level: 2, name: 'Installed servers' })
+      screen.getByRole('heading', { level: 3, name: 'Installed servers' })
     ).toBeInTheDocument();
   });
 

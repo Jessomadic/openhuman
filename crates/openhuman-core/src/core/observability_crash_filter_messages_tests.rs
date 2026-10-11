@@ -473,7 +473,7 @@ fn expected_kind_demotes_every_backend_owned_error_code() {
     // bypass `expected_error_kind` would have re-demoted it to the
     // suppressed `ContextWindowExceeded` bucket.
     assert!(
-        crate::inference::provider::is_context_window_exceeded_message(context),
+        tinyinference_llm::failure::is_context_window_exceeded_message(context),
         "test body must actually trigger the matcher the bypass guards against"
     );
 }

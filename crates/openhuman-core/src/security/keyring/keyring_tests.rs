@@ -34,7 +34,7 @@ fn os_keychain_available() -> bool {
     if std::env::var("OPENHUMAN_TEST_OS_KEYCHAIN").as_deref() != Ok("1") {
         return false;
     }
-    let b = backend::OsBackend;
+    let b = backend::OsBackend::new();
     let probe_key = "__openhuman_probe_test__";
     let probe_val = "__probe_ok__";
     if b.set(probe_key, probe_val).is_err() {
@@ -392,7 +392,7 @@ fn os_round_trip_get_set_delete() {
         eprintln!("skip: OS keychain not available");
         return;
     }
-    let b = backend::OsBackend;
+    let b = backend::OsBackend::new();
     let nk = "__openhuman_test__rtgsd:round_trip_key_001";
     let _ = b.delete(nk);
 
@@ -409,7 +409,7 @@ fn os_delete_nonexistent_is_ok() {
         eprintln!("skip: OS keychain not available");
         return;
     }
-    backend::OsBackend
+    backend::OsBackend::new()
         .delete("__openhuman_test__del_ne:__nonexistent__")
         .expect("idempotent delete");
 }
@@ -420,7 +420,7 @@ fn os_user_id_isolation() {
         eprintln!("skip: OS keychain not available");
         return;
     }
-    let b = backend::OsBackend;
+    let b = backend::OsBackend::new();
     let nk_a = "__openhuman_test__user_a_iso:__shared_key_iso__";
     let nk_b = "__openhuman_test__user_b_iso:__shared_key_iso__";
     let _ = b.delete(nk_a);
@@ -465,135 +465,7 @@ fn get_or_create_random_idempotent_file_backend() {
     assert_eq!(first, second, "idempotent read-back");
 }
 
-// ── is_available probe: idempotency regression tests ─────────────────────────
-//
-// The probe in `is_available()` must return `true` on every launch, not just the
-// first one. Before the fix, `set()` was called blindly: on macOS the Keychain
-// returns `-25299 "item already exists"` when the probe key survives from a
-// prior launch, flipping `is_available` to `false` even though the keychain is
-// fully functional. The fix deletes the probe key first so the write always
-// lands clean.
-//
-// We verify this with a `StrictSetBackend` — a `FileBackend` wrapper that
-// rejects `set()` on an already-existing key, exactly matching the Keychain
-// semantics that exposed the bug. This lets the regression run in CI without
-// the `OPENHUMAN_TEST_OS_KEYCHAIN=1` gate.
-
-/// Wraps `FileBackend` but fails `set` with `KeyringError::Backend` when the
-/// key already exists, mirroring macOS Keychain's `-25299` behaviour.
-struct StrictSetBackend {
-    inner: FileBackend,
-}
-
-impl StrictSetBackend {
-    fn new(dir: &std::path::Path) -> Self {
-        Self {
-            inner: FileBackend::new(dir),
-        }
-    }
-}
-
-impl KeyringBackend for StrictSetBackend {
-    fn get(&self, key: &str) -> Result<Option<String>, KeyringError> {
-        self.inner.get(key)
-    }
-    fn set(&self, key: &str, value: &str) -> Result<(), KeyringError> {
-        if self.inner.get(key)?.is_some() {
-            return Err(KeyringError::Backend(
-                "Platform secure storage failure: The specified item already exists in the keychain. (OSStatus -25299)".into(),
-            ));
-        }
-        self.inner.set(key, value)
-    }
-    fn delete(&self, key: &str) -> Result<(), KeyringError> {
-        self.inner.delete(key)
-    }
-    fn name(&self) -> &'static str {
-        "strict-set-mock"
-    }
-}
-
-/// Run the OLD (broken) probe logic against any backend.
-/// Returns `true` only if the round-trip succeeded.
-fn old_probe<B: KeyringBackend>(b: &B) -> bool {
-    const KEY: &str = "__probe__:__openhuman_keyring_probe__";
-    const VAL: &str = "__probe_value__";
-    if b.set(KEY, VAL).is_err() {
-        return false;
-    }
-    let ok = b.get(KEY).ok().flatten().as_deref() == Some(VAL);
-    let _ = b.delete(KEY);
-    ok
-}
-
-/// Run the NEW (fixed) probe logic against any backend.
-/// Deletes any residue before writing, making the probe idempotent.
-fn new_probe<B: KeyringBackend>(b: &B) -> bool {
-    const KEY: &str = "__probe__:__openhuman_keyring_probe__";
-    const VAL: &str = "__probe_value__";
-    let _ = b.delete(KEY);
-    if b.set(KEY, VAL).is_err() {
-        return false;
-    }
-    let ok = b.get(KEY).ok().flatten().as_deref() == Some(VAL);
-    let _ = b.delete(KEY);
-    ok
-}
-
-#[test]
-fn probe_old_logic_fails_when_key_preexists() {
-    // Demonstrates the bug: old probe returns false the second time because
-    // `set` on an already-existing key fails with "item already exists".
-    let dir = TempDir::new().expect("tempdir");
-    let b = StrictSetBackend::new(dir.path());
-
-    // First probe: key absent → succeeds.
-    assert!(old_probe(&b), "first probe should succeed");
-
-    // Key was deleted by the probe — re-seed it to simulate a leftover from a
-    // previous launch (e.g. the app was force-quit after writing but before
-    // the delete could run, or a previous `is_available` call left it behind).
-    b.inner
-        .set("__probe__:__openhuman_keyring_probe__", "stale")
-        .unwrap();
-
-    // Second probe with residue: `set` hits "already exists" → returns false.
-    assert!(
-        !old_probe(&b),
-        "old probe must fail when probe key pre-exists (regression target)"
-    );
-}
-
-#[test]
-fn probe_new_logic_succeeds_even_when_key_preexists() {
-    // Verifies the fix: new probe deletes any residue first, so it always
-    // succeeds regardless of leftover state.
-    let dir = TempDir::new().expect("tempdir");
-    let b = StrictSetBackend::new(dir.path());
-
-    assert!(new_probe(&b), "first probe should succeed");
-
-    // Re-seed to simulate a leftover key (same scenario as the bug test).
-    b.inner
-        .set("__probe__:__openhuman_keyring_probe__", "stale")
-        .unwrap();
-
-    assert!(
-        new_probe(&b),
-        "new probe must succeed even when probe key pre-exists"
-    );
-}
-
-#[test]
-fn probe_new_logic_is_idempotent_across_multiple_runs() {
-    // New probe must return true on every consecutive call.
-    let dir = TempDir::new().expect("tempdir");
-    let b = StrictSetBackend::new(dir.path());
-
-    for i in 0..5 {
-        assert!(new_probe(&b), "probe run {i} should succeed");
-    }
-}
+// ── is_available probe: idempotency (OS backend only) ─────────────────────────
 
 #[test]
 fn is_available_returns_true_on_repeated_calls_os_backend() {
@@ -606,7 +478,7 @@ fn is_available_returns_true_on_repeated_calls_os_backend() {
         return;
     }
     // Use the OsBackend directly to simulate the cross-launch residue.
-    let b = backend::OsBackend;
+    let b = backend::OsBackend::new();
     let probe_key = "__probe__:__openhuman_keyring_probe__";
     // Pre-seed to mimic a leftover from a previous app launch.
     let _ = b.set(probe_key, "__probe_value__");
@@ -632,7 +504,7 @@ fn migrate_from_file_happy_path_os() {
         eprintln!("skip: OS keychain not available");
         return;
     }
-    let b = backend::OsBackend;
+    let b = backend::OsBackend::new();
     let user_id = "__openhuman_test__mig_hp";
     let key = "__migrate_key_hp__";
     let nk = format!("{user_id}:{key}");

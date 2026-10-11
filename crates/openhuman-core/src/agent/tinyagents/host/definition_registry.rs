@@ -20,8 +20,8 @@
 //! # Contract mismatches resolved here
 //!
 //! **1. Absence must never be an error.** OpenHuman's own catalogue relies on
-//! this: `orchestrator/agent.toml` lists `mcp_agent` in `subagents` even in a
-//! build with the `mcp` feature off, and both existing resolution sites
+//! this: an agent may list a subagent id that a feature gate compiled out of
+//! the build (`presentation_agent` without `documents`), and both existing resolution sites
 //! tolerate it (`collect_orchestrator_tools` warns and skips;
 //! [`validate_tier_hierarchy`](crate::agent::registry::agents::validate_tier_hierarchy) explicitly `continue`s past unknown ids). So
 //! `OpenHumanDefinitionRegistry::resolve` returns `Ok(None)` for every miss
@@ -139,6 +139,9 @@ pub struct OpenHumanDefinitionRegistry {
     /// non-empty cannot be projected faithfully and [`Self::tools_for`] fails
     /// closed rather than re-granting the denied tools.
     registered_tools: Option<Arc<Vec<String>>>,
+    /// Registered deferred tools. A named belt that lists the intrinsic
+    /// `tool_search` bridge grants these names to the hosted harness too.
+    deferred_tools: Option<Arc<Vec<String>>>,
     /// Per-invocation direct delegation routes synthesized beside the durable
     /// tool registry. They must augment a named root scope so the hosted loop
     /// authorizes the same hand-off routes it advertises.
@@ -183,25 +186,10 @@ impl OpenHumanDefinitionRegistry {
             registry: RegistryHandle::Shared(registry),
             config: None,
             registered_tools: None,
+            deferred_tools: None,
             session_delegation_tools: None,
             session_definition: None,
         }
-    }
-
-    /// Adapts the process-wide registry, or `None` when
-    /// [`AgentDefinitionRegistry::init_global`] has not run yet.
-    ///
-    /// Returning `Option` rather than lazily initialising keeps boot ordering
-    /// the host's decision: silently building a builtins-only registry here
-    /// would mask a missing workspace-override load.
-    pub fn from_global() -> Option<Self> {
-        AgentDefinitionRegistry::global().map(|registry| Self {
-            registry: RegistryHandle::Global(registry),
-            config: None,
-            registered_tools: None,
-            session_delegation_tools: None,
-            session_definition: None,
-        })
     }
 
     /// Adapts a freshly-built builtins-only registry (no workspace scan).
@@ -224,6 +212,11 @@ impl OpenHumanDefinitionRegistry {
     /// list. Without it such a definition fails closed — see [`Self::tools_for`].
     pub fn with_registered_tools(mut self, tools: Arc<Vec<String>>) -> Self {
         self.registered_tools = Some(tools);
+        self
+    }
+
+    pub fn with_deferred_tools(mut self, tools: Arc<Vec<String>>) -> Self {
+        self.deferred_tools = Some(tools);
         self
     }
 
@@ -311,6 +304,10 @@ impl OpenHumanDefinitionRegistry {
             model: model_for(&def.model),
             subagents: declared_subagent_ids(def),
             tools: self.tools_for(def),
+            // The definition's rule layer (its `tool_rules` plus its
+            // `disallowed_tools` as a deny), enforced by the harness gate on
+            // the catalogue, `tool_search` and every call of a hosted run.
+            tool_rules: crate::tools::rules::agent_rule_layer(def),
         }
     }
 
@@ -325,14 +322,42 @@ impl OpenHumanDefinitionRegistry {
         match &def.tools {
             ToolScope::Named(named) => {
                 let mut names = named.clone();
+                if named
+                    .iter()
+                    .any(|name| name == crate::tools::implementations::meta::TOOL_SEARCH_NAME)
+                {
+                    if let Some(deferred) = self.deferred_tools.as_deref() {
+                        names.extend(deferred.iter().cloned());
+                    }
+                }
                 if let Some(delegation_tools) = self.session_delegation_tools.as_deref() {
                     names.extend(delegation_tools.iter().cloned());
+                }
+                // A curated belt still has to reach the tools a compacted
+                // result names (`juice_retrieve`, `juice_find`, …). The
+                // session adds them to its visible set; without the same
+                // names here the harness allowlist rejects every call to them
+                // as an unknown tool. A zero-tool belt stays zero-tool.
+                if !named.is_empty() {
+                    if let (Some(config), Some(registered)) =
+                        (self.config.as_deref(), self.registered_tools.as_deref())
+                    {
+                        for name in
+                            crate::inference::tokenjuice::companion_tool_names(&def.id, config)
+                        {
+                            if registered.iter().any(|r| r == name) {
+                                names.push(name.to_string());
+                            }
+                        }
+                    }
                 }
                 // `extra_tools` is an "also include these" hook on top of a
                 // named scope. Under `Wildcard` it is meaningless — everything
                 // is already in scope.
                 names.extend(def.extra_tools.iter().cloned());
-                names.retain(|name| !disallows_tool(&def.disallowed_tools, name));
+                names.retain(|name| {
+                    !crate::tools::rules::glob_list_matches(&def.disallowed_tools, name)
+                });
                 dedupe_preserving_order(&mut names);
                 // Deliberately *not* collapsed to `Wildcard` when empty: an
                 // agent configured with no tools, or one whose whole scope was
@@ -346,7 +371,9 @@ impl OpenHumanDefinitionRegistry {
                 Some(registered) => {
                     let mut names: Vec<String> = registered
                         .iter()
-                        .filter(|name| !disallows_tool(&def.disallowed_tools, name))
+                        .filter(|name| {
+                            !crate::tools::rules::glob_list_matches(&def.disallowed_tools, name)
+                        })
                         .cloned()
                         .collect();
                     dedupe_preserving_order(&mut names);
@@ -457,26 +484,6 @@ fn model_for(spec: &ModelSpec) -> Option<String> {
         ModelSpec::Exact(name) => Some(name.clone()),
         ModelSpec::Hint(_) => Some(spec.resolve("")),
     }
-}
-
-/// Whether `name` is blocked by a definition's `disallowed_tools`.
-///
-/// Mirrors the private `definition_disallows_tool` in
-/// `agent/session_host/builder/factory.rs`, including its trailing-`*`
-/// prefix-match form. Duplicated rather than imported because that helper is
-/// module-private and Phase 4 must not edit existing files.
-///
-/// TODO(phase4): make `definition_disallows_tool` `pub(crate)` in
-/// `agent/session_host/builder/factory.rs` and delete this copy, so the
-/// denylist grammar has one implementation.
-fn disallows_tool(disallowed: &[String], name: &str) -> bool {
-    disallowed.iter().any(|entry| {
-        if let Some(prefix) = entry.strip_suffix('*') {
-            name.starts_with(prefix)
-        } else {
-            entry == name
-        }
-    })
 }
 
 /// Drops repeated names while keeping first-occurrence order.

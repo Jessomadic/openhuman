@@ -1,6 +1,7 @@
 'use client';
 
 import { cn } from '@/components/assistant-ui/lib/utils';
+import { useT } from '@/lib/i18n/I18nContext';
 import {
   ComposerPrimitive,
   type QuoteMessagePartComponent,
@@ -89,6 +90,7 @@ function SelectionToolbarQuote({
   children,
   ...props
 }: ComponentProps<typeof SelectionToolbarPrimitive.Quote>) {
+  const { t } = useT();
   return (
     <SelectionToolbarPrimitive.Quote
       data-slot="selection-toolbar-quote"
@@ -100,7 +102,7 @@ function SelectionToolbarQuote({
       {children ?? (
         <>
           <QuoteIcon className="size-3.5" />
-          Quote
+          {t('quote.label', 'Quote')}
         </>
       )}
     </SelectionToolbarPrimitive.Quote>
@@ -181,6 +183,7 @@ function ComposerQuotePreviewDismiss({
   children,
   ...props
 }: ComponentProps<typeof ComposerPrimitive.QuoteDismiss>) {
+  const { t } = useT();
   const defaultClassName =
     'shrink-0 rounded-sm p-0.5 text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground';
 
@@ -192,7 +195,7 @@ function ComposerQuotePreviewDismiss({
       {children ?? (
         <button
           type="button"
-          aria-label="Dismiss quote"
+          aria-label={t('quote.dismiss', 'Dismiss quote')}
           className={cn(defaultClassName, className)}>
           <XIcon className="size-3.5" />
         </button>
@@ -243,17 +246,4 @@ ComposerQuotePreview.Icon = ComposerQuotePreviewIcon;
 ComposerQuotePreview.Text = ComposerQuotePreviewText;
 ComposerQuotePreview.Dismiss = ComposerQuotePreviewDismiss;
 
-export {
-  QuoteBlock,
-  QuoteBlockRoot,
-  QuoteBlockIcon,
-  QuoteBlockText,
-  SelectionToolbar,
-  SelectionToolbarRoot,
-  SelectionToolbarQuote,
-  ComposerQuotePreview,
-  ComposerQuotePreviewRoot,
-  ComposerQuotePreviewIcon,
-  ComposerQuotePreviewText,
-  ComposerQuotePreviewDismiss,
-};
+export { QuoteBlock, SelectionToolbar, ComposerQuotePreview };

@@ -8,13 +8,16 @@ import { threadApi } from '../../services/api/threadApi';
 import { socketService } from '../../services/socketService';
 import { store } from '../../store';
 import {
+  beginInferenceTurn,
   clearAllChatRuntime,
-  enqueueFollowup,
   findPendingDelegationContext,
   registerParallelRequest,
   resetSessionTokenUsage,
   setPendingPlanReviewForThread,
+  setStreamingAssistantForThread,
+  streamDeltaReceived,
 } from '../../store/chatRuntimeSlice';
+import { pendingFollowupAdded } from '../../store/queueSlice';
 import { setStatusForUser } from '../../store/socketSlice';
 import {
   clearAllThreads,
@@ -27,7 +30,12 @@ import { clearAllProactiveThreadPins } from '../proactiveThreadPins';
 
 vi.mock('../../services/chatService', async () => {
   const actual = await vi.importActual<typeof chatService>('../../services/chatService');
-  return { ...actual, subscribeChatEvents: vi.fn() };
+  return {
+    ...actual,
+    subscribeChatEvents: vi.fn(),
+    subscribeQueueEvents: vi.fn(() => () => {}),
+    subscribeSuggestionEvents: vi.fn(() => () => {}),
+  };
 });
 
 vi.mock('../../services/api/threadApi', () => ({
@@ -366,7 +374,7 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       expect(row?.subagent?.transcript).toEqual([]);
     });
 
-    it('routes a parallel (forked) turn into its own lane, leaving the primary stream untouched', () => {
+    it('routes a parallel (forked) turn into its own lane, leaving the primary stream untouched', async () => {
       const listeners = renderProvider();
 
       // Primary turn streams on the thread.
@@ -395,6 +403,12 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
         });
       });
 
+      // Deltas are coalesced per frame (`chatDeltaCoalescer`); wait for the flush.
+      await waitFor(() =>
+        expect(
+          store.getState().chatRuntime.parallelStreamsByThread['t-par']?.['branch']?.content
+        ).toBe('B1B2')
+      );
       const mid = store.getState().chatRuntime;
       // Primary stream is not clobbered by the parallel branch.
       expect(mid.streamingAssistantByThread['t-par']?.content).toBe('P');
@@ -418,6 +432,89 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       expect(after.parallelStreamsByThread['t-par']).toBeUndefined();
       expect(after.parallelRequestThreads['branch']).toBeUndefined();
       expect(after.streamingAssistantByThread['t-par']?.content).toBe('P');
+    });
+
+    it('marks a failed parallel turn for the assistant-ui error card', async () => {
+      const listeners = renderProvider();
+      act(() => {
+        store.dispatch(registerParallelRequest({ threadId: 't-par', requestId: 'branch-error' }));
+        listeners.onError?.({
+          thread_id: 't-par',
+          request_id: 'branch-error',
+          message: 'The provider refused this turn.',
+          error_type: 'provider_error',
+          round: 0,
+        });
+      });
+
+      await waitFor(() =>
+        expect(threadApi.appendMessage).toHaveBeenCalledWith(
+          't-par',
+          expect.objectContaining({
+            content: 'The provider refused this turn.',
+            extraMetadata: expect.objectContaining({
+              chatError: expect.objectContaining({ errorType: 'provider_error' }),
+            }),
+          })
+        )
+      );
+      expect(store.getState().chatRuntime.parallelRequestThreads['branch-error']).toBeUndefined();
+    });
+
+    describe('chat_error copy_key rendering', () => {
+      const failParallel = (
+        requestId: string,
+        extra: { copy_key?: string; copy_params?: Record<string, unknown> }
+      ) => {
+        const listeners = renderProvider();
+        act(() => {
+          store.dispatch(registerParallelRequest({ threadId: 't-copy', requestId }));
+          listeners.onError?.({
+            thread_id: 't-copy',
+            request_id: requestId,
+            message: 'core english message',
+            error_type: 'rate_limited',
+            round: 0,
+            ...extra,
+          });
+        });
+      };
+
+      it('renders a known copy_key from the locale table with its params', async () => {
+        failParallel('copy-known', {
+          copy_key: 'chat_error.rate_limited',
+          copy_params: { retry_after_secs: 30, detail: 'quota hit' },
+        });
+        await waitFor(() =>
+          expect(threadApi.appendMessage).toHaveBeenCalledWith(
+            't-copy',
+            expect.objectContaining({
+              content:
+                'Your AI provider is rate-limiting requests. This is a transient upstream limit, not a thread-level block. You can retry in this thread. Try again in 30 seconds.\n\n> quota hit',
+            })
+          )
+        );
+      });
+
+      it('falls back to message for an unknown copy_key', async () => {
+        failParallel('copy-unknown', { copy_key: 'chat_error.from_a_newer_core' });
+        await waitFor(() =>
+          expect(threadApi.appendMessage).toHaveBeenCalledWith(
+            't-copy',
+            expect.objectContaining({ content: 'core english message' })
+          )
+        );
+      });
+
+      it('falls back to message when copy_key is missing', async () => {
+        failParallel('copy-missing', {});
+        await waitFor(() =>
+          expect(threadApi.appendMessage).toHaveBeenCalledWith(
+            't-copy',
+            expect.objectContaining({ content: 'core english message' })
+          )
+        );
+      });
     });
 
     it('bumps the heartbeat counter only for the primary turn, never a parallel branch (#4282)', () => {
@@ -762,10 +859,56 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       expect(store.getState().chatRuntime.pendingPlanReviewByThread['t-plan']).toBeUndefined();
     });
 
+    it('flushes queued upload originals through core staging and caches only returned references', async () => {
+      const listeners = renderProvider();
+      const raw = '[FILE:data:application/zip;name=archive.zip;base64,AQID]';
+      const durable =
+        '[ATTACHMENT:%7B%22path%22%3A%22uploads%2Ft%2Fa%2Farchive.zip%22%2C%22name%22%3A%22archive.zip%22%2C%22mime%22%3A%22application%2Fzip%22%2C%22size_bytes%22%3A3%7D]';
+      vi.mocked(threadApi.appendMessage).mockImplementation(async (_tid, message) =>
+        message.sender === 'user' ? { ...message, content: durable } : message
+      );
+      store.dispatch(
+        pendingFollowupAdded({
+          threadId: 't-upload',
+          message: {
+            id: 'queued-upload',
+            content: raw,
+            type: 'text',
+            extraMetadata: { attachmentNames: ['archive.zip'], attachmentKinds: ['file'] },
+            sender: 'user',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          },
+          text: raw,
+        })
+      );
+      await act(async () => {
+        listeners.onDone?.({
+          thread_id: 't-upload',
+          request_id: 'r-upload',
+          full_response: 'done',
+          rounds_used: 1,
+          total_input_tokens: 1,
+          total_output_tokens: 1,
+        });
+      });
+      await waitFor(() =>
+        expect(threadApi.appendMessage).toHaveBeenCalledWith(
+          't-upload',
+          expect.objectContaining({ content: raw, sender: 'user' })
+        )
+      );
+      const row = store
+        .getState()
+        .thread.messagesByThreadId['t-upload'].find(message => message.id === 'queued-upload');
+      expect(row?.content).toBe(durable);
+      expect(JSON.stringify(row?.extraMetadata)).not.toContain('base64');
+      expect(store.getState().queue.pendingFollowupsByThread['t-upload']).toBeUndefined();
+    });
+
     it('flushes queued follow-ups into the transcript when a turn ends', async () => {
       const listeners = renderProvider();
       store.dispatch(
-        enqueueFollowup({
+        pendingFollowupAdded({
           threadId: 't-fup',
           message: {
             id: 'f1',
@@ -775,7 +918,7 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
             sender: 'user',
             createdAt: '2026-01-01T00:00:00.000Z',
           },
-          label: 'queued follow-up text',
+          text: 'queued follow-up text',
         })
       );
 
@@ -798,7 +941,7 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
           expect.objectContaining({ content: 'queued follow-up text', sender: 'user' })
         )
       );
-      expect(store.getState().chatRuntime.queuedFollowupsByThread['t-fup']).toBeUndefined();
+      expect(store.getState().queue.pendingFollowupsByThread['t-fup']).toBeUndefined();
     });
 
     it('stamps the assistant answer with the producing turn requestId on chat_done', async () => {
@@ -900,7 +1043,7 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       });
 
       // The user is mid-conversation: the selected thread already holds
-      // messages, so a proactive morning brief / subconscious update must
+      // messages, so a proactive morning brief / scheduled-job update must
       // NOT be injected into it.
       store.dispatch(
         loadThreads.fulfilled(
@@ -963,6 +1106,69 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
         'rehydrated-thread',
         expect.anything()
       );
+    });
+
+    it('delivers an origin-bound cron reply into its own thread under the core row id', async () => {
+      // The user is chatting in another thread; the reminder belongs to the
+      // thread that asked for it, which the core already persisted under
+      // `agent:<request_id>`.
+      store.dispatch(
+        loadThreads.fulfilled(
+          {
+            threads: [
+              { id: 'asking-thread', title: 'reminders', messageCount: 2 },
+              { id: 'other-thread', title: 'chat', messageCount: 5 },
+            ] as never,
+            count: 2,
+          },
+          'req-id',
+          undefined
+        )
+      );
+      store.dispatch(setSelectedThread('other-thread'));
+      const listeners = renderProvider();
+
+      await act(async () => {
+        listeners.onProactiveMessage?.({
+          thread_id: 'asking-thread',
+          request_id: 'cron:job-1:run-1',
+          full_response: 'time to drink water',
+          persisted_message_id: 'agent:cron:job-1:run-1',
+        });
+      });
+
+      await waitFor(() =>
+        expect(threadApi.appendMessage).toHaveBeenCalledWith(
+          'asking-thread',
+          expect.objectContaining({ id: 'agent:cron:job-1:run-1', content: 'time to drink water' })
+        )
+      );
+      expect(threadApi.createNewThread).not.toHaveBeenCalled();
+      expect(store.getState().thread.selectedThreadId).toBe('other-thread');
+    });
+
+    it('generates its own id for a real-thread proactive message the core did not persist', async () => {
+      store.dispatch(
+        loadThreads.fulfilled(
+          { threads: [{ id: 'real-thread', title: 'x', messageCount: 2 }] as never, count: 1 },
+          'req-id',
+          undefined
+        )
+      );
+      store.dispatch(setSelectedThread('real-thread'));
+      const listeners = renderProvider();
+
+      await act(async () => {
+        listeners.onProactiveMessage?.({
+          thread_id: 'real-thread',
+          request_id: 'turn-1',
+          full_response: 'first',
+        });
+      });
+
+      await waitFor(() => expect(threadApi.appendMessage).toHaveBeenCalled());
+      const sent = vi.mocked(threadApi.appendMessage).mock.calls.at(-1)?.[1] as { id: string };
+      expect(sent.id).not.toBe('agent:turn-1');
     });
 
     it('creates a new thread when no visible thread exists for proactive handoff', async () => {
@@ -1474,7 +1680,7 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       }
     });
 
-    it('accumulates text_delta chunks within the same request_id', () => {
+    it('accumulates text_delta chunks within the same request_id', async () => {
       const listeners = renderProvider();
 
       act(() => {
@@ -1482,13 +1688,15 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
         listeners.onTextDelta?.({ thread_id: 't-mid', request_id: 'r1', round: 0, delta: 'lo!' });
       });
 
+      await waitFor(() =>
+        expect(store.getState().chatRuntime.streamingAssistantByThread['t-mid']).toBeDefined()
+      );
       const streaming = store.getState().chatRuntime.streamingAssistantByThread['t-mid'];
-      expect(streaming).toBeDefined();
       expect(streaming?.requestId).toBe('r1');
       expect(streaming?.content).toBe('Hello!');
     });
 
-    it('replaces streaming state when request_id changes mid-turn', () => {
+    it('replaces streaming state when request_id changes mid-turn', async () => {
       const listeners = renderProvider();
 
       act(() => {
@@ -1496,6 +1704,11 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
         listeners.onTextDelta?.({ thread_id: 't-mid', request_id: 'r2', round: 0, delta: 'bbb' });
       });
 
+      await waitFor(() =>
+        expect(store.getState().chatRuntime.streamingAssistantByThread['t-mid']?.requestId).toBe(
+          'r2'
+        )
+      );
       const streaming = store.getState().chatRuntime.streamingAssistantByThread['t-mid'];
       expect(streaming?.requestId).toBe('r2');
       expect(streaming?.content).toBe('bbb');
@@ -1521,8 +1734,10 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
           delta: 'Let me check your calendar first.',
         });
       });
-      expect(store.getState().chatRuntime.streamingAssistantByThread['t-interim']?.content).toBe(
-        'Let me check your calendar first.'
+      await waitFor(() =>
+        expect(store.getState().chatRuntime.streamingAssistantByThread['t-interim']?.content).toBe(
+          'Let me check your calendar first.'
+        )
       );
       // …and is already captured as a narration transcript item by the delta
       // reducer — this is what the rail renders.
@@ -1598,7 +1813,7 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       expect(threadApi.appendMessage).not.toHaveBeenCalled();
     });
 
-    it('sets inference status to thinking on inference_start and clears it on chat_done', () => {
+    it('sets inference status to thinking on inference_start and clears it on chat_done', async () => {
       const listeners = renderProvider();
 
       act(() => {
@@ -1616,11 +1831,15 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
           total_output_tokens: 0,
         });
       });
-      expect(store.getState().chatRuntime.inferenceStatusByThread['t-inv']).toBeUndefined();
+      // Cleared by `turnSettled`, once the reply is persisted — not before, so
+      // the status line does not vanish ahead of the reply that replaces it.
+      await waitFor(() =>
+        expect(store.getState().chatRuntime.inferenceStatusByThread['t-inv']).toBeUndefined()
+      );
       expect(store.getState().chatRuntime.streamingAssistantByThread['t-inv']).toBeUndefined();
     });
 
-    it('terminates running tool-timeline rows on chat_done', () => {
+    it('cancels an unresolved tool row when the completed snapshot cannot be loaded', async () => {
       const listeners = renderProvider();
 
       act(() => {
@@ -1649,9 +1868,63 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
         });
       });
 
-      const timeline = store.getState().chatRuntime.toolTimelineByThread['t-inv'] ?? [];
-      expect(timeline).toHaveLength(1);
-      expect(timeline[0]?.status).toBe('success');
+      // The core drains every queued progress event before `chat_done`, so a
+      // row with no result by now has none. If the completed snapshot cannot
+      // be loaded, it has no remaining event driver and must not pulse as
+      // `running`; this still does not invent a successful tool outcome.
+      await waitFor(() => {
+        const timeline = store.getState().chatRuntime.toolTimelineByThread['t-inv'] ?? [];
+        expect(timeline).toHaveLength(1);
+        expect(timeline[0]?.status).toBe('cancelled');
+      });
+    });
+
+    it('keeps two id-less calls of one tool in a round apart by seq, still deduping a redelivery', () => {
+      const listeners = renderProvider();
+      const call = (seq: number) => ({
+        thread_id: 't-seq',
+        request_id: 'r1',
+        seq,
+        round: 1,
+        tool_name: 'shell',
+        skill_id: 'web_channel',
+        args: {},
+      });
+
+      act(() => {
+        listeners.onToolCall?.(call(3));
+        listeners.onToolCall?.(call(5));
+        // Socket redelivery of the first frame.
+        listeners.onToolCall?.(call(3));
+      });
+
+      expect(store.getState().chatRuntime.toolTimelineByThread['t-seq']).toHaveLength(2);
+    });
+
+    it('drops a redelivered text delta by seq instead of appending it twice', async () => {
+      const listeners = renderProvider();
+      const delta = (seq: number, text: string) => ({
+        thread_id: 't-delta',
+        request_id: 'r1',
+        seq,
+        round: 1,
+        delta: text,
+      });
+
+      act(() => {
+        listeners.onTextDelta?.(delta(1, 'Hel'));
+        listeners.onTextDelta?.(delta(2, 'lo'));
+        listeners.onTextDelta?.(delta(1, 'Hel'));
+        listeners.onThinkingDelta?.(delta(2, 'lo'));
+        listeners.onTextDelta?.(delta(3, '!'));
+      });
+
+      // Deltas are coalesced per frame (`chatDeltaCoalescer`); wait for the flush.
+      await waitFor(() =>
+        expect(store.getState().chatRuntime.streamingAssistantByThread['t-delta']?.content).toBe(
+          'Hello!'
+        )
+      );
     });
 
     it('transitions running tool-timeline rows to error on chat_error', () => {
@@ -1682,6 +1955,41 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       const timeline = store.getState().chatRuntime.toolTimelineByThread['t-err'] ?? [];
       expect(timeline[0]?.status).toBe('error');
       expect(store.getState().chatRuntime.inferenceStatusByThread['t-err']).toBeUndefined();
+    });
+
+    it('keeps a queued follow-up live when the previous turn error arrives late', async () => {
+      const listeners = renderProvider();
+      const threadId = 't-late-error';
+      act(() => {
+        store.dispatch(beginInferenceTurn({ threadId }));
+        store.dispatch(setActiveThread(threadId));
+        listeners.onInferenceStart?.({ thread_id: threadId, request_id: 'new' });
+        store.dispatch(
+          setStreamingAssistantForThread({
+            threadId,
+            streaming: { content: 'new answer', thinking: '', requestId: 'new' },
+          })
+        );
+        listeners.onError?.({
+          thread_id: threadId,
+          request_id: 'old',
+          message: 'Earlier turn failed',
+          error_type: 'inference',
+          round: 0,
+        });
+      });
+
+      const state = store.getState();
+      expect(state.chatRuntime.liveRequestIdByThread[threadId]).toBe('new');
+      expect(state.chatRuntime.inferenceTurnLifecycleByThread[threadId]).toBe('streaming');
+      expect(state.chatRuntime.streamingAssistantByThread[threadId]?.content).toBe('new answer');
+      expect(state.thread.activeThreadIds[threadId]).toBe(true);
+      await waitFor(() =>
+        expect(threadApi.appendMessage).toHaveBeenCalledWith(
+          threadId,
+          expect.objectContaining({ content: 'Earlier turn failed' })
+        )
+      );
     });
 
     it('forwards the server-provided inference error message verbatim', async () => {
@@ -2171,13 +2479,10 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
   // user-friendly `message` from classify_inference_error() in web_errors.rs,
   // which is forwarded directly so the user sees the real reason (for
   // 'inference' that message is a friendly summary plus the sanitized upstream
-  // provider error as a `> quote` block). The USER_FACING_FALLBACK constant is
-  // only used when the server sends an empty/missing message. 'cancelled'
-  // produces no bubble at all.
+  // provider error as a `> quote` block). An empty server message is stored
+  // as an empty error row for assistant-ui's ErrorState fallback. 'cancelled'
+  // produces no error row.
   describe('inference error classifier — full type set', () => {
-    const USER_FACING_FALLBACK =
-      'Something went wrong. Please try again.\nThis error has been reported. You can also report it on Discord.\n<openhuman-link path="community/discord-report">Report on Discord</openhuman-link>';
-
     it.each([
       ['rate_limited', 'You have been rate limited. Please try again later.'],
       ['auth_error', 'Authentication failed. Please reconnect your account.'],
@@ -2241,7 +2546,7 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       );
     });
 
-    it('falls back to the constant when an inference error has no message', async () => {
+    it('stores an empty error row for assistant-ui when an inference error has no message', async () => {
       const listeners = renderProvider();
       const threadId = 't-inference-empty';
 
@@ -2258,7 +2563,13 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       await waitFor(() =>
         expect(threadApi.appendMessage).toHaveBeenCalledWith(
           threadId,
-          expect.objectContaining({ content: USER_FACING_FALLBACK, sender: 'agent' })
+          expect.objectContaining({
+            content: '',
+            sender: 'agent',
+            extraMetadata: expect.objectContaining({
+              chatError: expect.objectContaining({ errorType: 'inference' }),
+            }),
+          })
         )
       );
     });
@@ -2285,7 +2596,7 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       );
     });
 
-    it('falls back to USER_FACING constant when inference error has empty message', async () => {
+    it('stores an empty error row for other error types without a message', async () => {
       const listeners = renderProvider();
       const threadId = 't-empty-msg';
 
@@ -2302,10 +2613,262 @@ describe('ChatRuntimeProvider — dedupe, proactive resolution, mid-turn invaria
       await waitFor(() =>
         expect(threadApi.appendMessage).toHaveBeenCalledWith(
           threadId,
-          expect.objectContaining({ content: USER_FACING_FALLBACK, sender: 'agent' })
+          expect.objectContaining({
+            content: '',
+            sender: 'agent',
+            extraMetadata: expect.objectContaining({
+              chatError: expect.objectContaining({ errorType: 'network' }),
+            }),
+          })
         )
       );
     });
+  });
+});
+
+describe('ChatRuntimeProvider — chat_cancelled (wire-contract.md)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetRuntimeState();
+  });
+
+  afterEach(() => {
+    resetRuntimeState();
+  });
+
+  // `chat_cancelled` is the core-authoritative sibling of the local Stop path
+  // in `Conversations.tsx`; the core keeps emitting `chat_error{error_type:
+  // "cancelled"}` alongside it for one release (asserted above to append no
+  // message), so this dedupes on `request_id` against whatever the local
+  // path already persisted.
+  it('persists the live partial as a stopped reply, tagged with cancel_reason', async () => {
+    const listeners = renderProvider();
+    const threadId = 't-chat-cancelled';
+
+    act(() => {
+      store.dispatch(
+        setStreamingAssistantForThread({
+          threadId,
+          streaming: { content: 'partial before supersede', thinking: '', requestId: 'r-sup' },
+        })
+      );
+    });
+
+    act(() => {
+      listeners.onCancelled?.({
+        thread_id: threadId,
+        request_id: 'r-sup',
+        cancel_reason: 'superseded',
+        superseded_by: 'r-next',
+      });
+    });
+
+    await waitFor(() =>
+      expect(threadApi.appendMessage).toHaveBeenCalledWith(
+        threadId,
+        expect.objectContaining({
+          sender: 'agent',
+          content: 'partial before supersede',
+          extraMetadata: expect.objectContaining({
+            stopped: true,
+            cancelReason: 'superseded',
+            supersededBy: 'r-next',
+            requestId: 'r-sup',
+          }),
+        })
+      )
+    );
+  });
+
+  it('keeps the partial when the core sends cancelled chat_error before chat_cancelled', async () => {
+    const listeners = renderProvider();
+    const threadId = 't-stop-event-order';
+
+    act(() => {
+      store.dispatch(
+        setStreamingAssistantForThread({
+          threadId,
+          streaming: { content: 'answer so far', thinking: '', requestId: 'r-stop' },
+        })
+      );
+      listeners.onError?.({
+        thread_id: threadId,
+        request_id: 'r-stop',
+        message: 'Cancelled',
+        error_type: 'cancelled',
+        round: 0,
+      });
+      listeners.onCancelled?.({
+        thread_id: threadId,
+        request_id: 'r-stop',
+        cancel_reason: 'user_stop',
+      });
+    });
+
+    await waitFor(() =>
+      expect(threadApi.appendMessage).toHaveBeenCalledWith(
+        threadId,
+        expect.objectContaining({
+          content: 'answer so far',
+          extraMetadata: expect.objectContaining({
+            stopped: true,
+            cancelReason: 'user_stop',
+            requestId: 'r-stop',
+          }),
+        })
+      )
+    );
+    expect(threadApi.appendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('anchors a stopped turn whose output was only processing activity', async () => {
+    const listeners = renderProvider();
+    const threadId = 't-processing-stop';
+
+    act(() => {
+      store.dispatch(
+        streamDeltaReceived({
+          threadId,
+          requestId: 'r-thinking',
+          round: 1,
+          delta: 'considering the request',
+          channel: 'thinking',
+          at: Date.now(),
+        })
+      );
+      listeners.onError?.({
+        thread_id: threadId,
+        request_id: 'r-thinking',
+        message: 'Cancelled',
+        error_type: 'cancelled',
+        round: 1,
+      });
+      listeners.onCancelled?.({
+        thread_id: threadId,
+        request_id: 'r-thinking',
+        cancel_reason: 'user_stop',
+      });
+    });
+
+    await waitFor(() =>
+      expect(threadApi.appendMessage).toHaveBeenCalledWith(
+        threadId,
+        expect.objectContaining({
+          content: '',
+          extraMetadata: expect.objectContaining({ stopped: true, requestId: 'r-thinking' }),
+        })
+      )
+    );
+    await waitFor(() =>
+      expect(store.getState().chatRuntime.settledTurnsByThread[threadId]?.['r-thinking']).toEqual(
+        expect.objectContaining({
+          transcript: expect.arrayContaining([
+            expect.objectContaining({ kind: 'thinking', text: 'considering the request' }),
+          ]),
+        })
+      )
+    );
+  });
+
+  it('stops a parallel branch without clearing the primary turn', async () => {
+    const listeners = renderProvider();
+    const threadId = 't-parallel-stop';
+
+    act(() => {
+      store.dispatch(registerParallelRequest({ threadId, requestId: 'r-branch' }));
+      store.dispatch(
+        setStreamingAssistantForThread({
+          threadId,
+          streaming: { content: 'primary continues', thinking: '', requestId: 'r-primary' },
+        })
+      );
+      store.dispatch(
+        streamDeltaReceived({
+          threadId,
+          requestId: 'r-branch',
+          round: 1,
+          delta: 'branch partial',
+          channel: 'content',
+        })
+      );
+      listeners.onError?.({
+        thread_id: threadId,
+        request_id: 'r-branch',
+        message: 'Cancelled',
+        error_type: 'cancelled',
+        round: 1,
+      });
+      listeners.onCancelled?.({
+        thread_id: threadId,
+        request_id: 'r-branch',
+        cancel_reason: 'user_stop',
+      });
+    });
+
+    await waitFor(() =>
+      expect(threadApi.appendMessage).toHaveBeenCalledWith(
+        threadId,
+        expect.objectContaining({ content: 'branch partial' })
+      )
+    );
+    await waitFor(() =>
+      expect(store.getState().chatRuntime.parallelRequestThreads['r-branch']).toBeUndefined()
+    );
+    expect(store.getState().chatRuntime.streamingAssistantByThread[threadId]?.content).toBe(
+      'primary continues'
+    );
+  });
+
+  it('persists a repeated chat_cancelled event only once for the same request', async () => {
+    const listeners = renderProvider();
+    const threadId = 't-chat-cancelled-dedupe';
+
+    act(() => {
+      store.dispatch(
+        setStreamingAssistantForThread({
+          threadId,
+          streaming: { content: 'save this once', thinking: '', requestId: 'r-dup' },
+        })
+      );
+    });
+
+    act(() => {
+      const event = {
+        thread_id: threadId,
+        request_id: 'r-dup',
+        cancel_reason: 'user_stop',
+      } as const;
+      listeners.onCancelled?.(event);
+      listeners.onCancelled?.(event);
+    });
+
+    await waitFor(() => expect(threadApi.appendMessage).toHaveBeenCalledTimes(1));
+    expect(threadApi.appendMessage).toHaveBeenCalledWith(
+      threadId,
+      expect.objectContaining({
+        content: 'save this once',
+        extraMetadata: expect.objectContaining({ stopped: true, requestId: 'r-dup' }),
+      })
+    );
+  });
+
+  it('produces no message when nothing streamed (no partial to save)', async () => {
+    const listeners = renderProvider();
+    const threadId = 't-chat-cancelled-empty';
+
+    act(() => {
+      listeners.onCancelled?.({
+        thread_id: threadId,
+        request_id: 'r-empty',
+        cancel_reason: 'user_stop',
+      });
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(threadApi.appendMessage).not.toHaveBeenCalledWith(
+      threadId,
+      expect.objectContaining({ sender: 'agent' })
+    );
   });
 });
 
@@ -2467,5 +3030,138 @@ describe('ChatRuntimeProvider — skill tool-chain latency (#4273 AC3)', () => {
     expect(warnSpy.mock.calls.some(args => String(args[0]).includes('[skill-latency]'))).toBe(
       false
     );
+  });
+});
+
+// Regression: an async sub-agent's approval card (`detached`) was routed to the
+// parent thread and then wiped by the parent turn's `chat_done`, though its
+// gate was still parked — every async `image_agent` approval expired unseen.
+describe('ChatRuntimeProvider — detached sub-agent approvals', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetRuntimeState();
+    vi.mocked(threadApi.appendMessage).mockImplementation(async (_tid, msg) => msg);
+    vi.mocked(threadApi.getThreads).mockResolvedValue({ threads: [], count: 0 });
+    vi.mocked(threadApi.getTurnState).mockResolvedValue(null);
+    vi.mocked(threadApi.listRuns).mockResolvedValue([]);
+  });
+
+  const done = (threadId: string) => ({
+    thread_id: threadId,
+    request_id: 'parent-turn',
+    full_response: 'I asked the image agent to make it.',
+    rounds_used: 1,
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    segment_total: 0,
+  });
+
+  it('keeps a detached card across the parent turn end and clears it on its decision', () => {
+    const listeners = renderProvider();
+    act(() => {
+      listeners.onApprovalRequest?.({
+        thread_id: 't-sub',
+        request_id: 'appr-sub',
+        tool_name: 'media_generate_image',
+        message: 'Run `media_generate_image` — a red fox',
+        detached: true,
+      });
+    });
+    act(() => {
+      listeners.onDone?.(done('t-sub'));
+    });
+    expect(store.getState().chatRuntime.pendingApprovalByThread['t-sub']?.requestId).toBe(
+      'appr-sub'
+    );
+
+    act(() => {
+      listeners.onApprovalDecided?.({
+        thread_id: 't-sub',
+        request_id: 'appr-sub',
+        message: 'approve_once',
+      });
+    });
+    expect(store.getState().chatRuntime.pendingApprovalByThread['t-sub']).toBeUndefined();
+  });
+
+  it('keeps a second detached card on the thread answerable instead of replacing the first', () => {
+    const listeners = renderProvider();
+    act(() => {
+      listeners.onApprovalRequest?.({
+        thread_id: 't-sub',
+        request_id: 'appr-a',
+        tool_name: 'media_generate_image',
+        message: 'Run `media_generate_image`',
+        detached: true,
+      });
+      listeners.onApprovalRequest?.({
+        thread_id: 't-sub',
+        request_id: 'appr-b',
+        tool_name: 'media_generate_video',
+        message: 'Run `media_generate_video`',
+        detached: true,
+      });
+    });
+    const runtime = () => store.getState().chatRuntime;
+    expect(runtime().pendingApprovalByThread['t-sub']?.requestId).toBe('appr-a');
+
+    // The first is answered elsewhere; the second takes its place.
+    act(() => {
+      listeners.onApprovalDecided?.({
+        thread_id: 't-sub',
+        request_id: 'appr-a',
+        message: 'approve_once',
+      });
+    });
+    expect(runtime().pendingApprovalByThread['t-sub']?.requestId).toBe('appr-b');
+    act(() => {
+      listeners.onApprovalDecided?.({ thread_id: 't-sub', request_id: 'appr-b', message: 'deny' });
+    });
+    expect(runtime().pendingApprovalByThread['t-sub']).toBeUndefined();
+  });
+
+  it('drops a detached card on a socket drop and rejoins its thread for the core replay', async () => {
+    const listeners = renderProvider();
+    act(() => {
+      listeners.onApprovalRequest?.({
+        thread_id: 't-sub',
+        request_id: 'appr-sub',
+        tool_name: 'media_generate_image',
+        message: 'Run `media_generate_image`',
+        detached: true,
+      });
+    });
+    // The parent turn is long settled: nothing is in flight on the thread.
+    act(() => {
+      listeners.onDone?.(done('t-sub'));
+    });
+    vi.mocked(socketService.subscribeThread).mockClear();
+
+    // The core restarts: its waiter and route for `appr-sub` are gone.
+    act(() => {
+      store.dispatch(setStatusForUser({ userId: '__pending__', status: 'disconnected' }));
+    });
+    expect(store.getState().chatRuntime.pendingApprovalByThread['t-sub']).toBeUndefined();
+    act(() => {
+      store.dispatch(setStatusForUser({ userId: '__pending__', status: 'connected' }));
+    });
+    // The rejoin is what makes the core replay any park it still holds.
+    await waitFor(() => expect(socketService.subscribeThread).toHaveBeenCalledWith('t-sub'));
+  });
+
+  it('still clears an in-turn card when its turn ends', () => {
+    const listeners = renderProvider();
+    act(() => {
+      listeners.onApprovalRequest?.({
+        thread_id: 't-main',
+        request_id: 'appr-main',
+        tool_name: 'shell',
+        message: 'Run `shell` — ls',
+      });
+    });
+    act(() => {
+      listeners.onDone?.(done('t-main'));
+    });
+    expect(store.getState().chatRuntime.pendingApprovalByThread['t-main']).toBeUndefined();
   });
 });

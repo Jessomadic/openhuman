@@ -25,47 +25,47 @@
 //! re-exports them so `tinyagents::middleware::*` paths stay stable.
 
 mod approval;
-mod arg_recovery;
-mod artifact_index_toc;
+mod call_effect;
 mod cli_rpc_only;
 mod cost_budget;
 mod credential_scrub;
 mod embedder_hooks;
-mod final_call_wrap_up;
+mod failure_policy;
+mod fetched_site;
 mod loop_guards;
-mod memory_protocol;
-mod message_trim;
+mod memory_pack;
+mod nudge_injector;
 mod packed_tool_route;
-mod prompt_cache;
-mod repeat_progress;
 mod repeated_failure;
+mod research_budget;
+mod shell_turn_budget;
 mod tool_exposure;
 mod tool_outcome_capture;
 mod tool_output;
+mod tool_output_file_read;
 mod tool_policy;
 mod turn_context;
+mod unmet_deliverable;
 
 pub(crate) use approval::ApprovalSecurityMiddleware;
-pub(crate) use arg_recovery::ArgRecoveryMiddleware;
-pub(crate) use artifact_index_toc::{split_input_allowance, ArtifactIndexTocMiddleware};
+pub(crate) use call_effect::tool_sets_lookup;
 pub(crate) use cli_rpc_only::CliRpcOnlyMiddleware;
 pub(crate) use cost_budget::CostBudgetMiddleware;
-pub(crate) use credential_scrub::CredentialScrubMiddleware;
+pub(crate) use credential_scrub::credential_scrub_middleware;
 pub(crate) use embedder_hooks::EmbedderToolHooksMiddleware;
-pub(crate) use final_call_wrap_up::FinalCallWrapUpMiddleware;
-pub use memory_protocol::MemoryProtocolMiddleware;
-pub(crate) use message_trim::{legacy_max_input_tokens, ImageAwareMessageTrimMiddleware};
+pub(crate) use loop_guards::is_repeat_call_exempt;
+pub(crate) use memory_pack::MemoryPackMiddleware;
 pub(crate) use packed_tool_route::PackedToolRouteMiddleware;
-pub(crate) use prompt_cache::PromptCacheSegmentMiddleware;
-pub(crate) use repeat_progress::RepeatProgressMiddleware;
 pub(crate) use repeated_failure::RepeatedToolFailureMiddleware;
+pub(crate) use research_budget::ResearchBudgetMiddleware;
+pub(crate) use shell_turn_budget::install_time_notes;
 pub(crate) use tool_exposure::OpenHumanToolExposureShadowMiddleware;
 pub(crate) use tool_outcome_capture::ToolOutcomeCaptureMiddleware;
 pub(crate) use tool_policy::ToolPolicyMiddleware;
 pub(crate) use turn_context::{
-    render_unanswered_steps, HandoffConfig, TranscriptSnapshot, TranscriptSnapshotSink,
-    TurnContextMiddleware,
+    render_unanswered_steps, TranscriptSnapshot, TranscriptSnapshotSink, TurnContextMiddleware,
 };
+pub(super) use unmet_deliverable::install as install_unmet_deliverable;
 
 /// Render the canonical TinyTools content blocks at the OpenHuman boundary.
 /// Middleware that used the retired string-shaped harness result must not

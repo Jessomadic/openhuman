@@ -3,31 +3,25 @@ import { describe, expect, it } from 'vitest';
 import { AVATAR_MENU_ITEMS, NAV_TABS } from '../navConfig';
 
 describe('NAV_TABS', () => {
-  it('has exactly 4 entries', () => {
-    expect(NAV_TABS).toHaveLength(4);
+  it('has exactly 3 entries', () => {
+    expect(NAV_TABS).toHaveLength(3);
   });
 
   it('has the correct ids in order', () => {
-    expect(NAV_TABS.map(t => t.id)).toEqual(['chat', 'brain', 'flows', 'connections']);
+    expect(NAV_TABS.map(t => t.id)).toEqual(['chat', 'flows', 'connections']);
   });
 
   it('has the correct paths', () => {
-    expect(NAV_TABS.map(t => t.path)).toEqual(['/chat', '/brain', '/flows', '/connections']);
+    expect(NAV_TABS.map(t => t.path)).toEqual(['/chat', '/flows', '/connections']);
   });
 
   it('has the correct labelKeys', () => {
-    expect(NAV_TABS.map(t => t.labelKey)).toEqual([
-      'nav.chat',
-      'nav.brain',
-      'nav.flows',
-      'nav.connections',
-    ]);
+    expect(NAV_TABS.map(t => t.labelKey)).toEqual(['nav.chat', 'nav.flows', 'nav.connections']);
   });
 
   it('has the correct walkthroughAttrs', () => {
     expect(NAV_TABS.map(t => t.walkthroughAttr)).toEqual([
       'tab-chat',
-      'tab-brain',
       'tab-flows',
       'tab-connections',
     ]);
@@ -67,29 +61,25 @@ describe('NAV_TABS', () => {
 });
 
 describe('AVATAR_MENU_ITEMS', () => {
-  it('has exactly 4 entries', () => {
-    expect(AVATAR_MENU_ITEMS).toHaveLength(4);
+  it('has exactly 3 entries', () => {
+    expect(AVATAR_MENU_ITEMS).toHaveLength(3);
   });
 
   it('has the correct ids in order', () => {
-    expect(AVATAR_MENU_ITEMS.map(i => i.id)).toEqual(['account', 'billing', 'invites', 'wallet']);
+    expect(AVATAR_MENU_ITEMS.map(i => i.id)).toEqual(['account', 'invites', 'wallet']);
   });
 
   it('no longer offers rewards (it is a primary nav destination now)', () => {
     expect(AVATAR_MENU_ITEMS.find(i => i.id === 'rewards')).toBeUndefined();
   });
 
-  it('billing and invites are cloudOnly; account and wallet are not', () => {
+  it('invites is cloudOnly; account and wallet are not', () => {
     const cloudOnly = AVATAR_MENU_ITEMS.filter(i => i.cloudOnly).map(i => i.id);
-    expect(cloudOnly).toEqual(['billing', 'invites']);
+    expect(cloudOnly).toEqual(['invites']);
   });
 
   it('keeps every account-menu destination inside the app', () => {
     const openUrlItems = AVATAR_MENU_ITEMS.filter(i => i.kind === 'openUrl').map(i => i.id);
     expect(openUrlItems).toEqual([]);
-  });
-
-  it('opens the billing summary before the user chooses a web action', () => {
-    expect(AVATAR_MENU_ITEMS.find(i => i.id === 'billing')?.target).toBe('/settings/billing');
   });
 });

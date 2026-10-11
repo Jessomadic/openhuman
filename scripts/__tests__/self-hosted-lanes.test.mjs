@@ -18,6 +18,8 @@ import {
 } from "../ci/self-hosted/lanes-plan.mjs";
 import {
   PrioritySemaphore,
+  processTable,
+  treeRssMiB,
   sccacheSummary,
   Runner,
   defaultHeavySlots,
@@ -34,8 +36,8 @@ const repoRoot = path.join(
   "..",
   "..",
 );
-const ciLite = fs.readFileSync(
-  path.join(repoRoot, ".github", "workflows", "ci-lite.yml"),
+const ciLanes = fs.readFileSync(
+  path.join(repoRoot, ".github", "workflows", "ci-lanes.yml"),
   "utf8",
 );
 
@@ -67,6 +69,32 @@ test("every hosted group resolves on its own, and every hosted lane has exactly 
   assert.deepEqual(grouped, plan.lanes.map((l) => l.name).sort());
 });
 
+test("Rust coverage installs the mock backend dependencies without a frontend area", () => {
+  for (const profile of ["hosted", "ex63"]) {
+    const plan = buildPlan({
+      profile,
+      areas: { ...NONE, rustCore: true },
+      env: profile === "ex63" ? EX63_ENV : {},
+    });
+    const selected = selectLanes(
+      plan,
+      profile === "ex63" ? ["frontend", "rust-cov"] : ["rust-cov"],
+    );
+    assert.deepEqual(validatePlan(selected), []);
+    const checks = selected.lanes.flatMap((lane) => lane.checks);
+    const install = checks.find((c) => c.name === "pnpm-install");
+    assert.equal(install.when, true);
+    assert.equal(install.run, "pnpm install --frozen-lockfile");
+    assert.ok(
+      checks
+        .find((c) => c.name === "rust-core-coverage")
+        .needs.includes(
+          profile === "ex63" ? "frontend:pnpm-install" : "pnpm-install",
+        ),
+    );
+  }
+});
+
 test("commands are static: no suite is ever narrowed to the diff", () => {
   for (const plan of plans()) {
     for (const run of allRuns(plan)) {
@@ -79,22 +107,73 @@ test("commands are static: no suite is ever narrowed to the diff", () => {
   }
 });
 
-test("the doctests run exactly once per profile", () => {
+test("ex63 runs the core's unit tests under nextest; hosted keeps cargo's runner", () => {
   for (const plan of plans()) {
     const cov = plan.lanes
       .find((l) => l.name === "rust-cov")
       .checks.find((c) => c.name === "rust-core-coverage");
-    const separate = allRuns(plan).filter((r) =>
-      /cargo test -p openhuman --doc --features/.test(r),
+    assert.equal(
+      cov.env.OH_COV_RUNNER,
+      plan.profile === "ex63" ? "nextest" : undefined,
     );
-    if (plan.profile === "ex63") {
-      assert.equal(cov.env.OH_COV_DOCTESTS, "0");
-      assert.equal(separate.length, 1);
-    } else {
-      assert.equal(cov.env.OH_COV_DOCTESTS, undefined);
-      assert.equal(separate.length, 0);
-    }
   }
+  assert.match(
+    fs.readFileSync(path.join(repoRoot, ".config/nextest.toml"), "utf8"),
+    /\[profile\.ci\][\s\S]*fail-fast = false/,
+  );
+});
+
+test("a core-only change still installs the node deps rust-core-coverage's mock backend imports", () => {
+  const coreOnly = { ...NONE, rustCore: true };
+  for (const plan of [
+    buildPlan({ profile: "ex63", areas: coreOnly, env: EX63_ENV }),
+    buildPlan({ profile: "hosted", areas: coreOnly }),
+  ]) {
+    const checks = new Map(
+      plan.lanes.flatMap((l) =>
+        l.checks.map((c) => [`${l.name}:${c.name}`, c]),
+      ),
+    );
+    const cov = checks.get("rust-cov:rust-core-coverage");
+    const install = cov.needs
+      .map((n) => checks.get(n.includes(":") ? n : `rust-cov:${n}`))
+      .find((c) => c.run === "pnpm install --frozen-lockfile");
+    assert.ok(
+      install,
+      `${plan.profile}: rust-core-coverage needs a pnpm install`,
+    );
+    assert.equal(install.when, true, `${plan.profile}: that install runs`);
+    // Exactly one install per profile: ex63 lanes share one checkout.
+    const installs = [...checks.values()].filter(
+      (c) => c.when && c.run === "pnpm install --frozen-lockfile",
+    );
+    assert.equal(installs.length, 1, plan.profile);
+  }
+  const hosted = buildPlan({ profile: "hosted", areas: coreOnly });
+  const sub = selectLanes(hosted, ["rust-cov"]);
+  assert.deepEqual(validatePlan(sub), []);
+  assert.deepEqual(orderProblems(sub), []);
+});
+
+test("core doctests remain outside PR coverage; embed doctests and tui tests run on PRs", () => {
+  for (const plan of plans()) {
+    const cov = plan.lanes
+      .find((l) => l.name === "rust-cov")
+      .checks.find((c) => c.name === "rust-core-coverage");
+    assert.equal(cov.env.OH_COV_DOCTESTS, "0");
+    assert.equal(cov.env.OH_COV_TUI, "1");
+    const runs = allRuns(plan).join("\n");
+    assert.doesNotMatch(runs, /cargo test -p openhuman --doc/);
+    assert.doesNotMatch(runs, /cargo test -p openhuman-(embed|tinyhumans)\b(?! --doc)/);
+    assert.match(runs, /cargo test -p openhuman-embed --doc/);
+    const doc = plan.lanes.find(l => l.name === "rust-lint").checks.find(c => c.name === "embed-rustdoc");
+    assert.equal(doc.env.RUSTDOCFLAGS, "-D warnings");
+    assert.match(doc.run, /cargo doc -p openhuman-embed --no-deps/);
+    assert.match(runs, /node scripts\/run-embed-examples.mjs/);
+    assert.doesNotMatch(runs, /-p openhuman --no-default-features$/m);
+    assert.doesNotMatch(runs, /tool_output_tabulates_a_large_graph/);
+  }
+  assert.match(ciLanes, /scripts\/ci\/self-hosted\/lanes\.mjs/);
 });
 
 test("the complete suites run, not subsets", () => {
@@ -107,9 +186,7 @@ test("the complete suites run, not subsets", () => {
   );
 });
 
-test("every ci-lite check the lanes claim to carry is still a ci-lite check", () => {
-  // Commands shared verbatim with ci-lite.yml. If ci-lite changes one of these
-  // the lane plan must move with it (and vice versa).
+test("the lane plan retains the shared CI checks", () => {
   const shared = [
     "cargo fmt --all -- --check",
     "node scripts/ci/check-openhuman-rust-layout.mjs",
@@ -119,6 +196,7 @@ test("every ci-lite check the lanes claim to carry is still a ci-lite check", ()
     "bash scripts/ci/check-gated-test-allowlist.sh",
     "bash scripts/ci/orch-ip-gate.sh",
     "node scripts/ci/check-feature-forwarding.mjs",
+    "node scripts/ci/check-crate-chain.mjs",
     "node scripts/ci/check-module-pins.mjs",
     "node scripts/ci/check-submodule-monotonic.mjs",
     "node scripts/ci/check-toolchain-image.mjs",
@@ -130,14 +208,9 @@ test("every ci-lite check the lanes claim to carry is still a ci-lite check", ()
     "pnpm docs:test",
     "pnpm docs:check",
     "pnpm test:scripts",
-    "cargo clippy -p openhuman -- -D warnings",
     "cargo clippy -p openhuman-embed --all-targets -- -D warnings",
     "cargo check -p openhuman-embed --no-default-features",
-    "cargo test -p openhuman-embed",
     "cargo clippy -p openhuman-tinyhumans --all-targets -- -D warnings",
-    "cargo test -p openhuman-tinyhumans",
-    "bash scripts/check-prompt-budget.sh --verbose",
-    "cargo check --manifest-path Cargo.toml -p openhuman --no-default-features",
     "bash scripts/check-kernel-floor.sh --verbose",
     "bash scripts/ci/check-dep-sim-calibration.sh",
     "cargo clippy --manifest-path crates/openhuman-app/Cargo.toml -- -D warnings",
@@ -146,7 +219,6 @@ test("every ci-lite check the lanes claim to carry is still a ci-lite check", ()
   const runs = allRuns(plans()[0]).join("\n");
   for (const cmd of shared) {
     assert.ok(runs.includes(cmd), `lane plan lost: ${cmd}`);
-    assert.ok(ciLite.includes(cmd), `ci-lite.yml no longer runs: ${cmd}`);
   }
 });
 
@@ -158,12 +230,92 @@ test("untouched areas leave only the always-on gates", () => {
   assert.deepEqual(on, [
     "static:orch-ip-gate",
     "static:feature-forwarding",
+    "static:crate-chain",
     "static:module-pins",
     "static:submodule-monotonic",
   ]);
   assert.deepEqual(
     hostedMatrix(plan).map((g) => g.group),
     ["checks"],
+  );
+});
+
+test("the storage area arms only the storage-drivers lane, with the sqlite and file drivers on", () => {
+  for (const profile of ["hosted", "ex63"]) {
+    const plan = buildPlan({
+      profile,
+      areas: { ...NONE, storage: true },
+      env: profile === "ex63" ? EX63_ENV : {},
+    });
+    const on = plan.lanes.flatMap((l) =>
+      l.checks.filter((c) => c.when).map((c) => `${l.name}:${c.name}`),
+    );
+    // Only the always-on gates plus this lane: the storage area arms no
+    // frontend, Rust or other area lane.
+    assert.deepEqual(
+      on.filter((id) => !id.startsWith("static:")),
+      [
+        "storage-drivers:storage-e2e",
+        "storage-drivers:storage-lib-tests",
+        "storage-drivers:storage-session-store-tests",
+      ],
+      profile,
+    );
+    assert.deepEqual(
+      on.filter((id) => id.startsWith("static:")),
+      [
+        "static:orch-ip-gate",
+        "static:feature-forwarding",
+        "static:crate-chain",
+        "static:module-pins",
+        "static:submodule-monotonic",
+      ],
+      profile,
+    );
+    const lane = plan.lanes.find((l) => l.name === "storage-drivers");
+    assert.equal(lane.active, true, profile);
+    for (const check of lane.checks) {
+      assert.match(
+        check.run,
+        /--features (?:session-store,)?storage-sqlite,storage-file(?:\s|$)/,
+      );
+    }
+    // Every root storage target runs in the lane, so a new one cannot be
+    // forgotten: the targets on disk are exactly the targets in the command.
+    const e2e = lane.checks.find((c) => c.name === "storage-e2e").run;
+    const onDisk = fs
+      .readdirSync(path.join(repoRoot, "tests"))
+      .filter((f) => /^(storage_.*_e2e|cli_storage_url_e2e)\.rs$/.test(f))
+      .map((f) => f.replace(/\.rs$/, ""))
+      .sort();
+    const inLane = [...e2e.matchAll(/--test (\S+)/g)].map((m) => m[1]).sort();
+    assert.deepEqual(inLane, onDisk, profile);
+    // MongoDB runs the shared storage targets that support its feature set.
+    // SQLite-only targets belong to the driver lane above, not MongoDB.
+    const mongo = fs.readFileSync(
+      path.join(repoRoot, ".github/workflows/storage-mongodb.yml"),
+      "utf8",
+    );
+    const inMongo = [...mongo.matchAll(/--test (\S+)/g)]
+      .map((m) => m[1])
+      .sort();
+    assert.deepEqual(
+      inMongo,
+      onDisk.filter((target) => target !== "storage_default_import_e2e"),
+      "storage-mongodb.yml",
+    );
+    if (profile === "hosted") {
+      assert.deepEqual(
+        hostedMatrix(plan).map((g) => g.group),
+        ["checks", "storage"],
+      );
+    }
+  }
+  // Without the area the lane stays off.
+  const off = buildPlan({ profile: "hosted", areas: NONE });
+  assert.equal(
+    off.lanes.find((l) => l.name === "storage-drivers").active,
+    false,
   );
 });
 
@@ -463,4 +615,39 @@ test("runner: heavy lanes wait for a slot, light lanes never do", async () => {
     Date.parse(by.light.checks[0].start) < Date.parse(by.h1.checks[0].end),
   );
   fs.rmSync(out, { recursive: true, force: true });
+});
+
+test("peak RSS follows the process tree, including setsid'd descendants", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oh-proc-"));
+  const stat = (pid, ppid, pages) => {
+    fs.mkdirSync(path.join(dir, String(pid)));
+    // comm with a space and parens, as real process names can have.
+    const fields = ["S", ppid, pid, ...Array(18).fill(0), pages];
+    fs.writeFileSync(
+      path.join(dir, String(pid), "stat"),
+      `${pid} (cargo (x) y) ${fields.join(" ")}\n`,
+    );
+  };
+  stat(100, 1, 256); // the check's bash: 1 MiB
+  stat(101, 100, 512); // ci-cancel-aware.sh, own session after setsid: 2 MiB
+  stat(102, 101, 1024 * 256); // rustc: 1 GiB
+  stat(200, 1, 1024 * 256); // someone else's process
+  fs.mkdirSync(path.join(dir, "self")); // non-numeric entries are skipped
+  try {
+    const table = processTable(dir);
+    assert.equal(table.size, 4);
+    assert.equal(table.get(102).ppid, 101);
+    assert.equal(treeRssMiB(table, 100), 1 + 2 + 1024);
+    assert.equal(treeRssMiB(table, 999), 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the rust-core path filter arms the lane for every crate the tui depends on", () => {
+  const filter = fs.readFileSync(".github/ci-paths-filter.yml", "utf8");
+  const block = filter.split(/^rust-tauri:/m)[0].split(/^rust-core:/m)[1];
+  for (const crate of ["core", "embed", "tinyhumans", "rpc", "cli", "tui"]) {
+    assert.ok(block.includes(`'crates/openhuman-${crate}/**'`), crate);
+  }
 });

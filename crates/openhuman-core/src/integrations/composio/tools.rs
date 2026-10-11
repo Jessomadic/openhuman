@@ -24,14 +24,14 @@
 //! the right slug and supply valid arguments without a separate round
 //! trip.
 
-mod direct;
-
 mod authorize;
 mod connect;
 mod execute;
 mod list_connections;
 mod list_toolkits;
 mod list_tools;
+mod live_config;
+mod redact;
 mod registry;
 mod visibility;
 
@@ -41,8 +41,9 @@ mod visibility;
 #[path = "tools_tests.rs"]
 mod tests;
 
-pub use direct::{ComposioAction, ComposioConnectedAccount, ComposioTool};
 pub use execute::ComposioExecuteTool;
+pub(crate) use live_config::live_composio_config;
+pub(crate) use redact::redact_composio_outcome;
 pub use registry::all_composio_agent_tools;
 
 // Brought into this module's own namespace (private `use`, not `pub use`)
@@ -50,13 +51,15 @@ pub use registry::all_composio_agent_tools;
 // — can still reach these via a plain `use super::*;`, exactly as when
 // this was one un-split file. See each item's `pub(super)` in its owning
 // submodule.
+#[cfg(test)]
+pub(crate) use connect::canonicalize_toolkit_slug;
 pub(crate) use visibility::{action_mutates_external_state, resolve_action_scope};
 
 pub use authorize::ComposioAuthorizeTool;
 #[cfg(test)]
 use connect::{
-    canonicalize_toolkit_slug, connection_is_active, parse_composio_connect_timeout,
-    ComposioConnectTool, DEFAULT_COMPOSIO_CONNECT_TIMEOUT_SECS,
+    composio_connect_tool_timeout, connection_is_active, parse_composio_connect_timeout,
+    remaining_park_bound, ComposioConnectTool, DEFAULT_COMPOSIO_CONNECT_TIMEOUT_SECS,
 };
 pub use list_connections::ComposioListConnectionsTool;
 pub use list_toolkits::ComposioListToolkitsTool;

@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Thread } from '../../../types/thread';
-import {
-  GENERAL_TAB_VALUE,
-  isThreadVisibleInTab,
-  SUBCONSCIOUS_TAB_VALUE,
-  TASKS_TAB_VALUE,
-} from './threadFilter';
+import { GENERAL_TAB_VALUE, isThreadVisibleInTab, TASKS_TAB_VALUE } from './threadFilter';
 
 function thread(overrides: Partial<Thread>): Thread {
   return {
@@ -43,9 +38,6 @@ describe('isThreadVisibleInTab', () => {
     });
 
     it('excludes threads that belong to explicit non-General buckets', () => {
-      expect(
-        isThreadVisibleInTab(thread({ labels: [SUBCONSCIOUS_TAB_VALUE] }), GENERAL_TAB_VALUE)
-      ).toBe(false);
       expect(isThreadVisibleInTab(thread({ labels: [TASKS_TAB_VALUE] }), GENERAL_TAB_VALUE)).toBe(
         false
       );
@@ -57,29 +49,6 @@ describe('isThreadVisibleInTab', () => {
     it('excludes meeting threads from the General bucket (folded into Tasks)', () => {
       expect(isThreadVisibleInTab(thread({ labels: ['meetings'] }), GENERAL_TAB_VALUE)).toBe(false);
       expect(isThreadVisibleInTab(thread({ labels: ['Meetings'] }), GENERAL_TAB_VALUE)).toBe(false);
-    });
-  });
-
-  describe('Subconscious bucket', () => {
-    it('keeps canonical and legacy subconscious-generated threads', () => {
-      expect(
-        isThreadVisibleInTab(thread({ labels: [SUBCONSCIOUS_TAB_VALUE] }), SUBCONSCIOUS_TAB_VALUE)
-      ).toBe(true);
-      expect(
-        isThreadVisibleInTab(thread({ labels: ['from_reflection'] }), SUBCONSCIOUS_TAB_VALUE)
-      ).toBe(true);
-      expect(
-        isThreadVisibleInTab(thread({ labels: ['subconscious_tick'] }), SUBCONSCIOUS_TAB_VALUE)
-      ).toBe(true);
-    });
-
-    it('excludes ordinary and task threads', () => {
-      expect(
-        isThreadVisibleInTab(thread({ labels: [GENERAL_TAB_VALUE] }), SUBCONSCIOUS_TAB_VALUE)
-      ).toBe(false);
-      expect(
-        isThreadVisibleInTab(thread({ labels: [TASKS_TAB_VALUE] }), SUBCONSCIOUS_TAB_VALUE)
-      ).toBe(false);
     });
   });
 
@@ -106,13 +75,10 @@ describe('isThreadVisibleInTab', () => {
       expect(isThreadVisibleInTab(thread({ labels: ['Meetings'] }), TASKS_TAB_VALUE)).toBe(true);
     });
 
-    it('excludes ordinary and subconscious threads', () => {
+    it('excludes ordinary threads', () => {
       expect(isThreadVisibleInTab(thread({ labels: [GENERAL_TAB_VALUE] }), TASKS_TAB_VALUE)).toBe(
         false
       );
-      expect(
-        isThreadVisibleInTab(thread({ labels: [SUBCONSCIOUS_TAB_VALUE] }), TASKS_TAB_VALUE)
-      ).toBe(false);
     });
   });
 });

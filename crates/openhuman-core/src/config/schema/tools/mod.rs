@@ -10,16 +10,19 @@ pub mod search;
 pub use browser::{BrowserComputerUseConfig, BrowserConfig};
 pub use http::{CurlConfig, HttpRequestConfig};
 pub use integrations::{
-    ComposioConfig, IntegrationToggle, IntegrationsConfig, SecretsConfig, COMPOSIO_MODE_BACKEND,
-    COMPOSIO_MODE_DIRECT,
+    ComposioConfig, ComposioDirectBaseUrls, ComposioHostCredential, IntegrationToggle,
+    IntegrationsConfig, SecretsConfig, COMPOSIO_MODE_BACKEND, COMPOSIO_MODE_DIRECT,
+    COMPOSIO_MODE_DISABLED,
 };
 pub use mcp::{
     GitbooksConfig, HttpHeader, McpAuthConfig, McpClientConfig, McpClientIdentityConfig,
-    McpServerConfig,
+    McpServerConfig, McpToolExposure,
 };
 pub use multimodal::{MultimodalConfig, MultimodalFileConfig};
 pub use search::{
-    SearchConfig, SearchEngine, SearchEngineCredentials, SearxngConfig, SeltzConfig,
-    WebSearchConfig, SEARCH_ENGINE_BRAVE, SEARCH_ENGINE_DISABLED, SEARCH_ENGINE_EXA,
+    LegacySearchInputs, SearchConfig, SearchEngineCredentials, SearchPresentation,
+    SearchProviderSettings, SearchRoute, SearxngConfig, SeltzConfig, WebSearchConfig,
+    MANAGED_SEARCH_PROVIDERS, SEARCH_ENGINE_BRAVE, SEARCH_ENGINE_DISABLED, SEARCH_ENGINE_EXA,
     SEARCH_ENGINE_MANAGED, SEARCH_ENGINE_PARALLEL, SEARCH_ENGINE_QUERIT, SEARCH_ENGINE_TAVILY,
+    SEARCH_PROVIDERS, SEARCH_ROLES, SEARCH_ROLE_ANSWER, SEARCH_ROLE_CONTENTS, SEARCH_ROLE_SEARCH,
 };

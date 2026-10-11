@@ -16,8 +16,6 @@
 //! `crates/openhuman-core/src/skills/mod.rs` for the pattern and the type carve-out.
 
 #[cfg(feature = "skills")]
-pub mod agent;
-#[cfg(feature = "skills")]
 pub mod ops;
 #[cfg(feature = "skills")]
 mod run_machinery;

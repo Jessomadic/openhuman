@@ -32,12 +32,68 @@
 //! as still loading instead of hanging into that deadline.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
-use super::resolution::{self, Claim, Resolution, ResolutionState, ResolutionTable, Waited};
 use super::types::{ModuleRecord, ModuleState, ModuleStatus};
-use super::{host, platform, registry};
+use super::{host, registry};
 use crate::config::Config;
+use tinybus::module::platform::host_candidates;
+use tinybus::module::resolution::{self, Claim, Resolution, ResolutionState, Waited};
+use tinybus::module::{load_first_admitted, prune_stale_versions, ReleaseAsset, ReleasePlan};
+
+/// Environment variable naming a directory of bundled release archives, for
+/// headless hosts (the Docker image, the CLI tarball, bench bundles).
+pub const BUNDLED_MODULES_ENV: &str = "OPENHUMAN_BUNDLED_MODULES";
+
+/// Directory name searched beside the executable when nothing else is set.
+const BUNDLED_MODULES_DIR: &str = "bundled-modules";
+
+/// Installer-owned, read-only release cache. The desktop host sets this before
+/// starting the embedded core; headless hosts name it with
+/// [`BUNDLED_MODULES_ENV`] or ship it beside the binary.
+static BUNDLED_RELEASES: OnceLock<PathBuf> = OnceLock::new();
+
+/// Register the directory of release archives shipped with the desktop app.
+/// Its contents still pass the compiled digest and TinyBus admission gates.
+pub fn set_bundled_releases_dir(path: PathBuf) -> Result<(), PathBuf> {
+    BUNDLED_RELEASES.set(path)
+}
+
+/// The bundled release directory: the one the host registered, else
+/// [`BUNDLED_MODULES_ENV`], else `bundled-modules/` beside the executable.
+/// Only an existing directory counts; nothing here creates one.
+fn bundled_releases_dir() -> Option<PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    resolve_bundled_dir(
+        BUNDLED_RELEASES.get().cloned(),
+        std::env::var_os(BUNDLED_MODULES_ENV).map(PathBuf::from),
+        exe_dir,
+    )
+}
+
+pub(crate) fn resolve_bundled_dir(
+    registered: Option<PathBuf>,
+    from_env: Option<PathBuf>,
+    exe_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    // Each candidate must be a directory to win: a stale registered path or a
+    // mistyped env var must not hide a valid directory further down the list.
+    let found = [
+        registered,
+        from_env,
+        exe_dir.map(|dir| dir.join(BUNDLED_MODULES_DIR)),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|dir| dir.is_dir());
+    if let Some(dir) = &found {
+        log::debug!("[modules] bundled release directory: {}", dir.display());
+    }
+    found
+}
 
 /// Why a bounded [`ensure_loaded_within`] did not end with the module serving.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +157,7 @@ pub async fn ensure_loaded_within(
     let record =
         registry::find(id).ok_or_else(|| LoadError::Failed(format!("unknown module '{id}'")))?;
 
-    let receiver = match resolution::table().claim(id) {
+    let receiver = match resolution::global().claim(id) {
         Claim::Done(Resolution::Ready) => return Ok(()),
         Claim::Done(Resolution::Failed(reason)) => return Err(LoadError::Failed(reason)),
         Claim::Wait(receiver) => receiver,
@@ -110,7 +166,7 @@ pub async fn ensure_loaded_within(
             receiver
         }
     };
-    match ResolutionTable::wait(receiver, within).await {
+    match resolution::global().wait(id, receiver, within).await {
         Waited::Ready => Ok(()),
         Waited::Failed(reason) => Err(LoadError::Failed(reason)),
         Waited::StillLoading => Err(LoadError::StillLoading),
@@ -120,7 +176,7 @@ pub async fn ensure_loaded_within(
 /// The state of `id` as the resolution table reports it, without touching it.
 #[must_use]
 pub fn state_of(id: &str) -> ModuleState {
-    match resolution::table().peek(id) {
+    match resolution::global().peek(id) {
         ResolutionState::Unresolved => ModuleState::Available,
         ResolutionState::Loading => ModuleState::Loading,
         ResolutionState::Ready => ModuleState::Ready,
@@ -148,11 +204,15 @@ async fn start_resolution(
                 Resolution::Ready
             }
             Err(reason) => {
-                log::warn!("[modules] '{id}' did not load: {reason}");
+                // Every resolution failure is terminal for the process (the
+                // outcome is cached), whichever path produced it; marking here
+                // makes later re-reports classify as `ModuleUnavailable`.
+                let reason = mark_terminal(reason);
+                report_resolution_failure(id, &reason);
                 Resolution::Failed(reason)
             }
         };
-        resolution::table().complete(id, resolution, sender);
+        resolution::global().complete(id, resolution, sender);
     };
     match host::runtime().await {
         Ok(runtime) => {
@@ -163,6 +223,20 @@ async fn start_resolution(
             work.await;
         }
     }
+}
+
+/// Report a module that did not load — once per process.
+///
+/// A resolution runs once and its failure is cached for every later caller
+/// (see the module docs), so this is the single Sentry event a broken install
+/// produces. Those callers re-raise the cached reason, and those re-reports
+/// classify as `ExpectedErrorKind::ModuleUnavailable` and are demoted; this
+/// one goes through [`report_error`] directly so the classifier cannot swallow
+/// it too.
+///
+/// [`report_error`]: crate::core::observability::report_error
+pub(super) fn report_resolution_failure(id: &str, reason: &str) {
+    crate::core::observability::report_error(reason, "modules", "resolve", &[("module", id)]);
 }
 
 /// Do the actual work of getting `record` serving.
@@ -226,24 +300,22 @@ async fn resolve(config: &Config, record: &'static ModuleRecord) -> Result<(), S
     let allow_download = config.modules.allow_download;
     let module_config = module_config(config, record.id);
     let cache_root = root.clone();
-    let outcome =
-        blocking(move || load_cached(runtime, record, &cache_root, module_config, allow_download))
-            .await;
+    let bundled = bundled_releases_dir();
+    let outcome = blocking(move || {
+        load_cached(
+            runtime,
+            record,
+            &cache_root,
+            module_config,
+            allow_download,
+            bundled.as_deref(),
+        )
+    })
+    .await;
     match outcome {
         Ok(()) => {
-            prune_stale_versions(&root, record);
+            prune_stale_versions(&root, record.id, record.version);
             Ok(())
-        }
-        Err(reason) if !allow_download => {
-            log::debug!(
-                "[modules] '{}' release cache miss with downloads disabled: {reason}",
-                record.id
-            );
-            Err(format!(
-                "module '{}' is unavailable: no local artifact is installed and downloads are \
-                 disabled in configuration",
-                record.id
-            ))
         }
         Err(reason) => Err(reason),
     }
@@ -253,20 +325,29 @@ async fn resolve(config: &Config, record: &'static ModuleRecord) -> Result<(), S
 ///
 /// A panic in the loader is reported rather than propagated: it would otherwise
 /// take down whichever task happened to be awaiting the load.
+///
+/// Every loader error is terminal for the process and says so once: tinybus'
+/// release-cache path and [`load_local`] already carry the marker, the rest
+/// get it appended here.
 async fn blocking<F>(work: F) -> Result<(), String>
 where
     F: FnOnce() -> Result<(), String> + Send + 'static,
 {
     host::runtime()
         .await
-        .map_err(|error| format!("the module bus could not start: {error}"))?
+        .map_err(|error| mark_terminal(format!("the module bus could not start: {error}")))?
         .blocking(work)
         .await
-        .map_err(|error| {
-            format!(
-                "{error}. This is terminal for the running process; restart the app to try again"
-            )
-        })
+        .map_err(mark_terminal)
+}
+
+/// Append the terminal-fault sentence to `error` unless it already has it.
+pub(super) fn mark_terminal(error: String) -> String {
+    let marker = crate::tools::status::MODULE_FAULT_MARKER;
+    if error.contains(marker) {
+        return error;
+    }
+    format!("{error}. {marker}; restart the app to try again")
 }
 
 /// Load the pinned release for this host through the release cache.
@@ -282,156 +363,27 @@ fn load_cached(
     install_root: &Path,
     module_config: serde_json::Value,
     allow_download: bool,
+    bundled_root: Option<&Path>,
 ) -> Result<(), String> {
-    let candidates = platform::host_candidates();
-    let assets: Vec<_> = candidates
+    let assets: Vec<ReleaseAsset<'static>> = host_candidates()
         .iter()
         .filter_map(|key| record.asset_for(key))
+        .map(|asset| ReleaseAsset {
+            host_key: asset.host_key,
+            archive: asset.archive,
+            sha256: asset.sha256,
+        })
         .collect();
-    if assets.is_empty() {
-        return Err(format!(
-            "module '{}' is not available for this platform, so the feature it provides is \
-             unavailable in this build",
-            record.id
-        ));
-    }
-
-    let mut last_error = String::new();
-    for asset in assets {
-        let Some(cache_dir) = artifact_dir(install_root, record, asset.host_key) else {
-            last_error =
-                "the module's cache path could not be built from its registry entry".to_string();
-            continue;
-        };
-        let release = tinybus::module::CachedRelease {
-            release_url: record.release_url,
-            asset_name: asset.archive,
-            expected_sha256: Some(asset.sha256),
-            cache_dir: &cache_dir,
-            allow_download,
-        };
-        match runtime
-            .host()
-            .load_github_release_cached(&release, module_config.clone())
-        {
-            Ok(_) => {
-                log::info!(
-                    "[modules] loaded '{}' {} ({}) through the release cache",
-                    record.id,
-                    record.version,
-                    asset.host_key
-                );
-                return Ok(());
-            }
-            Err(err) => {
-                // Sanitised: tinybus's own errors carry only a basename and a
-                // fixed reason, and nothing here adds a path or a URL.
-                last_error = err.to_string();
-                log::warn!(
-                    "[modules] '{}' artifact for {} was not admitted: {last_error}",
-                    record.id,
-                    asset.host_key
-                );
-            }
-        }
-    }
-    Err(format!(
-        "module '{}' could not be loaded: {last_error}. This is terminal for the running \
-         process; restart the app to try again",
-        record.id
-    ))
-}
-
-/// Whether `component` is safe to use as one directory name.
-///
-/// The three values that build a cache path — a module id, its version, and a
-/// host key — are compiled-in `const` data today, so nothing reaches this with
-/// a separator in it. It is checked anyway because of what sits at the end of
-/// the path: [`prune_stale_versions`] calls `remove_dir_all` on what these
-/// build. A registry edit or a future value that carried `..` or a separator
-/// would turn a cache tidy-up into deleting somewhere else entirely, and a
-/// rule that has to hold for a delete is worth stating rather than inferring
-/// from where the data happens to come from today.
-fn is_safe_path_component(component: &str) -> bool {
-    !component.is_empty()
-        && component != "."
-        && component != ".."
-        && !component.contains('/')
-        && !component.contains('\\')
-        && !component.contains('\0')
-        // A leading dot would collide with the `.staging-*` directories a
-        // concurrent download is filling.
-        && !component.starts_with('.')
-}
-
-/// Where one artifact of one module version is cached, when all three
-/// components are usable as directory names.
-///
-/// `None` rather than a sanitised path: a registry entry that cannot name a
-/// directory is a build-time mistake, and quietly rewriting it would hide the
-/// mistake behind a cache that silently never hits.
-fn artifact_dir(install_root: &Path, record: &ModuleRecord, host_key: &str) -> Option<PathBuf> {
-    for component in [record.id, record.version, host_key] {
-        if !is_safe_path_component(component) {
-            log::error!(
-                "[modules] '{}' has a component that cannot name a directory; refusing to build a \
-                 cache path from it",
-                record.id
-            );
-            return None;
-        }
-    }
-    Some(
-        install_root
-            .join(record.id)
-            .join(record.version)
-            .join(host_key),
-    )
-}
-
-/// Remove cached versions of `record` other than the pinned one.
-///
-/// Best-effort and after the fact: a version that is no longer pinned will
-/// never be loaded again, so keeping it only costs disk. Staging directories
-/// are left alone — a concurrent process may be filling one — and every
-/// removal is logged, because a cache that empties itself is worth noticing.
-fn prune_stale_versions(install_root: &Path, record: &ModuleRecord) {
-    // Both sides of the comparison below have to be real directory names, or
-    // "everything that is not the pinned version" is not a set this function
-    // should be handing to `remove_dir_all`.
-    if !is_safe_path_component(record.id) || !is_safe_path_component(record.version) {
-        log::error!(
-            "[modules] refusing to prune '{}': its id or version cannot name a directory",
-            record.id
-        );
-        return;
-    }
-    let module_root = install_root.join(record.id);
-    let Ok(entries) = std::fs::read_dir(&module_root) else {
-        return;
+    let plan = ReleasePlan {
+        id: record.id,
+        version: record.version,
+        release_url: record.release_url,
+        assets: &assets,
+        install_root,
+        bundled_root,
+        allow_download,
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        // `read_dir` never yields `.` or `..`, and the leading-dot skip covers
-        // the staging directories; the guard is here so the delete depends on
-        // this function's own check rather than on that being remembered.
-        if !path.is_dir() || name == record.version || !is_safe_path_component(&name) {
-            continue;
-        }
-        match std::fs::remove_dir_all(&path) {
-            Ok(()) => log::info!(
-                "[modules] removed cached '{}' {name}; {} is pinned",
-                record.id,
-                record.version
-            ),
-            Err(error) => log::warn!(
-                "[modules] could not remove cached '{}' {name}: {error}",
-                record.id
-            ),
-        }
-    }
+    load_first_admitted(runtime.host(), &plan, &module_config).map(|_| ())
 }
 
 /// Load a platform library from `path`.
@@ -458,6 +410,13 @@ pub(super) fn load_local(
 /// Credentials are intentionally absent. TinyMemory calls back into the host
 /// for embedding and chat compute; the other modules need no host config.
 fn module_config(config: &Config, id: &str) -> serde_json::Value {
+    if id == super::search::MODULE_ID {
+        return serde_json::to_value(super::search::module_config(config))
+            .expect("TinySearch config serializes");
+    }
+    if id == super::desktop::MODULE_ID {
+        return super::desktop::module_config(config);
+    }
     if id == super::connectors::MODULE_ID {
         // The connector module takes its route and credential from here and
         // reads one from nowhere else. A configuration that cannot be built —
@@ -473,58 +432,7 @@ fn module_config(config: &Config, id: &str) -> serde_json::Value {
             serde_json::json!({})
         });
     }
-    if id != super::memory::MODULE_ID {
-        return serde_json::json!({});
-    }
-    serde_json::json!({
-        "workspace_dir": config.workspace_dir,
-        // The registry file the host writes `[[memory_sources]]` into. The
-        // module used to derive `workspace_dir/config.toml`, a file that does
-        // not exist, and answered `NotFound` for every host-registered source
-        // on sync (openhuman#5820). Additive: an older module ignores it.
-        "config_path": config.config_path,
-        "memory": config.memory,
-        "memory_tree": config.memory_tree,
-        "scheduler_gate": config.scheduler_gate,
-        "local_ai": config.local_ai,
-        "embeddings_provider": config.embeddings_provider,
-        "memory_provider": config.memory_provider,
-        "default_model": config.default_model,
-        "default_temperature": config.default_temperature,
-        "output_language": config.output_language,
-        "memory_sources": config.memory_sources,
-        "embedding_routes": config.embedding_routes,
-        "storage_provider": config.storage.provider.config,
-        "ollama_base_url": tinyinference_local::ollama::ollama_base_url_from_override(config.local_ai.base_url.as_deref()),
-        // The module's `EmbeddingHost::default_cloud_embedding_model`: what the
-        // engine switches to when the opted-in local model is unreachable
-        // (`store::factories`). That is the host's managed-cloud default, the
-        // same constant the in-process `OpenHumanEmbeddingHost` answers with.
-        // It is NOT `config.memory.embedding_model`, which is the user's
-        // intended model and is usually the local one; sending that here made
-        // the cloud fallback ask the managed embedder for `nomic-embed-text`
-        // (openhuman#5820).
-        "cloud_embedding_model":
-            tinyinference_embeddings::DEFAULT_CLOUD_MODEL,
-        "cloud_embedding_dimensions":
-            tinyinference_embeddings::DEFAULT_CLOUD_DIMENSIONS,
-        "models_supporting_dimensions":
-            tinyinference_embeddings::MODELS_SUPPORTING_DIMENSIONS,
-        // The periodic composio and workspace-source sync loops run INSIDE the
-        // module now (tinymemory#100), and these three are what let them run at
-        // all. Without the cadence the module answers manual-only and skips
-        // every source silently; without the mode `composio_config` never
-        // selects its direct branch and every connection fails. All three are
-        // `#[serde(default)]` upstream, so an older module ignores them rather
-        // than failing to load.
-        "memory_sync_interval_secs": config.memory_sync_interval_secs,
-        "composio_mode": config.composio.mode,
-        "composio_entity_id": config.composio.entity_id,
-        // Proxied Composio addresses the backend with this; without it the module
-        // builds its request against an empty base and fails in the HTTP client.
-        "backend_api_url": crate::api::config::effective_backend_api_url(&config.api_url),
-        "driver_id": "tinymemory",
-    })
+    serde_json::json!({})
 }
 
 /// A configured local artifact for `id`, if one is set.
@@ -542,8 +450,8 @@ fn local_override(config: &Config, id: &str) -> Option<PathBuf> {
 
     configured
         .or_else(|| {
-            (id == super::memory::MODULE_ID)
-                .then(|| std::env::var_os("TINYMEMORY_TEST_MODULE"))
+            (id == super::search::MODULE_ID)
+                .then(|| std::env::var_os("TINYSEARCH_TEST_MODULE"))
                 .flatten()
                 .map(PathBuf::from)
         })
@@ -560,7 +468,7 @@ fn local_override(config: &Config, id: &str) -> Option<PathBuf> {
 /// Where downloaded artifacts are kept.
 ///
 /// The user cache directory, falling back to the workspace when there is none —
-/// the same shape the Node and Python runtime installers use, for the same
+/// the same shape used by other module asset installers, for the same
 /// reason: a headless container often has no `XDG_CACHE_HOME`, and failing to
 /// install because of that would be worse than writing beside the workspace.
 #[must_use]
@@ -594,12 +502,12 @@ fn status_of(config: &Config, record: &ModuleRecord) -> ModuleStatus {
             ModuleState::Unsupported,
             Some("modules are disabled in configuration".to_string()),
         ),
-        _ => match resolution::table().peek(record.id) {
+        _ => match resolution::global().peek(record.id) {
             ResolutionState::Ready => (ModuleState::Ready, None),
             ResolutionState::Loading => (ModuleState::Loading, None),
             ResolutionState::Failed(reason) => (ModuleState::Failed, Some(reason)),
             ResolutionState::Unresolved => {
-                let supported = platform::host_candidates()
+                let supported = host_candidates()
                     .iter()
                     .any(|key| record.asset_for(key).is_some());
                 if supported {

@@ -4,11 +4,12 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::core::all::{ControllerFuture, RegisteredController};
+use crate::core::Outcome;
 use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 
-use super::ops::run_import;
-use super::types::ImportOptions;
+use super::projector::journal_message_from_transcript;
+use tinyagents_session::transcript::import::ops::run_import;
+use tinyagents_session::transcript::import::types::ImportOptions;
 
 #[derive(Debug, Deserialize, Default)]
 struct SessionImportRunParams {
@@ -112,11 +113,11 @@ fn handle_session_import_run(params: Map<String, Value>) -> ControllerFuture {
             dry_run = opts.dry_run,
             "[session-import] rpc run"
         );
-        let summary = run_import(&workspace, &opts)
+        let summary = run_import(&workspace, &opts, journal_message_from_transcript)
             .await
             .map_err(|e| format!("session import failed: {e:#}"))?;
         let logs = summary.warnings.clone();
-        RpcOutcome::new(summary, logs).into_cli_compatible_json()
+        Outcome::new(summary, logs).into_cli_compatible_json()
     })
 }
 

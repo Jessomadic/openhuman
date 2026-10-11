@@ -1,12 +1,12 @@
 id = "critic"
 display_name = "Critic"
 delegate_name = "review_code"
-when_to_use = "Adversarial read-only review of diffs and code: vulnerabilities, regressions, missing tests."
+when_to_use = "Workflow-run worker: adversarial read-only cross-check of claims, diffs and code (vulnerabilities, regressions, missing tests). Not a chat delegate."
 temperature = 0.4
 max_iterations = 5
 # Bound the review verdict that flows up to the orchestrator verbatim
 # (delegate_critic). 8000 chars (~2000 tokens) matches the normal
-# sub-agent cap (planner/researcher) and keeps long diffs from leaking
+# sub-agent cap (planner) and keeps long diffs from leaking
 # an unbounded critique into the orchestrator's context (#4099).
 max_result_chars = 8000
 sandbox_mode = "read_only"

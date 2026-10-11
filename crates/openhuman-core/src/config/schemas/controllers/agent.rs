@@ -1,4 +1,4 @@
-//! Handlers for agent behaviour settings: autonomy, privacy, browser, sandbox, activity level, and memory sync.
+//! Handlers for agent behaviour settings: autonomy, privacy, browser, sandbox, and memory sync.
 
 use serde_json::{Map, Value};
 
@@ -6,9 +6,9 @@ use crate::config::rpc as config_rpc;
 use crate::core::all::ControllerFuture;
 
 use super::super::helpers::{
-    deserialize_params, to_json, ActivityLevelSettingsUpdate, AgentSettingsUpdate,
-    AutonomySettingsUpdate, BrowserSettingsUpdate, MemorySyncSettingsUpdate, PrivacyModeUpdate,
-    SandboxSettingsUpdate, SetBrowserAllowAllParams,
+    deserialize_params, to_json, AgentSettingsUpdate, AutonomySettingsUpdate,
+    BrowserSettingsUpdate, ComputerSettingsUpdate, PrivacyModeUpdate, SandboxSettingsUpdate,
+    SetBrowserAllowAllParams,
 };
 
 pub(crate) fn handle_get_autonomy_settings(_params: Map<String, Value>) -> ControllerFuture {
@@ -26,9 +26,7 @@ pub(crate) fn handle_update_autonomy_settings(params: Map<String, Value>) -> Con
             forbidden_paths: update.forbidden_paths,
             trusted_roots: update.trusted_roots,
             allow_tool_install: update.allow_tool_install,
-            max_actions_per_hour: update
-                .max_actions_per_hour
-                .map(|v| u32::try_from(v).unwrap_or(u32::MAX)),
+            max_actions_per_hour: update.max_actions_per_hour,
             auto_approve: update.auto_approve,
             auto_approve_all: update.auto_approve_all,
         };
@@ -76,6 +74,8 @@ pub(super) fn handle_update_agent_settings(params: Map<String, Value>) -> Contro
         };
         let patch = config_rpc::AgentSettingsPatch {
             agent_timeout_secs: update.agent_timeout_secs,
+            chat_agent_id: update.chat_agent_id,
+            tool_dispatcher: update.tool_dispatcher,
         };
         match config_rpc::load_and_apply_agent_settings(patch).await {
             Ok(outcome) => {
@@ -96,8 +96,32 @@ pub(super) fn handle_update_browser_settings(params: Map<String, Value>) -> Cont
         let patch = config_rpc::BrowserSettingsPatch {
             enabled: update.enabled,
             backend: update.backend,
+            headless: update.headless,
+            viewport_width: update.viewport_width,
+            viewport_height: update.viewport_height,
+            chrome_path: update.chrome_path,
+            profile_mode: update.profile_mode,
+            profile_path: update.profile_path,
+            download_dir: update.download_dir,
+            max_task_steps: update.max_task_steps,
+            task_timeout_secs: update.task_timeout_secs,
+            learn_from_tasks: update.learn_from_tasks,
         };
         to_json(config_rpc::load_and_apply_browser_settings(patch).await?)
+    })
+}
+
+pub(super) fn handle_update_computer_settings(params: Map<String, Value>) -> ControllerFuture {
+    Box::pin(async move {
+        let update = deserialize_params::<ComputerSettingsUpdate>(params)?;
+        let patch = config_rpc::ComputerSettingsPatch {
+            decision_model: update.decision_model,
+            sage_fast: update.sage_fast,
+            planner_model: update.planner_model,
+            rescue_model: update.rescue_model,
+            max_rescues: update.max_rescues,
+        };
+        to_json(config_rpc::load_and_apply_computer_settings(patch).await?)
     })
 }
 
@@ -105,36 +129,6 @@ pub(super) fn handle_set_browser_allow_all(params: Map<String, Value>) -> Contro
     Box::pin(async move {
         let payload = deserialize_params::<SetBrowserAllowAllParams>(params)?;
         to_json(config_rpc::set_browser_allow_all(payload.enabled)?)
-    })
-}
-
-pub(super) fn handle_get_activity_level_settings(_params: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move { to_json(config_rpc::get_activity_level_settings().await?) })
-}
-
-pub(super) fn handle_update_activity_level_settings(
-    params: Map<String, Value>,
-) -> ControllerFuture {
-    Box::pin(async move {
-        let update = deserialize_params::<ActivityLevelSettingsUpdate>(params)?;
-        let patch = config_rpc::ActivityLevelSettingsPatch {
-            level: update.level,
-        };
-        to_json(config_rpc::load_and_apply_activity_level_settings(patch).await?)
-    })
-}
-
-pub(super) fn handle_get_memory_sync_settings(_params: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move { to_json(config_rpc::get_memory_sync_settings().await?) })
-}
-
-pub(super) fn handle_update_memory_sync_settings(params: Map<String, Value>) -> ControllerFuture {
-    Box::pin(async move {
-        let update = deserialize_params::<MemorySyncSettingsUpdate>(params)?;
-        let patch = config_rpc::MemorySyncSettingsPatch {
-            sync_interval_secs: update.sync_interval_secs,
-        };
-        to_json(config_rpc::load_and_apply_memory_sync_settings(patch).await?)
     })
 }
 

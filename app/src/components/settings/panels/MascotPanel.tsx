@@ -899,7 +899,7 @@ const MascotPanel = ({ embedded = false }: MascotPanelProps) => {
   // renders the body flush — a `p-4` here would indent it twice.
   if (embedded) return <div className="space-y-5">{body}</div>;
 
-  return <SettingsPanel>{body}</SettingsPanel>;
+  return <SettingsPanel description={t('settings.face.menuDesc')}>{body}</SettingsPanel>;
 };
 
 export default MascotPanel;

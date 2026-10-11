@@ -16,7 +16,7 @@
 import { Base } from './BaseDemo';
 import { MockRuntimeProvider } from './MockRuntimeProvider';
 
-export function AssistantUiDemoPage() {
+function AssistantUiDemoPage() {
   return (
     <div className="h-dvh w-full overflow-hidden">
       <MockRuntimeProvider>

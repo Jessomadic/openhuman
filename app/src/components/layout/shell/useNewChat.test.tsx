@@ -157,7 +157,7 @@ describe('useNewChat', () => {
     });
   });
 
-  it('does not reuse a blank non-General thread (task / subconscious / parented)', async () => {
+  it('does not reuse a blank non-General thread (task / parented)', async () => {
     // A blank task thread (parentThreadId) is hidden from the General tab, so
     // New Chat must not land on it — create a fresh general chat instead.
     mockThreads = [{ id: 'task-1', messageCount: 0, parentThreadId: 'parent' }];

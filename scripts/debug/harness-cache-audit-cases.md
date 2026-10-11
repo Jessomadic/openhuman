@@ -44,7 +44,7 @@ Observed on 2026-06-22:
 - Without explicit `thread_id`: `68.56%` cache hit, `$0.011535`.
 - With explicit `thread_id`: `85.49%` cache hit, `$0.040142`.
 
-Note: the generic prompt may route to heavier agents such as `researcher`.
+Note: when these numbers were recorded, the generic prompt could route to the heavier `researcher` sub-agent. That agent has since been removed; the orchestrator now does web research itself (`web_answer_tool` with `depth: "deep"`), so re-measure before comparing.
 
 ## Case 2: Complex Internal Tool Loop
 
@@ -73,6 +73,10 @@ Observed on 2026-06-22:
 Note: one `integrations_agent` session still appeared, so this is not fully
 deterministic.
 
+Note: `tools_agent` and `integrations_agent` have since been removed; the
+orchestrator now runs generic tools and Composio actions itself (through
+`tool_search` and `use_skill`), so re-measure before comparing.
+
 ## Case 3: Read-Only Coding Agent
 
 Purpose: exercise code-repo delegation without file edits or test execution.
@@ -100,6 +104,11 @@ Observed on 2026-06-22:
 - `orchestrator`: `96.41%`.
 - `code_executor`: `92.72%`.
 - Turn 1 was slow (`240406ms`), then turns 2-4 completed much faster.
+
+Note: `code_executor` has since been removed. Repository work is now done by
+the orchestrator itself after loading the `coding` skill (`use_skill`), so
+this case no longer produces a coding sub-agent row; judge it by the
+orchestrator row and re-measure before comparing.
 
 ## Interpreting Results
 

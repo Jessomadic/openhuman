@@ -115,10 +115,11 @@ describe('Skills page — Channels grid', () => {
     renderWithProviders(<Skills />, { initialEntries: ['/connections'], preloadedState });
     fireEvent.click(screen.getByTestId('two-pane-nav-channels'));
 
-    const channelsCard = screen
-      .getByRole('heading', { name: 'Messaging' })
-      .closest('[data-slot="card"]');
-    const order = within(channelsCard as HTMLElement)
+    // The channels overview splits into a "Connected" card and an "Available"
+    // card (rendered in that order), rather than one flat "Messaging" list —
+    // scope on the shared overview container that wraps both.
+    const overview = screen.getByTestId('channels-overview');
+    const order = within(overview)
       .getAllByTestId(/^skill-row-channel-/)
       .map(el => el.getAttribute('data-testid'));
 
@@ -137,10 +138,8 @@ describe('Skills page — Channels grid', () => {
     const { store } = renderWithProviders(<Skills />, { initialEntries: ['/connections'] });
     fireEvent.click(screen.getByTestId('two-pane-nav-channels'));
 
-    const channelsCard = screen
-      .getByRole('heading', { name: 'Messaging' })
-      .closest('[data-slot="card"]');
-    const within$ = within(channelsCard as HTMLElement);
+    const overview = screen.getByTestId('channels-overview');
+    const within$ = within(overview);
 
     // The redux default starts on Telegram, so its tile shows the "Default"
     // badge (there is no longer a second, separate channel-picker list below).
@@ -162,15 +161,14 @@ describe('Skills page — Channels grid', () => {
   it('renders configured channels as tiles in a dedicated card and opens the setup modal on click', async () => {
     renderWithProviders(<Skills />, { initialEntries: ['/connections'] });
 
-    // Switch to the Channels tab to make the Channels card visible.
+    // Switch to the Channels tab to make the Channels overview visible.
     fireEvent.click(screen.getByTestId('two-pane-nav-channels'));
 
-    const channelsHeading = screen.getByRole('heading', { name: 'Messaging' });
-    expect(channelsHeading).toBeInTheDocument();
-
-    const channelsCard = channelsHeading.closest('[data-slot="card"]');
-    expect(channelsCard).not.toBeNull();
-    const within$ = within(channelsCard as HTMLElement);
+    // Both tiles are "Not configured" (not yet connected), so they land in
+    // the "Available" card inside the shared overview container.
+    const overview = await screen.findByTestId('channels-overview');
+    expect(screen.getByRole('heading', { name: 'Available' })).toBeInTheDocument();
+    const within$ = within(overview);
 
     const telegramTile = within$.getByRole('button', { name: /Telegram.*Not configured.*Setup/i });
     expect(telegramTile).toBeInTheDocument();
@@ -185,12 +183,12 @@ describe('Skills page — Channels grid', () => {
   });
 
   it.each([
-    ['connected', /Connected/i, /sage/],
-    ['connecting', /Connecting/i, /amber/],
-    ['error', /Error/i, /coral/],
+    ['connected', /Connected/i, 'bg-sage-500'],
+    ['connecting', /Connecting/i, 'bg-amber-500'],
+    ['error', /Error/i, 'bg-coral-500'],
   ] as const)(
     'styles the Telegram channel tile to reflect the %s connection state',
-    (status, labelPattern, classPattern) => {
+    (status, labelPattern, dotClass) => {
       const preloadedState = {
         channelConnections: {
           schemaVersion: 1,
@@ -228,20 +226,23 @@ describe('Skills page — Channels grid', () => {
       };
 
       renderWithProviders(<Skills />, { initialEntries: ['/connections'], preloadedState });
-      // Switch to the Channels tab so the Channels card is visible.
+      // Switch to the Channels tab so the Channels overview is visible.
       fireEvent.click(screen.getByTestId('two-pane-nav-channels'));
-      const channelsCard = screen
-        .getByRole('heading', { name: 'Messaging' })
-        .closest('[data-slot="card"]');
-      const telegramTile = within(channelsCard as HTMLElement).getByRole('button', {
+      const overview = screen.getByTestId('channels-overview');
+      const telegramButton = within(overview).getByRole('button', {
         name: new RegExp(`Telegram.*${labelPattern.source}`, 'i'),
       });
-      // The connection-status colour now lives on the tile container (the
-      // inner button only owns the "configure" affordance), so assert against
-      // the wrapping tile rather than the button itself.
-      const tileContainer = telegramTile.closest('.rounded-2xl');
+      // The connection status is carried by the tile's status Badge (chip
+      // text + a coloured dot), not a tinted tile background — consistent
+      // with the shared Badge primitive used everywhere else in the redesign.
+      const tileContainer = telegramButton.closest('.rounded-xl');
       expect(tileContainer).not.toBeNull();
-      expect((tileContainer as HTMLElement).className).toMatch(classPattern);
+      const statusBadge = within(tileContainer as HTMLElement)
+        .getByText(labelPattern)
+        .closest('[data-slot="badge"]');
+      expect(statusBadge).not.toBeNull();
+      const dot = (statusBadge as HTMLElement).querySelector('[data-slot="badge-dot"]');
+      expect(dot?.className).toContain(dotClass);
     }
   );
 

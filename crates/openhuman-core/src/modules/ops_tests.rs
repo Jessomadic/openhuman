@@ -10,6 +10,83 @@ use crate::modules::ops::{self, install_dir, list};
 use crate::modules::registry;
 use crate::modules::types::ModuleState;
 
+fn test_bundled_record() -> &'static crate::modules::types::ModuleRecord {
+    use crate::modules::types::{LoadPolicy, ModuleRecord, PlatformAsset};
+
+    let host_key = Box::leak(
+        tinybus::module::platform::host_candidates()[0]
+            .clone()
+            .into_boxed_str(),
+    );
+    let assets = Box::leak(Box::new([PlatformAsset {
+        host_key,
+        archive: "test-bundled-module.zip",
+        // SHA-256 of the empty archive staged by the test.
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    }]));
+    Box::leak(Box::new(ModuleRecord {
+        id: "test-bundled-module",
+        description: "test module",
+        bus_name: "test.BundledModule",
+        object_path: "/test/BundledModule",
+        version: "0.0.0",
+        release_url: "https://github.com/tinyhumansai/tinydocs/releases/tag/v0.1.16",
+        assets,
+        load: LoadPolicy::Lazy,
+    }))
+}
+
+#[tokio::test]
+async fn invalid_installer_bundle_is_reported_without_falling_back_to_the_cache() {
+    let record = test_bundled_record();
+    let bundled = tempfile::tempdir().unwrap();
+    let user_cache = tempfile::tempdir().unwrap();
+    let bundle_dir = tinybus::module::artifact_dir(
+        bundled.path(),
+        record.id,
+        record.version,
+        record.assets[0].host_key,
+    )
+    .unwrap();
+    std::fs::create_dir_all(&bundle_dir).unwrap();
+    std::fs::write(bundle_dir.join(record.assets[0].archive), b"").unwrap();
+
+    let runtime = crate::modules::host::runtime().await.unwrap();
+    let error = ops::load_cached(
+        runtime,
+        record,
+        user_cache.path(),
+        serde_json::json!({}),
+        false,
+        Some(bundled.path()),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("installer bundle"), "{error}");
+    assert!(error.contains("repairing the installation"), "{error}");
+    assert!(!user_cache.path().join(record.id).exists());
+}
+
+#[tokio::test]
+async fn absent_installer_bundle_uses_the_existing_cache_miss_path() {
+    let record = test_bundled_record();
+    let bundled = tempfile::tempdir().unwrap();
+    let user_cache = tempfile::tempdir().unwrap();
+    let runtime = crate::modules::host::runtime().await.unwrap();
+    let error = ops::load_cached(
+        runtime,
+        record,
+        user_cache.path(),
+        serde_json::json!({}),
+        false,
+        Some(bundled.path()),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("downloads are disabled"), "{error}");
+    assert!(!error.contains("installer bundle"), "{error}");
+}
+
 /// A config with modules on but downloads off, so nothing reaches the network.
 fn offline_config() -> Config {
     let mut config = Config::default();
@@ -145,40 +222,6 @@ fn errors_never_leak_a_path_or_a_url() {
     }
 }
 
-#[test]
-fn module_config_hands_the_module_the_hosts_cloud_embedding_defaults() {
-    // `cloud_embedding_model` is what the module's engine falls back to when
-    // the opted-in local model is unreachable, so it must be the host's
-    // managed-cloud default, never the user's intended (usually local) model.
-    // Sending `config.memory.embedding_model` here made the fallback ask the
-    // managed embedder for `nomic-embed-text` (#5820).
-    let mut config = offline_config();
-    config.memory.embedding_model = "nomic-embed-text:latest".to_string();
-    config.memory.embedding_dimensions = 768;
-
-    let sent = ops::module_config(&config, crate::modules::memory::MODULE_ID);
-
-    assert_eq!(
-        sent["cloud_embedding_model"],
-        tinyinference_embeddings::DEFAULT_CLOUD_MODEL
-    );
-    assert_eq!(
-        sent["cloud_embedding_dimensions"],
-        tinyinference_embeddings::DEFAULT_CLOUD_DIMENSIONS
-    );
-    let supports = sent["models_supporting_dimensions"]
-        .as_array()
-        .expect("a list of model ids");
-    assert!(
-        supports
-            .iter()
-            .any(|model| model == "text-embedding-3-large"),
-        "the dimension-aware family is named: {supports:?}"
-    );
-    // The user's own model still travels, just not as the cloud fallback.
-    assert_eq!(sent["memory"]["embedding_model"], "nomic-embed-text:latest");
-}
-
 #[tokio::test]
 async fn a_bounded_wait_with_nothing_cached_and_downloads_off_fails_rather_than_loading() {
     // An isolated install directory: this machine's real cache may hold the
@@ -192,8 +235,8 @@ async fn a_bounded_wait_with_nothing_cached_and_downloads_off_fails_rather_than_
     // left behind by one of those would be answered from cache before this
     // config is ever consulted, so clear it first and again at the end rather
     // than depending on which tests ran before this one.
-    let table = crate::modules::resolution::table();
-    table.reset_for_test("tinydocs");
+    let table = tinybus::module::resolution::global();
+    table.forget("tinydocs");
 
     // Nothing to download from, nothing cached: the resolution settles at once,
     // so a bounded caller gets the terminal reason, never `StillLoading`.
@@ -212,7 +255,7 @@ async fn a_bounded_wait_with_nothing_cached_and_downloads_off_fails_rather_than_
         .into_iter()
         .find(|status| status.id == "tinydocs")
         .expect("tinydocs is a registry entry");
-    table.reset_for_test("tinydocs");
+    table.forget("tinydocs");
 
     match &outcome {
         Ok(()) => {
@@ -234,88 +277,24 @@ async fn a_bounded_wait_with_nothing_cached_and_downloads_off_fails_rather_than_
 }
 
 #[test]
-fn each_artifact_of_a_version_has_its_own_cache_directory() {
-    let record = registry::find("tinydocs").expect("tinydocs is a registry entry");
-    let root = std::path::Path::new("/cache/modules");
-    let dir = ops::artifact_dir(root, record, "macos-26-arm64").expect("a usable cache path");
-    assert_eq!(
-        dir,
-        root.join("tinydocs")
-            .join(record.version)
-            .join("macos-26-arm64")
-    );
-    assert_ne!(Some(dir), ops::artifact_dir(root, record, "macos-15-arm64"));
-}
-
-#[test]
-fn a_component_that_cannot_name_a_directory_yields_no_cache_path() {
-    // The delete in `prune_stale_versions` is built from these components, so
-    // a value that escapes its directory must produce no path at all rather
-    // than one that resolves somewhere else.
-    for bad in ["..", ".", "", "a/b", "a\\b", ".hidden", "a\0b"] {
-        assert!(
-            !ops::is_safe_path_component(bad),
-            "{bad:?} must be refused as a directory name"
-        );
-    }
-    for good in [
-        "tinydocs",
-        "0.1.15",
-        "macos-26-arm64",
-        "ubuntu-22.04-x86_64",
-    ] {
-        assert!(ops::is_safe_path_component(good), "{good:?} is a real name");
-    }
-
-    let record = registry::find("tinydocs").expect("tinydocs is a registry entry");
-    let root = std::path::Path::new("/cache/modules");
-    assert_eq!(ops::artifact_dir(root, record, ".."), None);
-    assert_eq!(ops::artifact_dir(root, record, "a/b"), None);
+fn every_shipped_registry_entry_names_a_cache_directory() {
     // Every shipped registry entry names a directory on every host it claims.
     for entry in registry::ALL {
         assert!(
-            ops::is_safe_path_component(entry.id) && ops::is_safe_path_component(entry.version),
+            tinybus::module::is_safe_path_component(entry.id)
+                && tinybus::module::is_safe_path_component(entry.version),
             "registry entry '{}' cannot name a cache directory",
             entry.id
         );
         for asset in entry.assets {
             assert!(
-                ops::is_safe_path_component(asset.host_key),
+                tinybus::module::is_safe_path_component(asset.host_key),
                 "'{}' host key '{}' cannot name a cache directory",
                 entry.id,
                 asset.host_key
             );
         }
     }
-}
-
-#[test]
-fn pruning_keeps_the_pinned_version_and_anything_still_being_staged() {
-    let record = registry::find("tinydocs").expect("tinydocs is a registry entry");
-    let install = tempfile::tempdir().expect("temp install dir");
-    let module_root = install.path().join(record.id);
-    let pinned = module_root.join(record.version);
-    let stale = module_root.join("0.0.1");
-    let staging = module_root.join(".staging-abc123");
-    for dir in [&pinned, &stale, &staging] {
-        std::fs::create_dir_all(dir).unwrap();
-        std::fs::write(dir.join("marker"), b"x").unwrap();
-    }
-    // A stray file beside the version directories is not a version.
-    std::fs::write(module_root.join("notes.txt"), b"x").unwrap();
-
-    ops::prune_stale_versions(install.path(), record);
-
-    assert!(pinned.join("marker").is_file(), "the pinned version stays");
-    assert!(
-        staging.join("marker").is_file(),
-        "an in-progress staging dir stays"
-    );
-    assert!(!stale.exists(), "an unpinned version is removed");
-    assert!(module_root.join("notes.txt").is_file());
-
-    // A module that was never cached has nothing to prune, and says nothing.
-    ops::prune_stale_versions(&install.path().join("never"), record);
 }
 
 #[test]
@@ -331,4 +310,133 @@ fn load_errors_render_for_callers_that_cannot_wait_again() {
     );
     let message = ops::LoadError::StillLoading.into_message();
     assert!(message.contains("still loading"), "{message}");
+}
+
+#[tokio::test]
+async fn a_loader_error_carries_the_terminal_marker_exactly_once() {
+    // `blocking` marks a loader error terminal, but tinybus' release-cache path
+    // and `load_local` already say so; appending again doubled the sentence.
+    // The failure policy keys on both phrases, so each must stay, once.
+    let marker = crate::tools::status::MODULE_FAULT_MARKER;
+    for loader_error in [
+        "module 'tinydocs' could not be loaded: digest mismatch. This is terminal for the \
+         running process; restart the app to try again",
+        "module 'tinydocs' could not be loaded from the installer bundle: refused. Restart the \
+         app after repairing the installation",
+    ] {
+        let owned = loader_error.to_string();
+        let error = ops::blocking(move || Err(owned)).await.unwrap_err();
+        assert_eq!(error.matches(marker).count(), 1, "{error}");
+        assert_eq!(
+            error.matches("restart the app to try again").count(),
+            1,
+            "{error}"
+        );
+    }
+}
+
+/// The Sentry payload of TAURI-RUST-117K: a load refused at admission, with the
+/// terminal marker the loader adds.
+const REFUSED_LOAD: &str = "module 'tinyconnectors' could not be loaded from the installer \
+     bundle: module `windows-2022-x86_64` refused: module directory is writable by another \
+     user. Restart the app after repairing the installation. This is terminal for the running \
+     process; restart the app to try again";
+
+#[cfg(feature = "crash-reporting")]
+#[test]
+fn a_failed_resolution_is_reported_once_with_the_module_id() {
+    // The resolution runs once per process and caches its failure, so this
+    // report is the one Sentry event per broken install. Every later caller's
+    // re-report is demoted as `ModuleUnavailable`; this one must not be.
+    let events = sentry::test::with_captured_events(|| {
+        ops::report_resolution_failure("tinyconnectors", REFUSED_LOAD);
+    });
+    assert_eq!(events.len(), 1, "{events:?}");
+    let tags = &events[0].tags;
+    assert_eq!(tags.get("domain").map(String::as_str), Some("modules"));
+    assert_eq!(tags.get("operation").map(String::as_str), Some("resolve"));
+    assert_eq!(
+        tags.get("module").map(String::as_str),
+        Some("tinyconnectors")
+    );
+
+    // The same reason re-reported by a caller is demoted.
+    let repeats = sentry::test::with_captured_events(|| {
+        crate::core::observability::report_error_or_expected(
+            REFUSED_LOAD,
+            "composio",
+            "list_connections",
+            &[],
+        );
+    });
+    assert!(repeats.is_empty(), "{repeats:?}");
+}
+
+#[test]
+fn bundled_dir_prefers_registered_then_env_then_exe_sibling() {
+    let root = tempfile::tempdir().unwrap();
+    let registered = root.path().join("registered");
+    let from_env = root.path().join("env");
+    let exe_dir = root.path().join("bin");
+    std::fs::create_dir_all(&registered).unwrap();
+    std::fs::create_dir_all(&from_env).unwrap();
+    std::fs::create_dir_all(exe_dir.join("bundled-modules")).unwrap();
+
+    assert_eq!(
+        ops::resolve_bundled_dir(
+            Some(registered.clone()),
+            Some(from_env.clone()),
+            Some(exe_dir.clone())
+        ),
+        Some(registered)
+    );
+    assert_eq!(
+        ops::resolve_bundled_dir(None, Some(from_env.clone()), Some(exe_dir.clone())),
+        Some(from_env)
+    );
+    assert_eq!(
+        ops::resolve_bundled_dir(None, None, Some(exe_dir.clone())),
+        Some(exe_dir.join("bundled-modules"))
+    );
+}
+
+#[test]
+fn bundled_dir_ignores_paths_that_do_not_exist() {
+    let root = tempfile::tempdir().unwrap();
+    assert_eq!(
+        ops::resolve_bundled_dir(None, Some(root.path().join("missing")), None),
+        None
+    );
+    assert_eq!(
+        ops::resolve_bundled_dir(None, None, Some(root.path().into())),
+        None
+    );
+}
+
+#[test]
+fn bundled_dir_skips_a_missing_candidate_for_a_valid_later_one() {
+    let root = tempfile::tempdir().unwrap();
+    let exe_dir = root.path().join("bin");
+    std::fs::create_dir_all(exe_dir.join("bundled-modules")).unwrap();
+    assert_eq!(
+        ops::resolve_bundled_dir(
+            Some(root.path().join("stale")),
+            Some(root.path().join("typo")),
+            Some(exe_dir.clone())
+        ),
+        Some(exe_dir.join("bundled-modules"))
+    );
+}
+
+/// A module-bus startup failure is cached like any loader error, so it must
+/// carry the terminal marker the observability classifier demotes on.
+#[test]
+fn a_marked_bus_startup_failure_is_classified_as_module_unavailable() {
+    let marked = ops::mark_terminal("the module bus could not start: no runtime".to_string());
+    assert!(marked.ends_with("restart the app to try again"), "{marked}");
+    assert!(crate::core::observability::is_module_unavailable_message(
+        &marked
+    ));
+    // Idempotent: an already-marked error is not annotated twice.
+    assert_eq!(ops::mark_terminal(marked.clone()), marked);
 }

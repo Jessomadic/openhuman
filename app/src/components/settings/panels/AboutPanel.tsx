@@ -7,6 +7,7 @@
  * here would race with that component's own state machine.
  */
 import { invoke } from '@tauri-apps/api/core';
+import { ExternalLink, RefreshCw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { GitHubStarCard } from '../../../features/star/GitHubStarCard';
@@ -16,8 +17,7 @@ import { useAppSelector } from '../../../store/hooks';
 import { APP_VERSION, LATEST_APP_DOWNLOAD_URL } from '../../../utils/config';
 import { isTauriEnvironment } from '../../../utils/configPersistence';
 import { openUrl } from '../../../utils/openUrl';
-import Button from '../../ui/Button';
-import { SettingsRow, SettingsSection } from '../controls';
+import { Badge, Button, Card, Field } from '../../ui';
 import SettingsPanel from '../layout/SettingsPanel';
 import SystemDiagnostics from './SystemDiagnostics';
 
@@ -66,104 +66,110 @@ const AboutPanel = () => {
     if (result !== null) setLastCheckedAt(new Date());
   };
 
+  const updateAvailable = Boolean(info?.available && info.available_version);
+  const modeLabel =
+    coreMode.kind === 'local'
+      ? t('settings.about.connectionModeLocal')
+      : coreMode.kind === 'cloud'
+        ? t('settings.about.connectionModeCloud')
+        : t('settings.about.connectionModeUnset');
+
   return (
-    <SettingsPanel description={t('settings.aboutDesc')}>
-      {/* Version */}
-      <SettingsSection>
-        <div className="px-4 py-3">
-          <div className="text-xs text-content-muted">{t('settings.about.version')}</div>
-          <div className="mt-1 text-lg font-semibold text-content">v{APP_VERSION}</div>
-          {info?.available && info.available_version && (
-            <div className="mt-1 text-xs text-primary-500">
-              v{info.available_version} {t('settings.about.updateAvailable')}
+    <SettingsPanel testId="about-panel" description={t('settings.aboutDesc')}>
+      {/* ── The app: name, version, update status ───────────────────────── */}
+      <Card padded data-testid="about-version">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+          <img src="/logo.png" alt="" className="h-14 w-14 shrink-0 rounded-2xl" />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-title text-lg font-semibold text-content">OpenHuman</span>
+              <Badge variant="neutral" data-testid="about-version-badge">
+                v{APP_VERSION}
+              </Badge>
+              {updateAvailable && (
+                <Badge variant="primary">
+                  v{info?.available_version} {t('settings.about.updateAvailable')}
+                </Badge>
+              )}
             </div>
-          )}
-        </div>
-      </SettingsSection>
-
-      {/* Software updates */}
-      <SettingsSection>
-        <SettingsRow
-          label={t('settings.about.softwareUpdates')}
-          description={summary}
-          control={
-            <Button
-              type="button"
-              variant="primary"
-              size="xs"
-              onClick={handleCheck}
-              disabled={isChecking}>
-              {isChecking ? t('settings.about.checking') : t('settings.about.checkForUpdates')}
-            </Button>
-          }
-        />
-        {lastCheckedAt && (
-          <div className="px-4 py-3 text-[11px] text-content-faint">
-            {t('settings.about.lastChecked')} {formatRelative(lastCheckedAt, t)}
+            <p className="mt-1 text-xs text-content-muted">
+              {summary}
+              {lastCheckedAt && (
+                <span className="text-content-faint">
+                  {' · '}
+                  {t('settings.about.lastChecked')} {formatRelative(lastCheckedAt, t)}
+                </span>
+              )}
+            </p>
           </div>
-        )}
-      </SettingsSection>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            leadingIcon={
+              <RefreshCw
+                className={`h-3.5 w-3.5 ${isChecking ? 'animate-spin' : ''}`}
+                aria-hidden
+              />
+            }
+            onClick={handleCheck}
+            disabled={isChecking}
+            data-testid="about-check-updates"
+            className="shrink-0">
+            {isChecking ? t('settings.about.checking') : t('settings.about.checkForUpdates')}
+          </Button>
+        </div>
+      </Card>
 
-      {/* Connection */}
-      <SettingsSection title={t('settings.about.connection')}>
-        <SettingsRow
+      {/* ── Where the UI talks to the core ─────────────────────────────── */}
+      <Card
+        title={t('settings.about.connection')}
+        description={
+          coreMode.kind === 'cloud'
+            ? t('settings.about.connectionHelperCloud')
+            : t('settings.about.connectionHelperLocal')
+        }>
+        <Field
           label={t('settings.about.connectionMode')}
-          control={
-            <span className="text-xs font-medium text-content">
-              {coreMode.kind === 'local'
-                ? t('settings.about.connectionModeLocal')
-                : coreMode.kind === 'cloud'
-                  ? t('settings.about.connectionModeCloud')
-                  : t('settings.about.connectionModeUnset')}
-            </span>
-          }
+          control={<Badge variant="neutral">{modeLabel}</Badge>}
         />
-        <SettingsRow
+        <Field
           label={t('settings.about.serverUrl')}
           control={
             <span
-              className="text-xs font-mono text-content truncate max-w-[200px]"
+              className="block max-w-[260px] truncate font-mono text-xs text-content"
               title={rpcUrl ?? undefined}>
               {rpcUrl ?? t('settings.about.serverUrlUnavailable')}
             </span>
           }
         />
-        <div className="px-4 py-3">
-          <p className="text-[11px] text-content-muted leading-relaxed">
-            {coreMode.kind === 'cloud'
-              ? t('settings.about.connectionHelperCloud')
-              : t('settings.about.connectionHelperLocal')}
-          </p>
-        </div>
-      </SettingsSection>
+      </Card>
 
-      {/* Releases */}
-      <SettingsSection>
-        <div className="px-4 py-3 space-y-2">
-          <div className="text-sm font-medium text-content">{t('settings.about.releases')}</div>
-          <p className="text-xs text-content-muted leading-relaxed">
-            {t('settings.about.releasesDesc')}
-          </p>
-          <Button
-            type="button"
-            variant="secondary"
-            size="xs"
-            onClick={() => {
-              void openUrl(LATEST_APP_DOWNLOAD_URL);
-            }}>
-            {t('settings.about.openReleases')}
-          </Button>
-        </div>
-      </SettingsSection>
-
-      {/* Star us on GitHub — a subtle, dismissible CTA (#5005). The card owns
-          its own surface styling and renders nothing once the user stars or
-          dismisses it (durable, per-user), so it is not wrapped in a
-          SettingsSection that would leave a hollow box behind. */}
-      <GitHubStarCard />
+      {/* ── Links out ──────────────────────────────────────────────────── */}
+      <Card title={t('settings.about.resources')}>
+        <Field
+          label={t('settings.about.releases')}
+          description={t('settings.about.releasesDesc')}
+          control={
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              trailingIcon={<ExternalLink className="h-3.5 w-3.5" aria-hidden />}
+              onClick={() => {
+                void openUrl(LATEST_APP_DOWNLOAD_URL);
+              }}>
+              {t('settings.about.openReleases')}
+            </Button>
+          }
+        />
+        {/* Star us on GitHub (#5005): a row, not a banner. Renders nothing once
+            the user stars or dismisses it (durable, per-user). */}
+        <GitHubStarCard />
+      </Card>
 
       {/* Diagnostics (app logs, restart tour, staging Sentry test) —
-            relocated here from the retired Developer & Diagnostics page. */}
+          relocated here from the retired Developer & Diagnostics page. */}
       <SystemDiagnostics />
     </SettingsPanel>
   );

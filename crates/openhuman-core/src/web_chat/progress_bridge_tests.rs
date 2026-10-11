@@ -2,12 +2,17 @@ use super::interim_narration_text;
 use super::session_profile_user_attribution;
 
 #[test]
-fn interim_narration_skips_empty_and_trivial() {
+fn interim_narration_skips_only_empty_text() {
     assert_eq!(interim_narration_text(""), None);
     assert_eq!(interim_narration_text("   \n  "), None);
-    // Below the min length → left as transient streaming text.
-    assert_eq!(interim_narration_text("Ok."), None);
-    assert_eq!(interim_narration_text("Sure, one sec"), None);
+    // Short narration still flushes: `chat_interim` is what resets the live
+    // preview between rounds, so an unflushed "Ok." used to be glued onto the
+    // next round's text.
+    assert_eq!(interim_narration_text("Ok."), Some("Ok.".to_string()));
+    assert_eq!(
+        interim_narration_text(" Let me check. "),
+        Some("Let me check.".to_string())
+    );
 }
 
 #[test]
@@ -121,6 +126,9 @@ async fn tool_call_completed_forwards_real_output_on_tool_result() {
         elapsed_ms: 42,
         iteration: 1,
         failure: None,
+        display_label: None,
+        display_detail: None,
+        structured: None,
     })
     .await
     .expect("send progress");
@@ -267,9 +275,7 @@ async fn stops_heartbeat_after_turn_completed() {
     }
 
     // Complete the turn, then drop the sender so the bridge loop breaks.
-    tx.send(AgentProgress::TurnCompleted { iterations: 1 })
-        .await
-        .unwrap();
+    tx.send(AgentProgress::turn_completed(1)).await.unwrap();
     drop(tx);
 
     // Let the bridge process TurnCompleted + observe the closed channel.
@@ -362,6 +368,9 @@ async fn stamps_monotonic_seq_on_emitted_events() {
         elapsed_ms: 5,
         iteration: 1,
         failure: None,
+        display_label: None,
+        display_detail: None,
+        structured: None,
     })
     .await
     .unwrap();
@@ -380,4 +389,354 @@ async fn stamps_monotonic_seq_on_emitted_events() {
     );
 
     drop(tx);
+}
+
+// ── Terminal-event ordering: the bridge drains before chat_done ─────────────
+
+fn drain_test_config(tmp: &tempfile::TempDir) -> Config {
+    Config {
+        workspace_dir: tmp.path().join("workspace"),
+        action_dir: tmp.path().join("workspace"),
+        config_path: tmp.path().join("config.toml"),
+        ..Default::default()
+    }
+}
+
+/// `wait_drained` returns only once the bridge has forwarded every event the
+/// parent queued before `TurnCompleted` — the caller publishes `chat_done`
+/// right after it, so a tool result must never still be in flight.
+#[tokio::test]
+async fn wait_drained_returns_after_queued_events_are_forwarded() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let store = TurnStateStore::new(tmp.path().join("turn_states"));
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    let mut bus = super::super::event_bus::subscribe_web_channel_events();
+    let handle = spawn_progress_bridge(
+        rx,
+        "client-drain".into(),
+        "thread-drain".into(),
+        "req-drain".into(),
+        store,
+        ChatRequestMetadata::default(),
+        drain_test_config(&tmp),
+    );
+
+    tx.send(AgentProgress::ToolCallCompleted {
+        call_id: "call-last".into(),
+        tool_name: "web_search".into(),
+        success: true,
+        output_chars: 2,
+        output: "ok".into(),
+        arguments: None,
+        elapsed_ms: 1,
+        iteration: 1,
+        failure: None,
+        display_label: None,
+        display_detail: None,
+        structured: None,
+    })
+    .await
+    .unwrap();
+    tx.send(AgentProgress::turn_completed(1)).await.unwrap();
+
+    // The sender stays alive (as a detached sub-agent's clone would), so the
+    // drain must come from `TurnCompleted`, not from the channel closing.
+    assert!(handle.wait_drained(Duration::from_secs(5)).await);
+
+    let mut saw_result = false;
+    loop {
+        match bus.try_recv() {
+            Ok(ev) if ev.thread_id == "thread-drain" && ev.event == "tool_result" => {
+                saw_result = true;
+            }
+            Ok(_) | Err(TryRecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
+    assert!(
+        saw_result,
+        "the queued tool_result was published before the drain released"
+    );
+    drop(tx);
+}
+
+/// Without `TurnCompleted` (a failed turn) and with a sender still held, the
+/// wait is bounded and reports that it timed out.
+#[tokio::test]
+async fn wait_drained_is_bounded_when_the_turn_never_completes() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let store = TurnStateStore::new(tmp.path().join("turn_states"));
+    let (tx, rx) = tokio::sync::mpsc::channel::<AgentProgress>(16);
+    let handle = spawn_progress_bridge(
+        rx,
+        "client-drain-timeout".into(),
+        "thread-drain-timeout".into(),
+        "req-drain-timeout".into(),
+        store,
+        ChatRequestMetadata::default(),
+        drain_test_config(&tmp),
+    );
+    assert!(!handle.wait_drained(Duration::from_millis(50)).await);
+    // Closing the channel ends the bridge, which counts as drained.
+    drop(tx);
+    assert!(handle.wait_drained(Duration::from_secs(5)).await);
+}
+
+/// A short narration ("Let me check.") is flushed as `chat_interim` when the
+/// round's first tool call starts, so the frontend resets its live preview
+/// before the next round streams.
+#[tokio::test]
+async fn short_narration_is_flushed_on_the_rounds_first_tool_call() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let store = TurnStateStore::new(tmp.path().join("turn_states"));
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    let mut bus = super::super::event_bus::subscribe_web_channel_events();
+    let _handle = spawn_progress_bridge(
+        rx,
+        "client-short".into(),
+        "thread-short-narration".into(),
+        "req-short".into(),
+        store,
+        ChatRequestMetadata::default(),
+        drain_test_config(&tmp),
+    );
+    tx.send(AgentProgress::TextDelta {
+        delta: "Let me check.".into(),
+        iteration: 1,
+    })
+    .await
+    .unwrap();
+    tx.send(AgentProgress::ToolCallStarted {
+        call_id: "call-1".into(),
+        tool_name: "web_search".into(),
+        arguments: serde_json::json!({}),
+        iteration: 1,
+        display_label: None,
+        display_detail: None,
+    })
+    .await
+    .unwrap();
+
+    let interim = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let ev = recv_for_thread(&mut bus, "thread-short-narration").await;
+            if ev.event == "chat_interim" {
+                return ev;
+            }
+        }
+    })
+    .await
+    .expect("chat_interim within timeout");
+    assert_eq!(interim.full_response.as_deref(), Some("Let me check."));
+    assert_eq!(interim.round, Some(1));
+}
+
+// ── C1: parent_call_id / capped output forwarding ────────────────────────
+
+#[test]
+fn cap_wire_args_passes_through_small_payloads() {
+    let args = serde_json::json!({"query": "hello"});
+    assert_eq!(cap_wire_args(Some(args.clone())), Some(args));
+}
+
+#[test]
+fn cap_wire_args_drops_null() {
+    assert_eq!(cap_wire_args(Some(serde_json::Value::Null)), None);
+    assert_eq!(cap_wire_args(None), None);
+}
+
+#[test]
+fn cap_wire_args_truncates_oversized_payload_to_a_marker_string() {
+    let big = serde_json::json!({ "body": "x".repeat(MAX_WIRE_SUBAGENT_OUTPUT) });
+    let capped = cap_wire_args(Some(big)).expect("oversized args still forwarded");
+    let rendered = capped.as_str().expect("degrades to a string, not JSON");
+    assert!(rendered.len() <= MAX_WIRE_SUBAGENT_OUTPUT);
+    assert!(rendered.contains("truncated"));
+}
+
+/// `SubagentSpawned.parent_call_id` must reach the wire (`subagent.parent_call_id`
+/// on `subagent_spawned`) so the frontend can key the delegation row to the
+/// spawning tool call (#C1).
+#[tokio::test]
+async fn subagent_spawned_forwards_parent_call_id() {
+    let mut events = super::super::event_bus::subscribe_web_channel_events();
+    let thread_id = "thread-c1-spawned";
+    let tx = spawn_test_bridge(thread_id, "req-c1-spawned");
+
+    tx.send(AgentProgress::SubagentSpawned {
+        agent_id: "researcher".into(),
+        task_id: "sub-c1".into(),
+        mode: "typed".into(),
+        dedicated_thread: false,
+        prompt_chars: 4,
+        prompt: "help".into(),
+        worker_thread_id: None,
+        display_name: None,
+        parent_call_id: Some("call-parent-1".into()),
+    })
+    .await
+    .unwrap();
+
+    let ev = recv_for_thread(&mut events, thread_id).await;
+    assert_eq!(ev.event, "subagent_spawned");
+    let subagent = ev.subagent.expect("subagent detail present");
+    assert_eq!(subagent.parent_call_id.as_deref(), Some("call-parent-1"));
+}
+
+/// Terminal sub-agent events (`_completed`/`_failed`/`_awaiting_user`) must
+/// keep carrying the same `parent_call_id` the spawn recorded, even though
+/// those `AgentProgress` variants don't repeat it — the bridge remembers it
+/// per `task_id` (#C1).
+#[tokio::test]
+async fn subagent_completed_carries_parent_call_id_and_capped_output() {
+    let mut events = super::super::event_bus::subscribe_web_channel_events();
+    let thread_id = "thread-c1-completed";
+    let tx = spawn_test_bridge(thread_id, "req-c1-completed");
+
+    tx.send(AgentProgress::SubagentSpawned {
+        agent_id: "researcher".into(),
+        task_id: "sub-c1-done".into(),
+        mode: "typed".into(),
+        dedicated_thread: false,
+        prompt_chars: 4,
+        prompt: "help".into(),
+        worker_thread_id: None,
+        display_name: None,
+        parent_call_id: Some("call-parent-2".into()),
+    })
+    .await
+    .unwrap();
+    let spawned = recv_for_thread(&mut events, thread_id).await;
+    assert_eq!(spawned.event, "subagent_spawned");
+
+    tx.send(AgentProgress::SubagentCompleted {
+        agent_id: "researcher".into(),
+        task_id: "sub-c1-done".into(),
+        elapsed_ms: 10,
+        iterations: 1,
+        output_chars: 5,
+        usage: None,
+        output: "final answer".into(),
+        worktree_path: None,
+        changed_files: Vec::new(),
+        dirty_status: None,
+        stop: None,
+    })
+    .await
+    .unwrap();
+
+    let completed = recv_for_thread(&mut events, thread_id).await;
+    assert_eq!(completed.event, "subagent_completed");
+    let subagent = completed.subagent.expect("subagent detail present");
+    assert_eq!(subagent.parent_call_id.as_deref(), Some("call-parent-2"));
+    assert_eq!(subagent.output.as_deref(), Some("final answer"));
+}
+
+#[tokio::test]
+async fn subagent_failed_carries_parent_call_id() {
+    let mut events = super::super::event_bus::subscribe_web_channel_events();
+    let thread_id = "thread-c1-failed";
+    let tx = spawn_test_bridge(thread_id, "req-c1-failed");
+
+    tx.send(AgentProgress::SubagentSpawned {
+        agent_id: "researcher".into(),
+        task_id: "sub-c1-failed".into(),
+        mode: "typed".into(),
+        dedicated_thread: false,
+        prompt_chars: 4,
+        prompt: "help".into(),
+        worker_thread_id: None,
+        display_name: None,
+        parent_call_id: Some("call-parent-3".into()),
+    })
+    .await
+    .unwrap();
+    let spawned = recv_for_thread(&mut events, thread_id).await;
+    assert_eq!(spawned.event, "subagent_spawned");
+
+    tx.send(AgentProgress::SubagentFailed {
+        agent_id: "researcher".into(),
+        task_id: "sub-c1-failed".into(),
+        error: "boom".into(),
+    })
+    .await
+    .unwrap();
+
+    let failed = recv_for_thread(&mut events, thread_id).await;
+    assert_eq!(failed.event, "subagent_failed");
+    let subagent = failed.subagent.expect("subagent detail present");
+    assert_eq!(subagent.parent_call_id.as_deref(), Some("call-parent-3"));
+}
+
+/// A held turn (TinyMemes treatment arm) must not stream the answer text, but
+/// narration before a tool call still surfaces as an interim bubble.
+#[tokio::test]
+async fn hold_text_stream_suppresses_text_delta_but_keeps_interim() {
+    use crate::agent::progress::AgentProgress;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config = crate::config::Config {
+        workspace_dir: tmp.path().join("workspace"),
+        action_dir: tmp.path().join("workspace"),
+        config_path: tmp.path().join("config.toml"),
+        ..Default::default()
+    };
+    let store = TurnStateStore::new(tmp.path().join("turn_states"));
+    let (tx, rx) = tokio::sync::mpsc::channel(16);
+    let mut bus = super::super::event_bus::subscribe_web_channel_events();
+    spawn_progress_bridge(
+        rx,
+        "client-hold".into(),
+        "thread-hold".into(),
+        "req-hold".into(),
+        store,
+        ChatRequestMetadata {
+            hold_text_stream: true,
+            ..Default::default()
+        },
+        config,
+    );
+
+    tx.send(AgentProgress::TextDelta {
+        delta: "Let me check the release notes for you first.".into(),
+        iteration: 1,
+    })
+    .await
+    .unwrap();
+    tx.send(AgentProgress::ToolCallStarted {
+        call_id: "tc-hold".into(),
+        tool_name: "web_search".into(),
+        arguments: serde_json::json!({}),
+        iteration: 1,
+        display_label: None,
+        display_detail: None,
+    })
+    .await
+    .unwrap();
+
+    let events = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut seen = Vec::new();
+        loop {
+            match bus.recv().await {
+                Ok(ev) if ev.thread_id == "thread-hold" => {
+                    let done = ev.event == "chat_interim";
+                    seen.push((ev.event.clone(), ev.full_response.clone()));
+                    if done {
+                        return seen;
+                    }
+                }
+                Ok(_) => continue,
+                Err(err) => panic!("bus closed: {err}"),
+            }
+        }
+    })
+    .await
+    .expect("chat_interim within timeout");
+
+    assert!(!events.iter().any(|(e, _)| e == "text_delta"), "{events:?}");
+    // The interim bubble carries the held narration itself.
+    let interim = events.iter().find(|(e, _)| e == "chat_interim").unwrap();
+    assert_eq!(
+        interim.1.as_deref(),
+        Some("Let me check the release notes for you first.")
+    );
 }

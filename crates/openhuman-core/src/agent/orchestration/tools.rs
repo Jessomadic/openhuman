@@ -8,7 +8,7 @@
 //! - **Control**: `steer_subagent`, `continue_subagent`, `close_subagent`,
 //!   `wait_subagent`, `wait` / `wait_loop`, `list_subagents`.
 //! - **Delegation**: `DelegateGraphTool`, `ArchetypeDelegationTool`,
-//!   `CollapsedDelegationTool` (`delegate_to`), and `agent_prepare_context`.
+//!   and `CollapsedDelegationTool` (`delegate_to`).
 //!
 //! `dispatch.rs`, `awaiting_user.rs`, and `worker_thread.rs` are `pub(crate)`
 //! helpers shared by the tools above (the common spawn path, the awaiting-user
@@ -20,8 +20,6 @@
 //! `agent::subagent_host::run_subagent`; this module only owns the tool-call
 //! surface (schema, argument parsing, response formatting).
 
-#[path = "tools/agent_prepare_context.rs"]
-mod agent_prepare_context;
 #[path = "tools/archetype_delegation.rs"]
 mod archetype_delegation;
 #[path = "tools/awaiting_user.rs"]
@@ -48,11 +46,11 @@ mod spawn_subagent;
 pub mod spawn_worker_thread;
 #[path = "tools/steer_subagent.rs"]
 mod steer_subagent;
+#[path = "tools/subagent_abort_report.rs"]
+mod subagent_abort_report;
 #[cfg(test)]
 #[path = "tools/tools_e2e_tests.rs"]
 mod tools_e2e_tests;
-#[path = "tools/wait.rs"]
-mod wait;
 #[path = "tools/wait_subagent.rs"]
 mod wait_subagent;
 #[path = "tools/worker_thread.rs"]
@@ -77,10 +75,6 @@ pub(crate) fn ambient_parent_run_context(
     })
 }
 
-pub(crate) use agent_prepare_context::AgentPrepareContextDispatch;
-pub use agent_prepare_context::{
-    run_context_scout, run_context_scout_with_catalog, AgentPrepareContextTool,
-};
 pub use archetype_delegation::{ArchetypeDelegationTool, DelegationTarget};
 pub(crate) use close_subagent::CloseSubagentDispatch;
 pub use close_subagent::CloseSubagentTool;
@@ -101,6 +95,5 @@ pub(crate) use spawn_worker_thread::SpawnWorkerThreadDispatch;
 pub use spawn_worker_thread::SpawnWorkerThreadTool;
 pub(crate) use steer_subagent::SteerSubagentDispatch;
 pub use steer_subagent::SteerSubagentTool;
-pub use wait::{WaitLoopTool, WaitTool};
 pub(crate) use wait_subagent::WaitSubagentDispatch;
 pub use wait_subagent::WaitSubagentTool;

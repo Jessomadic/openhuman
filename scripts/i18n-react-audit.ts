@@ -1,49 +1,90 @@
 #!/usr/bin/env -S pnpm exec tsx
 
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const __filename = fileURLToPath(import.meta.url);
-const ROOT = path.resolve(path.dirname(__filename), '..');
-const APP_SRC = path.join(ROOT, 'app/src');
-const ATTRIBUTE_NAMES = new Set(['aria-label', 'placeholder', 'title', 'alt', 'label']);
-const IGNORED_FILE_SUFFIXES = ['.test.tsx', '.test.ts', '.stories.tsx'];
-const IGNORED_ANCESTOR_TAGS = new Set(['code', 'pre', 'kbd']);
+const ROOT = path.resolve(path.dirname(__filename), "..");
+const APP_SRC = path.join(ROOT, "app/src");
+const ATTRIBUTE_NAMES = new Set([
+  "aria-label",
+  "placeholder",
+  "title",
+  "alt",
+  "label",
+]);
+const IGNORED_FILE_SUFFIXES = [".test.tsx", ".test.ts", ".stories.tsx"];
+const IGNORED_ANCESTOR_TAGS = new Set(["code", "pre", "kbd"]);
 const IGNORED_TEXT = new Set([
-  '·',
-  '…',
-  'Tab',
-  'LLM',
-  'MCP',
-  'QR',
-  'URL',
-  'API',
-  'OpenHuman',
-  'Gmail',
-  'Discord',
-  'Telegram',
-  'iPhone',
+  "·",
+  "…",
+  "Tab",
+  "LLM",
+  "MCP",
+  "QR",
+  "URL",
+  "API",
+  "OpenHuman",
+  "Gmail",
+  "Discord",
+  "Telegram",
+  "iPhone",
+  // McpServerForm.tsx placeholders — example server config values, not prose.
+  "github", // example MCP server name
+  "-y @modelcontextprotocol/server-github", // example CLI args
+  "https://mcp.example.com/mcp", // example MCP server URL
+  "http://localhost:8080", // example local search endpoint URL
+  "X-API-Key", // example HTTP header name
+  // flows/canvas/nodeConfig/* placeholders — flow-engine expression/code/field-name
+  // examples, not prose (the product's `=`-expression syntax, field names, or code).
+  "=item.id", // flow-engine expression example
+  "=item.needs_another_pass", // flow-engine expression example
+  "=item.title", // flow-engine expression example
+  "=item", // flow-engine expression example
+  "web_search", // native tool slug example
+  "https://api.example.com/v1/resource", // example HTTP URL
+  "status", // example field name
+  "type", // example field name
+  "return items;", // example code snippet
+  // EmbeddingsSetupModal.tsx placeholders — example custom-endpoint config
+  // values (a URL and a model-name example), not prose.
+  "https://your-endpoint.com/v1", // example custom embeddings endpoint URL
+  "text-embedding-3-small", // example embeddings model name
+  // ThemeStudioPanel.tsx placeholders — non-linguistic examples (an image URL
+  // and a JSON shape) shown as field placeholders, not prose.
+  "https://…/background.jpg", // example background image URL
+  '{ "name": "...", "isDark": false, "colors": { ... } }', // example theme JSON shape
+  // VoicePanelRoutingSection.tsx placeholder — an opaque ElevenLabs voice-ID
+  // example, not English text.
+  "JBFqnCBsd6RMkjVDRZzb", // example ElevenLabs voice ID
+  // NumberField.tsx range separator — a decorative en-dash entity between
+  // {min} and {max}, not translatable content.
+  "&#x2013;", // en-dash range separator
+  // AppearancePanel.tsx font-size preview swatch — an aria-hidden visual
+  // specimen glyph (not read by screen readers), meant to render identically
+  // in every locale, not a translated word.
+  "Aa", // font-size preview glyph
 ]);
 const IGNORED_SHORT_TOKENS = new Set([
-  'v',
-  'x',
-  'ms',
-  'min',
-  'tok',
-  'at',
-  'of',
-  'or',
-  'and',
-  'to',
-  'identit',
+  "v",
+  "x",
+  "ms",
+  "min",
+  "tok",
+  "at",
+  "of",
+  "or",
+  "and",
+  "to",
+  "identit",
 ]);
 
 interface Finding {
   file: string;
   line: number;
-  kind: 'jsx-text' | 'jsx-attr';
+  kind: "jsx-text" | "jsx-attr";
   preview: string;
 }
 
@@ -51,15 +92,18 @@ async function walk(dir: string, out: string[]): Promise<void> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
-    if (fullPath.includes('__tests__') || fullPath.includes('/lib/i18n/')) continue;
+    if (fullPath.includes("__tests__") || fullPath.includes("/lib/i18n/"))
+      continue;
+    // Dev-only galleries/demos are not shipped; exclude them from the audit.
+    if (fullPath.includes("/pages/dev/")) continue;
     if (entry.isDirectory()) {
       await walk(fullPath, out);
       continue;
     }
     if (
       entry.isFile() &&
-      fullPath.endsWith('.tsx') &&
-      !IGNORED_FILE_SUFFIXES.some(suffix => fullPath.endsWith(suffix))
+      fullPath.endsWith(".tsx") &&
+      !IGNORED_FILE_SUFFIXES.some((suffix) => fullPath.endsWith(suffix))
     ) {
       out.push(fullPath);
     }
@@ -67,7 +111,7 @@ async function walk(dir: string, out: string[]): Promise<void> {
 }
 
 function normalize(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function shouldReportText(raw: string): boolean {
@@ -76,17 +120,23 @@ function shouldReportText(raw: string): boolean {
   if (IGNORED_TEXT.has(value)) return false;
   if (/^&[a-z]+;$/i.test(value)) return false;
   if (/^&(?:nbsp|middot);/i.test(value)) return false;
-  if (value.startsWith('·') || value.startsWith('•')) return false;
+  if (value.startsWith("·") || value.startsWith("•")) return false;
   if (IGNORED_SHORT_TOKENS.has(value.toLowerCase())) return false;
   if (!/[A-Za-z]/.test(value)) return false;
   if (/^\d+\s*(GB|MB|KB)$/i.test(value)) return false;
   if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(value)) return false;
   if (/^[A-Za-z0-9_.:/-]+\(\)$/.test(value)) return false;
   if (/^[A-Za-z0-9_.:/-]+\.\.\.$/.test(value)) return false;
-  if (/^[A-Za-z0-9_.:/-]+\s*[•·]\s*[A-Za-z0-9_.:/-]+$/.test(value)) return false;
+  if (/^[A-Za-z0-9_.:/-]+\s*[•·]\s*[A-Za-z0-9_.:/-]+$/.test(value))
+    return false;
   if (/^[A-Z0-9_./:-]+$/.test(value)) return false;
-  if (/^[A-Za-z0-9_./:-]+$/.test(value) && !/[A-Z]/.test(value) && value.length <= 3) return false;
-  if (value === 'at (' || value === 'of $') return false;
+  if (
+    /^[A-Za-z0-9_./:-]+$/.test(value) &&
+    !/[A-Z]/.test(value) &&
+    value.length <= 3
+  )
+    return false;
+  if (value === "at (" || value === "of $") return false;
   if (/<[A-Za-z]/.test(value)) return false;
   return true;
 }
@@ -119,7 +169,7 @@ function isInsideTranslateCall(node: ts.Node): boolean {
     if (
       ts.isCallExpression(current) &&
       ts.isIdentifier(current.expression) &&
-      current.expression.text === 't'
+      current.expression.text === "t"
     ) {
       return true;
     }
@@ -128,8 +178,16 @@ function isInsideTranslateCall(node: ts.Node): boolean {
   return false;
 }
 
-function record(findings: Finding[], sourceFile: ts.SourceFile, node: ts.Node, kind: Finding['kind'], preview: string) {
-  const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+function record(
+  findings: Finding[],
+  sourceFile: ts.SourceFile,
+  node: ts.Node,
+  kind: Finding["kind"],
+  preview: string,
+) {
+  const { line } = sourceFile.getLineAndCharacterOfPosition(
+    node.getStart(sourceFile),
+  );
   findings.push({
     file: sourceFile.fileName,
     line: line + 1,
@@ -138,22 +196,36 @@ function record(findings: Finding[], sourceFile: ts.SourceFile, node: ts.Node, k
   });
 }
 
-function visit(sourceFile: ts.SourceFile, findings: Finding[], node: ts.Node): void {
+function visit(
+  sourceFile: ts.SourceFile,
+  findings: Finding[],
+  node: ts.Node,
+): void {
   if (
     ts.isJsxText(node) &&
     !hasIgnoredAncestorTag(node) &&
     shouldReportText(node.getText(sourceFile))
   ) {
-    record(findings, sourceFile, node, 'jsx-text', node.getText(sourceFile));
+    record(findings, sourceFile, node, "jsx-text", node.getText(sourceFile));
   }
 
   if (ts.isJsxAttribute(node) && ATTRIBUTE_NAMES.has(node.name.text)) {
     if (hasIgnoredAncestorTag(node)) {
-      ts.forEachChild(node, child => visit(sourceFile, findings, child));
+      ts.forEachChild(node, (child) => visit(sourceFile, findings, child));
       return;
     }
-    if (node.initializer && ts.isStringLiteral(node.initializer) && shouldReportText(node.initializer.text)) {
-      record(findings, sourceFile, node.initializer, 'jsx-attr', `${node.name.text}="${node.initializer.text}"`);
+    if (
+      node.initializer &&
+      ts.isStringLiteral(node.initializer) &&
+      shouldReportText(node.initializer.text)
+    ) {
+      record(
+        findings,
+        sourceFile,
+        node.initializer,
+        "jsx-attr",
+        `${node.name.text}="${node.initializer.text}"`,
+      );
     }
 
     if (
@@ -168,13 +240,13 @@ function visit(sourceFile: ts.SourceFile, findings: Finding[], node: ts.Node): v
         findings,
         sourceFile,
         node.initializer.expression,
-        'jsx-attr',
-        `${node.name.text}="${node.initializer.expression.text}"`
+        "jsx-attr",
+        `${node.name.text}="${node.initializer.expression.text}"`,
       );
     }
   }
 
-  ts.forEachChild(node, child => visit(sourceFile, findings, child));
+  ts.forEachChild(node, (child) => visit(sourceFile, findings, child));
 }
 
 async function main(): Promise<void> {
@@ -183,26 +255,34 @@ async function main(): Promise<void> {
   const findings: Finding[] = [];
 
   for (const file of files) {
-    const source = await fs.readFile(file, 'utf8');
-    const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const source = await fs.readFile(file, "utf8");
+    const sourceFile = ts.createSourceFile(
+      file,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    );
     visit(sourceFile, findings, sourceFile);
   }
 
   findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
 
   if (findings.length === 0) {
-    console.log('No non-i18nized React UI strings found.');
+    console.log("No non-i18nized React UI strings found.");
     return;
   }
 
   for (const finding of findings) {
-    console.log(`${path.relative(ROOT, finding.file)}:${finding.line} [${finding.kind}] ${finding.preview}`);
+    console.log(
+      `${path.relative(ROOT, finding.file)}:${finding.line} [${finding.kind}] ${finding.preview}`,
+    );
   }
 
   process.exitCode = 1;
 }
 
-void main().catch(error => {
+void main().catch((error) => {
   console.error(error);
   process.exit(1);
 });

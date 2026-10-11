@@ -7,7 +7,6 @@ import { useId } from 'react';
 
 import { useT } from '../../lib/i18n/I18nContext';
 import type { ChannelDefinition, ChannelType } from '../../types/channels';
-import Badge from '../ui/Badge';
 import { ModalShell } from '../ui/ModalShell';
 import ChannelConnectHelp from './ChannelConnectHelp';
 import { renderChannelIcon } from './channelIcon';
@@ -61,7 +60,6 @@ function ChannelConfigContent({ definition }: { definition: ChannelDefinition })
 }
 
 export default function ChannelSetupModal({ definition, onClose }: ChannelSetupModalProps) {
-  const { t } = useT();
   const titleId = useId();
 
   return (
@@ -71,12 +69,7 @@ export default function ChannelSetupModal({ definition, onClose }: ChannelSetupM
       icon={renderChannelIcon(definition.icon)}
       maxWidthClassName="max-w-[500px]"
       contentClassName="max-h-[70vh] overflow-y-auto px-5 py-4"
-      title={
-        <span className="flex items-center gap-2">
-          {definition.display_name}
-          <Badge variant="primary">{t('channels.channel')}</Badge>
-        </span>
-      }
+      title={definition.display_name}
       subtitle={definition.description}>
       <ChannelConfigContent definition={definition} />
     </ModalShell>

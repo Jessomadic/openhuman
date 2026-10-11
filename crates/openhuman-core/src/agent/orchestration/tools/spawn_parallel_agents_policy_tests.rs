@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn metadata_methods_expose_execute_permission_and_schema() {
-    let tool = SpawnParallelAgentsTool::default();
+    let tool = SpawnParallelAgentsTool;
     assert_eq!(tool.name(), "spawn_parallel_agents");
     assert!(tool.description().contains("independent sub-agent tasks"));
     assert_eq!(tool.permission_level(), PermissionLevel::Execute);
@@ -21,7 +21,7 @@ fn ownership_boundary_is_prepended_when_present() {
 
 #[test]
 fn schema_advertises_isolation_and_base_ref() {
-    let tool = SpawnParallelAgentsTool::default();
+    let tool = SpawnParallelAgentsTool;
     let schema = tool.parameters_schema();
     let props = &schema["properties"]["tasks"]["items"]["properties"];
     assert_eq!(props["isolation"]["enum"][0], "none");
@@ -194,8 +194,7 @@ async fn collects_immediate_task_validation_failures() {
         tool.execute(json!({
             "tasks": [
                 { "agent_id": " ", "prompt": "missing agent", "ownership": "files: none" },
-                { "agent_id": "__missing_agent__", "prompt": "unknown agent" },
-                { "agent_id": "integrations_agent", "prompt": "needs toolkit" }
+                { "agent_id": "__missing_agent__", "prompt": "unknown agent" }
             ]
         }))
         .await
@@ -205,8 +204,8 @@ async fn collects_immediate_task_validation_failures() {
 
     assert!(!result.is_error, "{}", result.output());
     let body: serde_json::Value = serde_json::from_str(&result.output()).expect("json output");
-    assert_eq!(body["parallel_agents"]["total"], 3);
-    assert_eq!(body["parallel_agents"]["failed"], 3);
+    assert_eq!(body["parallel_agents"]["total"], 2);
+    assert_eq!(body["parallel_agents"]["failed"], 2);
     let errors = body["parallel_agents"]["results"]
         .as_array()
         .expect("results")
@@ -219,9 +218,6 @@ async fn collects_immediate_task_validation_failures() {
     assert!(errors
         .iter()
         .any(|error| error.contains("unknown agent_id")));
-    assert!(errors
-        .iter()
-        .any(|error| error.contains("requires toolkit")));
 }
 
 #[test]
@@ -245,7 +241,6 @@ fn shared_workspace_rejects_write_capable_named_worker_without_worktree() {
             agent_id: "researcher".into(),
             prompt: "edit a file".into(),
             context: None,
-            toolkit: None,
             ownership: None,
             isolation: None,
             base_ref: None,
@@ -293,7 +288,6 @@ fn shared_workspace_allows_readonly_or_explicitly_isolated_workers() {
                 agent_id: "researcher".into(),
                 prompt: "read only".into(),
                 context: None,
-                toolkit: None,
                 ownership: None,
                 isolation: None,
                 base_ref: None,
@@ -302,7 +296,6 @@ fn shared_workspace_allows_readonly_or_explicitly_isolated_workers() {
                 agent_id: "critic".into(),
                 prompt: "isolated edit".into(),
                 context: None,
-                toolkit: None,
                 ownership: Some("files: src/b.rs".into()),
                 isolation: Some("worktree".into()),
                 base_ref: None,

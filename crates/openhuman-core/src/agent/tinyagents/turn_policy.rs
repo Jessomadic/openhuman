@@ -52,29 +52,122 @@ pub(super) const DEFAULT_AGENT_TURN_TIMEOUT_SECS: u64 = 3_600;
 /// per-tool timeouts.
 pub(super) const DEFAULT_MODEL_CALL_TIMEOUT_SECS: u64 = 900;
 
+/// Per-model-call ceiling for a **local / self-hosted** provider (Ollama,
+/// LM Studio, MLX, llama.cpp...), in seconds (#6042). A local model prefills
+/// the whole prompt before it emits its first token, and a ~57K-token prompt
+/// takes many minutes on consumer hardware, so the hosted 900s ceiling killed
+/// calls that were making progress. One hour; hang detection for hosted
+/// providers keeps the tighter [`DEFAULT_MODEL_CALL_TIMEOUT_SECS`].
+pub(super) const LOCAL_MODEL_CALL_TIMEOUT_SECS: u64 = 3_600;
+
+/// Per-turn ceiling for a local / self-hosted provider, in seconds (#6042):
+/// four hours, so a turn of several slow local calls still fits. Must stay
+/// above [`LOCAL_MODEL_CALL_TIMEOUT_SECS`].
+pub(super) const LOCAL_AGENT_TURN_TIMEOUT_SECS: u64 = 14_400;
+
+/// Extra seconds the outer web-turn backstop allows a local turn beyond the
+/// harness turn ceiling, so the harness's own (more informative) timeout fires
+/// first.
+pub(crate) const LOCAL_WEB_TURN_BACKSTOP_GRACE_SECS: u64 = 300;
+
+/// Whether `provider` (a provider string such as `ollama:llama3`) with the
+/// resolved `endpoint` is a local / self-hosted runtime, which gets the longer
+/// ceilings (#6042).
+///
+/// Do not use `tinyinference_local::profile::is_local_provider_string` for this
+/// on its own: it maps the bare name `openai` onto the generic local
+/// OpenAI-compatible kind, so hosted OpenAI would be classed as local and lose
+/// its tight hang detection. Locality comes from the runtime kind and the
+/// endpoint instead:
+/// - Ollama / LM Studio / MLX / oMLX are self-hosted by definition.
+/// - The generic OpenAI-compatible kinds (`local-openai`, `llamacpp`, `vllm`,
+///   bare `openai`...) can point anywhere, so they are local only when the
+///   endpoint host is loopback or on a private network.
+/// - `openai:<model>` and every other cloud provider are never local.
+pub(crate) fn provider_is_self_hosted(provider: &str, endpoint: Option<&str>) -> bool {
+    use tinyinference_local::profile::{kind_from_provider_string, LocalProviderKind};
+    let p = provider.trim().to_ascii_lowercase();
+    let Some(kind) = kind_from_provider_string(&p) else {
+        return false;
+    };
+    match kind {
+        LocalProviderKind::LocalOpenai => endpoint
+            .and_then(|url| url::Url::parse(url).ok())
+            .is_some_and(|parsed| crate::util::url::host_is_local(&parsed)),
+        _ => true,
+    }
+}
+
+/// Whether `config` routes the chat workload to a local / self-hosted provider.
+pub(crate) fn chat_provider_is_local(config: &crate::config::Config) -> bool {
+    let provider = crate::inference::provider::provider_for_role("chat", config);
+    provider_is_self_hosted(&provider, local_openai_endpoint(config).as_deref())
+}
+
+/// The endpoint the generic local OpenAI-compatible runtime resolves to:
+/// `LOCAL_OPENAI_URL`, else `local_ai.base_url`, else the profile default.
+pub(crate) fn local_openai_endpoint(config: &crate::config::Config) -> Option<String> {
+    std::env::var("LOCAL_OPENAI_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| config.local_ai.base_url.clone())
+        .or_else(|| {
+            Some(
+                tinyinference_local::profile::LOCAL_OPENAI_PROFILE
+                    .default_base_url
+                    .to_string(),
+            )
+        })
+}
+
 /// Resolve the per-turn wall-clock ceiling in milliseconds for the harness
 /// policy. Reads `OPENHUMAN_AGENT_TURN_TIMEOUT_SECS` (falling back to
 /// [`DEFAULT_AGENT_TURN_TIMEOUT_SECS`]); `0` means "no ceiling" → `None`, which
 /// restores the previous unbounded behavior for callers that deliberately opt
 /// out (e.g. very long autonomous runs).
+#[cfg(test)]
 pub(crate) fn agent_turn_wall_clock_ms() -> Option<u64> {
-    parse_agent_turn_wall_clock_ms(
+    agent_turn_wall_clock_ms_for(false)
+}
+
+/// Resolve the wall-clock ceiling for a turn on a local provider when `local`:
+/// the env override still wins, otherwise the default is
+/// [`LOCAL_AGENT_TURN_TIMEOUT_SECS`].
+pub(crate) fn agent_turn_wall_clock_ms_for(local: bool) -> Option<u64> {
+    parse_turn_ms_with_default(
         std::env::var("OPENHUMAN_AGENT_TURN_TIMEOUT_SECS")
             .ok()
             .as_deref(),
+        if local {
+            LOCAL_AGENT_TURN_TIMEOUT_SECS
+        } else {
+            DEFAULT_AGENT_TURN_TIMEOUT_SECS
+        },
     )
 }
 
-/// Pure core of [`agent_turn_wall_clock_ms`]: map an optional
+fn parse_turn_ms_with_default(env_value: Option<&str>, default_secs: u64) -> Option<u64> {
+    let secs = env_value
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(default_secs);
+    (secs > 0).then(|| secs.saturating_mul(1_000))
+}
+
+/// Outer web-turn backstop for a turn on a local provider: the local turn
+/// ceiling plus [`LOCAL_WEB_TURN_BACKSTOP_GRACE_SECS`], or `None` when the turn
+/// ceiling is disabled. The backstop must sit above the harness ceiling or it
+/// pre-empts it (#6042: it was 900s, under even the hosted 3600s ceiling).
+pub(crate) fn local_web_turn_backstop_secs() -> Option<u64> {
+    agent_turn_wall_clock_ms_for(true).map(|ms| ms / 1_000 + LOCAL_WEB_TURN_BACKSTOP_GRACE_SECS)
+}
+
+/// Pure core of the per-turn wall-clock ceiling: map an optional
 /// `OPENHUMAN_AGENT_TURN_TIMEOUT_SECS` value to a wall-clock ceiling in
 /// milliseconds. An absent/unparseable value falls back to
 /// [`DEFAULT_AGENT_TURN_TIMEOUT_SECS`]; `0` yields `None` (unbounded opt-out).
 /// Kept env-free so it is deterministically unit-testable.
 pub(super) fn parse_agent_turn_wall_clock_ms(env_value: Option<&str>) -> Option<u64> {
-    let secs = env_value
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_SECS);
-    (secs > 0).then(|| secs.saturating_mul(1_000))
+    parse_turn_ms_with_default(env_value, DEFAULT_AGENT_TURN_TIMEOUT_SECS)
 }
 
 /// Resolve the per-model-call wall-clock ceiling in milliseconds for the
@@ -83,10 +176,21 @@ pub(super) fn parse_agent_turn_wall_clock_ms(env_value: Option<&str>) -> Option<
 /// `None`, leaving calls bounded only by the turn's remaining wall clock as
 /// before #5766.
 pub(super) fn model_call_wall_clock_ms() -> Option<u64> {
-    parse_model_call_wall_clock_ms(
+    model_call_wall_clock_ms_for(false)
+}
+
+/// [`model_call_wall_clock_ms`] for a local provider when `local` (#6042): the
+/// env override still wins, otherwise [`LOCAL_MODEL_CALL_TIMEOUT_SECS`].
+pub(super) fn model_call_wall_clock_ms_for(local: bool) -> Option<u64> {
+    parse_turn_ms_with_default(
         std::env::var("OPENHUMAN_MODEL_CALL_TIMEOUT_SECS")
             .ok()
             .as_deref(),
+        if local {
+            LOCAL_MODEL_CALL_TIMEOUT_SECS
+        } else {
+            DEFAULT_MODEL_CALL_TIMEOUT_SECS
+        },
     )
 }
 
@@ -97,10 +201,63 @@ pub(super) fn model_call_wall_clock_ms() -> Option<u64> {
 /// env-free so it is deterministically unit-testable — the same shape as
 /// [`parse_agent_turn_wall_clock_ms`].
 pub(super) fn parse_model_call_wall_clock_ms(env_value: Option<&str>) -> Option<u64> {
+    parse_turn_ms_with_default(env_value, DEFAULT_MODEL_CALL_TIMEOUT_SECS)
+}
+
+/// Default silence allowed between output events of a streaming model call,
+/// in seconds, once the first output has arrived. Matches the harness default
+/// but is set explicitly so a harness bump cannot silently change it.
+pub(super) const DEFAULT_STREAM_IDLE_TIMEOUT_SECS: u64 = 120;
+
+/// Default circuit breaker: consecutive stream idle timeouts on one model
+/// before retrying that model stops.
+pub(super) const DEFAULT_MAX_CONSECUTIVE_STREAM_IDLE_TIMEOUTS: usize = 5;
+
+/// Pure core of the stream idle ceiling: `OPENHUMAN_STREAM_IDLE_TIMEOUT_SECS`
+/// in seconds, `0` disables, absent/unparseable falls back to the default.
+pub(super) fn parse_stream_idle_timeout_ms(env_value: Option<&str>) -> Option<u64> {
     let secs = env_value
         .and_then(|v| v.trim().parse::<u64>().ok())
-        .unwrap_or(DEFAULT_MODEL_CALL_TIMEOUT_SECS);
+        .unwrap_or(DEFAULT_STREAM_IDLE_TIMEOUT_SECS);
     (secs > 0).then(|| secs.saturating_mul(1_000))
+}
+
+/// Pure core of the first-event ceiling: `OPENHUMAN_STREAM_FIRST_EVENT_TIMEOUT_SECS`.
+/// Off (`None`) unless set to a positive value: reasoning-hidden providers and
+/// local models legitimately stay silent for minutes before the first token.
+pub(super) fn parse_stream_first_event_timeout_ms(env_value: Option<&str>) -> Option<u64> {
+    env_value
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(|secs| secs.saturating_mul(1_000))
+}
+
+/// Pure core of the idle-timeout breaker:
+/// `OPENHUMAN_MAX_CONSECUTIVE_STREAM_IDLE_TIMEOUTS`, `0` disables.
+pub(super) fn parse_max_consecutive_stream_idle_timeouts(env_value: Option<&str>) -> Option<usize> {
+    let n = env_value
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_CONSECUTIVE_STREAM_IDLE_TIMEOUTS);
+    (n > 0).then_some(n)
+}
+
+/// Writes the three stream-silence limits from raw override values. Taking the
+/// values as arguments keeps the default-policy tests independent of the
+/// process environment.
+pub(super) fn apply_stream_limits(
+    limits: &mut tinyagents_harness::limits::RunLimits,
+    idle: Option<&str>,
+    first_event: Option<&str>,
+    breaker: Option<&str>,
+) {
+    limits.stream_idle_timeout_ms = parse_stream_idle_timeout_ms(idle);
+    limits.stream_first_event_timeout_ms = parse_stream_first_event_timeout_ms(first_event);
+    limits.max_consecutive_stream_idle_timeouts =
+        parse_max_consecutive_stream_idle_timeouts(breaker);
+}
+
+fn env_str(name: &str) -> Option<String> {
+    std::env::var(name).ok()
 }
 
 /// Build the harness [`RunPolicy`] for an openhuman turn.
@@ -136,9 +293,25 @@ pub(super) fn parse_model_call_wall_clock_ms(env_value: Option<&str>) -> Option<
 /// `ReliableProvider` does *not* fail over across the registered workload-tier
 /// routes (chat→burst, reasoning→agentic, …) the way the harness registry can.
 pub(crate) fn run_policy_for(max_iterations: usize, response_cache_enabled: bool) -> RunPolicy {
+    run_policy_for_provider(max_iterations, response_cache_enabled, false)
+}
+
+/// [`run_policy_for`] with the turn's provider locality: a local / self-hosted
+/// provider gets the longer per-call and per-turn ceilings (#6042); hosted
+/// providers keep the tight defaults so a wedged call is still caught fast.
+pub(crate) fn run_policy_for_provider(
+    max_iterations: usize,
+    response_cache_enabled: bool,
+    local_provider: bool,
+) -> RunPolicy {
     let mut policy = RunPolicy::default();
+    // A managed streaming response can finish with reasoning but no visible
+    // answer. Reissue that unusable call once; the harness keeps the same
+    // output cap and drops the blank assistant row before retrying. If it
+    // repeats, the existing EmptyProviderResponse path remains actionable.
+    policy.empty_response_retries = 1;
     policy.limits.max_model_calls = max_iterations;
-    policy.limits.max_tool_calls = max_iterations.saturating_mul(8).max(8);
+    policy.limits.max_tool_calls = crate::agent::stop_hooks::tool_call_limit(max_iterations);
     policy.limits.max_depth = MAX_SPAWN_DEPTH;
     // Wall-clock ceiling for the whole turn (issue #4746). The harness bounds
     // every individual model AND tool call by the run's *remaining* wall-clock
@@ -154,7 +327,7 @@ pub(crate) fn run_policy_for(max_iterations: usize, response_cache_enabled: bool
     // the parent's remaining-budget wraps the sub-agent tool call, and a child
     // turn with no per-run timeout inherits this policy-level cap. Generous by
     // design (a backstop, not a UX deadline); env-overridable, `0` disables.
-    policy.limits.max_wall_clock_ms = agent_turn_wall_clock_ms();
+    policy.limits.max_wall_clock_ms = agent_turn_wall_clock_ms_for(local_provider);
     // Per-model-call ceiling (#5766): each model call (and retry attempt) gets
     // a fresh `min(ceiling, turn remainder)` budget, so hang detection is
     // per-call instead of riding the turn deadline — which let the turn
@@ -162,7 +335,22 @@ pub(crate) fn run_policy_for(max_iterations: usize, response_cache_enabled: bool
     // able to hold a turn for more than this. Tool calls (incl. sub-agent
     // delegations) are exempt in the harness and keep the remainder-only
     // budget. Env-overridable, `0` disables.
-    policy.limits.max_model_call_ms = model_call_wall_clock_ms();
+    policy.limits.max_model_call_ms = model_call_wall_clock_ms_for(local_provider);
+    // Stream silence bounds, explicit so a harness default change cannot
+    // alter them. The idle window applies only after the first output event;
+    // the first-event bound is OFF by default because local and hidden-
+    // reasoning models stay silent for minutes before the first token. The
+    // breaker stops retrying a model that keeps stalling.
+    apply_stream_limits(
+        &mut policy.limits,
+        env_str("OPENHUMAN_STREAM_IDLE_TIMEOUT_SECS").as_deref(),
+        env_str("OPENHUMAN_STREAM_FIRST_EVENT_TIMEOUT_SECS").as_deref(),
+        env_str("OPENHUMAN_MAX_CONSECUTIVE_STREAM_IDLE_TIMEOUTS").as_deref(),
+    );
+    // Each executed tool row ends with `[took 12.3s]` (#6953). Without it the
+    // model cannot tell a fifteen-minute command from a fast one, so it cannot
+    // budget the rest of the turn against the ceiling above.
+    policy.tool_result_durations = true;
     // Crate-owned retry (Phase 3a), lengthened for #6413.
     //
     // The former schedule — 2 retries at 500 ms and 1 s — spent about 1.5 s in
@@ -210,8 +398,9 @@ pub(crate) fn run_policy_for(max_iterations: usize, response_cache_enabled: bool
     // deleted sentinel was exactly that) and, when it hits, *silently* executes
     // that tool and emits `AgentEvent::UnknownToolCall { recovery: "rewrite:.." }`
     // WITHOUT injecting a tool message. `ReturnToolError` instead injects a
-    // recoverable `unknown tool `<name>` (arguments: ..); valid tools: [..]`
-    // result naming the originally-requested tool. Two live consumers depend on
+    // recoverable `unknown tool `<name>`: ...` result naming the originally
+    // requested tool, a few close matches and (when discovery is on) a pointer
+    // to `tool_search` rather than a dump of every callable name. Two live consumers depend on
     // that message: (1) the #4419 attempted-tool-name UX and (2) the failure
     // classifier in `agent::hooks::sanitize_tool_output`, which labels the result
     // `unknown_tool` by matching the "unknown tool" substring. Flipping to Rewrite
@@ -223,7 +412,16 @@ pub(crate) fn run_policy_for(max_iterations: usize, response_cache_enabled: bool
     // owns this admission behavior directly; the former host SchemaGuard had
     // to manufacture valid stub arguments only because this policy was left at
     // its historical fail-fast default.
-    policy.invalid_args = InvalidArgsPolicy::ReturnToolError;
+    //
+    // Normalize first: some providers (DeepSeek via OpenRouter) JSON-encode a
+    // nested object-typed argument, e.g. `mcp_registry_tool_call` with
+    // `"arguments": "{}"`. `ArgRecoveryMiddleware` only repairs a top-level
+    // string, so without the harness's schema-guided coercion every such call
+    // failed validation — and a parallel batch of them tripped the
+    // classified-failure breaker before the model could correct itself.
+    // Normalization keeps a rewrite only when it validates, so genuinely
+    // invalid arguments still come back as a corrective tool error.
+    policy.invalid_args = InvalidArgsPolicy::NormalizeThenReturnToolError;
     // Prompt-prefix protection is always on (issue #4249, 03.2). Two things
     // ride on it, and both were inert until the harness started stamping this
     // effective policy onto the outgoing request (tinyagents `model_call`):
@@ -233,8 +431,8 @@ pub(crate) fn run_policy_for(max_iterations: usize, response_cache_enabled: bool
     //     stable prefix into `provider_options`, and the provider adapters see
     //     `protect_prompt_prefix` and emit explicit `cache_control` breakpoints
     //     where the provider needs them (native Anthropic, OpenRouter relays).
-    // The stable prefix itself is declared per request by the host
-    // `PromptCacheSegmentMiddleware`.
+    // The stable prefix itself is declared per request by the vendor loop from
+    // the session's frozen system prefix (`RunContext::frozen_system_prefix_len`).
     policy.cache.protect_prompt_prefix = true;
     // Response caching is gated: it is enabled only for deterministic internal
     // runs (which additionally attach a `ResponseCache`). Interactive chat turns
@@ -285,7 +483,7 @@ pub(crate) fn effective_max_iterations(max_iterations: usize) -> usize {
 /// **This is a strict subset of the caller-side strip**, not a mirror of it
 /// (issue #6157). `subagent_host::tool_prep::is_subagent_spawn_tool` also
 /// resolves each archetype's `delegate_name` override through the definition
-/// registry — `plan`, `research`, `run_code`, `review_code`, … — none of which
+/// registry — `manage_tasks`, `create_image`, `setup_skills`, … — none of which
 /// carry the `delegate_` prefix this match relies on. Matching them here would
 /// put a registry lookup on the per-tool registration loop, so the caller
 /// stays responsible for the override names: every path that feeds `allowed`
@@ -293,8 +491,9 @@ pub(crate) fn effective_max_iterations(max_iterations: usize) -> usize {
 /// (`subagent_host::ops::runner`). Widen this predicate in lockstep if that
 /// ever stops being true.
 pub(crate) fn is_subagent_spawn_or_delegate_tool(name: &str) -> bool {
-    name == "spawn_subagent"
-        || name.starts_with("delegate_")
-        || name == "agent_prepare_context"
-        || name == "spawn_worker_thread"
+    name == "spawn_subagent" || name.starts_with("delegate_") || name == "spawn_worker_thread"
 }
+
+#[cfg(test)]
+#[path = "turn_policy_budget_tests.rs"]
+mod budget_tests;

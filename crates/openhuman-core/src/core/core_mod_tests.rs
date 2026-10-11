@@ -35,59 +35,6 @@ fn method_name_preserves_underscores_in_function() {
 }
 
 #[test]
-fn controller_schema_equality_considers_all_fields() {
-    let a = ControllerSchema {
-        namespace: "a",
-        function: "b",
-        description: "x",
-        inputs: vec![],
-        outputs: vec![],
-    };
-    let b = ControllerSchema {
-        namespace: "a",
-        function: "b",
-        description: "x",
-        inputs: vec![],
-        outputs: vec![],
-    };
-    let c = ControllerSchema {
-        namespace: "a",
-        function: "b",
-        description: "different",
-        inputs: vec![],
-        outputs: vec![],
-    };
-    assert_eq!(a, b);
-    assert_ne!(a, c);
-}
-
-#[test]
-fn type_schema_nesting_is_equality_comparable() {
-    let a = TypeSchema::Array(Box::new(TypeSchema::Option(Box::new(TypeSchema::String))));
-    let b = TypeSchema::Array(Box::new(TypeSchema::Option(Box::new(TypeSchema::String))));
-    let c = TypeSchema::Array(Box::new(TypeSchema::Option(Box::new(TypeSchema::I64))));
-    assert_eq!(a, b);
-    assert_ne!(a, c);
-}
-
-#[test]
-fn field_schema_required_flag_changes_equality() {
-    let a = FieldSchema {
-        name: "x",
-        ty: TypeSchema::Bool,
-        comment: "",
-        required: true,
-    };
-    let b = FieldSchema {
-        name: "x",
-        ty: TypeSchema::Bool,
-        comment: "",
-        required: false,
-    };
-    assert_ne!(a, b);
-}
-
-#[test]
 fn controller_schema_serializes_to_json() {
     // Schema must be JSON-serializable: the /schema endpoint depends on it.
     let s = ControllerSchema {
@@ -112,4 +59,22 @@ fn controller_schema_serializes_to_json() {
     assert_eq!(json["function"], "snapshot");
     assert_eq!(json["inputs"][0]["name"], "limit");
     assert_eq!(json["outputs"][0]["required"], true);
+}
+
+#[test]
+fn bounded_u64_serializes_additively() {
+    // `/schema` is a public contract: the bound rides in a new variant, so
+    // existing `"U64"` fields keep their exact wire shape (#6137).
+    let bounded = TypeSchema::BoundedU64 {
+        min: 1,
+        max: u32::MAX as u64,
+    };
+    assert_eq!(
+        serde_json::to_value(&bounded).unwrap(),
+        serde_json::json!({ "BoundedU64": { "min": 1, "max": 4_294_967_295u64 } })
+    );
+    assert_eq!(
+        serde_json::to_value(TypeSchema::U64).unwrap(),
+        serde_json::json!("U64")
+    );
 }

@@ -10,9 +10,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::context::{build_input, set_host_context, HostContext, TurnIdentity};
-use super::engine;
-use super::types::{
+use tinyagents_runtime::command_hooks::context::{
+    build_input, set_host_context, HostContext, TurnIdentity,
+};
+use tinyagents_runtime::command_hooks::types::{
     CompactPayload, HookEvent, HookPayload, PromptPayload, SessionPayload, SubagentPayload,
     TextPayload,
 };
@@ -31,22 +32,21 @@ pub async fn init(config: &crate::config::schema::Config) {
 
     if !settings.enabled {
         super::bridge::ConfiguredHookBridge::uninstall();
-        engine::global()
-            .install(super::config::HookConfig::default())
+        super::host::engine()
+            .install(tinyagents_runtime::command_hooks::HookConfig::default())
             .await;
         log::info!("[hooks] disabled by configuration");
         return;
     }
 
-    engine::global()
+    super::host::engine()
         .set_default_timeout(Duration::from_secs(settings.default_timeout_secs))
         .await;
-    let loaded = engine::global()
-        .reload(
-            Some(config.action_dir.clone()),
-            Some(config.workspace_dir.clone()),
-        )
-        .await;
+    let loaded = super::host::reload(
+        Some(config.action_dir.clone()),
+        Some(config.workspace_dir.clone()),
+    )
+    .await;
     if loaded.is_empty() {
         // Nothing configured: keep the bridge out of the harness entirely so an
         // unconfigured host pays not even a task-local lookup per tool call.
@@ -69,7 +69,7 @@ fn workspace_roots(config: &crate::config::schema::Config) -> Vec<PathBuf> {
 /// Fire `sessionStart`, returning context the caller should append to the
 /// session's system prompt.
 pub async fn session_started(identity: TurnIdentity, entrypoint: Option<String>) -> Option<String> {
-    let engine = engine::global();
+    let engine = super::host::engine();
     if !engine.has_hooks(HookEvent::SessionStart).await {
         return None;
     }
@@ -91,7 +91,7 @@ pub async fn session_started(identity: TurnIdentity, entrypoint: Option<String>)
 
 /// Fire `sessionEnd` and release everything scoped to the session.
 pub async fn session_ended(identity: TurnIdentity, reason: &str, duration_ms: Option<u64>) {
-    let engine = engine::global();
+    let engine = super::host::engine();
     let session_id = identity.session_id.clone();
     if engine.has_hooks(HookEvent::SessionEnd).await {
         let input = build_input(
@@ -107,7 +107,7 @@ pub async fn session_ended(identity: TurnIdentity, reason: &str, duration_ms: Op
     }
     if let Some(session_id) = session_id {
         engine.forget_session(&session_id).await;
-        super::followup::forget(&session_id).await;
+        tinyagents_runtime::command_hooks::followup::forget(&session_id).await;
     }
 }
 
@@ -134,7 +134,7 @@ pub async fn prompt_submitted(
     prompt: &str,
     attachments: Vec<String>,
 ) -> PromptVerdict {
-    let engine = engine::global();
+    let engine = super::host::engine();
     if !engine.has_hooks(HookEvent::BeforeSubmitPrompt).await {
         return PromptVerdict::Submit {
             additional_context: None,
@@ -170,7 +170,7 @@ pub async fn pre_compact(
     context_usage_percent: Option<f64>,
     message_count: Option<usize>,
 ) -> Option<String> {
-    let engine = engine::global();
+    let engine = super::host::engine();
     if !engine.has_hooks(HookEvent::PreCompact).await {
         return None;
     }
@@ -196,7 +196,7 @@ pub async fn subagent_starting(
     subagent_type: &str,
     task: &str,
 ) -> Result<(), String> {
-    let engine = engine::global();
+    let engine = super::host::engine();
     if !engine.has_hooks(HookEvent::SubagentStart).await {
         return Ok(());
     }
@@ -226,7 +226,7 @@ pub async fn subagent_stopped(
     status: &str,
     duration_ms: Option<u64>,
 ) -> Option<String> {
-    let engine = engine::global();
+    let engine = super::host::engine();
     if !engine.has_hooks(HookEvent::SubagentStop).await {
         return None;
     }
@@ -251,7 +251,7 @@ pub async fn subagent_stopped(
 /// Fire `afterAgentThought`. Observational, so this returns as soon as the
 /// hooks are scheduled.
 pub async fn agent_thought(identity: TurnIdentity, text: &str, duration_ms: Option<u64>) {
-    let engine = engine::global();
+    let engine = super::host::engine();
     if !engine.has_hooks(HookEvent::AfterAgentThought).await {
         return;
     }

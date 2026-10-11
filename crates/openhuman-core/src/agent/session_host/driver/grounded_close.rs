@@ -7,12 +7,12 @@
 //! its usage in a sidecar; it never owns transcript history or persistence.
 
 use futures::StreamExt;
+use tinyagents_session::transcript::TranscriptMessage;
 use tinyinference_llm::model::{ModelRequest, ModelStreamItem};
 use tinytools_agent::dialect::ToolDialect;
 
 use crate::agent::{
     message_convert::{dialect_response_from_provider, message_to_native_chat_message},
-    messages::ChatMessage,
     session_host::turn_checkpoint::{
         self, build_deterministic_checkpoint, build_deterministic_final_summary,
         close_repair_instruction, close_verification_prompt, final_answer_instruction,
@@ -21,7 +21,7 @@ use crate::agent::{
     },
     tinyagents::{TinyagentsTurnOutcome, TurnModelSource},
 };
-use crate::inference::provider::{ChatResponse, UsageInfo, AGENT_TURN_MAX_OUTPUT_TOKENS};
+use crate::inference::provider::{BilledUsage, ChatResponse, AGENT_TURN_MAX_OUTPUT_TOKENS};
 
 /// Accounting from model calls performed after the harness loop has ended.
 #[derive(Default)]
@@ -30,17 +30,37 @@ pub(super) struct RepairUsage {
     pub(super) input_tokens: u64,
     pub(super) output_tokens: u64,
     pub(super) cached_input_tokens: u64,
-    pub(super) charged_amount_usd: f64,
+    /// Cost of these calls: reported charge, catalog estimate, or unknown.
+    pub(super) cost: crate::agent::cost::CostTally,
+    /// Model the calls ran on, for pricing a call that reported no charge.
+    pub(super) pricing_model: String,
+    /// The newest repair call's own input/output: a repair runs after the
+    /// harness loop, so when one happened it is the turn's final call.
+    pub(super) last_call_input_tokens: u64,
+    pub(super) last_call_output_tokens: u64,
 }
 
 impl RepairUsage {
-    fn record(&mut self, usage: Option<UsageInfo>) {
+    /// Empty accounting for calls made on `model`.
+    pub(super) fn for_model(model: &str) -> Self {
+        Self {
+            pricing_model: model.to_string(),
+            ..Self::default()
+        }
+    }
+
+    fn record(&mut self, usage: Option<BilledUsage>, measures_context: bool) {
         self.model_calls += 1;
         if let Some(usage) = usage {
+            if measures_context {
+                self.last_call_input_tokens = usage.input_tokens;
+                self.last_call_output_tokens = usage.output_tokens;
+            }
             self.input_tokens += usage.input_tokens;
             self.output_tokens += usage.output_tokens;
-            self.cached_input_tokens += usage.cached_input_tokens;
-            self.charged_amount_usd += usage.charged_amount_usd;
+            self.cached_input_tokens += usage.cached_input_tokens();
+            self.cost
+                .add(crate::agent::cost::call_cost(&self.pricing_model, &usage));
         }
     }
 }
@@ -49,6 +69,21 @@ impl RepairUsage {
 pub(super) struct GroundedClose {
     pub(super) output: String,
     pub(super) usage: RepairUsage,
+}
+
+/// A classified halt has enough evidence for a deterministic partial result.
+/// Keeping this separate from the model-driven repair path guarantees zero
+/// additional provider calls once its recovery budget is exhausted.
+fn classified_halt_close(outcome: &TinyagentsTurnOutcome) -> Option<GroundedClose> {
+    let reason = outcome.breaker_halt.as_deref()?;
+    if !reason.starts_with("Stopping after ") {
+        return None;
+    }
+    let records = results_from_tool_outcomes(&outcome.tool_outcomes);
+    Some(GroundedClose {
+        output: build_deterministic_final_summary(&records, Some(reason)),
+        usage: RepairUsage::default(),
+    })
 }
 
 /// Repair an otherwise valid terminal reply which omits the host's required
@@ -68,23 +103,23 @@ pub(super) async fn repair_required_output(
     progress: Option<&tokio::sync::mpsc::Sender<crate::agent::progress::AgentProgress>>,
     iteration: u32,
 ) -> Option<GroundedClose> {
-    use crate::agent::harness::required_output as required;
+    use tinyagents_harness::config as required;
 
     if required::output_satisfies_contract(reply, contract) {
         return None;
     }
 
-    let mut prompt_history: Vec<ChatMessage> = history
+    let mut prompt_history: Vec<TranscriptMessage> = history
         .iter()
         .filter_map(message_to_native_chat_message)
         .collect();
-    prompt_history.push(ChatMessage::user(wrap_harness_instruction(
+    prompt_history.push(TranscriptMessage::user(wrap_harness_instruction(
         &required::repair_instruction(contract),
     )));
     let (candidate, candidate_usage) =
         completion(source, model, temperature, thread_id, prompt_history).await;
-    let mut usage = RepairUsage::default();
-    usage.record(candidate_usage);
+    let mut usage = RepairUsage::for_model(model);
+    usage.record(candidate_usage, true);
     let candidate = candidate.trim().to_owned();
     let candidate_is_usable = !candidate.is_empty()
         && !contains_tool_call(dispatcher, &candidate)
@@ -127,6 +162,36 @@ pub(super) async fn repair_required_output(
     })
 }
 
+/// The tool-less closing instruction for `outcome`: the cap checkpoint when the
+/// run stopped at its call cap, otherwise the final-answer directive — which
+/// names the run's real stop cause (a breaker halt, or a reply that ran out of
+/// output tokens while reasoning) rather than claiming the model finished.
+fn close_instruction(
+    outcome: &TinyagentsTurnOutcome,
+    needs_cap_close: bool,
+    rendered: &str,
+) -> String {
+    if needs_cap_close {
+        return format!(
+            "{}\n\n<tool_records>\n{}\n</tool_records>",
+            wrap_harness_instruction(turn_checkpoint::MAX_ITER_CHECKPOINT_INSTRUCTION),
+            if rendered.is_empty() {
+                "(no tool calls completed)"
+            } else {
+                rendered
+            }
+        );
+    }
+    if outcome.truncated {
+        tracing::info!(
+            model_calls = outcome.model_calls,
+            tool_calls = outcome.tool_calls,
+            "[session-runtime] closing a turn whose last reply ran out of output tokens"
+        );
+    }
+    final_answer_instruction(outcome.breaker_halt.as_deref(), outcome.truncated, rendered)
+}
+
 /// Return `None` when the loop's terminal text is already usable.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn close_if_needed(
@@ -145,22 +210,13 @@ pub(super) async fn close_if_needed(
         return None;
     }
 
+    if let Some(close) = classified_halt_close(outcome) {
+        return Some(close);
+    }
     let records = results_from_tool_outcomes(&outcome.tool_outcomes);
     let rendered = render_tool_results(&records, turn_checkpoint::GROUNDING_TOTAL_CHARS);
-    let instruction = if needs_cap_close {
-        format!(
-            "{}\n\n<tool_records>\n{}\n</tool_records>",
-            wrap_harness_instruction(turn_checkpoint::MAX_ITER_CHECKPOINT_INSTRUCTION),
-            if rendered.is_empty() {
-                "(no tool calls completed)"
-            } else {
-                &rendered
-            }
-        )
-    } else {
-        final_answer_instruction(outcome.breaker_halt.as_deref(), &rendered)
-    };
-    let base: Vec<ChatMessage> = base_history
+    let instruction = close_instruction(outcome, needs_cap_close, &rendered);
+    let base: Vec<TranscriptMessage> = base_history
         .iter()
         .filter_map(message_to_native_chat_message)
         .collect();
@@ -168,7 +224,7 @@ pub(super) async fn close_if_needed(
 
     let ask = |prompt: String| {
         let mut messages = base.clone();
-        messages.push(ChatMessage::user(prompt));
+        messages.push(TranscriptMessage::user(prompt));
         async move { completion(source, model, temperature, thread_id, messages).await }
     };
     // A closing response is only user-visible after a separate, tool-less
@@ -186,7 +242,7 @@ pub(super) async fn close_if_needed(
                 model,
                 temperature,
                 thread_id,
-                vec![ChatMessage::user(prompt)],
+                vec![TranscriptMessage::user(prompt)],
             )
             .await;
             let violation = match parse_close_verdict(&verdict) {
@@ -205,7 +261,7 @@ pub(super) async fn close_if_needed(
     };
 
     let (output, usage) =
-        close_with_one_repair(instruction, stop_reason, ask, verify, fallback).await;
+        close_with_one_repair(model, instruction, stop_reason, ask, verify, fallback).await;
     Some(GroundedClose { output, usage })
 }
 
@@ -223,6 +279,7 @@ pub(super) async fn close_if_needed(
 /// exercised without a provider; the deterministic guard stays here, ahead of
 /// `verify`, because it is the one check that cannot fail open.
 async fn close_with_one_repair<A, AF, V, VF>(
+    model: &str,
     instruction: String,
     stop_reason: Option<&str>,
     ask: A,
@@ -231,15 +288,15 @@ async fn close_with_one_repair<A, AF, V, VF>(
 ) -> (String, RepairUsage)
 where
     A: Fn(String) -> AF,
-    AF: std::future::Future<Output = (String, Option<UsageInfo>)>,
+    AF: std::future::Future<Output = (String, Option<BilledUsage>)>,
     V: Fn(String) -> VF,
-    VF: std::future::Future<Output = (Option<CloseViolation>, Option<UsageInfo>)>,
+    VF: std::future::Future<Output = (Option<CloseViolation>, Option<BilledUsage>)>,
 {
-    let mut usage = RepairUsage::default();
+    let mut usage = RepairUsage::for_model(model);
     let mut prompt = instruction.clone();
     for attempt in 0..2 {
         let (candidate, candidate_usage) = ask(prompt).await;
-        usage.record(candidate_usage);
+        usage.record(candidate_usage, true);
         let candidate = candidate.trim().to_owned();
         let violation = if candidate.is_empty() {
             Some(CloseViolation::NoReply)
@@ -247,7 +304,9 @@ where
             Some(CloseViolation::QuotedHarnessText)
         } else {
             let (violation, verify_usage) = verify(candidate.clone()).await;
-            usage.record(verify_usage);
+            // The verifier sees one synthetic prompt, not the conversation
+            // context that will be resumed, so it must not replace the gauge.
+            usage.record(verify_usage, false);
             violation
         };
         let Some(violation) = violation else {
@@ -270,8 +329,8 @@ async fn completion(
     model: &str,
     temperature: f64,
     thread_id: Option<&str>,
-    messages: Vec<ChatMessage>,
-) -> (String, Option<UsageInfo>) {
+    messages: Vec<TranscriptMessage>,
+) -> (String, Option<BilledUsage>) {
     let Ok(model_client) = source.build_summarizer(model, temperature, thread_id) else {
         return (String::new(), None);
     };

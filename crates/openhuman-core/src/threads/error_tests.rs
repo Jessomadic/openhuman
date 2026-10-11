@@ -1,5 +1,5 @@
 use super::*;
-use crate::rpc::StructuredRpcError;
+use crate::core::StructuredRpcError;
 
 #[test]
 fn not_found_display_is_stable() {

@@ -7,9 +7,11 @@ use serde_json::Value;
 
 use crate::config::Config;
 use crate::integrations::composio::client::{
-    create_composio_client, direct_list_tools, ComposioClientKind,
+    direct_list_tools, resolve_composio_route, ComposioRoute,
 };
-use crate::json_schema::{compute_primary_array_path, response_fields_from_schema};
+use crate::integrations::composio::module_client::{self as connectors, methods};
+use crate::integrations::composio::types::{ComposioListToolsRequest, ComposioToolsResponse};
+use tinyagents_harness::tool::{compute_primary_array_path, response_fields_from_schema};
 
 /// One Composio action's LIVE, ground-truth contract — the source of truth
 /// [Part 1 of the systemic tool-contract fix] grounds the Workflow builder
@@ -193,7 +195,8 @@ pub(crate) fn seed_live_catalog_cache_expired(toolkit: &str, contracts: Vec<Tool
         );
 }
 
-/// Fetches a toolkit's tool schemas STRAIGHT from the Composio client,
+/// Fetches a toolkit's tool schemas STRAIGHT from the connector module (or, in
+/// direct mode, the host-side v3 reader),
 /// deliberately bypassing `composio::ops::composio_list_tools`'s curated-
 /// whitelist filter (Direct mode's `filter_list_tools_response_for_direct` —
 /// Backend mode's branch of `composio_list_tools` never filters at all, so
@@ -202,7 +205,7 @@ pub(crate) fn seed_live_catalog_cache_expired(toolkit: &str, contracts: Vec<Tool
 /// not, curated or not), not the narrower curated subset the pre-fix
 /// `search_tool_catalog` searched.
 ///
-/// - **Backend mode** calls [`crate::integrations::composio::client::ComposioClient::list_tools`]
+/// - **Backend mode** calls the module's `ListTools` member
 ///   directly — already unfiltered (`composio_list_tools`'s backend branch
 ///   applies no filter either), so this is not a behavior change there.
 /// - **Direct mode** calls [`direct_list_tools`] directly instead of going
@@ -213,26 +216,30 @@ pub(crate) fn seed_live_catalog_cache_expired(toolkit: &str, contracts: Vec<Tool
 ///
 /// Returns `None` on any client-construction or network failure — callers
 /// degrade to "catalog unknown" rather than blocking.
-async fn fetch_raw_toolkit_tools(
-    config: &Config,
-    toolkit: &str,
-) -> Option<crate::integrations::composio::types::ComposioToolsResponse> {
-    let kind = create_composio_client(config)
+async fn fetch_raw_toolkit_tools(config: &Config, toolkit: &str) -> Option<ComposioToolsResponse> {
+    let kind = resolve_composio_route(config)
         .map_err(|e| {
             tracing::debug!(target: "flows", %toolkit, error = %e, "[flows] live catalog: composio client unavailable — skipping");
             e
         })
         .ok()?;
     match kind {
-        ComposioClientKind::Backend(client) => client
-            .list_tools(Some(&[toolkit.to_string()]), None)
-            .await
+        ComposioRoute::Backend => connectors::call::<_, ComposioToolsResponse>(
+            config,
+            methods::LIST_TOOLS,
+            ComposioListToolsRequest {
+                toolkits: vec![toolkit.to_string()],
+                tags: Vec::new(),
+                apply_user_scopes: false,
+            },
+        )
+        .await
             .map_err(|e| {
                 tracing::debug!(target: "flows", %toolkit, error = %e, "[flows] live catalog: backend fetch failed — skipping");
                 e
             })
             .ok(),
-        ComposioClientKind::Direct(tool) => direct_list_tools(&tool, &[toolkit.to_string()], None)
+        ComposioRoute::Direct(tool) => direct_list_tools(config, &tool, &[toolkit.to_string()], None)
             .await
             .map_err(|e| {
                 tracing::debug!(target: "flows", %toolkit, error = %e, "[flows] live catalog: direct fetch failed — skipping");

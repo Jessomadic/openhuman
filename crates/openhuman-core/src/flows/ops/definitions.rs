@@ -11,14 +11,6 @@ pub(super) fn publish_flow_changed(flow_id: &str, kind: &str, actor: &str) {
         kind: kind.to_string(),
         actor: actor.to_string(),
     });
-    // Re-advertise the workflow set to the medulla backend. This is the single
-    // funnel every store mutation passes through (create / duplicate / update /
-    // delete / enable), and the backend replaces a socket's whole entry on each
-    // registration — so re-sending here is what keeps a remote orchestrator from
-    // reasoning about a set that no longer exists. A no-op (one debug log, no
-    // task spawned) when no bridge is installed, which is every build that is
-    // not talking to a backend, and every test.
-    crate::platform::socket::medulla::workflows::emit_register_workflows();
 }
 
 /// Creates a new flow from a name and a raw graph JSON value.
@@ -64,7 +56,7 @@ pub async fn flows_create(
     name: String,
     graph_json: Value,
     require_approval: bool,
-) -> Result<RpcOutcome<Flow>, String> {
+) -> Result<Outcome<Flow>, String> {
     let graph = validate_and_migrate_graph(graph_json)?;
     ensure_config_aware_engine_compatible(config, &graph)?;
 
@@ -123,7 +115,7 @@ pub async fn flows_create(
     }
 
     publish_flow_changed(&flow.id, "created", "system");
-    Ok(RpcOutcome::new(flow, logs))
+    Ok(Outcome::new(flow, logs))
 }
 
 /// Duplicates a saved flow: creates an independent copy of its graph under a
@@ -134,7 +126,7 @@ pub async fn flows_create(
 /// can never immediately fire. Run history does not carry over. The user
 /// enables it explicitly (via `flows_set_enabled`) once they've reviewed the
 /// copy, at which point its trigger binds like any other flow.
-pub async fn flows_duplicate(config: &Config, id: &str) -> Result<RpcOutcome<Flow>, String> {
+pub async fn flows_duplicate(config: &Config, id: &str) -> Result<Outcome<Flow>, String> {
     let source = store::get_flow(config, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("flow '{id}' not found"))?;
@@ -145,18 +137,18 @@ pub async fn flows_duplicate(config: &Config, id: &str) -> Result<RpcOutcome<Flo
     // Intentionally NO bind_trigger: a duplicate is disabled and must stay
     // inert (no schedule/trigger dispatch) until the user enables it.
     publish_flow_changed(&flow.id, "created", "system");
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         flow,
         format!("flow duplicated from {id}"),
     ))
 }
 
 /// Loads one flow by id.
-pub async fn flows_get(config: &Config, id: &str) -> Result<RpcOutcome<Flow>, String> {
+pub async fn flows_get(config: &Config, id: &str) -> Result<Outcome<Flow>, String> {
     let flow = store::get_flow(config, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("flow '{id}' not found"))?;
-    Ok(RpcOutcome::single_log(flow, format!("flow loaded: {id}")))
+    Ok(Outcome::single_log(flow, format!("flow loaded: {id}")))
 }
 
 /// Loads a saved flow's portable [`WorkflowGraph`] by id, for the
@@ -205,7 +197,7 @@ pub(crate) fn load_engine_compatible_flow_graph(
 /// (`[flows]`-prefixed, id + error only — never row content) and surfaced in
 /// the RPC's `logs` so the UI can tell the user "N workflows could not be
 /// loaded" instead of silently rendering a shorter list than actually exists.
-pub async fn flows_list(config: &Config) -> Result<RpcOutcome<Vec<Flow>>, String> {
+pub async fn flows_list(config: &Config) -> Result<Outcome<Vec<Flow>>, String> {
     let (flows, skipped) = store::list_flows(config).map_err(|e| e.to_string())?;
     if skipped > 0 {
         tracing::warn!(
@@ -214,7 +206,7 @@ pub async fn flows_list(config: &Config) -> Result<RpcOutcome<Vec<Flow>>, String
             loaded = flows.len(),
             "[flows] flows_list: skipped corrupt/unmigratable flow_definitions rows"
         );
-        Ok(RpcOutcome::new(
+        Ok(Outcome::new(
             flows,
             vec![format!(
                 "flows listed ({skipped} workflow{} could not be loaded and were skipped)",
@@ -222,7 +214,7 @@ pub async fn flows_list(config: &Config) -> Result<RpcOutcome<Vec<Flow>>, String
             )],
         ))
     } else {
-        Ok(RpcOutcome::single_log(flows, "flows listed"))
+        Ok(Outcome::single_log(flows, "flows listed"))
     }
 }
 
@@ -237,37 +229,7 @@ pub async fn flows_list(config: &Config) -> Result<RpcOutcome<Vec<Flow>>, String
 /// (flow already gone, store error) is logged and does not block the delete
 /// itself — `store::remove_flow` below still errors clearly if `id` doesn't
 /// exist.
-pub async fn flows_delete(config: &Config, id: &str) -> Result<RpcOutcome<Value>, String> {
-    flows_delete_impl(config, id, None).await
-}
-
-/// Backs [`flows_delete`]. `memory_override`, when `Some`, is the guarded
-/// driver used for the namespace-clear step below in place of the one
-/// `memory::ops::guard::active_memory_guard` resolves — the same seam, and now
-/// the same type, as `bus::FlowRunDigestSubscriber`'s `with_memory`.
-///
-/// # Why an override at all
-///
-/// `active_memory_guard` resolves the ambient `CoreContext`'s workspace, and a
-/// pre-boot unit test has no context — it falls back to the single shared test
-/// workspace that every `memory::ops` fixture writes into, not to the
-/// `tempdir` this call's `config` names. A test asserting that *this* clear
-/// step ran therefore has to be handed the binding over its own workspace, or
-/// it is asserting against a store it never wrote to.
-///
-/// # What changed (#5560)
-///
-/// This used to take a `tinymemory_core::store::MemoryClientRef` — a direct
-/// handle on the in-process engine, and the only reason this file named the
-/// engine crate at all. It is an `Arc<MemoryGuard>` now, so the injected path
-/// and the resolved path are the same type running the same policy steps; the
-/// override can no longer be a second, unguarded door into memory. Production
-/// still passes `None`.
-pub(super) async fn flows_delete_impl(
-    config: &Config,
-    id: &str,
-    memory_override: Option<Arc<crate::memory::guard::MemoryGuard>>,
-) -> Result<RpcOutcome<Value>, String> {
+pub async fn flows_delete(config: &Config, id: &str) -> Result<Outcome<Value>, String> {
     match store::get_flow(config, id) {
         Ok(Some(flow)) => unbind_trigger(config, &flow),
         Ok(None) => {}
@@ -295,39 +257,21 @@ pub(super) async fn flows_delete_impl(
         }
     }
 
-    // Best-effort: clear this flow's private memory namespace along with its
-    // row — a deleted flow must not leave stray `flow_memory_remember`
-    // entries or run digests behind. Never fails the delete itself: the flow
-    // row is already gone by this point regardless of what happens here.
-    let memory_namespace = flow_namespace(id);
-    let guard = match memory_override {
-        Some(guard) => Ok(guard),
-        None => crate::memory::ops::guard::active_memory_guard().await,
-    };
-    let clear_result = match guard {
-        Ok(guard) => {
-            tracing::debug!(target: "flows", flow_id = %id, namespace = %memory_namespace, driver = %guard.driver_id(), "[flows] flows_delete: clearing flow memory namespace through the bound driver");
-            match guard.as_documents() {
-                Some(documents) => documents
-                    .clear_namespace(&memory_namespace)
-                    .await
-                    .map_err(|error| error.to_string()),
-                // Name the driver: "does not support" with no subject reads as
-                // a host bug, and the actual fact is which driver is bound.
-                None => Err(format!(
-                    "the bound memory driver '{}' does not serve the documents family",
-                    guard.driver_id()
-                )),
-            }
+    // Best-effort: forget this flow's memory along with its row — a deleted
+    // flow must not leave stray `flow_memory_remember` items or run digests
+    // behind. Memory off forgets nothing. Never fails the delete itself: the
+    // flow row is already gone by this point.
+    match crate::flows::forget_matching(config, crate::flows::flow_filter(id)).await {
+        Ok(forgotten) => {
+            tracing::debug!(target: "flows", flow_id = %id, forgotten, "[flows] flows_delete: forgot flow memory");
         }
-        Err(error) => Err(error),
-    };
-    if let Err(error) = clear_result {
-        tracing::warn!(target: "flows", flow_id = %id, namespace = %memory_namespace, %error, "[flows] flows_delete: failed to clear flow memory namespace");
+        Err(error) => {
+            tracing::warn!(target: "flows", flow_id = %id, code = error.code(), %error, "[flows] flows_delete: failed to forget flow memory");
+        }
     }
 
     publish_flow_changed(id, "deleted", "system");
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         json!({ "id": id, "removed": true }),
         vec![format!("flow removed: {id}")],
     ))

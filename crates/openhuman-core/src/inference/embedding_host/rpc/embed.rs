@@ -1,7 +1,7 @@
 //! Live embedding through the configured provider, and the connectivity test.
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::{resolve_api_key, LOG_PREFIX};
 use crate::inference::embedding_host::factory::create_embedding_provider_with_config;
@@ -12,7 +12,7 @@ use tinyinference_embeddings::probe::probe_custom_embeddings;
 pub async fn embed(
     config: &Config,
     inputs: &[String],
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let provider_name = &config.memory.embedding_provider;
     let model = &config.memory.embedding_model;
     let dims = config.memory.embedding_dimensions;
@@ -65,7 +65,7 @@ pub async fn embed(
         "model": model,
     });
 
-    Ok(RpcOutcome::new(payload, vec!["embedding completed".into()]))
+    Ok(Outcome::new(payload, vec!["embedding completed".into()]))
 }
 
 /// Tests connectivity to the configured (or specified) embedding provider.
@@ -74,7 +74,7 @@ pub async fn test_connection(
     provider_slug: Option<&str>,
     model: Option<&str>,
     dims: Option<usize>,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let slug = provider_slug.unwrap_or(&config.memory.embedding_provider);
     let model = model.unwrap_or(&config.memory.embedding_model);
     let dims = dims.unwrap_or(config.memory.embedding_dimensions);
@@ -130,10 +130,7 @@ pub async fn test_connection(
                 "requested_dimensions": dims,
                 "actual_dimensions": actual_dims,
             });
-            Ok(RpcOutcome::new(
-                payload,
-                vec!["connection test passed".into()],
-            ))
+            Ok(Outcome::new(payload, vec!["connection test passed".into()]))
         }
         Err(e) => {
             let payload = serde_json::json!({
@@ -142,7 +139,7 @@ pub async fn test_connection(
                 "model": model,
                 "error": e.to_string(),
             });
-            Ok(RpcOutcome::new(
+            Ok(Outcome::new(
                 payload,
                 vec![format!("connection test failed: {e}")],
             ))

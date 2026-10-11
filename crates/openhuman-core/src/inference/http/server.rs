@@ -3,7 +3,7 @@
 //! ## Mounting
 //!
 //! The router returned by [`router()`] is merged into the core axum server
-//! in `crates/openhuman-core/src/core/jsonrpc.rs` via `.nest("/v1", inference::http::router())`.
+//! in `crates/openhuman-rpc/src/server/http/mod.rs` via `.nest("/v1", inference::http::router())`.
 //! It reuses the same bearer-token auth middleware that guards `/rpc`.
 //!
 //! ## Authentication
@@ -341,9 +341,6 @@ async fn models_handler(State(_state): State<AppState>) -> Response {
         config.vision_provider.as_deref(),
         config.memory_provider.as_deref(),
         config.embeddings_provider.as_deref(),
-        config.heartbeat_provider.as_deref(),
-        config.learning_provider.as_deref(),
-        config.subconscious_provider.as_deref(),
     ]
     .into_iter()
     .flatten()

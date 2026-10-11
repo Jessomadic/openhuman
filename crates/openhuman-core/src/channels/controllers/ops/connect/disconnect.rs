@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 use crate::security::credentials;
 
 use super::super::super::definitions::{find_channel_definition, ChannelAuthMode};
@@ -17,7 +17,7 @@ pub async fn disconnect_channel(
     channel_id: &str,
     auth_mode: ChannelAuthMode,
     clear_memory: bool,
-) -> Result<RpcOutcome<Value>, String> {
+) -> Result<Outcome<Value>, String> {
     // Verify channel exists.
     find_channel_definition(channel_id).ok_or_else(|| format!("unknown channel: {channel_id}"))?;
 
@@ -102,7 +102,7 @@ pub async fn disconnect_channel(
         0
     };
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({
             "channel": channel_id,
             "auth_mode": auth_mode,

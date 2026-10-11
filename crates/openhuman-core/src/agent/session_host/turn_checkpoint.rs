@@ -1,41 +1,3 @@
-use crate::agent::messages::ChatMessage;
-
-pub(crate) fn assistant_message_has_tool_calls(msg: &ChatMessage) -> bool {
-    if msg.role != "assistant" {
-        return false;
-    }
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&msg.content) else {
-        return false;
-    };
-    // CodeRabbit follow-up: only treat this as the native tool_calls envelope
-    // when the full expected shape is present:
-    //   - top-level JSON object
-    //   - `content` key present (the canonical native dialect emits — see
-    //     `to_provider_messages`)
-    //   - non-empty `tool_calls` array whose every element carries an `id`
-    //     string, a `name` string, and an `arguments` field
-    // This stops a legitimate assistant text reply that happens to contain
-    // the literal string `tool_calls` from being misclassified and dropped at
-    // the bound-cached-transcript boundary.
-    let Some(obj) = value.as_object() else {
-        return false;
-    };
-    if !obj.contains_key("content") {
-        return false;
-    }
-    let Some(tool_calls) = obj.get("tool_calls").and_then(|tc| tc.as_array()) else {
-        return false;
-    };
-    if tool_calls.is_empty() {
-        return false;
-    }
-    tool_calls.iter().all(|tc| {
-        tc.get("id").and_then(|v| v.as_str()).is_some()
-            && tc.get("name").and_then(|v| v.as_str()).is_some()
-            && tc.get("arguments").is_some()
-    })
-}
-
 /// Instruction appended (as a synthetic user turn) to the provider
 /// messages when a turn hits the tool-call iteration cap. Asks the model
 /// to wrap up with a resumable checkpoint instead of letting the turn die.
@@ -95,6 +57,59 @@ Then close with a brief **Still to do** line naming what remains, so the user ca
 \n\
 Let the length follow the substance — neither a one-line status nor a raw dump of tool output. If the results support no \
 conclusion yet, say that plainly and name what is missing.";
+
+/// The penultimate call of a capped turn: the last call that may still *emit*
+/// a deliverable (issue #6548 follow-up).
+///
+/// [`MAX_ITER_CHECKPOINT_INSTRUCTION`] asks the final call to report what the
+/// turn produced, and [`FinalCallWrapUpMiddleware`](crate::agent::tinyagents::middleware::FinalCallWrapUpMiddleware)
+/// withdraws the whole tool belt so that request cannot be spent on another
+/// tool call. That is right for a turn whose product is *text*, and exactly
+/// wrong for one whose product is a **file**: the model holds the finished
+/// content in context and has, structurally, no way to put it anywhere. The
+/// `baggage-policy` life scenario failed precisely there — 27 tool calls of
+/// research, a correct summary in the reply, and the requested
+/// `out/delta_baggage_guide.md` never written, so it graded 0/1 with the reply
+/// itself saying "Still to do: write the guide".
+///
+/// So one call earlier the belt is narrowed to the tools that can only write
+/// (see `DELIVERABLE_TOOLS`) rather than cleared: a gathering tool here would
+/// just buy another round of findings the turn has no room to report, while a
+/// writer turns findings already in hand into the artifact that was asked for.
+///
+/// The trade is the same one the final call already makes, moved one step
+/// earlier and stated plainly: a capped turn spends its second-to-last round
+/// persisting rather than gathering. A turn with nothing to persist loses that
+/// round — which is the cost of making the artifact structural instead of
+/// merely requested.
+///
+/// # A code change is not a file to write (#6958)
+///
+/// This used to say that "an incomplete file that marks its gaps honestly is
+/// worth far more than no file at all". For a report or a guide that is true.
+/// For a code change it steered a DeepSWE run that had made no source edits
+/// into writing `ROLLING_WINDOW_IMPLEMENTATION_NOTES.md` into the user's repo:
+/// the only "file" it could produce in one call was a description of the
+/// change. So the wording now splits the two cases. A requested file is
+/// still written; a code task applies real edits to its source files, and a
+/// notes, plan or summary file in the project is ruled out by name, because a
+/// partial set of real edits is the only partial result a code task can use.
+/// What is left undone belongs in the reply, which the next call asks for.
+pub(crate) const FINAL_WRITE_INSTRUCTION: &str = "\
+This is the last call on which you can use a tool, and the only tools left are the ones that write files. \
+Gathering is over — anything you have not found by now will not be found in this turn.\n\
+\n\
+If this task asked you to produce a file (a report, a guide, a document) and you have not written it yet, write it now \
+with file_write, from what is already in the results above, and mark inside it any part you could not confirm.\n\
+\n\
+If this task is a code change, apply as much of the change as you can right now as real edits to the source files: \
+apply_patch for targeted edits, or file_write to rewrite a file whose full content you have. A partial set of real \
+edits is worth more than any description of them. Do not write notes, a plan, a summary, a TODO list or any other \
+document into the project in place of the change. If you cannot edit a file exactly, leave it untouched and name it \
+in your reply.\n\
+\n\
+If there is nothing to write — the task asked only for an answer, or the work is already written — then do not \
+call a tool. Answer instead, and you will be asked to conclude next.";
 
 /// One completed tool call, carrying enough of its **actual output** to stand
 /// in for an answer (issue #6014).
@@ -269,6 +284,26 @@ pub(crate) fn render_tool_results(results: &[CheckpointToolResult], total_budget
 /// the oldest results drop first, disclosed as omitted.
 pub(crate) const GROUNDING_TOTAL_CHARS: usize = 16_000;
 
+/// The body shared by [`FINAL_ANSWER_INSTRUCTION`] and
+/// [`TRUNCATED_ANSWER_INSTRUCTION`]; a macro so both stay `&'static str`
+/// constants that the quotation guard can split.
+macro_rules! final_answer_body {
+    () => {
+        "\
+Tools are no longer available and nothing more will run this turn, so do not call any tools and do not \
+describe steps you are about to take. Write a self-contained final message that reports what actually happened: \
+what you found, changed or established, grounded in the tool results above and the tool records below. \
+If the request was not completed, say so and give the reason from the failing tool's own error message, \
+keeping any link it includes. Do not state anything the tool records contradict. \
+If nothing conclusive resulted, say so plainly.\n\
+\n\
+These directions are addressed to you and are not part of the conversation. Do not quote or restate them, \
+in whole or in part. Do not list or describe the tools available to you. Do not narrate your deliberation: \
+no thinking aloud, no correcting yourself mid-reply, no weighing what to do. Write only the message the user \
+will read."
+    };
+}
+
 /// Instruction appended (as a synthetic user turn) when a turn finished its
 /// tool work but the model produced **no final answer** — it yielded a
 /// terminating response with empty text after running tools (issue #4093) —
@@ -287,19 +322,22 @@ pub(crate) const GROUNDING_TOTAL_CHARS: usize = 16_000;
 /// directives forbid the three shapes that reached a user's screen; the frame
 /// [`wrap_harness_instruction`] adds is what makes it structurally distinct
 /// from the conversation in the first place.
-pub(crate) const FINAL_ANSWER_INSTRUCTION: &str = "\
-You have finished using tools for this turn but have not yet written a reply to the user. \
-Tools are no longer available and nothing more will run this turn, so do not call any tools and do not \
-describe steps you are about to take. Write a self-contained final message that reports what actually happened: \
-what you found, changed or established, grounded in the tool results above and the tool records below. \
-If the request was not completed, say so and give the reason from the failing tool's own error message, \
-keeping any link it includes. Do not state anything the tool records contradict. \
-If nothing conclusive resulted, say so plainly.\n\
-\n\
-These directions are addressed to you and are not part of the conversation. Do not quote or restate them, \
-in whole or in part. Do not list or describe the tools available to you. Do not narrate your deliberation: \
-no thinking aloud, no correcting yourself mid-reply, no weighing what to do. Write only the message the user \
-will read.";
+pub(crate) const FINAL_ANSWER_INSTRUCTION: &str = concat!(
+    "You have finished using tools for this turn but have not yet written a reply to the user. ",
+    final_answer_body!()
+);
+
+/// [`FINAL_ANSWER_INSTRUCTION`] for a turn whose last reply ran out of output
+/// tokens while the model was still reasoning, with no tool call (#6951). The
+/// generic lead ("you have finished using tools") was false there and drew
+/// replies that presented unfinished work as done. This lead names the real
+/// cause and asks the model to say what is left.
+pub(crate) const TRUNCATED_ANSWER_INSTRUCTION: &str = concat!(
+    "Your last reply ran out of output tokens while you were still reasoning, so this turn ended \
+     before you made your next tool call or wrote a reply to the user. The work is unfinished: say so \
+     plainly and name what is still left to do. ",
+    final_answer_body!()
+);
 
 /// The lead-in that hands the breaker's stop note to the closing call.
 ///
@@ -340,7 +378,9 @@ const MIN_QUOTED_WORDS: usize = 10;
 fn harness_instruction_needles(stop_reason: Option<&str>) -> Vec<String> {
     let mut sources = vec![
         FINAL_ANSWER_INSTRUCTION,
+        TRUNCATED_ANSWER_INSTRUCTION,
         MAX_ITER_CHECKPOINT_INSTRUCTION,
+        FINAL_WRITE_INSTRUCTION,
         STOP_NOTE_PREAMBLE,
     ];
     if let Some(reason) = stop_reason {
@@ -414,14 +454,19 @@ pub(crate) fn close_repair_instruction(instruction: &str, violation: CloseViolat
     format!("{named} Write the message again.\n\n{instruction}")
 }
 
-/// The full closing-message instruction: [`FINAL_ANSWER_INSTRUCTION`], the
+/// The full closing-message instruction: [`FINAL_ANSWER_INSTRUCTION`] (or
+/// [`TRUNCATED_ANSWER_INSTRUCTION`] when `truncated` and not halted), the
 /// breaker's stop note when the run was halted (issue #6279), and this turn's
 /// rendered tool records.
 ///
 /// The stop note is passed as input, not as text to repeat. The breaker words it
 /// for a model ("Report this back instead of retrying"), which is right for a
 /// sub-agent's parent and wrong on a user's screen.
-pub(crate) fn final_answer_instruction(stop_reason: Option<&str>, records: &str) -> String {
+pub(crate) fn final_answer_instruction(
+    stop_reason: Option<&str>,
+    truncated: bool,
+    records: &str,
+) -> String {
     let mut directive = String::new();
     if let Some(reason) = stop_reason {
         directive.push_str(STOP_NOTE_PREAMBLE);
@@ -429,7 +474,13 @@ pub(crate) fn final_answer_instruction(stop_reason: Option<&str>, records: &str)
         directive.push_str(reason.trim());
         directive.push_str("\n</stop_note>\n\n");
     }
-    directive.push_str(FINAL_ANSWER_INSTRUCTION);
+    // A breaker halt already explains the stop; truncation only replaces the
+    // "you have finished" lead when nothing more specific is known.
+    directive.push_str(if truncated && stop_reason.is_none() {
+        TRUNCATED_ANSWER_INSTRUCTION
+    } else {
+        FINAL_ANSWER_INSTRUCTION
+    });
     let mut out = wrap_harness_instruction(&directive);
     out.push_str("\n\n<tool_records>\n");
     out.push_str(if records.trim().is_empty() {
@@ -515,14 +566,18 @@ pub(crate) fn parse_close_verdict(text: &str) -> CloseVerdict {
 /// Distinct from [`build_deterministic_checkpoint`]: the turn did NOT hit the
 /// iteration cap, so this reads as a completed summary, not a paused one.
 ///
-/// Quotes each result's own output (issue #6278): a failure's message is
-/// usually the only explanation of why the request was not done, and it used to
-/// be reduced to the word "failed". When the breaker halted the run (issue
-/// #6279) its stop note is quoted too, because it names the rung that tripped
-/// and, for a missing connection or exhausted credits, what the user must do.
-/// The lead does not say the calls failed: `RepeatProgressMiddleware` halts
-/// through the same slot when identical calls keep *succeeding*, and the
-/// records below carry each call's real status.
+/// Without a stop note it quotes each result's own output (issue #6278): a
+/// failure's message is usually the only explanation of why the request was not
+/// done, and it used to be reduced to the word "failed".
+///
+/// When the breaker halted the run it delegates to
+/// [`super::stop_summary::render_stop_summary`]: one plain-language reason
+/// derived from the stop note, identical results collapsed with a count, and
+/// at most each tool's name and a short scrubbed error line. The stop note is
+/// written for the model and tool output can carry a user's personal details,
+/// so neither is quoted to the user. It does not call successful calls failed:
+/// `RepeatProgressMiddleware` halts through the same slot when identical calls
+/// keep *succeeding*.
 pub(crate) fn build_deterministic_final_summary(
     results: &[CheckpointToolResult],
     stop_reason: Option<&str>,
@@ -530,24 +585,12 @@ pub(crate) fn build_deterministic_final_summary(
     if results.is_empty() && stop_reason.is_none() {
         return "I finished this turn but produced no result to report.".to_string();
     }
-    let mut out = match stop_reason {
-        Some(reason) => {
-            let mut lead = String::from(
-                "I stopped this turn early because my tool calls were not making progress, so I \
-                 could not finish the request.\n\n**Why I stopped**\n",
-            );
-            for line in reason.trim().lines() {
-                lead.push_str("> ");
-                lead.push_str(line);
-                lead.push('\n');
-            }
-            lead.push_str("\n**What each tool call returned**\n");
-            lead
-        }
-        None => String::from(
-            "I finished this turn without writing up a result. Here is what each tool call returned:\n",
-        ),
-    };
+    if let Some(reason) = stop_reason {
+        return super::stop_summary::render_stop_summary(results, reason);
+    }
+    let mut out = String::from(
+        "I finished this turn without writing up a result. Here is what each tool call returned:\n",
+    );
     if results.is_empty() {
         out.push_str("\n- (no tool calls completed)\n");
     } else {

@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::core::bus::BUS;
 use crate::core::events::DomainEvent;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 /// JSON-serializable acknowledgement returned to CLI / JSON-RPC callers
 /// before the current process exits.
@@ -29,7 +29,7 @@ pub struct ShutdownStatus {
 pub async fn service_shutdown(
     source: Option<String>,
     reason: Option<String>,
-) -> Result<RpcOutcome<ShutdownStatus>, String> {
+) -> Result<Outcome<ShutdownStatus>, String> {
     let source = source
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -50,7 +50,7 @@ pub async fn service_shutdown(
         reason: reason.clone(),
     });
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         ShutdownStatus {
             accepted: true,
             source,

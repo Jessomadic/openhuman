@@ -3,7 +3,7 @@
 use serde_json::json;
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 use crate::security::credentials::{AuthService, DEFAULT_AUTH_PROFILE_NAME};
 
 /// Provider slot for the user-provided Composio API key when running in
@@ -26,7 +26,7 @@ pub const COMPOSIO_DIRECT_PROVIDER: &str = "composio-direct";
 pub async fn store_composio_api_key(
     config: &Config,
     api_key: &str,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     let trimmed = api_key.trim();
     if trimmed.is_empty() {
         return Err("composio api_key must not be empty".to_string());
@@ -45,7 +45,7 @@ pub async fn store_composio_api_key(
     )
     .map_err(|e| e.to_string())?;
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({ "stored": true, "provider": COMPOSIO_DIRECT_PROVIDER }),
         "composio direct api key stored",
     ))
@@ -54,7 +54,7 @@ pub async fn store_composio_api_key(
 /// Read the user-provided Composio API key from the encrypted credential
 /// store. Returns `Ok(None)` when no key has been stored yet.
 ///
-/// Used by [`crate::integrations::composio::client::create_composio_client`]
+/// Used by [`crate::integrations::composio::client::resolve_composio_route`]
 /// to decide whether direct mode can actually be activated.
 pub fn get_composio_api_key(config: &Config) -> Result<Option<String>, String> {
     let auth = AuthService::from_config(config);
@@ -70,21 +70,19 @@ pub fn get_composio_api_key(config: &Config) -> Result<Option<String>, String> {
 pub async fn rpc_store_composio_api_key(
     config: &Config,
     api_key: &str,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     store_composio_api_key(config, api_key).await
 }
 
 /// Remove the stored Composio direct-mode API key. Used when the user
 /// switches back to backend mode and explicitly clears their key.
-pub async fn clear_composio_api_key(
-    config: &Config,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn clear_composio_api_key(config: &Config) -> Result<Outcome<serde_json::Value>, String> {
     tracing::debug!("[composio-direct] clearing stored api key");
     let auth = AuthService::from_config(config);
     let removed = auth
         .remove_profile(COMPOSIO_DIRECT_PROVIDER, DEFAULT_AUTH_PROFILE_NAME)
         .map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({ "removed": removed }),
         "composio direct api key cleared",
     ))

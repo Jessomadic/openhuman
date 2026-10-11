@@ -7,7 +7,6 @@
  * payload.
  */
 import { callCoreRpc } from '../../services/coreRpcClient';
-import { isTauri } from './common';
 
 export type TaskSourceProvider = 'github' | 'notion' | 'linear' | 'clickup';
 
@@ -120,24 +119,15 @@ export interface TaskSourceAddParams {
   max_tasks_per_fetch?: number;
 }
 
-function ensureTauri(): void {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
-}
-
 export async function openhumanTaskSourcesList(): Promise<TaskSource[]> {
-  ensureTauri();
   return await callCoreRpc<TaskSource[]>({ method: 'openhuman.task_sources_list' });
 }
 
 export async function openhumanTaskSourcesGet(id: string): Promise<TaskSource> {
-  ensureTauri();
   return await callCoreRpc<TaskSource>({ method: 'openhuman.task_sources_get', params: { id } });
 }
 
 export async function openhumanTaskSourcesAdd(params: TaskSourceAddParams): Promise<TaskSource> {
-  ensureTauri();
   return await callCoreRpc<TaskSource>({
     method: 'openhuman.task_sources_add',
     params: params as unknown as Record<string, unknown>,
@@ -148,7 +138,6 @@ export async function openhumanTaskSourcesUpdate(
   id: string,
   patch: TaskSourcePatch
 ): Promise<TaskSource> {
-  ensureTauri();
   return await callCoreRpc<TaskSource>({
     method: 'openhuman.task_sources_update',
     params: { id, patch },
@@ -158,7 +147,6 @@ export async function openhumanTaskSourcesUpdate(
 export async function openhumanTaskSourcesRemove(
   id: string
 ): Promise<{ id: string; removed: boolean; pruned?: number }> {
-  ensureTauri();
   return await callCoreRpc<{ id: string; removed: boolean; pruned?: number }>({
     method: 'openhuman.task_sources_remove',
     params: { id },
@@ -166,7 +154,6 @@ export async function openhumanTaskSourcesRemove(
 }
 
 export async function openhumanTaskSourcesFetch(id: string): Promise<FetchOutcome> {
-  ensureTauri();
   return await callCoreRpc<FetchOutcome>({
     method: 'openhuman.task_sources_fetch',
     params: { id },
@@ -174,7 +161,6 @@ export async function openhumanTaskSourcesFetch(id: string): Promise<FetchOutcom
 }
 
 export async function openhumanTaskSourcesSync(): Promise<FetchOutcome[]> {
-  ensureTauri();
   return await callCoreRpc<FetchOutcome[]>({ method: 'openhuman.task_sources_sync' });
 }
 
@@ -182,7 +168,6 @@ export async function openhumanTaskSourcesListTasks(
   id: string,
   limit = 50
 ): Promise<NormalizedTask[]> {
-  ensureTauri();
   return await callCoreRpc<NormalizedTask[]>({
     method: 'openhuman.task_sources_list_tasks',
     params: { id, limit },
@@ -195,7 +180,6 @@ export async function openhumanTaskSourcesPreviewFilter(
   connectionId?: string,
   max?: number
 ): Promise<NormalizedTask[]> {
-  ensureTauri();
   return await callCoreRpc<NormalizedTask[]>({
     method: 'openhuman.task_sources_preview_filter',
     params: { provider, filter, connection_id: connectionId, max },
@@ -209,7 +193,6 @@ export async function openhumanTaskSourcesListDatabases(
   provider: TaskSourceProvider,
   connectionId?: string
 ): Promise<TaskContainer[]> {
-  ensureTauri();
   return await callCoreRpc<TaskContainer[]>({
     method: 'openhuman.task_sources_list_databases',
     params: { provider, connection_id: connectionId },
@@ -217,6 +200,5 @@ export async function openhumanTaskSourcesListDatabases(
 }
 
 export async function openhumanTaskSourcesStatus(): Promise<TaskSourcesStatus> {
-  ensureTauri();
   return await callCoreRpc<TaskSourcesStatus>({ method: 'openhuman.task_sources_status' });
 }

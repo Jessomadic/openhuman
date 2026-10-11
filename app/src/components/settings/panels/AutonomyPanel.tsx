@@ -1,3 +1,4 @@
+import { Infinity as InfinityIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
@@ -14,6 +15,8 @@ const UNLIMITED = 4_294_967_295;
 
 /** Preset rows. The `label` field is an i18n key for the unlimited entry; the
  *  numeric-only rows are intentionally locale-agnostic. */
+const UNLIMITED_ICON = <InfinityIcon className="h-3.5 w-3.5" aria-hidden />;
+
 const PRESETS: { labelKey?: string; label?: string; value: number }[] = [
   { labelKey: 'autonomy.presetUnlimited', value: UNLIMITED },
   { label: '100', value: 100 },
@@ -107,11 +110,20 @@ const AutonomyRateLimitSection = () => {
         control={
           <div className="space-y-3">
             <div className="flex items-center gap-2">
+              {/* The u32::MAX sentinel shows as an empty field with an ∞
+                  placeholder; clearing the field means unlimited again. */}
               <SettingsNumberField
                 id="autonomy-max-actions"
-                value={draft}
+                value={draft === String(UNLIMITED) ? '' : draft}
+                placeholder="∞"
+                rangeLabel={
+                  <>
+                    {MIN}&#x2013;
+                    <InfinityIcon className="h-3 w-3" aria-label={t('autonomy.presetUnlimited')} />
+                  </>
+                }
                 onChange={v => {
-                  setDraft(v);
+                  setDraft(v.trim() === '' ? String(UNLIMITED) : v);
                   if (status.kind === 'saved' || status.kind === 'error') {
                     setStatus({ kind: 'idle' });
                   }
@@ -128,6 +140,7 @@ const AutonomyRateLimitSection = () => {
                 type="button"
                 variant="primary"
                 size="xs"
+                data-testid="autonomy-max-actions-save"
                 onClick={() => void onSave()}
                 disabled={!canSave}>
                 {status.kind === 'saving' ? t('autonomy.statusSaving') : t('common.save')}
@@ -141,6 +154,7 @@ const AutonomyRateLimitSection = () => {
                   type="button"
                   variant="tertiary"
                   size="xs"
+                  leadingIcon={p.value === UNLIMITED ? UNLIMITED_ICON : undefined}
                   onClick={() => applyPreset(p.value)}>
                   {p.labelKey ? t(p.labelKey) : p.label}
                 </Button>
@@ -153,7 +167,10 @@ const AutonomyRateLimitSection = () => {
               </p>
             )}
             {isValid && parsed === UNLIMITED && (
-              <p className="text-xs text-content-muted">{t('autonomy.unlimitedNote')}</p>
+              <p className="flex items-center gap-1.5 text-xs text-content-muted">
+                {UNLIMITED_ICON}
+                {t('autonomy.unlimitedNote')}
+              </p>
             )}
 
             <SettingsStatusLine

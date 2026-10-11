@@ -32,16 +32,26 @@ const ColorTokenField = ({ tokenKey, label, value, disabled, onChange }: ColorTo
   return (
     <label
       htmlFor={id}
-      className={`flex items-center gap-3 py-2 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
-      <input
-        id={id}
-        type="color"
-        value={hex}
-        disabled={disabled}
-        onChange={e => onChange(hexToChannels(e.target.value))}
-        aria-label={label}
-        className="h-9 w-9 shrink-0 cursor-pointer rounded-lg border border-line bg-surface p-0 disabled:cursor-not-allowed disabled:opacity-50"
-      />
+      className={`flex items-center gap-3 py-1.5 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+      {/* The native colour input paints its own frame and inset padding around
+          the swatch, which doubled up with our border and looked different in
+          every engine. The visible swatch is a plain span; the real input sits
+          on top of it, transparent, so clicking still opens the OS picker. */}
+      <span
+        className={`relative h-7 w-7 shrink-0 overflow-hidden rounded-md ring-1 ring-inset ring-line-strong ${
+          disabled ? 'opacity-50' : ''
+        }`}
+        style={{ backgroundColor: hex }}>
+        <input
+          id={id}
+          type="color"
+          value={hex}
+          disabled={disabled}
+          onChange={e => onChange(hexToChannels(e.target.value))}
+          aria-label={label}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+        />
+      </span>
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
         <span className="truncate text-sm text-content">{label}</span>
         {/* The hex is the value you are about to change, so it stays on the

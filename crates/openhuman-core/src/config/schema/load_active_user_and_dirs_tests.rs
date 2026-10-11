@@ -98,11 +98,13 @@ fn user_openhuman_dir_builds_correct_path() {
 }
 
 #[tokio::test]
-// Races on `OPENHUMAN_WORKSPACE` env var with other tests holding
-// `TEST_ENV_LOCK` — passes in isolation, intermittently fails in parallel.
-// Runs reliably with `--ignored --test-threads=1`. See PR #1524.
-#[ignore = "flaky in parallel cargo test; OPENHUMAN_WORKSPACE env-var race — see PR #1524"]
+#[allow(clippy::await_holding_lock)]
 async fn resolve_dirs_uses_active_user_when_present() {
+    // `resolve_runtime_config_dirs` reads `OPENHUMAN_WORKSPACE`; hold the shared
+    // env lock and clear it so a sibling test's override cannot leak in.
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
+    let prior_workspace = std::env::var_os("OPENHUMAN_WORKSPACE");
+    std::env::remove_var("OPENHUMAN_WORKSPACE");
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let default_workspace = root.join("workspace");
@@ -126,6 +128,10 @@ async fn resolve_dirs_uses_active_user_when_present() {
     assert_eq!(oh_dir, expected_user_dir);
     assert_eq!(ws_dir, expected_user_dir.join("workspace"));
     assert_eq!(source, ConfigResolutionSource::ActiveUser);
+
+    if let Some(value) = prior_workspace {
+        std::env::set_var("OPENHUMAN_WORKSPACE", value);
+    }
 }
 
 #[test]
@@ -145,21 +151,19 @@ fn default_root_dir_name_uses_staging_suffix_for_staging_env() {
     // openhuman dir (e.g. the credentials active-session guard, which silently
     // stops finding `active_user.toml` once the root becomes `.openhuman-staging`).
     // Take the same lock those tests hold.
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let prior = std::env::var(crate::api::config::APP_ENV_VAR).ok();
+    let _env_guard = crate::config::TEST_ENV_LOCK.blocking_lock();
+    let prior = std::env::var(crate::config::app_env::APP_ENV_VAR).ok();
 
-    std::env::set_var(crate::api::config::APP_ENV_VAR, "staging");
-    assert!(crate::api::config::is_staging_app_env(Some("staging")));
+    std::env::set_var(crate::config::app_env::APP_ENV_VAR, "staging");
+    assert!(crate::config::app_env::is_staging_app_env(Some("staging")));
     assert_eq!(default_root_dir_name(), ".openhuman-staging");
 
-    std::env::set_var(crate::api::config::APP_ENV_VAR, "production");
+    std::env::set_var(crate::config::app_env::APP_ENV_VAR, "production");
     assert_eq!(default_root_dir_name(), ".openhuman");
 
     match prior {
-        Some(value) => std::env::set_var(crate::api::config::APP_ENV_VAR, value),
-        None => std::env::remove_var(crate::api::config::APP_ENV_VAR),
+        Some(value) => std::env::set_var(crate::config::app_env::APP_ENV_VAR, value),
+        None => std::env::remove_var(crate::config::app_env::APP_ENV_VAR),
     }
 }
 
@@ -657,37 +661,29 @@ fn env_overlay_toggles_agent_tracing_capture_content() {
 }
 
 #[test]
-fn env_overlay_runtime_pool_workers_and_enabled() {
-    // Baseline: master switch on, both pools at the default worker count.
+fn env_overlay_agent_max_tool_iterations_override() {
     let mut cfg = Config::default();
-    assert!(cfg.runtime_pool.enabled, "master switch defaults on");
-    assert_eq!(cfg.runtime_pool.node.max_workers, 2);
-    assert_eq!(cfg.runtime_pool.python.max_workers, 2);
+    assert_eq!(cfg.agent.max_tool_iterations_override, None);
 
-    // Valid overrides land; `enabled` parses via the shared bool parser.
     cfg.apply_env_overlay_with(
-        &HashMapEnv::new()
-            .with("OPENHUMAN_RUNTIME_POOL_ENABLED", "off")
-            .with("OPENHUMAN_RUNTIME_POOL_NODE_MAX_WORKERS", "7")
-            .with("OPENHUMAN_RUNTIME_POOL_PYTHON_MAX_WORKERS", "3"),
+        &HashMapEnv::new().with("OPENHUMAN_AGENT_MAX_TOOL_ITERATIONS", " 250 "),
     );
-    assert!(!cfg.runtime_pool.enabled, "explicit off disables the pool");
-    assert_eq!(cfg.runtime_pool.node.max_workers, 7);
-    assert_eq!(cfg.runtime_pool.python.max_workers, 3);
+    assert_eq!(cfg.agent.max_tool_iterations_override, Some(250));
+    assert_eq!(
+        cfg.agent.max_tool_iterations,
+        Config::default().agent.max_tool_iterations,
+        "the override never rewrites the definition-less default"
+    );
 
-    // Unparseable worker counts are ignored (the warn arm) — the previously
-    // applied values survive rather than resetting to a default or zero.
-    cfg.apply_env_overlay_with(
-        &HashMapEnv::new()
-            .with("OPENHUMAN_RUNTIME_POOL_NODE_MAX_WORKERS", "not-a-number")
-            .with("OPENHUMAN_RUNTIME_POOL_PYTHON_MAX_WORKERS", ""),
-    );
-    assert_eq!(
-        cfg.runtime_pool.node.max_workers, 7,
-        "invalid node worker count keeps the prior value"
-    );
-    assert_eq!(
-        cfg.runtime_pool.python.max_workers, 3,
-        "empty python worker count keeps the prior value"
-    );
+    // Zero, garbage and blank values are ignored, keeping the last good value.
+    for ignored in ["0", "lots", "-5", ""] {
+        cfg.apply_env_overlay_with(
+            &HashMapEnv::new().with("OPENHUMAN_AGENT_MAX_TOOL_ITERATIONS", ignored),
+        );
+        assert_eq!(
+            cfg.agent.max_tool_iterations_override,
+            Some(250),
+            "`{ignored}` must not change the override"
+        );
+    }
 }

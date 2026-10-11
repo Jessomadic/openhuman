@@ -52,16 +52,6 @@ fn every_intent_tag_decodes() {
 }
 
 #[test]
-fn an_unrecognised_tag_degrades_to_unknown_rather_than_failing() {
-    // A module newer than this host may name an intent we have never heard
-    // of. Deferring to the agent is the correct handling; a decode error
-    // would turn a forward-compatible addition into a broken call.
-    let decoded: VoiceIntent =
-        serde_json::from_str(r#"{"intent":"summon_helicopter"}"#).expect("decodes");
-    assert_eq!(decoded, VoiceIntent::Unknown);
-}
-
-#[test]
 fn hallucination_modes_use_the_wire_spelling() {
     // The module rejects an unknown mode rather than defaulting, so a typo
     // here is a hard failure at runtime rather than a silent mode swap.

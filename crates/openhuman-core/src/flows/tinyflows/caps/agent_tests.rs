@@ -19,21 +19,6 @@ fn harness_ceiling_honours_a_valid_override() {
     assert_eq!(super::max_parallel_harness_agents(Some(" 16 ")), 16);
 }
 
-#[test]
-fn explicit_timeout_is_clamped_but_never_scaled() {
-    assert_eq!(super::resolve_run_timeout_secs(Some(120), 50), 120);
-    assert_eq!(super::resolve_run_timeout_secs(Some(5), 50), 10);
-    assert_eq!(super::resolve_run_timeout_secs(Some(9_000), 50), 600);
-}
-
-#[test]
-fn default_timeout_scales_with_iteration_cap_and_caps_at_600() {
-    assert_eq!(super::resolve_run_timeout_secs(None, 10), 240);
-    assert_eq!(super::resolve_run_timeout_secs(None, 25), 300);
-    assert_eq!(super::resolve_run_timeout_secs(None, 50), 600);
-    assert_eq!(super::resolve_run_timeout_secs(None, usize::MAX), 600);
-}
-
 #[tokio::test]
 async fn production_harness_ceiling_is_open_and_reusable() {
     let held = super::HARNESS_AGENT_SLOTS
@@ -42,4 +27,45 @@ async fn production_harness_ceiling_is_open_and_reusable() {
         .expect("the production limiter must remain open");
     drop(held);
     assert!(!super::HARNESS_AGENT_SLOTS.is_closed());
+}
+
+// --- host-registered agents (agent::host_agents) ---
+
+struct FlowsHost;
+
+impl crate::agent::host_agents::HostAgentResolver for FlowsHost {
+    fn resolve(&self, agent_id: &str) -> Option<crate::agent::host_agents::HostAgent> {
+        if agent_id != "flows-host-agent" {
+            return None;
+        }
+        let mut definition =
+            crate::agent::harness::definition::AgentDefinitionRegistry::builtins_only()
+                .get("orchestrator")
+                .cloned()
+                .unwrap();
+        definition.id = agent_id.to_string();
+        Some(crate::agent::host_agents::HostAgent {
+            definition,
+            config: crate::config::Config::default(),
+            host_tools: None,
+            hooks: Default::default(),
+            context: crate::core::runtime::CoreContext::for_test(
+                crate::core::runtime::DomainSet::full(),
+                None,
+            ),
+        })
+    }
+}
+
+#[test]
+fn a_host_registered_agent_routes_ahead_of_the_registries() {
+    let _slot = crate::agent::host_agents::tests::lock();
+    let installed: std::sync::Arc<dyn crate::agent::host_agents::HostAgentResolver> =
+        std::sync::Arc::new(FlowsHost);
+    crate::agent::host_agents::install(std::sync::Arc::clone(&installed));
+    let host = super::route_for_agent_ref("flows-host-agent");
+    let other = super::route_for_agent_ref("flows-not-a-host-agent");
+    crate::agent::host_agents::clear_if(&installed);
+    assert_eq!(host, super::AgentRoute::HostAgent);
+    assert_eq!(other, super::AgentRoute::RegistryFallback);
 }

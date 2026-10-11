@@ -87,7 +87,7 @@ describe('PersonaPanel', () => {
     fireEvent.change(screen.getByTestId('persona-guided-personality'), {
       target: { value: 'Warm and direct.' },
     });
-    fireEvent.click(screen.getByTestId('persona-soul-save'));
+    fireEvent.click(screen.getByTestId('persona-save'));
 
     await waitFor(() => {
       expect(writePersonaFileMock).toHaveBeenCalledWith(
@@ -105,7 +105,7 @@ describe('PersonaPanel', () => {
     await awaitLoaded();
 
     fireEvent.click(screen.getByTestId('persona-template-doctor'));
-    fireEvent.click(screen.getByTestId('persona-soul-save'));
+    fireEvent.click(screen.getByTestId('persona-save'));
 
     await waitFor(() => {
       const lastCall = writePersonaFileMock.mock.calls.at(-1);
@@ -125,16 +125,26 @@ describe('PersonaPanel', () => {
     fireEvent.change(screen.getByTestId('persona-description-input'), {
       target: { value: 'Calm and concise.' },
     });
-    fireEvent.click(screen.getByTestId('persona-identity-save'));
+    fireEvent.click(screen.getByTestId('persona-save'));
 
     expect(store.getState().persona.displayName).toBe('Nova');
     expect(store.getState().persona.description).toBe('Calm and concise.');
   });
 
-  it('keeps the identity save button disabled until a field changes', async () => {
+  it('hides the save bar until a field changes, one bar for the whole page', async () => {
     renderWithProviders(<PersonaPanel />);
     await awaitLoaded();
-    expect(screen.getByTestId('persona-identity-save')).toBeDisabled();
+    // Identity and SOUL.md now share a single save bar/button, shown only
+    // once something is dirty — no separate per-section save controls.
+    expect(screen.queryByTestId('persona-save-bar')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('persona-save')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('persona-display-name-input'), {
+      target: { value: 'Nova' },
+    });
+
+    expect(screen.getByTestId('persona-save-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('persona-save')).not.toBeDisabled();
   });
 
   it('writes edited SOUL.md contents over RPC from the raw editor', async () => {
@@ -145,7 +155,7 @@ describe('PersonaPanel', () => {
     fireEvent.change(screen.getByTestId('persona-soul-editor'), {
       target: { value: 'You are calm and concise.' },
     });
-    fireEvent.click(screen.getByTestId('persona-soul-save'));
+    fireEvent.click(screen.getByTestId('persona-save'));
 
     await waitFor(() => {
       expect(writePersonaFileMock).toHaveBeenCalledWith('SOUL.md', 'You are calm and concise.');
@@ -159,7 +169,7 @@ describe('PersonaPanel', () => {
     openAdvanced();
 
     fireEvent.change(screen.getByTestId('persona-soul-editor'), { target: { value: 'edited' } });
-    fireEvent.click(screen.getByTestId('persona-soul-save'));
+    fireEvent.click(screen.getByTestId('persona-save'));
 
     await waitFor(() => {
       expect(screen.getByTestId('persona-soul-error')).toHaveTextContent('disk full');
@@ -210,12 +220,9 @@ describe('PersonaPanel', () => {
     });
   });
 
-  it('navigates to the Face tab for avatar & voice', async () => {
-    renderWithProviders(<PersonaPanel />);
-    await awaitLoaded();
-    fireEvent.click(screen.getByTestId('persona-open-mascot'));
-    expect(mockNavigateToSettings).toHaveBeenCalledWith('personality#face');
-  });
+  // Personality and Face are now separate settings pages (not tabs of one
+  // panel); the `#face` deep link redirect lives in the route table
+  // (`PersonalityRoute` in settingsRouteElements.tsx), not in PersonaPanel.
 
   it('links guided users to Agent access for permissions', async () => {
     renderWithProviders(<PersonaPanel />);

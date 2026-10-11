@@ -55,6 +55,10 @@ const Card = ({
 }: CardProps) => {
   /* Real heading (h3, one level below SettingsHeader's h2) for a11y and so
      getByRole('heading') keeps resolving section titles. */
+  // A header-only card (body rendered conditionally and currently empty)
+  // needs the header's own bottom padding, or the description sits on the
+  // card's bottom edge.
+  const hasBody = children != null && children !== false && children !== '';
   const heading = title ? (
     <>
       <h3 className="text-xs font-semibold tracking-wide text-content-muted">{title}</h3>
@@ -70,7 +74,7 @@ const Card = ({
       data-testid={testId}
       className={cn('overflow-hidden rounded-xl border border-line bg-surface', className)}>
       {(heading || headerRight) && (
-        <div className="px-4 pb-0 pt-4">
+        <div className={cn('px-4 pt-4', hasBody ? 'pb-0' : 'pb-4')}>
           {headerRight ? (
             <div className="flex items-baseline justify-between gap-3">
               <div className="min-w-0">{heading}</div>
@@ -84,9 +88,11 @@ const Card = ({
       {/* `divide-line-subtle` flips with the theme on its own, so the historical
           hardcoded dark-mode companion is gone: a raw palette scale would not
           follow a user's custom theme. */}
-      <div className={cn(divided && 'divide-y divide-line-subtle', padded && 'p-4')}>
-        {children}
-      </div>
+      {hasBody && (
+        <div className={cn(divided && 'divide-y divide-line-subtle', padded && 'p-4')}>
+          {children}
+        </div>
+      )}
     </div>
   );
 };

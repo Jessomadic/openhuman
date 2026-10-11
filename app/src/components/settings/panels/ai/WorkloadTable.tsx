@@ -1,35 +1,41 @@
 /*
- * One titled group of workload rows (chat, or background) rendered as a real
- * table.
- *
- * The two groups were byte-identical markup differing only in copy and row
- * array, so they share one component. `Table` brings the piece that matters
- * beyond semantics: it wraps the table in its own `overflow-x-auto`, so a
- * narrow settings pane scrolls the matrix rather than the whole page.
- *
- * The action column has a deliberately empty header. It holds a control, not
- * data, and a visible label for it would be read out on every row; the buttons
- * name themselves ("Change Model" / "Choose Model").
+ * One titled group of workload rows (chat, or background) rendered as a Card
+ * holding a real table: the task on the left, the route it resolves to on the
+ * right. `Table` wraps itself in `overflow-x-auto`, so a narrow settings pane
+ * scrolls the matrix rather than the whole page.
  */
 import { type ReactNode } from 'react';
+
+import { useT } from '../../../../lib/i18n/I18nContext';
+import Card from '../../../ui/Card';
+import { Table, TableBody, TableHead, TableHeader, TableRow } from '../../../ui/Table';
 
 export const WorkloadTable = ({
   title,
   description,
   children,
+  'data-testid': testId,
 }: {
   title: string;
   description: string;
   children: ReactNode;
+  'data-testid'?: string;
 }) => {
+  const { t } = useT();
   return (
-    <div className="flex w-full flex-col">
-      <div className="flex flex-col gap-0.5 px-4 py-3">
-        <h4 className="text-sm font-semibold text-content">{title}</h4>
-        <p className="text-xs text-content-muted">{description}</p>
-      </div>
-      <ul className="divide-y divide-line-subtle border-t border-line-subtle">{children}</ul>
-    </div>
+    <Card title={title} description={description} className="w-full" data-testid={testId}>
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="pl-4">{t('settings.ai.routing.columnTask')}</TableHead>
+            <TableHead className="w-px whitespace-nowrap pr-4">
+              {t('settings.ai.routing.columnRoute')}
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>{children}</TableBody>
+      </Table>
+    </Card>
   );
 };
 

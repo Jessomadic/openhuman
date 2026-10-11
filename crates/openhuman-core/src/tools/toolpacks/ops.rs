@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 
 use super::registry;
-use super::tools::{PackRegistryHandle, UseSkillTool, USE_SKILL};
+use tinyagents_harness::tool::packs::{PackRegistryHandle, UseSkillTool, USE_SKILL};
 use tinytools::Tool;
 
 /// Append `use_skill` to a freshly built registry.
@@ -12,7 +12,10 @@ use tinytools::Tool;
 /// It starts unbound; [`bind_pack_registry`] gives it its view of the registry
 /// once that is behind an `Arc`.
 pub fn append_pack_tools(tools: &mut Vec<Box<dyn Tool>>) {
-    tools.push(Box::new(UseSkillTool::new(PackRegistryHandle::default())));
+    tools.push(Box::new(UseSkillTool::new(
+        PackRegistryHandle::default(),
+        registry::CATALOG,
+    )));
 }
 
 /// Point the pack tool at the durable registry it lives in.
@@ -57,7 +60,7 @@ pub fn bind_synthesized_pack_registry(
 /// Apply `edit` to every pack tool's handle in `tools`, returning how many.
 fn for_each_pack_tool(
     tools: &Arc<Vec<Box<dyn Tool>>>,
-    mut edit: impl FnMut(&super::tools::PackRegistryHandle),
+    mut edit: impl FnMut(&PackRegistryHandle),
 ) -> usize {
     let mut bound = 0usize;
     for tool in tools.iter() {

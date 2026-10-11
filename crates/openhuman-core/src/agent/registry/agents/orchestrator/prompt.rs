@@ -13,8 +13,8 @@
 use crate::agent::harness::definition::SubagentEntry;
 use crate::agent::harness::AgentDefinitionRegistry;
 use crate::agent::prompts::{
-    render_datetime, render_identity, render_tools, render_user_files, render_workspace,
-    ConnectedIntegration, PromptContext,
+    render_datetime, render_identity, render_tools, render_workspace, ConnectedIntegration,
+    PromptContext, ToolCallFormat,
 };
 use crate::skills::ops_types::Workflow;
 use crate::tools::orchestrator_tools::sanitise_slug;
@@ -35,11 +35,35 @@ pub fn build(ctx: &PromptContext<'_>) -> Result<String> {
         }
     };
 
-    // Resolved once: the same three routes decide both the static rows below
+    // Resolved once: the skill routes decide both the static rows below
     // and the generated sections further down, and they must agree (#6302).
-    let skill_run = hand_off_route(ctx, "skill_executor");
-    let skill_install = hand_off_route(ctx, "skill_setup");
-    let mcp_route = hand_off_route(ctx, "mcp_agent");
+    let skill_run = run_workflow_route(ctx);
+    // A packed install route is already named under "Capabilities not in your
+    // tool list"; the skills section names it only when it is on the belt.
+    let skill_install = hand_off_route(ctx, "skill_setup")
+        .filter(|route| !route.contains(tinyagents_harness::tool::packs::USE_SKILL));
+    // An empty visibility set is the builder's unfiltered sentinel. Preserve
+    // the MCP route for those sessions while suppressing it in gated-off builds.
+    // Registered is enough: the orchestrator defers the registry tools
+    // (`deferred_tools` in its agent.toml), so they are reachable through
+    // `tool_search` and by name without being in the visible set.
+    let mcp_available = cfg!(feature = "mcp")
+        && (ctx.visible_tool_names.is_empty()
+            || ctx.visible_tool_names.contains("mcp_registry_tool_call")
+            || ctx
+                .tools
+                .iter()
+                .any(|tool| tool.name.as_ref() == "mcp_registry_tool_call"));
+
+    // `composio_connect` exists only while Composio is on (the registry builds no
+    // Composio tools under `composio.mode = "disabled"`), so its routing row must
+    // vanish with it. Same sentinel rule as MCP: an empty visible set is unfiltered.
+    let composio_available = ctx.visible_tool_names.is_empty()
+        || ctx.visible_tool_names.contains("composio_connect")
+        || ctx
+            .tools
+            .iter()
+            .any(|tool| tool.name.as_ref() == "composio_connect");
 
     // ── Stable tier: identical across sessions for a given build ─────────
     //
@@ -54,31 +78,32 @@ pub fn build(ctx: &PromptContext<'_>) -> Result<String> {
         &strip_route_lines(
             ARCHETYPE,
             skill_run.is_some() || skill_install.is_some(),
-            mcp_route.is_some(),
+            mcp_available,
+            composio_available,
         ),
     );
-    push(&mut out, &render_tools(ctx)?);
+    // A native-tool-calling provider carries the schemas in the request, and
+    // the only prose `render_tools` adds there is the generic Tool Use
+    // Protocol, whose one rule ("call it in the same message") is the first
+    // line of this agent's `## Grounding and tool use`. Text dialects still
+    // need the catalogue and their protocol block.
+    if ctx.tool_call_format != ToolCallFormat::Native {
+        push(&mut out, &render_tools(ctx)?);
+    }
     push(&mut out, &render_datetime(ctx)?);
 
     // ── Context tier: stable for the session, not across installs ────────
     out.push_str(PROMPT_TIER_CONTEXT_MARKER);
     out.push('\n');
     push(&mut out, &render_workspace(ctx)?);
-    // Model families that stop after announcing a plan get one short block of
-    // execution discipline; the rest (Claude, Gemini) pay nothing. The text
-    // and the gate are tinyagents', so every host renders the same words.
-    if let Some(guidance) = tinyagents_harness::prompt::execution_discipline_for(ctx.model_name) {
-        tracing::debug!(
-            model = ctx.model_name,
-            "[orchestrator-prompt] rendering model-gated execution discipline"
-        );
-        push(&mut out, guidance);
-    }
+    // No model-gated execution-discipline block here: its rules (act in the
+    // same response, keep going until done, batch calls, ask only when the
+    // ambiguity changes the tool) are this agent's own `## Grounding and tool
+    // use`, stated once for every model.
 
     // ── Volatile tier: the user's state, changes between sessions ────────
     out.push_str(PROMPT_TIER_VOLATILE_MARKER);
     out.push('\n');
-    push(&mut out, &render_user_files(ctx)?);
     push(&mut out, ctx.connected_identities_md.as_str());
     push(
         &mut out,
@@ -93,10 +118,9 @@ pub fn build(ctx: &PromptContext<'_>) -> Result<String> {
         &mut out,
         &render_connected_integrations(ctx.connected_integrations),
     );
-    push(
-        &mut out,
-        &render_connected_mcp_servers(mcp_route.as_deref()),
-    );
+    if mcp_available {
+        push(&mut out, &render_connected_mcp_servers());
+    }
 
     // NOTE: the grounding contract lives in `prompt.md` under the shared
     // heading, so `SystemPromptBuilder::build` skips the global copy.
@@ -129,13 +153,13 @@ fn render_withheld_specialists(ctx: &PromptContext<'_>) -> String {
         );
         return String::new();
     }
-    let Some(registry) = AgentDefinitionRegistry::global() else {
+    let Some(registry) = AgentDefinitionRegistry::current() else {
         tracing::debug!(
             "[orchestrator-prompt] no agent registry; withheld-specialist section omitted"
         );
         return String::new();
     };
-    let Some(definition) = resolve_definition(registry, ctx.agent_id) else {
+    let Some(definition) = resolve_definition(&registry, ctx.agent_id) else {
         tracing::debug!(
             agent = ctx.agent_id,
             "[orchestrator-prompt] agent id does not resolve to a registry entry"
@@ -193,16 +217,16 @@ fn render_withheld_specialists(ctx: &PromptContext<'_>) -> String {
     let mut by_pack: std::collections::BTreeMap<&'static str, Vec<String>> =
         std::collections::BTreeMap::new();
     for (tool, pack) in rows {
-        by_pack.entry(pack).or_default().push(format!("`{tool}`"));
+        by_pack.entry(pack).or_default().push(tool);
     }
-    let mut out = String::from(
-        "## Capabilities not in your tool list\n\nAvailable through `use_skill` (`skill` \
-         alone lists arguments; add `tool` + `args` to run):\n\n",
-    );
-    for (pack, tools) in by_pack {
-        let _ = writeln!(out, "- skill `{pack}`: {}", tools.join(", "));
-    }
-    out
+    let entries: Vec<String> = by_pack
+        .into_iter()
+        .map(|(pack, tools)| format!("`{pack}` ({})", tools.join(", ")))
+        .collect();
+    format!(
+        "## Capabilities not in your tool list\n\nVia `use_skill`: {}.",
+        entries.join(", ")
+    )
 }
 
 /// How this session can reach `specialist` right now, as the call to name.
@@ -213,8 +237,8 @@ fn render_withheld_specialists(ctx: &PromptContext<'_>) -> String {
 /// visible set exactly like [`render_withheld_specialists`], never hand-written,
 /// so a pack or allowlist change moves the prose with it (#6302).
 fn hand_off_route(ctx: &PromptContext<'_>, specialist: &str) -> Option<String> {
-    let registry = AgentDefinitionRegistry::global()?;
-    let definition = resolve_definition(registry, ctx.agent_id)?;
+    let registry = AgentDefinitionRegistry::current()?;
+    let definition = resolve_definition(&registry, ctx.agent_id)?;
     let listed = definition
         .subagents
         .iter()
@@ -234,28 +258,69 @@ fn hand_off_route(ctx: &PromptContext<'_>, specialist: &str) -> Option<String> {
     // itself. A filtered belt holding neither the delegate nor `use_skill` has
     // no way to reach the specialist, and naming one anyway is the same "call a
     // tool you do not have" failure this whole block exists to end (#6302).
-    if !ctx.visible_tool_names.contains(toolpacks::USE_SKILL) {
+    if !ctx
+        .visible_tool_names
+        .contains(tinyagents_harness::tool::packs::USE_SKILL)
+    {
         return None;
     }
-    toolpacks::pack_for_tool(&tool).map(|pack| {
-        format!(
-            "`use_skill {{ \"skill\": \"{}\", \"tool\": \"{tool}\" }}`",
-            pack.id
-        )
-    })
+    toolpacks::pack_for_tool(&tool)
+        .map(|pack| format!("`{tool}` (`use_skill` skill `{}`)", pack.id))
+}
+
+/// How this session runs an installed skill: its own `run_workflow`, on the
+/// belt directly or, while the `workflows` pack holds it, through `use_skill`. There is no skill-running specialist any more — the
+/// orchestrator's `run_workflow` already spawns the skill as an isolated run
+/// (`spawn_skill_run_background`), so a second hand-off was a second door.
+fn run_workflow_route(ctx: &PromptContext<'_>) -> Option<String> {
+    const RUN_WORKFLOW: &str = "run_workflow";
+    if ctx.visible_tool_names.is_empty() || ctx.visible_tool_names.contains(RUN_WORKFLOW) {
+        return Some(format!("`{RUN_WORKFLOW}`"));
+    }
+    // Packed: only a route if this session can call `use_skill` itself, AND its
+    // belt actually lists `run_workflow`. `use_skill` may be on the wire for
+    // some other pack while the `workflows` pack has nothing callable here, in
+    // which case the policy gate would refuse the call this names.
+    if !ctx
+        .visible_tool_names
+        .contains(tinyagents_harness::tool::packs::USE_SKILL)
+        || !belt_lists(ctx, RUN_WORKFLOW)
+    {
+        return None;
+    }
+    toolpacks::pack_for_tool(RUN_WORKFLOW)
+        .map(|pack| format!("`{RUN_WORKFLOW}` (`use_skill` skill `{}`)", pack.id))
+}
+
+/// Whether this agent's own belt lists `tool`: a wildcard belt holds everything,
+/// a named one only what it names. The prompt has no policy session, and a pack
+/// is callable for an agent only when its belt mentions one of the pack's tools.
+fn belt_lists(ctx: &PromptContext<'_>, tool: &str) -> bool {
+    use crate::agent::harness::definition::ToolScope;
+    let Some(registry) = AgentDefinitionRegistry::current() else {
+        return false;
+    };
+    let Some(definition) = resolve_definition(&registry, ctx.agent_id) else {
+        return false;
+    };
+    match &definition.tools {
+        ToolScope::Wildcard => true,
+        ToolScope::Named(names) => names.iter().any(|name| name == tool),
+    }
 }
 
 /// `prompt.md` with the route-tagged rows this build cannot honour removed.
 ///
-/// A row tagged `<!--route:skills-->` or `<!--route:mcp-->` names a hand-off
+/// A row tagged `<!--route:skills-->`, `<!--route:mcp-->` or `<!--route:composio-->` names a hand-off
 /// that exists only while that family is compiled in: with `skills` off the
-/// loader drops `skill_setup` and `skill_executor` from the builtins, so no
+/// loader drops `skill_setup` from the builtins, so no
 /// delegate is synthesised and the static row would order the model to call a
 /// tool nobody has — the very failure this issue is about (#6302). The tag is
 /// stripped from every row that stays, so it never reaches the model.
-fn strip_route_lines(archetype: &str, skills: bool, mcp: bool) -> String {
+fn strip_route_lines(archetype: &str, skills: bool, mcp: bool, composio: bool) -> String {
     const SKILLS_TAG: &str = "<!--route:skills-->";
     const MCP_TAG: &str = "<!--route:mcp-->";
+    const COMPOSIO_TAG: &str = "<!--route:composio-->";
     archetype
         .lines()
         .filter(|line| {
@@ -263,11 +328,17 @@ fn strip_route_lines(archetype: &str, skills: bool, mcp: bool) -> String {
                 skills
             } else if line.contains(MCP_TAG) {
                 mcp
+            } else if line.contains(COMPOSIO_TAG) {
+                composio
             } else {
                 true
             }
         })
-        .map(|line| line.replace(SKILLS_TAG, "").replace(MCP_TAG, ""))
+        .map(|line| {
+            line.replace(SKILLS_TAG, "")
+                .replace(MCP_TAG, "")
+                .replace(COMPOSIO_TAG, "")
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -283,8 +354,8 @@ fn strip_route_lines(archetype: &str, skills: bool, mcp: bool) -> String {
 ///
 /// So: exact match first, then the longest registry id that `agent_id` extends
 /// at an `_` boundary. Longest wins because ids are not prefix-free —
-/// `integrations_agent` starts with no other id today, but `skill_setup` and
-/// `skill_executor` share a stem, and a shorter accidental match would resolve
+/// no id is a prefix of another today, but ids that share a stem (`task_manager_agent`
+/// vs a future `task_manager`) would, and a shorter accidental match would resolve
 /// a renamed session onto the wrong agent's subagent list.
 fn resolve_definition<'r>(
     registry: &'r AgentDefinitionRegistry,
@@ -307,6 +378,11 @@ fn resolve_definition<'r>(
     registry.get(&best)
 }
 
+/// Longest skill description kept in `## Installed Skills`: enough for the
+/// skill's trigger phrase, which is what routing reads. The full description is
+/// one `describe_workflow` call away.
+const SKILL_DESCRIPTION_CHARS: usize = 70;
+
 fn render_installed_skills(
     skills: &[Workflow],
     run: Option<&str>,
@@ -327,12 +403,9 @@ fn render_installed_skills(
         let _ = write!(out, "Run one with {run} (skill id + task). ");
     }
     if let Some(install) = install {
-        let _ = write!(out, "Find or install others with {install}. ");
+        let _ = write!(out, "Install more with {install}.");
     }
-    out.push_str(
-        "A skill runs in an isolated worker and returns its result plus a `## Handoff Plan` \
-         for anything it could not do itself.\n\n",
-    );
+    out.push_str("\n\n");
     for skill in skills {
         let id = if skill.dir_name.is_empty() {
             &skill.name
@@ -347,7 +420,7 @@ fn render_installed_skills(
             // chars / instruction fences) and cap so a single installed
             // skill can't bloat the prompt or smuggle routing instructions;
             // full details stay one `describe_workflow` call away.
-            crate::util::sanitize::sanitize_for_llm(&skill.description, 120)
+            crate::util::sanitize::sanitize_for_llm(&skill.description, SKILL_DESCRIPTION_CHARS)
                 .replace(['\n', '\t'], " ")
                 .trim()
                 .to_string()
@@ -359,21 +432,16 @@ fn render_installed_skills(
 
 /// Render the `## Connected MCP Servers` block from the live connection
 /// registry. The MCP analogue of [`render_connected_integrations`]: it lists each
-/// connected MCP server and tells the orchestrator to hand matching requests to
-/// the `mcp_agent` worker — NOT to call a server's tools itself or claim it
-/// can't. This is what lets the orchestrator pick up a connected server
+/// connected MCP server and tells the orchestrator to discover and call its
+/// tools directly. This is what lets the orchestrator pick up a connected server
 /// *without the user naming it* (e.g. a connected "weather" server answering
 /// "what's the weather in Tokyo?").
-///
-/// `route` is the hand-off in the form this session can call
-/// ([`hand_off_route`]). It is not hand-written: this block once told the model
-/// to call `use_mcp_server` while a pack was withholding it (#6302).
 ///
 /// Reads the global connection map via a guarded `block_on` — the same
 /// pattern `tool_registry::ops::registry_entries` uses. `block_in_place`
 /// requires the multi-threaded runtime; single-threaded contexts (unit
 /// tests) fall back to an empty list and the section is omitted.
-fn render_connected_mcp_servers(route: Option<&str>) -> String {
+fn render_connected_mcp_servers() -> String {
     use crate::mcp::registry::connections;
     let servers = match tokio::runtime::Handle::try_current() {
         Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
@@ -381,7 +449,7 @@ fn render_connected_mcp_servers(route: Option<&str>) -> String {
         }
         _ => Vec::new(),
     };
-    format_connected_mcp_block(&servers, route)
+    format_connected_mcp_block(&servers)
 }
 
 /// Pure formatter for the connected-MCP block — split from
@@ -389,32 +457,20 @@ fn render_connected_mcp_servers(route: Option<&str>) -> String {
 /// connection registry. Empty input → empty string (section omitted).
 fn format_connected_mcp_block(
     servers: &[crate::mcp::registry::connections::ConnectedServerOverview],
-    route: Option<&str>,
 ) -> String {
     if servers.is_empty() {
         return String::new();
     }
     // Keep the block compact — describe each server (the capability signal),
     // not its full toolset. Mirrors the Composio `## Connected Integrations`
-    // block (`**Toolkit** (slug): description`). The `mcp_agent` discovers
-    // and lists each server's actual tools downstream via
-    // `mcp_registry_list_tools`, so the orchestrator only needs to know a
-    // server exists and roughly what it does, in order to route.
-    let mut out = String::from("## Connected MCP Servers\n\n");
-    match route {
-        Some(route) => {
-            let _ = write!(
-                out,
-                "Anything one of these servers can satisfy goes to {route} as a plain-language \
-                 task; you have no direct access to them, so never say you can't before \
-                 handing off.\n\n"
-            );
-        }
-        None => out.push_str(
-            "Connected, but no MCP hand-off is available to you in this session, so you \
-             cannot use them here.\n\n",
-        ),
-    }
+    // block (`**Toolkit** (slug): description`). The orchestrator discovers
+    // each server's actual tools on demand via `mcp_registry_list_tools`.
+    let mut out = String::from(
+        "## Connected MCP Servers\n\n\
+         Their actions are searchable through `tool_search`. Search for the \
+         action in plain words, then call the matching MCP tool with the \
+         schema the search returns.\n\n",
+    );
     for s in servers {
         let name = if s.display_name.trim().is_empty() {
             s.qualified_name.as_str()
@@ -449,14 +505,19 @@ fn format_connected_mcp_block(
                 .to_string()
         };
         if !capability.is_empty() {
-            let _ = writeln!(out, "- **{name}** (`{}`): {capability}", s.qualified_name);
+            let _ = writeln!(
+                out,
+                "- **{name}** (`{}`, `server_id: \"{}\"`): {capability}",
+                s.qualified_name, s.server_id
+            );
         } else {
             // No registry capability metadata — fall back to a tool-count
             // hint so the line still conveys the server has callable capability.
             let _ = writeln!(
                 out,
-                "- **{name}** (`{}`) — {} tool{} available",
+                "- **{name}** (`{}`, `server_id: \"{}\"`) — {} tool{} available",
                 s.qualified_name,
+                s.server_id,
                 s.tools.len(),
                 if s.tools.len() == 1 { "" } else { "s" }
             );
@@ -480,10 +541,6 @@ fn format_connected_mcp_block(
 /// rest of the prompt surface so the model's `composio_connect` argument and
 /// its searches name the toolkit consistently.
 ///
-/// The gated-tools appendix used to live in the integrations sub-agent's
-/// prompt. It moves here with the catalogue: an action behind a permission
-/// toggle is not in the searchable set, so without this list the model would
-/// answer "can you do X?" with a wrong "no" instead of the unlock path.
 fn render_connected_integrations(integrations: &[ConnectedIntegration]) -> String {
     let connected: Vec<&ConnectedIntegration> =
         integrations.iter().filter(|ci| ci.connected).collect();
@@ -498,108 +555,41 @@ fn render_connected_integrations(integrations: &[ConnectedIntegration]) -> Strin
         tracing::debug!("[connected-integrations] section omitted — no connected integrations");
         return String::new();
     }
-    let mut out = String::from(
-        "## Connected Integrations\n\n\
-         Their actions are not in your listed tools: `tool_search` for the action in plain \
-         words (\"send an email\", \"list calendar events\"), then call the tool it returns — \
-         no sub-agent. Act on a service only when the request operates on that service's data \
-         or actions (a connected service is not a reason to touch it for general-knowledge, \
-         web/news, date/time or math questions). Never claim you cannot access one without \
-         searching first.\n\n",
-    );
-    for ci in &connected {
-        let slug = sanitise_slug(&ci.toolkit);
-        if ci.connections.len() > 1 {
-            let _ = writeln!(
-                out,
-                "- **{}** (`toolkit: \"{}\"`, {} accounts connected): {}",
-                ci.toolkit,
-                slug,
-                ci.connections.len(),
-                ci.description
-            );
-            for conn in &ci.connections {
-                let label = conn.label.as_deref().unwrap_or("(unlabeled)");
-                let default_marker = if conn.is_default { " [default]" } else { "" };
-                let _ = writeln!(
-                    out,
-                    "  - `connection_id: \"{}\"` — {}{}",
-                    conn.connection_id, label, default_marker
-                );
-            }
-        } else {
-            let _ = writeln!(
-                out,
-                "- **{}** (`toolkit: \"{}\"`): {}",
-                ci.toolkit, slug, ci.description
-            );
-        }
-    }
-    // CRITICAL behavioural rule. Without this, the orchestrator answers
-    // "can you do X with {toolkit}?" from its training-data priors about
-    // "what gmail/notion/slack usually does", which is consistently a
-    // SUBSET of the real per-toolkit catalogue (no bulk-delete, no
-    // batch-modify, no admin/destructive actions, etc.). The result is a
-    // confident wrong refusal ("nope, I can't delete emails") even when
-    // the action is in the catalogue. `tool_search` is the ground truth for
-    // callable actions and the gated appendix below for the rest.
-    // The cross-chat bullet names the canonical header literal verbatim
-    // so the model knows exactly which block to mistrust. Sourced from
-    // CROSS_CHAT_HEADER (single source of truth) — drift would silently
-    // detune the rule.
-    let cross_chat_header_for_prompt =
-        crate::memory::agent::memory_loader::CROSS_CHAT_HEADER.trim_end();
-    let _ = write!(
-        out,
-        "\n### Capability questions about connected toolkits\n\n\
-         Your prior knowledge of what a toolkit can do is unreliable: the live catalogue and \
-         the user's scopes decide. For \"can you do X with {{toolkit}}?\" or any action on a \
-         connected toolkit, `tool_search` first; the only honest \"no\" is an empty search that \
-         the permission-gated list below does not explain. A past \"I can / can't\" in the \
-         `{cross_chat_header_for_prompt}` block is a stale snapshot, never an answer.\n\n",
-    );
-
-    // Pref-gated actions: the toolkit has them, the user has not granted the
-    // scope, so they are not in the searchable catalogue. The agent cannot
-    // call them and cannot flip the scope itself — the per-row `unlock
-    // paths` carry the exact UI hint to show the user.
-    let gated: Vec<&&ConnectedIntegration> = connected
+    // One line for the whole list. Vendor descriptions ("Gmail is Google's
+    // email service…") told a model nothing it did not know and cost ~190
+    // tokens on a seven-toolkit workspace; `tool_search` is what says what a
+    // toolkit can do. Connection ids are listed only when labelled: an
+    // unlabelled id gives neither the model nor the user a way to pick it, and
+    // the default connection is used when none is named.
+    let entries: Vec<String> = connected
         .iter()
-        .filter(|ci| !ci.gated_tools.is_empty())
-        .collect();
-    tracing::debug!(
-        connected_with_gated = gated.len(),
-        "[connected-integrations] gated-tools scan complete"
-    );
-    if !gated.is_empty() {
-        out.push_str(
-            "### Additional capabilities behind a permission toggle\n\n\
-             These actions exist in the toolkit but are NOT searchable or callable — the user \
-             has not granted the required scope. Do NOT pretend they're unavailable. When the \
-             user asks for one (or you'd otherwise need it), tell them what the action does and \
-             present ALL of its `unlock paths` listed below so the user can choose how to enable \
-             it. Never drop a path or rewrite it into your own framing.\n\n",
-        );
-        for ci in gated {
-            let _ = writeln!(out, "- **{}**:", ci.toolkit);
-            for gt in &ci.gated_tools {
-                let desc = if gt.description.is_empty() {
-                    "(no description)"
-                } else {
-                    gt.description.as_str()
-                };
-                let _ = writeln!(
-                    out,
-                    "  - `{}` — {} (requires `{}` scope)",
-                    gt.name, desc, gt.required_scope
-                );
-                for path in &gt.unlock_paths {
-                    let _ = writeln!(out, "    - unlock path: {path}");
-                }
+        .map(|ci| {
+            let slug = sanitise_slug(&ci.toolkit);
+            let labelled: Vec<String> = ci
+                .connections
+                .iter()
+                .filter_map(|conn| {
+                    let label = conn.label.as_deref()?.trim();
+                    (!label.is_empty()).then(|| {
+                        let default_marker = if conn.is_default { ", default" } else { "" };
+                        format!("{label}: `{}`{default_marker}", conn.connection_id)
+                    })
+                })
+                .collect();
+            match (ci.connections.len(), labelled.is_empty()) {
+                (0 | 1, _) => format!("`{slug}`"),
+                (n, true) => format!("`{slug}` ({n} accounts)"),
+                (n, false) => format!("`{slug}` ({n} accounts; {})", labelled.join("; ")),
             }
-        }
-        out.push('\n');
-    }
+        })
+        .collect();
+    let out = format!(
+        "## Connected Integrations\n\n\
+         {}.\n\n\
+         `tool_search` their actions. Its results, not prior knowledge or past answers, say \
+         what a toolkit can do.\n",
+        entries.join(", ")
+    );
 
     tracing::debug!(
         section_len = out.len(),

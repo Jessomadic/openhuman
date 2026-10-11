@@ -38,7 +38,6 @@ use std::sync::{Arc, LazyLock};
 
 use chrono::Utc;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use tinyflows::model::{NodeKind, TriggerKind, WorkflowGraph};
 // The save/run safety predicates are `tinyflows-catalog`'s: whether a graph
 // fires unattended, whether it can act on the world, whether it has anything to
@@ -48,15 +47,11 @@ use tinyflows::model::{NodeKind, TriggerKind, WorkflowGraph};
 pub(crate) use tinyflows_catalog::graph_policy::{
     enforce_side_effect_approval, graph_has_actionable_nodes, trigger_is_automatic,
 };
-// Reached only by this module's own tests, which assert the host resolves the
-// predicate the two save rules are built on — `enforce_side_effect_approval`
-// is what production calls.
-#[cfg(test)]
-pub(crate) use tinyflows_catalog::graph_policy::graph_has_outbound_side_effect;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::turn_origin::{with_origin, AgentTurnOrigin, TrustedAutomationSource};
 use crate::config::Config;
+use crate::core::Outcome;
 use crate::flows::bus;
 use crate::flows::draft_store;
 use crate::flows::run_registry;
@@ -64,18 +59,12 @@ use crate::flows::store;
 use crate::flows::types::{
     FlowConnection, FlowRunStep, FlowRunTrigger, FlowSuggestion, SuggestionStatus,
 };
-use crate::flows::{flow_namespace, Flow, FlowRun};
-use crate::rpc::RpcOutcome;
+use crate::flows::{Flow, FlowRun};
 use crate::security::approval::{
     ApprovalChatContext, FlowRunContext, APPROVAL_CHAT_CONTEXT, APPROVAL_COPILOT_STREAM_CONTEXT,
     APPROVAL_FLOW_RUN_CONTEXT,
 };
 use tinyflows_catalog::build_registry;
-// `MemoryProvider` brings `driver_id()` / `as_documents()` into scope for the
-// `MemoryGuard` this file's delete path clears through. Nothing here names the
-// engine crate any more — `flows_delete_impl`'s test seam took an
-// `Arc<MemoryClient>` until #5560 and takes the guard now.
-use tinymemory_api::provider::MemoryProvider;
 
 /// Overall safety bound on a single `flows_run` / `flows_resume`. Individual
 /// capabilities have their own timeouts (HTTP, sandbox), but a hung LLM/tool

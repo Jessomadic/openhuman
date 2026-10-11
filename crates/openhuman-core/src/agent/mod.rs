@@ -19,19 +19,21 @@
 //!   adapters for sub-agents driven by the neutral TinyAgents lifecycle.
 //!   within a parent agent's tool loop, enabling hierarchical delegation.
 pub mod artifacts;
+pub(crate) mod attachments;
 pub mod bus;
 pub mod context;
+pub mod context_breakdown;
 pub(crate) mod cost;
 pub mod debug;
 pub mod error;
-pub mod experience;
-pub mod file_state;
 pub mod goals;
 pub mod harness;
-pub mod harness_init;
 pub mod hooks;
+/// Host-registered agents the core's own drivers (cron, workflow nodes) can
+/// resolve by id, with their definition, host tools and context.
+pub mod host_agents;
+pub mod host_overrides;
 pub mod host_runtime;
-pub mod learning;
 pub mod library;
 pub(crate) mod message_convert;
 pub mod messages;
@@ -67,6 +69,7 @@ pub mod session_db;
 /// snapshots are owned by `tinyagents-runtime`.
 pub mod session_host;
 pub mod session_import;
+pub mod session_store;
 pub mod stop_hooks;
 /// Product-specific adapters around `tinyagents_orchestration::subagent`.
 /// Generic lifecycle ordering and task-key coalescing live in TinyAgents;
@@ -75,14 +78,21 @@ pub mod subagent_host;
 pub mod tinyagents;
 pub mod todos;
 pub mod tool_policy;
+pub mod tool_snapshot_scope;
 pub mod tools;
 pub mod triage;
+/// Wall-clock deadline of one top-level turn: the outer backstop and the
+/// harness wind-down / hard-stop points derived from it.
+pub mod turn_deadline;
 /// Turn-origin task-local — explicit trust/routing label scoped by every
-/// entry point that invokes the agent (web chat, channel runtime,
-/// subconscious, cron, CLI). Read by the approval gate to make
+/// entry point that invokes the agent (web chat, channel runtime, cron,
+/// background jobs, CLI). Read by the approval gate to make
 /// origin-aware decisions rather than inferring trust from the absence of
 /// `APPROVAL_CHAT_CONTEXT`.
 pub mod turn_origin;
+/// How a turn that reached the completion path was stopped early (breaker,
+/// deadline wind-down, iteration cap), carried to traces and parent tools.
+pub mod turn_stop;
 /// Turn-workspace task-local — the per-turn filesystem root an embedder binds
 /// a single agent turn to. Read by the session builder (as the turn's default
 /// cwd) and by the path policy (as a read/write trusted root), so a host that
@@ -99,4 +109,7 @@ pub use schemas::{
 mod tests;
 
 #[allow(unused_imports)]
-pub use session_host::{OpenHumanSessionHost, SessionHostBuilder, TurnOverrides};
+pub use session_host::{
+    HostOnlyToolPolicy, HostTools, HostTurnTools, OpenHumanSessionHost, SessionHostBuilder,
+    TurnContext, TurnOverrides,
+};

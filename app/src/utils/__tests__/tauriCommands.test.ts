@@ -119,10 +119,12 @@ describe('tauriCommands', () => {
     );
   });
 
-  test('openhumanServiceStatus throws when not running in Tauri', async () => {
+  test('openhumanServiceStatus uses core RPC and skips the CLI fallback outside Tauri', async () => {
     mockIsTauri.mockReturnValue(false);
+    mockCallCoreRpc.mockRejectedValueOnce(new Error('core unreachable'));
 
-    await expect(openhumanServiceStatus()).rejects.toThrow('Not running in Tauri');
-    expect(mockCallCoreRpc).not.toHaveBeenCalled();
+    await expect(openhumanServiceStatus()).rejects.toThrow('core unreachable');
+    expect(mockCallCoreRpc).toHaveBeenCalledWith({ method: 'openhuman.service_status' });
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 use super::*;
-use crate::memory::conversations::{ensure_thread, list_threads, CreateConversationThread};
+use crate::threads::store::{ensure_thread, list_threads, CreateConversationThread};
 use tempfile::TempDir;
 
 fn make_thread(id: &str, labels: Vec<String>) -> CreateConversationThread {
@@ -10,6 +10,7 @@ fn make_thread(id: &str, labels: Vec<String>) -> CreateConversationThread {
         parent_thread_id: None,
         labels: Some(labels),
         personality_id: None,
+        working_dir: None,
     }
 }
 

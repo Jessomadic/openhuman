@@ -33,7 +33,9 @@ use log::debug;
 use serde_json::Value;
 use tinywallet_bus::rpc::{NetworkId, Transport, TransportError, TransportResult};
 
-use super::defaults::{rpc_url_for_chain, rpc_url_for_evm_network, EvmNetwork};
+use tinywallet_web3::crypto::defaults::EvmNetwork;
+
+use super::endpoints::{rpc_url_for_chain, rpc_url_for_evm_network};
 use super::ops::WalletChain;
 use super::rpc::{redact_rpc_url, rest_get_text, rest_post_text, rpc_call_to};
 

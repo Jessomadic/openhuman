@@ -19,6 +19,7 @@ fn synthetic(id: &str, tier: AgentTier, subagents: &[&str]) -> HostAgentDefiniti
         system_prompt: None,
         tool_allowlist: Vec::new(),
         tool_denylist: Vec::new(),
+        tool_rules: None,
         subagents: AgentSubagentPolicy::from_allowlist(
             subagents.iter().map(|s| s.to_string()).collect(),
         ),
@@ -223,9 +224,18 @@ fn skills_wildcard_entries_are_not_agent_ids() {
 #[test]
 fn denylist_supports_exact_and_prefix_forms() {
     let denied = vec!["file_write".to_string(), "storage_*".to_string()];
-    assert!(disallows_tool(&denied, "file_write"));
-    assert!(disallows_tool(&denied, "storage_delete_file"));
-    assert!(!disallows_tool(&denied, "file_read"));
+    assert!(crate::tools::rules::glob_list_matches(
+        &denied,
+        "file_write"
+    ));
+    assert!(crate::tools::rules::glob_list_matches(
+        &denied,
+        "storage_delete_file"
+    ));
+    assert!(!crate::tools::rules::glob_list_matches(
+        &denied,
+        "file_read"
+    ));
 }
 
 /// A wildcard scope materializes the session's registered tool surface.
@@ -242,6 +252,50 @@ fn an_undenied_wildcard_scope_projects_registered_tools() {
             .tools,
         vec!["file_read".to_string()]
     );
+}
+
+#[test]
+fn named_tool_search_grants_deferred_tools_to_hosted_run() {
+    let mut with_search = synthetic("searcher", AgentTier::Chat, &[]);
+    with_search.tools = ToolScope::Named(vec!["tool_search".to_owned()]);
+    let registry = registry_of(vec![with_search.clone()]).with_deferred_tools(Arc::new(vec![
+        "desktop_list_apps".to_owned(),
+        "desktop_goal".to_owned(),
+    ]));
+    let tools = registry.project(&with_search).tools;
+    assert!(tools.iter().any(|name| name == "tool_search"));
+    assert!(tools.iter().any(|name| name == "desktop_list_apps"));
+    assert!(tools.iter().any(|name| name == "desktop_goal"));
+
+    let mut without_search = synthetic("no-search", AgentTier::Chat, &[]);
+    without_search.tools = ToolScope::Named(vec!["file_read".to_owned()]);
+    let tools = registry.project(&without_search).tools;
+    assert!(!tools.iter().any(|name| name.starts_with("desktop_")));
+}
+
+#[test]
+fn named_discovery_scope_authorizes_only_registered_deferred_tools() {
+    let mut def = synthetic("searcher", AgentTier::Chat, &[]);
+    def.tools = ToolScope::Named(vec!["file_read".into(), "tool_search".into()]);
+    def.disallowed_tools = vec!["blocked_*".into()];
+    let projected = registry_of(vec![def.clone()])
+        .with_deferred_tools(Arc::new(vec![
+            "browser_open".into(),
+            "browser".into(),
+            "blocked_secret".into(),
+        ]))
+        .project(&def);
+    assert!(projected.tools.contains(&"browser_open".to_string()));
+    assert!(projected.tools.contains(&"browser".to_string()));
+    assert!(!projected.tools.contains(&"blocked_secret".to_string()));
+
+    def.tools = ToolScope::Named(vec!["file_read".into()]);
+    let without_discovery = registry_of(vec![def.clone()])
+        .with_deferred_tools(Arc::new(vec!["browser_open".into()]))
+        .project(&def);
+    assert!(!without_discovery
+        .tools
+        .contains(&"browser_open".to_string()));
 }
 
 /// A wildcard scope carrying a denylist must be materialised against the
@@ -331,6 +385,29 @@ fn named_scope_drops_denied_tools_and_keeps_extras() {
     );
 }
 
+#[test]
+fn the_projection_carries_the_definition_rule_layer() {
+    let mut def = synthetic("worker", AgentTier::Worker, &[]);
+    def.disallowed_tools = vec!["web_*".into()];
+    let projected = registry_of(vec![def.clone()]).project(&def);
+    let layer = projected.tool_rules.expect("a rule layer");
+    assert_eq!(layer.name.as_deref(), Some("agent:worker"));
+    let set = tinytools::ToolRuleSet::single(layer);
+    let context = tinytools::RuleContext::new();
+    assert!(!set.visible(
+        &tinytools::ToolSubject::named("web_fetch"),
+        &context,
+        tinytools::Surface::Search
+    ));
+
+    let mut open = synthetic("open", AgentTier::Worker, &[]);
+    open.disallowed_tools.clear();
+    assert!(registry_of(vec![open.clone()])
+        .project(&open)
+        .tool_rules
+        .is_none());
+}
+
 // ── config-backed custom agents ───────────────────────────────────────
 
 fn config_with(entries: Vec<AgentRegistryEntry>) -> Arc<Config> {
@@ -350,6 +427,7 @@ fn custom_entry(id: &str, enabled: bool) -> AgentRegistryEntry {
         system_prompt: Some("Do finance work.".to_string()),
         tool_allowlist: vec!["memory_recall".to_string()],
         tool_denylist: Vec::new(),
+        tool_rules: None,
         subagents: AgentSubagentPolicy::default(),
         tags: Vec::new(),
         metadata: serde_json::Value::Null,
@@ -411,16 +489,6 @@ async fn list_is_stable_across_calls() {
     let second = registry.list().await.expect("list");
     assert!(!first.is_empty());
     assert_eq!(first, second);
-}
-
-#[tokio::test]
-async fn is_usable_as_a_trait_object() {
-    let registry: Box<dyn DefinitionRegistry> = Box::new(builtins());
-    assert!(registry
-        .resolve("orchestrator")
-        .await
-        .expect("resolve")
-        .is_some());
 }
 
 #[tokio::test]
@@ -523,4 +591,83 @@ async fn a_session_definition_does_not_shadow_other_ids() {
         registry.resolve("no-such-agent").await.unwrap().is_none(),
         "a session definition must not answer for an unrelated missing id"
     );
+}
+
+fn handle_mode_config() -> Arc<crate::config::Config> {
+    let mut config = crate::config::Config::default();
+    config.context.compaction_enabled = true;
+    config.tokenjuice.router_enabled = true;
+    config.tokenjuice.ccr_enabled = true;
+    config.tokenjuice.repl_handle_enabled = true;
+    Arc::new(config)
+}
+
+/// A curated belt must still be allowed to call the tools a compacted result
+/// points at. The session advertises them; the harness allowlist built here is
+/// what decides whether a call to them dispatches or is answered as unknown.
+#[test]
+fn named_scope_admits_the_tinyjuice_tools_a_handle_names() {
+    let mut def = synthetic("curated", AgentTier::Worker, &[]);
+    def.tools = ToolScope::Named(vec!["file_read".into()]);
+    let registered = Arc::new(vec![
+        "file_read".to_string(),
+        "juice_retrieve".to_string(),
+        "juice_find".to_string(),
+        "juice_extract".to_string(),
+        "juice_summarize".to_string(),
+    ]);
+    let tools = registry_of(vec![def.clone()])
+        .with_config(handle_mode_config())
+        .with_registered_tools(registered)
+        .project(&def)
+        .tools;
+    for name in [
+        "juice_retrieve",
+        "juice_find",
+        "juice_extract",
+        "juice_summarize",
+    ] {
+        assert!(
+            tools.contains(&name.to_string()),
+            "{name} missing: {tools:?}"
+        );
+    }
+}
+
+#[test]
+fn named_scope_skips_tinyjuice_tools_that_are_off_or_unregistered() {
+    let mut def = synthetic("curated", AgentTier::Worker, &[]);
+    def.tools = ToolScope::Named(vec!["file_read".into()]);
+
+    // Handle mode off: nothing names the REPL tools, so they stay out.
+    let mut off = crate::config::Config::default();
+    off.context.compaction_enabled = false;
+    off.tokenjuice.repl_handle_enabled = false;
+    let tools = registry_of(vec![def.clone()])
+        .with_config(Arc::new(off))
+        .with_registered_tools(Arc::new(vec!["file_read".into(), "juice_find".into()]))
+        .project(&def)
+        .tools;
+    assert!(!tools.contains(&"juice_find".to_string()), "{tools:?}");
+
+    // Active but not registered: an allowlist entry for a tool that does not
+    // exist would only widen the surface.
+    let tools = registry_of(vec![def.clone()])
+        .with_config(handle_mode_config())
+        .with_registered_tools(Arc::new(vec!["file_read".into()]))
+        .project(&def)
+        .tools;
+    assert!(!tools.contains(&"juice_find".to_string()), "{tools:?}");
+}
+
+#[test]
+fn zero_tool_scope_stays_zero_tool_with_tinyjuice_active() {
+    let mut def = synthetic("silent", AgentTier::Worker, &[]);
+    def.tools = ToolScope::Named(Vec::new());
+    let tools = registry_of(vec![def.clone()])
+        .with_config(handle_mode_config())
+        .with_registered_tools(Arc::new(vec!["juice_find".into()]))
+        .project(&def)
+        .tools;
+    assert!(!tools.contains(&"juice_find".to_string()), "{tools:?}");
 }

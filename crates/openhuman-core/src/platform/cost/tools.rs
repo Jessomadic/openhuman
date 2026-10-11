@@ -30,6 +30,10 @@ impl CostDashboardTool {
 
 #[async_trait]
 impl Tool for CostDashboardTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         "cost_get_dashboard"
     }
@@ -66,6 +70,10 @@ impl CostDailyHistoryTool {
 
 #[async_trait]
 impl Tool for CostDailyHistoryTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         "cost_get_daily_history"
     }
@@ -115,6 +123,10 @@ impl CostSummaryTool {
 
 #[async_trait]
 impl Tool for CostSummaryTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         "cost_get_summary"
     }

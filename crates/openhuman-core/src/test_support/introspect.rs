@@ -15,7 +15,7 @@ use serde::Serialize;
 use tokio::fs;
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 use crate::web3::wallet::prepared_quotes_for_test;
 use crate::web_chat::in_flight_entries_for_test;
 
@@ -112,10 +112,10 @@ pub struct WorkspaceRoot {
     pub exists: bool,
 }
 
-pub async fn workspace_root() -> Result<RpcOutcome<WorkspaceRoot>, String> {
+pub async fn workspace_root() -> Result<Outcome<WorkspaceRoot>, String> {
     let dir = current_workspace_dir().await?;
     let exists = fs::try_exists(&dir).await.unwrap_or(false);
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         WorkspaceRoot {
             path: dir.display().to_string(),
             exists,
@@ -199,7 +199,7 @@ async fn walk_dir(
 pub async fn list_workspace_files(
     rel_root: Option<String>,
     max_depth: Option<u32>,
-) -> Result<RpcOutcome<ListResult>, String> {
+) -> Result<Outcome<ListResult>, String> {
     let workspace = current_workspace_dir().await?;
     let root = match rel_root.as_deref().filter(|s| !s.is_empty()) {
         Some(r) => resolve_workspace_relative(&workspace, r)?,
@@ -209,7 +209,7 @@ pub async fn list_workspace_files(
     let mut entries = Vec::new();
     let truncated = walk_dir(&root, &root, depth, &mut entries, 2_000).await?;
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         ListResult {
             root: root.display().to_string(),
             entries: entries.to_vec(),
@@ -248,7 +248,7 @@ pub struct ReadFileResult {
 pub async fn read_workspace_file(
     rel_path: String,
     max_bytes: Option<u64>,
-) -> Result<RpcOutcome<ReadFileResult>, String> {
+) -> Result<Outcome<ReadFileResult>, String> {
     let workspace = current_workspace_dir().await?;
     let abs = resolve_workspace_relative(&workspace, &rel_path)?;
     let meta = fs::metadata(&abs)
@@ -276,7 +276,7 @@ pub async fn read_workspace_file(
     // assert against this value to verify byte-accurate truncation.
     let returned_bytes = returned.len() as u64;
     let content_utf8 = String::from_utf8_lossy(&returned).into_owned();
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         ReadFileResult {
             rel_path: rel_path.clone(),
             size_on_disk,
@@ -303,14 +303,14 @@ pub struct InFlightResult {
     pub entries: Vec<InFlightEntryView>,
 }
 
-pub async fn in_flight_chats() -> Result<RpcOutcome<InFlightResult>, String> {
+pub async fn in_flight_chats() -> Result<Outcome<InFlightResult>, String> {
     let entries: Vec<InFlightEntryView> = in_flight_entries_for_test()
         .await
         .into_iter()
         .map(|(key, request_id)| InFlightEntryView { key, request_id })
         .collect();
     let count = entries.len();
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         InFlightResult { entries },
         format!("in_flight_chats: {count} entries"),
     ))
@@ -325,10 +325,10 @@ pub struct PreparedQuotesResult {
     pub quotes: Vec<crate::web3::wallet::PreparedTransaction>,
 }
 
-pub async fn wallet_prepared_quotes() -> Result<RpcOutcome<PreparedQuotesResult>, String> {
+pub async fn wallet_prepared_quotes() -> Result<Outcome<PreparedQuotesResult>, String> {
     let quotes = prepared_quotes_for_test();
     let count = quotes.len();
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         PreparedQuotesResult { count, quotes },
         format!("wallet_prepared_quotes: {count} quotes"),
     ))

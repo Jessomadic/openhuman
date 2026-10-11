@@ -9,16 +9,16 @@
     "build": "pnpm --filter openhuman-app build",
     "docs:generate": "node scripts/generate-architecture-docs.mjs",
     "docs:check": "node scripts/generate-architecture-docs.mjs --check",
-    "docs:test": "node --test scripts/__tests__/generate-architecture-docs.test.mjs",
-    "test:scripts": "node --test scripts/__tests__/*.test.mjs scripts/mock-api/*.test.mjs scripts/mock-api/routes/__tests__/*.test.mjs scripts/bench/*.test.mjs",
+    "docs:test": "node --test scripts/__tests__/generate-architecture-docs.test.mjs scripts/__tests__/generate-embed-docs.test.mjs",
+    "test:scripts": "node --test scripts/__tests__/*.test.mjs scripts/mock-api/*.test.mjs scripts/mock-api/routes/__tests__/*.test.mjs",
     "test:inventory": "node scripts/generate-test-inventory.mjs",
     "compile": "pnpm --filter openhuman-app compile",
     "dev": "pnpm --filter openhuman-app dev",
     "dev:app": "pnpm --filter openhuman-app dev:app",
     "dev:app:web": "bash scripts/run-dev-web.sh",
+    "dev:app:web:attach": "bash scripts/run-dev-web.sh --attach",
     "dev:app:win": "pnpm --filter openhuman-app dev:app:win",
     "dev:staging": "bash scripts/dev-staging.sh",
-    "dev:cef": "pnpm --filter openhuman-app dev:cef",
     "format": "pnpm --filter openhuman-app format",
     "format:check": "pnpm --filter openhuman-app format:check",
     "knip": "pnpm --filter openhuman-app knip",
@@ -36,7 +36,6 @@
     "test:release-notes": "node --test scripts/__tests__/generate-release-notes.test.mjs",
     "test:e2e": "pnpm --filter openhuman-app test:e2e:all",
     "test:e2e:flows": "pnpm --filter openhuman-app test:e2e:all:flows",
-    "mascot:render": "pnpm --dir remotion render:runtime-assets",
     "merge-pr": "bash scripts/shortcuts/review/merge.sh",
     "mock:api": "node scripts/mock-api-server.mjs",
     "pr:checklist": "node scripts/check-pr-checklist.mjs",
@@ -57,10 +56,12 @@
     "test:install-ps1": "pwsh -NoProfile -File scripts/tests/OpenHumanWindowsInstall.Tests.ps1",
     "rust:check": "pnpm --filter openhuman-app rust:check",
     "rust:clippy": "cargo clippy -p openhuman -p openhuman-cli -p openhuman-tinyhumans -- -D warnings && pnpm --filter openhuman-app rust:clippy",
-    "rust:layout": "node scripts/ci/check-openhuman-rust-layout.mjs",
+    "rust:layout": "node scripts/ci/check-openhuman-rust-layout.mjs && node scripts/ci/check-crate-chain.mjs && node scripts/ci/check-storage-bypass.mjs",
     "rust:ignored-tests": "node scripts/ci/check-ignored-tests.mjs",
     "dep:audit": "bash scripts/dep-audit/run.sh",
     "agent:runtime-boundary": "node scripts/ci/check-agent-runtime-boundary.mjs",
+    "storage:bypass": "node scripts/ci/check-storage-bypass.mjs",
+    "saas:ambient": "node scripts/ci/check-saas-ambient.mjs",
     "typecheck": "pnpm --filter openhuman-app compile",
     "tauri:ios:init": "bash scripts/ios-init.sh",
     "tauri:ios:dev": "pnpm --filter openhuman-app tauri:ios:dev",
@@ -75,6 +76,7 @@
     "i18n:dump": "tsx scripts/i18n-coverage.ts --no-unused --out tmp/i18n-coverage"
   },
   "devDependencies": {
+    "gpt-tokenizer": "^3.4.0",
     "husky": "^9.1.7",
     "tsx": "^4.20.3",
     "ws": "^8.20.0"
@@ -84,7 +86,8 @@
   },
   "pnpm": {
     "patchedDependencies": {
-      "@assistant-ui/react-lexical@0.2.10": "app/patches/@assistant-ui__react-lexical@0.2.10.patch"
+      "@assistant-ui/react-lexical@0.2.10": "app/patches/@assistant-ui__react-lexical@0.2.10.patch",
+      "mdast-util-gfm-autolink-literal@2.0.1": "app/patches/mdast-util-gfm-autolink-literal@2.0.1.patch"
     }
   }
 }

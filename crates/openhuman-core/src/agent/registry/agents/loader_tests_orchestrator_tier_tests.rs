@@ -1,190 +1,59 @@
 use super::*;
 
-/// Crypto Agent (#1397) is the dedicated specialist for wallet
-/// actions and market operations. It must have a *narrow* tool
-/// allowlist (no shell, no file_write, no broad HTTP), MUST keep
-/// the safety preamble on (financial-risk gate), and MUST require
-/// quote/confirm-before-execute via `ask_user_clarification`.
+/// Wallet and market actions are the `web3` skill now, not a specialist. The
+/// money-safety contract the `crypto_agent` enforced has to survive the move:
+/// the guide carries the read → quote → confirm → execute order, and the
+/// orchestrator prompt carries the consent rule that binds before the skill
+/// is ever loaded.
 #[test]
-fn crypto_agent_has_narrow_wallet_market_tools_and_safety_on() {
-    let def = find("crypto_agent");
-    // Hint must be burst — latency matters for the narrow quote/execute
-    // workflow and provider routing still preserves explicit agentic BYOK.
-    assert!(matches!(def.model, ModelSpec::Hint(ref h) if h == "burst"));
-    assert_eq!(def.sandbox_mode, SandboxMode::None);
-    // Financial-risk agent — global safety preamble stays ON.
-    assert!(
-        !def.omit_safety_preamble,
-        "crypto_agent must keep the global safety preamble — financial-risk gate"
-    );
-    match &def.tools {
-        ToolScope::Named(tools) => {
-            // Wallet read surface.
-            // Only names with a registered agent Tool. `wallet_balances`,
-            // `wallet_network_defaults`, `wallet_supported_assets` and
-            // `wallet_encode_erc20_transfer` are `wallet.*` RPC methods with no
-            // Tool wrapper — asserting them here pinned an allowlist entry the
-            // spawn filter drops, so the assertion passed while the capability
-            // did not exist.
-            for required in ["wallet_status", "wallet_chain_status"] {
-                assert!(
-                    tools.iter().any(|t| t == required),
-                    "crypto_agent needs read tool `{required}`"
-                );
-            }
-            // Quote / prepare surface: native+token transfers on the
-            // wallet, swaps/bridges/dapp calls on the web3 layer.
-            for required in [
-                "wallet_prepare_transfer",
-                "web3_swap_quote",
-                "web3_bridge_quote",
-                "web3_dapp_call",
-            ] {
-                assert!(
-                    tools.iter().any(|t| t == required),
-                    "crypto_agent needs prepare tool `{required}`"
-                );
-            }
-            // Transaction inspection surface.
-            for required in ["wallet_tx_status", "wallet_tx_receipt", "wallet_lookup_tx"] {
-                assert!(
-                    tools.iter().any(|t| t == required),
-                    "crypto_agent needs tx-read tool `{required}`"
-                );
-            }
-            // Execute surface. There is no `wallet_execute_prepared` TOOL —
-            // it is a `wallet.*` RPC only — so a plain transfer is prepare-only
-            // for this agent. The executable surface is the web3 quote/execute
-            // family, and THAT is what the prompt's confirm-before-execute rule
-            // now gates on.
-            assert!(
-                !tools.iter().any(|t| t == "wallet_execute_prepared"),
-                "wallet_execute_prepared has no Tool wrapper; listing it puts a \
-                 call in the prompt that can never resolve"
-            );
-            for required in [
-                "web3_swap_execute",
-                "web3_bridge_execute",
-                "web3_dapp_execute",
-            ] {
-                assert!(
-                    tools.iter().any(|t| t == required),
-                    "crypto_agent needs {required} for the confirm-before-execute flow"
-                );
-            }
-            // Confirmation gate — MUST be present so the prompt's
-            // "confirm before execute" rule is mechanically enforceable.
-            assert!(
-                tools.iter().any(|t| t == "ask_user_clarification"),
-                "crypto_agent needs ask_user_clarification to gate write ops"
-            );
-            // Market grounding + time helpers. Memory retrieval is the
-            // orchestrator's on-demand concern — this specialist gets a
-            // grounded request and does not pre-fetch memory itself.
-            for required in [
-                "stock_quote",
-                "stock_exchange_rate",
-                "stock_crypto_series",
-                "current_time",
-            ] {
-                assert!(
-                    tools.iter().any(|t| t == required),
-                    "crypto_agent needs supporting tool `{required}`"
-                );
-            }
-            // x402 paid HTTP requests — signs on-chain USDC payments
-            // for APIs behind HTTP 402 challenges.
-            assert!(
-                tools.iter().any(|t| t == "x402_request"),
-                "crypto_agent needs x402_request for paid API access"
-            );
-            assert!(!tools.iter().any(|t| t == "call_memory_agent"));
-            // Hard exclusions — no broad-surface or write-anywhere tools.
-            // Includes the orchestrator-level delegate_* tools so a future
-            // TOML edit can't accidentally hand crypto writes to the
-            // generic integrations or code-execution paths.
-            for forbidden in [
-                "shell",
-                "file_write",
-                "curl",
-                "http_request",
-                "composio_execute",
-                "composio_list_tools",
-                "spawn_subagent",
-                "spawn_worker_thread",
-                // Synthesised delegation tools use the unprefixed
-                // `delegate_name` overrides — forbid those names too.
-                "run_code",
-                "research",
-                "plan",
-            ] {
-                assert!(
-                    !tools.iter().any(|t| t == forbidden),
-                    "crypto_agent must NOT have `{forbidden}` — keeps blast radius bounded"
-                );
-            }
-        }
-        ToolScope::Wildcard => panic!("crypto_agent must have a Named tool scope"),
+fn the_web3_skill_keeps_the_crypto_safety_contract() {
+    let web3 = crate::tools::toolpacks::pack("web3").expect("web3 skill exists");
+    for tool in [
+        "wallet_status",
+        "wallet_chain_status",
+        "wallet_prepare_transfer",
+        "web3_swap_quote",
+        "web3_swap_execute",
+        "web3_bridge_execute",
+        "web3_dapp_execute",
+        "x402_request",
+    ] {
+        assert!(web3.tools.contains(&tool), "web3 skill must hold `{tool}`");
     }
-    // Keep iteration cap tight — quote → confirm → execute is a
-    // 3-step loop, not a research crawl.
+    for rule in [
+        "read → quote → confirm → execute",
+        "no balance tool",
+        "`quote_id`",
+        "Never auto-retry a write",
+    ] {
+        assert!(
+            web3.guide.contains(rule),
+            "web3 guide lost the rule `{rule}`"
+        );
+    }
+    let prompt = include_str!("orchestrator/prompt.md");
     assert!(
-        def.max_iterations <= 10,
-        "crypto_agent max_iterations must stay tight (got {})",
-        def.max_iterations
-    );
-    assert!(def.omit_identity);
-    assert!(def.omit_memory_context);
-    // Pure-function specialist (omit_memory_context = true) — no eager
-    // memory pre-fetch; the orchestrator hands it a grounded request.
-    assert_eq!(def.trigger_memory_agent, TriggerMemoryAgent::Never);
-}
-
-/// Routing: the orchestrator must list `crypto_agent` in its
-/// `subagents` so a `delegate_do_crypto` tool is synthesised at
-/// agent-build time. Without this entry the orchestrator can't
-/// route crypto-shaped requests to the specialist.
-#[test]
-fn orchestrator_subagents_include_crypto_agent() {
-    use crate::agent::harness::definition::SubagentEntry;
-    let def = find("orchestrator");
-    let listed = def.subagents.iter().any(|e| match e {
-        SubagentEntry::AgentId(id) => id == "crypto_agent",
-        _ => false,
-    });
-    assert!(
-        listed,
-        "orchestrator.subagents must list `crypto_agent` so the \
-         routing layer can synthesise `delegate_do_crypto`"
+        prompt.contains("Explicit yes only before moving funds"),
+        "the orchestrator prompt must bind money actions to explicit consent"
     );
 }
 
-/// Routing: the orchestrator must list `mcp_agent` in its `subagents`
-/// so a `delegate_use_mcp_server` tool is synthesised at agent-build
-/// time. Without this entry the orchestrator has no route to actually *use*
-/// an already-connected server's tools from chat (issue #3495).
+/// The orchestrator uses MCP registry tools directly, without spawning a worker.
 #[test]
-fn orchestrator_subagents_include_mcp_agent() {
+fn orchestrator_does_not_delegate_mcp_calls() {
     use crate::agent::harness::definition::SubagentEntry;
     let def = find("orchestrator");
     let listed = def.subagents.iter().any(|e| match e {
         SubagentEntry::AgentId(id) => id == "mcp_agent",
         _ => false,
     });
-    assert!(
-        listed,
-        "orchestrator.subagents must list `mcp_agent` so the routing \
-         layer can synthesise `delegate_use_mcp_server`"
-    );
+    assert!(!listed, "orchestrator should call MCP tools directly");
 }
 
 /// The `mcp` gate's load-bearing safety contract (#4799).
 ///
-/// `agent.toml` is DATA — it cannot be `#[cfg]`'d, so the orchestrator goes
-/// on listing `mcp_agent` in `subagents` even in builds where the `mcp`
-/// feature dropped `mcp_agent` from [`BUILTINS`]. That leaves a subagent id
-/// that resolves to nothing, and the whole gate rests on the loader
-/// TOLERATING it rather than failing the boot.
+/// `agent.toml` is data and can refer to a missing optional agent. The loader
+/// tolerates unknown ids rather than failing the boot.
 ///
 /// Two independent sites provide that tolerance today:
 /// * `orchestrator_tools::collect_orchestrator_tools` warns + skips
@@ -204,96 +73,15 @@ fn orchestrator_tolerates_unresolvable_subagent_id() {
         "definitely_not_a_compiled_in_agent".into(),
     ));
 
-    validate_tier_hierarchy(&[def]).expect(
-        "validate_tier_hierarchy must tolerate an unresolvable subagent id — the `mcp` \
-         feature gate relies on it (orchestrator's agent.toml lists `mcp_agent` even in \
-         builds that compile `mcp_agent` out)",
-    );
+    validate_tier_hierarchy(&[def])
+        .expect("validate_tier_hierarchy must tolerate an unresolvable subagent id");
 }
 
-/// Companion to the above, asserting the real gated shape rather than a
-/// synthetic id: with `mcp` compiled out, `mcp_agent` is genuinely absent
-/// from the loaded set while the orchestrator still lists it — and
-/// `load_builtins` (which runs `validate_tier_hierarchy` internally) must
-/// still succeed, i.e. the core boots.
+/// MCP discovery and invocation are direct; skill setup keeps its specialist
+/// route, and running a skill is the orchestrator's own `run_workflow`.
 #[test]
-#[cfg(not(feature = "mcp"))]
-fn orchestrator_tolerates_absent_mcp_agent() {
-    let defs = load_builtins().expect(
-        "load_builtins must succeed with `mcp` compiled out — the orchestrator's dangling \
-         `mcp_agent` subagent reference must not fail the boot",
-    );
-
-    assert!(
-        !defs.iter().any(|d| d.id == "mcp_agent"),
-        "`mcp_agent` must be compiled out when the `mcp` feature is off"
-    );
-
-    let orchestrator = defs
-        .iter()
-        .find(|d| d.id == "orchestrator")
-        .expect("orchestrator must still load");
-    assert!(
-        orchestrator.subagents.iter().any(|e| matches!(
-            e,
-            SubagentEntry::AgentId(id) if id == "mcp_agent"
-        )),
-        "orchestrator.agent.toml is data and still lists `mcp_agent` — this dangling \
-         reference is exactly what the loader must tolerate"
-    );
-}
-
-/// The orchestrator reaches MCP servers and skills only through the specialists
-/// that own those families (#6302): no raw `mcp_registry_*` or
-/// `skill_registry_*` tool on its belt, and all four hand-off specialists in its
-/// sub-agent allowlist, so their hand-offs are synthesised. Enumerating and
-/// calling a connected server's tools stays `mcp_agent`'s job, which also keeps
-/// the chat agent's schema from ballooning with every server's toolset (#3495).
-#[test]
-fn orchestrator_reaches_mcp_and_skills_through_hand_offs_not_registry_tools() {
+fn orchestrator_reaches_mcp_directly_and_skills_through_hand_offs() {
     let def = find("orchestrator");
-    match &def.tools {
-        ToolScope::Named(tools) => {
-            let raw: Vec<&String> = tools
-                .iter()
-                .filter(|t| t.starts_with("mcp_registry_") || t.starts_with("skill_registry_"))
-                .collect();
-            assert!(
-                raw.is_empty(),
-                "orchestrator must not carry raw registry tools {raw:?}: it hands the task to \
-                 the specialist that owns the family"
-            );
-        }
-        ToolScope::Wildcard => panic!("orchestrator must have a Named tool scope"),
-    }
-    for specialist in ["mcp_agent", "skill_setup", "skill_executor"] {
-        assert!(
-            def.subagents
-                .iter()
-                .any(|entry| matches!(entry, SubagentEntry::AgentId(id) if id == specialist)),
-            "orchestrator must list `{specialist}` so its hand-off tool is synthesised"
-        );
-    }
-}
-
-/// `mcp_agent` is the connected-server execution specialist: it must hold
-/// the discover + call surface and a stable `use_mcp_server` delegate name,
-/// but must NOT hold the uninstall tool or any shell/file/network
-/// capability. There is no install tool at all: servers are declared by the
-/// user in mcp.json.
-///
-/// Gated: `find` panics on a missing id, and the `mcp` feature drops
-/// `mcp_agent` from [`BUILTINS`] entirely.
-#[test]
-#[cfg(feature = "mcp")]
-fn mcp_agent_drives_connected_servers_without_install_or_shell() {
-    let def = find("mcp_agent");
-    assert_eq!(def.agent_tier, AgentTier::Worker);
-    assert_eq!(
-        def.delegate_name.as_deref(),
-        Some("use_mcp_server"),
-        "mcp_agent must keep its `use_mcp_server` delegate name stable"
-    );
     match &def.tools {
         ToolScope::Named(tools) => {
             for required in [
@@ -304,41 +92,26 @@ fn mcp_agent_drives_connected_servers_without_install_or_shell() {
             ] {
                 assert!(
                     tools.iter().any(|t| t == required),
-                    "mcp_agent missing `{required}`"
+                    "missing direct MCP tool {required}"
                 );
             }
-            for forbidden in [
-                "mcp_registry_install",
-                "mcp_registry_uninstall",
-                "shell",
-                "file_write",
-                "curl",
-                "http_request",
-            ] {
-                assert!(
-                    !tools.iter().any(|t| t == forbidden),
-                    "mcp_agent must NOT have `{forbidden}` — it only relays through \
-                     already-connected servers; servers are declared in mcp.json"
-                );
-            }
+            assert!(!tools.iter().any(|t| t.starts_with("skill_registry_")));
+            assert!(
+                tools.iter().any(|t| t == "run_workflow"),
+                "the orchestrator runs installed skills itself through `run_workflow`"
+            );
         }
-        ToolScope::Wildcard => panic!("mcp_agent must have a Named tool scope"),
+        ToolScope::Wildcard => panic!("orchestrator must have a Named tool scope"),
     }
-}
-
-#[test]
-fn orchestrator_subagents_include_skill_creator() {
-    use crate::agent::harness::definition::SubagentEntry;
-    let def = find("orchestrator");
-    let listed = def.subagents.iter().any(|e| match e {
-        SubagentEntry::AgentId(id) => id == "skill_creator",
-        _ => false,
-    });
-    assert!(
-        listed,
-        "orchestrator.subagents must list `skill_creator` so the \
-        routing layer can synthesise `create_skill`"
-    );
+    {
+        let specialist = "skill_setup";
+        assert!(
+            def.subagents
+                .iter()
+                .any(|entry| matches!(entry, SubagentEntry::AgentId(id) if id == specialist)),
+            "orchestrator must list `{specialist}` so its hand-off tool is synthesised"
+        );
+    }
 }
 
 #[test]
@@ -354,27 +127,19 @@ fn orchestrator_subagents_include_control_specialists() {
         })
         .collect();
 
-    for expected in [
-        "task_manager_agent",
-        "settings_agent",
-        "profile_memory_agent",
-    ] {
-        assert!(
-            subagents.contains(expected),
-            "orchestrator.subagents must list `{expected}` so the routing layer can synthesize its delegate tool"
-        );
-    }
+    let expected = "task_manager_agent";
+    assert!(
+        subagents.contains(expected),
+        "orchestrator.subagents must list `{expected}` so the routing layer can synthesize its delegate tool"
+    );
 }
 
 #[test]
 fn control_specialists_have_named_tools_and_are_worker_leaves() {
     use crate::agent::harness::definition::SubagentEntry;
 
-    for expected in [
-        "task_manager_agent",
-        "settings_agent",
-        "profile_memory_agent",
-    ] {
+    {
+        let expected = "task_manager_agent";
         let def = find(expected);
         assert_eq!(def.agent_tier, AgentTier::Worker);
         let visible_subagents: Vec<&str> = def
@@ -428,14 +193,14 @@ fn other_builtins_default_to_worker_tier() {
     for def in load_builtins().unwrap() {
         if matches!(
             def.id.as_str(),
-            "orchestrator" | "planner" | "subconscious" | "flow_discovery"
+            "orchestrator" | "planner" | "flow_discovery"
         ) {
             continue;
         }
         assert_eq!(
             def.agent_tier,
             AgentTier::Worker,
-            "{} should default to worker tier (only orchestrator/planner/subconscious/flow_discovery are non-worker today)",
+            "{} should default to worker tier (only orchestrator/planner/flow_discovery are non-worker today)",
             def.id
         );
     }
@@ -487,8 +252,8 @@ fn rejects_reasoning_to_reasoning_delegation() {
 #[test]
 fn rejects_worker_with_subagents() {
     let mut defs = load_builtins().unwrap();
-    let researcher = defs.iter_mut().find(|d| d.id == "researcher").unwrap();
-    researcher
+    let worker = defs.iter_mut().find(|d| d.id == "summarizer").unwrap();
+    worker
         .subagents
         .push(SubagentEntry::AgentId("critic".into()));
 
@@ -511,4 +276,46 @@ fn allows_skill_wildcards_on_any_non_worker_tier() {
         crate::agent::harness::definition::SkillsWildcard { skills: "*".into() },
     ));
     validate_tier_hierarchy(&defs).expect("skill wildcards on reasoning tier must validate");
+}
+
+/// The orchestrator defers its rarely-used or duplicate-route tools for itself
+/// only (`deferred_tools`): they stay registered, searchable through
+/// `tool_search` and callable by name, while other agents that name them keep
+/// them advertised. The belt must opt into discovery for the list to apply.
+#[test]
+fn orchestrator_defers_its_duplicate_route_tools() {
+    let def = find("orchestrator");
+    let mut deferred = def.deferred_tools.clone();
+    deferred.sort();
+    assert_eq!(
+        deferred,
+        vec![
+            "composio_list_toolkits",
+            "current_time",
+            "file_read",
+            "file_write",
+            "http_request",
+            "mcp_registry_connect",
+            "mcp_registry_list_tools",
+            "mcp_registry_status",
+            "mcp_registry_tool_call",
+        ]
+    );
+    match &def.tools {
+        crate::agent::harness::definition::ToolScope::Named(named) => {
+            assert!(
+                named.iter().any(|name| name == "tool_search"),
+                "`deferred_tools` only applies to a belt that opted into discovery"
+            );
+            for name in &def.deferred_tools {
+                assert!(
+                    named.contains(name),
+                    "`{name}` is deferred but not on the belt, so deferring it does nothing"
+                );
+            }
+        }
+        crate::agent::harness::definition::ToolScope::Wildcard => {
+            panic!("the orchestrator keeps a named belt")
+        }
+    }
 }

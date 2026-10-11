@@ -11,7 +11,7 @@
 //! what writes to it as deliveries are dispatched.
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::super::module_client::{self as connectors, methods};
 use super::super::types::{
@@ -27,7 +27,7 @@ use super::error_utils::{report_composio_op_error, OpResult};
 pub async fn composio_list_github_repos(
     config: &Config,
     connection_id: Option<String>,
-) -> OpResult<RpcOutcome<ComposioGithubReposResponse>> {
+) -> OpResult<Outcome<ComposioGithubReposResponse>> {
     tracing::debug!(?connection_id, "[composio] rpc list_github_repos");
     let resp = connectors::call::<_, ComposioGithubReposResponse>(
         config,
@@ -41,7 +41,7 @@ pub async fn composio_list_github_repos(
     })?;
     let count = resp.repositories.len();
     let connection_id = resp.connection_id.clone();
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         resp,
         vec![format!(
             "composio: {count} github repo(s) listed for connection {connection_id}"
@@ -54,7 +54,7 @@ pub async fn composio_create_trigger(
     slug: &str,
     connection_id: Option<String>,
     trigger_config: Option<serde_json::Value>,
-) -> OpResult<RpcOutcome<ComposioCreateTriggerResponse>> {
+) -> OpResult<Outcome<ComposioCreateTriggerResponse>> {
     tracing::debug!(slug = %slug, ?connection_id, "[composio] rpc create_trigger");
     let resp = connectors::call::<_, ComposioCreateTriggerResponse>(
         config,
@@ -71,7 +71,7 @@ pub async fn composio_create_trigger(
         format!("[composio] create_trigger failed: {e}")
     })?;
     let trigger_id = resp.trigger_id.clone();
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         resp,
         vec![format!(
             "composio: trigger {trigger_id} created for slug {slug}"
@@ -83,7 +83,7 @@ pub async fn composio_list_available_triggers(
     config: &Config,
     toolkit: &str,
     connection_id: Option<String>,
-) -> OpResult<RpcOutcome<ComposioAvailableTriggersResponse>> {
+) -> OpResult<Outcome<ComposioAvailableTriggersResponse>> {
     tracing::debug!(toolkit = %toolkit, ?connection_id, "[composio] rpc list_available_triggers");
     let resp = connectors::call::<_, ComposioAvailableTriggersResponse>(
         config,
@@ -99,7 +99,7 @@ pub async fn composio_list_available_triggers(
         format!("[composio] list_available_triggers failed: {e}")
     })?;
     let count = resp.triggers.len();
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         resp,
         vec![format!(
             "composio: {count} available trigger(s) for toolkit {toolkit}"
@@ -110,7 +110,7 @@ pub async fn composio_list_available_triggers(
 pub async fn composio_list_triggers(
     config: &Config,
     toolkit: Option<String>,
-) -> OpResult<RpcOutcome<ComposioActiveTriggersResponse>> {
+) -> OpResult<Outcome<ComposioActiveTriggersResponse>> {
     tracing::debug!(?toolkit, "[composio] rpc list_triggers");
     let resp = connectors::call::<_, ComposioActiveTriggersResponse>(
         config,
@@ -123,7 +123,7 @@ pub async fn composio_list_triggers(
         format!("[composio] list_triggers failed: {e}")
     })?;
     let count = resp.triggers.len();
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         resp,
         vec![format!("composio: {count} active trigger(s) listed")],
     ))
@@ -134,7 +134,7 @@ pub async fn composio_enable_trigger(
     connection_id: &str,
     slug: &str,
     trigger_config: Option<serde_json::Value>,
-) -> OpResult<RpcOutcome<ComposioEnableTriggerResponse>> {
+) -> OpResult<Outcome<ComposioEnableTriggerResponse>> {
     tracing::debug!(slug = %slug, connection_id = %connection_id, "[composio] rpc enable_trigger");
     let resp = connectors::call::<_, ComposioEnableTriggerResponse>(
         config,
@@ -151,8 +151,8 @@ pub async fn composio_enable_trigger(
         // Enabling is the one trigger call a user drives directly from a
         // settings screen, so its failures are mapped to something a person can
         // act on ("reconnect GitHub") rather than the provider's own wording.
-        let class = super::super::error_mapping::classify_composio_error(slug, &e);
-        let mapped = super::super::error_mapping::format_provider_error(slug, &e);
+        let class = tinyconnectors::execute::classify_composio_error(slug, &e);
+        let mapped = tinyconnectors::execute::format_provider_error(slug, &e);
         tracing::warn!(
             slug = %slug,
             connection_id = %connection_id,
@@ -162,7 +162,7 @@ pub async fn composio_enable_trigger(
         mapped
     })?;
     let trigger_id = resp.trigger_id.clone();
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         resp,
         vec![format!("composio: enabled trigger {slug} → {trigger_id}")],
     ))
@@ -171,7 +171,7 @@ pub async fn composio_enable_trigger(
 pub async fn composio_disable_trigger(
     config: &Config,
     trigger_id: &str,
-) -> OpResult<RpcOutcome<ComposioDisableTriggerResponse>> {
+) -> OpResult<Outcome<ComposioDisableTriggerResponse>> {
     tracing::debug!(trigger_id = %trigger_id, "[composio] rpc disable_trigger");
     let resp = connectors::call::<_, ComposioDisableTriggerResponse>(
         config,
@@ -190,13 +190,13 @@ pub async fn composio_disable_trigger(
     } else {
         format!("composio: trigger {trigger_id} was not active")
     };
-    Ok(RpcOutcome::new(resp, vec![message]))
+    Ok(Outcome::new(resp, vec![message]))
 }
 
 pub async fn composio_list_trigger_history(
     config: &Config,
     limit: Option<usize>,
-) -> OpResult<RpcOutcome<ComposioTriggerHistoryResult>> {
+) -> OpResult<Outcome<ComposioTriggerHistoryResult>> {
     let requested_limit = limit.unwrap_or(100).clamp(1, 500);
     let workspace_label = config
         .workspace_dir
@@ -220,7 +220,7 @@ pub async fn composio_list_trigger_history(
     .map_err(|error| format!("[composio] list_trigger_history failed: {error}"))?;
     let count = history.entries.len();
 
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         history,
         vec![format!(
             "composio: {count} trigger history entrie(s) loaded (archive present)"

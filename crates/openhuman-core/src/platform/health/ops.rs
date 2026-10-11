@@ -2,11 +2,11 @@
 
 use serde::Serialize;
 
+use crate::core::Outcome;
 use crate::platform::health;
-use crate::rpc::RpcOutcome;
 
-pub fn health_snapshot() -> RpcOutcome<serde_json::Value> {
-    RpcOutcome::single_log(health::snapshot_json(), "health_snapshot requested")
+pub fn health_snapshot() -> Outcome<serde_json::Value> {
+    Outcome::single_log(health::snapshot_json(), "health_snapshot requested")
 }
 
 /// Static system information returned by `openhuman.health_system_info`.
@@ -27,7 +27,7 @@ pub struct SystemInfo {
 /// This is the handler backing the `openhuman.health_system_info` RPC method
 /// (legacy callers may send `openhuman.system_info`, which the alias table
 /// rewrites before dispatch).
-pub fn system_info() -> RpcOutcome<SystemInfo> {
+pub fn system_info() -> Outcome<SystemInfo> {
     let info = SystemInfo {
         version: env!("CARGO_PKG_VERSION"),
         os: std::env::consts::OS,
@@ -41,7 +41,7 @@ pub fn system_info() -> RpcOutcome<SystemInfo> {
         pid = info.pid,
         "[health] system_info requested"
     );
-    RpcOutcome::new(info, vec![])
+    Outcome::new(info, vec![])
 }
 
 #[cfg(test)]

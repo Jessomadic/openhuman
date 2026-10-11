@@ -22,11 +22,11 @@ fn builtin_agents_pass_when_all_known() {
 
 #[test]
 fn unknown_agent_is_reported() {
-    let errors = validate_agents(&good_def(), |id| id == "researcher");
-    // planner, critic, summarizer are unknown -> 3 errors.
-    assert_eq!(errors.len(), 3);
+    let errors = validate_agents(&good_def(), |id| id == "planner");
+    // critic and summarizer are unknown -> 2 errors.
+    assert_eq!(errors.len(), 2, "{errors:?}");
     assert!(errors.iter().any(
-        |e| matches!(e, DefinitionError::UnknownAgent { agent_id, .. } if agent_id == "planner")
+        |e| matches!(e, DefinitionError::UnknownAgent { agent_id, .. } if agent_id == "critic")
     ));
 }
 

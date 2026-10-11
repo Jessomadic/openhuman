@@ -1,9 +1,12 @@
 use std::path::{Path, PathBuf};
 
+use super::files::{self, FileRoots};
+use super::store_documents::{self, documents, on_docs, page_of};
 use super::types::{ArtifactMeta, ArtifactStatus};
 
 const ARTIFACTS_SUBDIR: &str = "artifacts";
 const META_FILENAME: &str = "meta.json";
+const META_TMP_FILENAME: &str = "meta.json.tmp";
 /// Sidecar file holding the verbatim producer-tool arguments that
 /// generated the artifact, persisted next to `meta.json` so a failed
 /// card's Retry button can re-dispatch the exact same generation
@@ -94,6 +97,10 @@ pub(crate) async fn save_artifact_meta(
 ) -> Result<(), String> {
     log::debug!("[artifacts] save_artifact_meta: id={}", meta.id);
     validate_artifact_id(&meta.id)?;
+    if let Some(docs) = documents(workspace_dir).await? {
+        let owned = meta.clone();
+        return on_docs(docs, move |docs| docs.put_meta(&owned)).await;
+    }
     let root = artifacts_root(workspace_dir).await?;
     let artifact_dir = root.join(&meta.id);
     // Verify sandboxing before writing
@@ -113,12 +120,24 @@ pub(crate) async fn save_artifact_meta(
             meta.id
         )
     })?;
-    tokio::fs::write(&meta_path, json).await.map_err(|e| {
+    // Write-then-rename so a crash mid-write never leaves a truncated
+    // meta.json: the migration relies on the record flipping atomically
+    // from the legacy path to the moved file.
+    let tmp_path = artifact_dir.join(META_TMP_FILENAME);
+    tokio::fs::write(&tmp_path, json).await.map_err(|e| {
         format!(
             "[artifacts] failed to write meta.json for id={}: {e}",
             meta.id
         )
     })?;
+    tokio::fs::rename(&tmp_path, &meta_path)
+        .await
+        .map_err(|e| {
+            format!(
+                "[artifacts] failed to commit meta.json for id={}: {e}",
+                meta.id
+            )
+        })?;
     log::debug!("[artifacts] saved meta.json for id={}", meta.id);
     Ok(())
 }
@@ -146,6 +165,10 @@ pub(crate) async fn list_artifacts(
         thread_id,
         workspace_dir
     );
+    if let Some(docs) = documents(workspace_dir).await? {
+        let all = on_docs(docs, |docs| docs.list_meta()).await?;
+        return Ok(page_of(all, offset, limit, thread_id));
+    }
     let root = artifacts_root(workspace_dir).await?;
 
     let mut read_dir = match tokio::fs::read_dir(&root).await {
@@ -207,24 +230,7 @@ pub(crate) async fn list_artifacts(
         }
     }
 
-    // Sort descending by created_at (newest first)
-    all.sort_by_key(|item| std::cmp::Reverse(item.created_at));
-
-    // Apply thread filter BEFORE pagination so `total` reflects the
-    // per-thread count the UI surfaces, and so a small page doesn't get
-    // silently emptied by filtering after the slice (#3226).
-    if let Some(tid) = thread_id {
-        all.retain(|m| m.thread_id.as_deref() == Some(tid));
-    }
-
-    let total = all.len();
-    let page = all.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
-
-    log::debug!(
-        "[artifacts] list_artifacts: total={total} returning {} items",
-        page.len()
-    );
-    Ok((page, total))
+    Ok(page_of(all, offset, limit, thread_id))
 }
 
 /// Retrieve a single artifact by ID.
@@ -234,6 +240,12 @@ pub(crate) async fn get_artifact(
 ) -> Result<ArtifactMeta, String> {
     log::debug!("[artifacts] get_artifact: id={artifact_id}");
     validate_artifact_id(artifact_id)?;
+    if let Some(docs) = documents(workspace_dir).await? {
+        let id = artifact_id.to_string();
+        return on_docs(docs, move |docs| docs.get_meta(&id))
+            .await?
+            .ok_or_else(|| format!("[artifacts] artifact not found id={artifact_id}"));
+    }
     let root = artifacts_root(workspace_dir).await?;
     let artifact_dir = root.join(artifact_id);
     assert_within_root(&root, &artifact_dir)?;
@@ -264,6 +276,10 @@ pub(crate) async fn save_artifact_args(
 ) -> Result<(), String> {
     log::debug!("[artifacts] save_artifact_args: id={artifact_id}");
     validate_artifact_id(artifact_id)?;
+    if let Some(docs) = documents(workspace_dir).await? {
+        let (id, owned) = (artifact_id.to_string(), args.clone());
+        return on_docs(docs, move |docs| docs.put_args(&id, &owned)).await;
+    }
     let root = artifacts_root(workspace_dir).await?;
     let artifact_dir = root.join(artifact_id);
     assert_within_root(&root, &artifact_dir)?;
@@ -297,6 +313,14 @@ pub(crate) async fn read_artifact_args(
 ) -> Result<serde_json::Value, String> {
     log::debug!("[artifacts] read_artifact_args: id={artifact_id}");
     validate_artifact_id(artifact_id)?;
+    if let Some(docs) = documents(workspace_dir).await? {
+        let id = artifact_id.to_string();
+        return on_docs(docs, move |docs| docs.get_args(&id))
+            .await?
+            .ok_or_else(|| {
+                format!("[artifacts] no persisted args for id={artifact_id} (not regenerable)")
+            });
+    }
     let root = artifacts_root(workspace_dir).await?;
     let artifact_dir = root.join(artifact_id);
     assert_within_root(&root, &artifact_dir)?;
@@ -311,27 +335,18 @@ pub(crate) async fn read_artifact_args(
 /// Read the raw bytes of a finalized artifact's output file.
 ///
 /// Single source of truth for resolving an artifact id → on-disk bytes:
-/// callers (e.g. the presentation image pipeline) must not reconstruct
-/// the `<root>/<id>/<filename>` path scheme themselves. Validates the id,
-/// confirms the resolved path stays under the artifacts root, and refuses
-/// artifacts that are not yet [`ArtifactStatus::Ready`] (a `Pending` /
-/// `Failed` record may have no bytes — or partial bytes — on disk).
+/// callers (e.g. the presentation image pipeline) must not reconstruct the
+/// path themselves. Goes through [`files::resolve_ready_file`], which refuses
+/// records that are not yet [`ArtifactStatus::Ready`] (a `Pending` / `Failed`
+/// record may have no bytes — or partial bytes — on disk), applies the escape
+/// guard, and reports a file removed outside OpenHuman as missing.
 pub async fn read_artifact_bytes(
     workspace_dir: &Path,
+    roots: impl Into<FileRoots>,
     artifact_id: &str,
 ) -> Result<Vec<u8>, String> {
     log::debug!("[artifacts] read_artifact_bytes: id={artifact_id}");
-    let meta = get_artifact(workspace_dir, artifact_id).await?;
-    if !matches!(meta.status, ArtifactStatus::Ready) {
-        return Err(format!(
-            "[artifacts] artifact id={artifact_id} is not ready (status={:?})",
-            meta.status
-        ));
-    }
-    let root = artifacts_root(workspace_dir).await?;
-    // `meta.path` is the store-internal `<id>/<filename>` relative path.
-    let file_path = root.join(&meta.path);
-    assert_within_root(&root, &file_path)?;
+    let file_path = files::resolve_ready_file(workspace_dir, &roots.into(), artifact_id).await?;
     let bytes = tokio::fs::read(&file_path)
         .await
         .map_err(|e| format!("[artifacts] failed to read artifact bytes id={artifact_id}: {e}"))?;
@@ -342,13 +357,41 @@ pub async fn read_artifact_bytes(
     Ok(bytes)
 }
 
-/// Delete an artifact directory and all its contents.
-pub(crate) async fn delete_artifact(workspace_dir: &Path, artifact_id: &str) -> Result<(), String> {
+/// Delete an artifact: its file in the files folder, then its metadata
+/// directory. A file already gone, or one the escape guard rejects, is left
+/// alone (logged) and the record is still removed.
+pub(crate) async fn delete_artifact(
+    workspace_dir: &Path,
+    roots: impl Into<FileRoots>,
+    artifact_id: &str,
+) -> Result<(), String> {
+    let roots = roots.into();
     log::debug!("[artifacts] delete_artifact: id={artifact_id}");
     validate_artifact_id(artifact_id)?;
     let root = artifacts_root(workspace_dir).await?;
     let artifact_dir = root.join(artifact_id);
     assert_within_root(&root, &artifact_dir)?;
+    if let Ok(meta) = get_artifact(workspace_dir, artifact_id).await {
+        if meta.file.is_some() {
+            match files::resolve_file(workspace_dir, &meta, &roots).await {
+                Ok(file) => match tokio::fs::remove_file(&file).await {
+                    Ok(()) => log::debug!(
+                        "[artifacts] delete_artifact: removed file for id={artifact_id}"
+                    ),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(format!(
+                            "[artifacts] failed to delete file for id={artifact_id}: {e}"
+                        ))
+                    }
+                },
+                Err(e) => log::warn!("[artifacts] delete_artifact: leaving file in place: {e}"),
+            }
+        }
+    }
+    if let Some(docs) = documents(workspace_dir).await? {
+        return store_documents::delete_record(docs, &artifact_dir, artifact_id).await;
+    }
     tokio::fs::remove_dir_all(&artifact_dir)
         .await
         .map_err(|e| format!("[artifacts] failed to delete artifact id={artifact_id}: {e}"))?;
@@ -357,8 +400,6 @@ pub(crate) async fn delete_artifact(workspace_dir: &Path, artifact_id: &str) -> 
 }
 
 // Mark a status as unused — referenced only in tests via the store
-#[allow(dead_code)]
-fn _assert_status_used(_: ArtifactStatus) {}
 
 /// Maximum length of a sanitized artifact filename stem. Keeps the
 /// rendered filename short enough to round-trip on every filesystem
@@ -428,10 +469,30 @@ fn sanitize_filename_stem(title: &str) -> String {
 /// bridge silently drops the event for lack of a routing target.
 pub async fn create_artifact(
     workspace_dir: &Path,
+    files: impl Into<FileRoots>,
     kind: super::types::ArtifactKind,
     title: &str,
     extension: &str,
 ) -> Result<(ArtifactMeta, PathBuf), String> {
+    create_artifact_for_call(workspace_dir, files, kind, title, extension, None).await
+}
+
+/// As [`create_artifact`], but also records the provider-assigned
+/// `tool_call_id` of the producing invocation (typically
+/// `crate::tools::host_extensions::tool_call_id(ctx)`) on the artifact's
+/// metadata and on the `ArtifactPending` event this publishes, so the UI
+/// can correlate the card with the tool-call bubble. `None` behaves
+/// exactly like [`create_artifact`].
+pub async fn create_artifact_for_call(
+    workspace_dir: &Path,
+    files: impl Into<FileRoots>,
+    kind: super::types::ArtifactKind,
+    title: &str,
+    extension: &str,
+    tool_call_id: Option<&str>,
+) -> Result<(ArtifactMeta, PathBuf), String> {
+    let roots = files.into();
+    let files_dir = roots.current();
     let trimmed_title = title.trim();
     if trimmed_title.is_empty() {
         return Err("[artifacts] create_artifact: title must not be empty".to_string());
@@ -458,52 +519,84 @@ pub async fn create_artifact(
         .filter(|target| !target.trim().is_empty());
     let is_regenerate = reused_id.is_some();
     let id = reused_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let filename = format!("{}.{trimmed_ext}", sanitize_filename_stem(trimmed_title));
-    let relative_path = format!("{id}/{filename}");
+    let stem = sanitize_filename_stem(trimmed_title);
 
     let root = artifacts_root(workspace_dir).await?;
     let artifact_dir = root.join(&id);
     assert_within_root(&root, &artifact_dir)?;
-    tokio::fs::create_dir_all(&artifact_dir)
-        .await
-        .map_err(|e| {
-            format!(
-                "[artifacts] create_artifact: failed to mkdir {:?}: {e}",
-                artifact_dir
-            )
-        })?;
-    let absolute_path = artifact_dir.join(&filename);
+    // With a storage backend the record is a document, so there is no
+    // per-artifact directory to make.
+    if store_documents::current()
+        .map_err(|e| format!("[artifacts] storage: {e:#}"))?
+        .is_none()
+    {
+        tokio::fs::create_dir_all(&artifact_dir)
+            .await
+            .map_err(|e| {
+                format!(
+                    "[artifacts] create_artifact: failed to mkdir {:?}: {e}",
+                    artifact_dir
+                )
+            })?;
+    }
 
     // Capture the originating chat thread (if any) at create-time so the
     // panel can repopulate from disk after a redux-persist purge — see
     // #3226. `finalize_artifact` / `fail_artifact` already read the same
     // task-local for event publication; persisting it here means the
     // routing target survives a process restart.
-    let (thread_id, _) = current_chat_context();
+    let (thread_id, _, _) = current_chat_context();
 
     // On a regenerate the id is reused in place, so preserve the original
     // `created_at` — bumping it to now would reorder the artifact to the
     // top of the `created_at`-sorted list/panel even though it is the same
     // logical artifact (#3162, CodeRabbit). New artifacts always stamp now.
-    let created_at = if is_regenerate {
-        match get_artifact(workspace_dir, &id).await {
-            Ok(prev) => prev.created_at,
-            Err(_) => chrono::Utc::now(),
-        }
+    // A regenerate also overwrites the file it already owns (#5505) rather
+    // than claiming a second name in the files folder.
+    let previous = if is_regenerate {
+        get_artifact(workspace_dir, &id).await.ok()
     } else {
-        chrono::Utc::now()
+        None
     };
+    let created_at = previous
+        .as_ref()
+        .map(|prev| prev.created_at)
+        .unwrap_or_else(chrono::Utc::now);
+    let owned_file = match previous.as_ref().filter(|prev| prev.file.is_some()) {
+        Some(prev) => match files::resolve_file(workspace_dir, prev, &roots).await {
+            Ok(path) if tokio::fs::try_exists(&path).await.unwrap_or(false) => prev
+                .file_root
+                .clone()
+                .map(|root| (path, PathBuf::from(root))),
+            _ => None,
+        },
+        None => None,
+    };
+    let (absolute_path, file_root) = match owned_file {
+        Some(pair) => pair,
+        None => (
+            files::reserve_file(files_dir, &stem, trimmed_ext, &id).await?,
+            files_dir.to_path_buf(),
+        ),
+    };
+    let filename = absolute_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("{stem}.{trimmed_ext}"));
 
     let meta = ArtifactMeta {
         id: id.clone(),
         kind,
         title: trimmed_title.to_string(),
-        path: relative_path,
+        path: filename,
+        file: Some(absolute_path.to_string_lossy().into_owned()),
+        file_root: Some(file_root.to_string_lossy().into_owned()),
         size_bytes: 0,
         status: ArtifactStatus::Pending,
         created_at,
         error: None,
         thread_id,
+        tool_call_id: tool_call_id.map(str::to_string),
     };
     save_artifact_meta(workspace_dir, &meta).await?;
 
@@ -519,7 +612,7 @@ pub async fn create_artifact(
     // (#3162). When `finalize_artifact` / `fail_artifact` later fires the
     // matching Ready/Failed event with the same `artifact_id`, the
     // frontend can swap the card in place.
-    let (thread_id, client_id) = current_chat_context();
+    let (thread_id, client_id, request_id) = current_chat_context();
     crate::core::bus::BUS.publish(crate::core::events::DomainEvent::ArtifactPending {
         artifact_id: meta.id.clone(),
         kind: meta.kind.as_str().to_string(),
@@ -528,6 +621,8 @@ pub async fn create_artifact(
         path: meta.path.clone(),
         thread_id,
         client_id,
+        tool_call_id: meta.tool_call_id.clone(),
+        request_id,
     });
 
     Ok((meta, absolute_path))
@@ -562,7 +657,7 @@ pub async fn finalize_artifact(
     save_artifact_meta(workspace_dir, &meta).await?;
     log::debug!("[artifacts] finalize_artifact: id={artifact_id} -> Ready size={size_bytes}");
 
-    let (thread_id, client_id) = current_chat_context();
+    let (thread_id, client_id, request_id) = current_chat_context();
     crate::core::bus::BUS.publish(crate::core::events::DomainEvent::ArtifactReady {
         artifact_id: meta.id.clone(),
         kind: meta.kind.as_str().to_string(),
@@ -572,6 +667,8 @@ pub async fn finalize_artifact(
         size_bytes: meta.size_bytes,
         thread_id,
         client_id,
+        tool_call_id: meta.tool_call_id.clone(),
+        request_id,
     });
     Ok(meta)
 }
@@ -586,6 +683,7 @@ pub async fn finalize_artifact(
 /// rules as [`finalize_artifact`].
 pub async fn fail_artifact(
     workspace_dir: &Path,
+    roots: impl Into<FileRoots>,
     artifact_id: &str,
     reason: &str,
 ) -> Result<ArtifactMeta, String> {
@@ -593,6 +691,7 @@ pub async fn fail_artifact(
     meta.status = ArtifactStatus::Failed;
     meta.error = Some(reason.to_string());
     save_artifact_meta(workspace_dir, &meta).await?;
+    files::remove_empty_placeholder(workspace_dir, &meta, &roots.into()).await;
     // Log only the size of the reason — it can carry provider stderr
     // / user-derived content, which we don't want flushed verbatim
     // into structured logs. The full payload is still persisted on
@@ -602,7 +701,7 @@ pub async fn fail_artifact(
         reason.len()
     );
 
-    let (thread_id, client_id) = current_chat_context();
+    let (thread_id, client_id, request_id) = current_chat_context();
     crate::core::bus::BUS.publish(crate::core::events::DomainEvent::ArtifactFailed {
         artifact_id: meta.id.clone(),
         kind: meta.kind.as_str().to_string(),
@@ -611,20 +710,29 @@ pub async fn fail_artifact(
         error: reason.to_string(),
         thread_id,
         client_id,
+        tool_call_id: meta.tool_call_id.clone(),
+        request_id,
     });
     Ok(meta)
 }
 
 /// Read the active [`ApprovalChatContext`] task-local (set by
-/// `web_chat` around each chat turn) and return its
-/// thread + client ids. Returns `(None, None)` for non-chat callers
-/// (CLI, cron, sub-agent runners) so artifact emit hooks degrade
-/// gracefully — the event is still published but the web subscriber
-/// drops it for lack of a routing target.
-fn current_chat_context() -> (Option<String>, Option<String>) {
+/// `web_chat` around each chat turn) and return its thread id, client
+/// id, and the originating turn's `request_id`. Returns `(None, None,
+/// None)` for non-chat callers (CLI, cron, sub-agent runners) so
+/// artifact emit hooks degrade gracefully — the event is still
+/// published but the web subscriber drops it for lack of a routing
+/// target.
+fn current_chat_context() -> (Option<String>, Option<String>, Option<String>) {
     crate::security::approval::APPROVAL_CHAT_CONTEXT
-        .try_with(|ctx| (Some(ctx.thread_id.clone()), Some(ctx.client_id.clone())))
-        .unwrap_or((None, None))
+        .try_with(|ctx| {
+            (
+                Some(ctx.thread_id.clone()),
+                Some(ctx.client_id.clone()),
+                ctx.request_id.clone(),
+            )
+        })
+        .unwrap_or((None, None, None))
 }
 
 #[cfg(test)]

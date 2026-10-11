@@ -1,166 +1,9 @@
 use super::*;
 
-/// Heuristic: does `text` already contain a clear, answerable question in its
-/// final paragraph? Conservative by design (issue: builder convergence) — a
-/// false negative (an actual question this misses) no longer discards the
-/// model's text (see `combine_trail_off_fallback`), so the safe failure mode
-/// stays "add a guaranteed question on top", never "under-detect and stay
-/// silent".
-///
-/// Regression (#4887 follow-up): the original version only checked for a `?`
-/// at the very end of the text / last line, which false-negatived on the
-/// extremely common LLM pattern "What's X? You can find it at Y." — a real
-/// question immediately followed by a trailing instructional sentence. The
-/// backstop then clobbered a specific, answerable question with a generic
-/// fallback. To catch that shape, this now also scans the LAST non-empty
-/// paragraph for a `?` that isn't inside inline code or a fenced code block
-/// (so a literal `?` in a code sample, e.g. `WHERE id = ?`, doesn't count).
-///
-/// Note: the trailing-noise strip below deliberately does NOT include the
-/// backtick. Stripping a trailing backtick would peel off the CLOSING
-/// delimiter of a code span whose last character is `?` (e.g. `` `id = ?` ``
-/// at the very end of the text), exposing that `?` as if it were a bare
-/// trailing question mark and defeating the code guard entirely.
-pub(super) fn text_looks_like_question(text: &str) -> bool {
-    let trimmed = text
-        .trim()
-        .trim_end_matches(['"', '\'', ')', ']', '*', '_', '.'])
-        .trim_end();
-    if trimmed.is_empty() {
-        return false;
-    }
-    if trimmed.ends_with('?') {
-        return true;
-    }
-    // The question may not be the literal last character (trailing markdown
-    // like a closing code fence or list marker on its own line) — fall back
-    // to the last non-blank line.
-    if trimmed
-        .lines()
-        .rfind(|line| !line.trim().is_empty())
-        .is_some_and(|last_line| last_line.trim_end().ends_with('?'))
-    {
-        return true;
-    }
-    // Final-paragraph scan: a question can sit mid-paragraph, followed by a
-    // further trailing sentence on the SAME line/paragraph ("...ID? You can
-    // find it under Profile > Copy member ID."). Take the last non-blank
-    // paragraph and accept it if it contains a `?` that isn't inside inline
-    // code / a code fence.
-    last_paragraph(trimmed)
-        .as_deref()
-        .is_some_and(question_mark_outside_code)
-}
-
-/// Returns the last non-blank paragraph of `text` — a maximal run of
-/// consecutive non-blank lines, working backward from the end and skipping
-/// any trailing blank lines first. `None` if `text` has no non-blank lines.
-///
-/// CodeRabbit review follow-up: this used to split on the literal `"\n\n"`
-/// byte sequence, which mishandles two real shapes:
-/// - **CRLF input** (`"question?\r\n\r\nstatus"`): the separator is
-///   `"\r\n\r\n"`, not `"\n\n"`, so the whole text was treated as ONE
-///   paragraph — an earlier question could then suppress the fallback for a
-///   trailing non-question status paragraph.
-/// - **Whitespace-only separator lines** (`"question?\n \nstatus"` — a blank
-///   line that isn't perfectly empty): same failure, same reason.
-///
-/// Working line-by-line via [`str::lines`] (which normalizes CRLF) and
-/// treating any all-whitespace line as blank fixes both.
-fn last_paragraph(text: &str) -> Option<String> {
-    let mut collected: Vec<&str> = Vec::new();
-    for line in text.lines().rev() {
-        if line.trim().is_empty() {
-            if collected.is_empty() {
-                continue; // still skipping trailing blank lines
-            }
-            break; // blank line marks the start of the paragraph above
-        }
-        collected.push(line);
-    }
-    if collected.is_empty() {
-        return None;
-    }
-    collected.reverse();
-    Some(collected.join("\n"))
-}
-
-/// Does `text` contain at least one *sentence-terminal* `?` that isn't
-/// inside a backtick-delimited code span (inline code like `` `U...` `` or a
-/// fenced block like `` ``` ``)? Follows the CommonMark code-span rule: a
-/// *run* of one or more consecutive backticks opens a span, and that span is
-/// closed only by the next run of the SAME length — a shorter or longer run
-/// of backticks encountered while inside a span is just literal backtick
-/// characters, not a delimiter.
-///
-/// CodeRabbit review follow-up: an earlier version tracked a running
-/// per-character backtick COUNT and used its parity (even = outside code).
-/// That misclassifies any multi-backtick span whose delimiter is more than
-/// one backtick — e.g. ``` ``SELECT ? FROM t`` ``` opens with a 2-backtick
-/// run (count 0→2, even → looks "outside" again immediately), so the `?`
-/// inside a valid double-backtick span was wrongly treated as outside code.
-/// Tracking delimiter run LENGTH (not raw backtick count) fixes this while
-/// still handling the common single-backtick and triple-backtick-fence
-/// cases, since those are just the run-length-1 and run-length-3 instances
-/// of the same rule.
-///
-/// Codex review follow-up: a bare `?` outside code isn't necessarily a real
-/// question — a status line like "Checked https://api.example/search?q=foo
-/// and got 403." has one mid-token, in a URL query string. Counting that
-/// would flip `text_looks_like_question` to `true` and skip
-/// `combine_trail_off_fallback` entirely, leaving the user with an
-/// unanswerable status note — exactly the failure mode this backstop exists
-/// to prevent. So each candidate `?` is additionally required to be
-/// sentence-terminal via [`is_sentence_terminal_question_mark`].
-pub(super) fn question_mark_outside_code(text: &str) -> bool {
-    let chars: Vec<char> = text.chars().collect();
-    // `Some(n)` while scanning is inside a code span opened by a run of `n`
-    // backticks; that span closes only on the next run of exactly `n`.
-    let mut open_run_len: Option<usize> = None;
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '`' {
-            let start = i;
-            while i < chars.len() && chars[i] == '`' {
-                i += 1;
-            }
-            let run_len = i - start;
-            open_run_len = match open_run_len {
-                None => Some(run_len),
-                Some(n) if n == run_len => None,
-                Some(n) => Some(n), // mismatched run length: still inside the span
-            };
-            continue;
-        }
-        if chars[i] == '?'
-            && open_run_len.is_none()
-            && is_sentence_terminal_question_mark(&chars, i)
-        {
-            return true;
-        }
-        i += 1;
-    }
-    false
-}
-
-/// Is the `?` at `chars[index]` sentence-terminal — i.e. does it read as an
-/// actual question mark rather than a character that merely happens to be a
-/// `?` mid-token (a URL query string like `search?q=foo`, a shell glob,
-/// etc.)? Skips over any immediately-following closing quote/bracket
-/// punctuation (`"`, `'`, right single/double quotes, `)`, `]`) and requires
-/// what remains to be whitespace or the end of the text — the shape a `?`
-/// takes at the end of a real sentence or clause.
-fn is_sentence_terminal_question_mark(chars: &[char], index: usize) -> bool {
-    let mut i = index + 1;
-    while let Some(&c) = chars.get(i) {
-        if matches!(c, '"' | '\'' | '\u{2019}' | '\u{201D}' | ')' | ']') {
-            i += 1;
-            continue;
-        }
-        return c.is_whitespace();
-    }
-    true // '?' was the last character in the paragraph.
-}
+// The pure text heuristics (`text_looks_like_question` and the code-span / URL /
+// paragraph checks under it) live in `tinyflows-copilot`; what stays here needs
+// the host's `TranscriptEntry` history and tool names.
+pub(super) use tinyflows_copilot::text_looks_like_question;
 
 /// Builder-authoring tools whose result body can explain a trail-off — the
 /// authoring belt `dry_run_workflow`/`validate_workflow`/`propose_workflow`/
@@ -186,7 +29,7 @@ const TRAIL_OFF_BLOCKER_TOOLS: &[&str] = &[
 /// blocker is found (the model may have simply stopped with nothing to point
 /// to).
 pub(super) fn build_trail_off_fallback(
-    history: &[crate::agent::messages::ConversationMessage],
+    history: &[tinytools_agent::dialect::TranscriptEntry],
 ) -> String {
     match last_builder_tool_blocker(history) {
         Some(blocker) => format!(
@@ -226,14 +69,14 @@ pub(super) fn combine_trail_off_fallback(fallback: &str, original: &str) -> Stri
 /// misattributes an unrelated read-only tool's plain-text output as a
 /// blocker.
 fn last_builder_tool_blocker(
-    history: &[crate::agent::messages::ConversationMessage],
+    history: &[tinytools_agent::dialect::TranscriptEntry],
 ) -> Option<String> {
-    use crate::agent::messages::ConversationMessage;
+    use tinytools_agent::dialect::TranscriptEntry;
 
     let mut call_names: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     for message in history {
-        if let ConversationMessage::AssistantToolCalls { tool_calls, .. } = message {
+        if let TranscriptEntry::AssistantToolCalls { tool_calls, .. } = message {
             for call in tool_calls {
                 call_names.insert(call.id.clone(), call.name.clone());
             }
@@ -241,7 +84,7 @@ fn last_builder_tool_blocker(
     }
 
     for message in history.iter().rev() {
-        let ConversationMessage::ToolResults(results) = message else {
+        let TranscriptEntry::ToolResults(results) = message else {
             continue;
         };
         for result in results.iter().rev() {

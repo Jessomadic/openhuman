@@ -1,13 +1,20 @@
+pub mod budget;
 pub mod catalog;
 mod global;
+pub mod report;
 pub mod route;
 mod rpc;
 mod schemas;
+pub mod scope;
 pub mod tools;
 pub mod tracker;
+mod tracker_documents;
 pub mod types;
 
-pub use global::{init_global, record_embedding_usage, record_provider_usage, try_global};
+pub use global::{
+    init_global, rebind_global, record_embedding_usage, record_provider_usage,
+    record_provider_usage_scoped, seed_tenant_tracker, try_global,
+};
 pub use route::{route_for_model, CostRoute};
 pub use schemas::{
     all_controller_schemas as all_cost_controller_schemas,
@@ -16,13 +23,14 @@ pub use schemas::{
 pub use tracker::CostTracker;
 pub use types::{
     BudgetStatus, CostDashboard, CostRecord, CostSource, CostSummary, DailyCostEntry, ModelStats,
-    TokenUsage, UsagePeriod,
+    TokenUsage, UsageScope,
 };
 
 /// Serialises tests that touch the process-global [`CostTracker`].
 ///
-/// The tracker is a one-shot `OnceCell` shared by every test in this binary,
-/// so a test that reads it and a test that installs it must not interleave:
+/// The tracker is one process-wide slot shared by every test in this binary,
+/// so a test that reads it and a test that installs or rebinds it must not
+/// interleave:
 /// `rpc_tests::dashboard_query_includes_persisted_record` guards itself with
 /// `try_global().is_some()`, and that check-then-use is only sound while no
 /// other test can call `init_global` between the two. Every test in this

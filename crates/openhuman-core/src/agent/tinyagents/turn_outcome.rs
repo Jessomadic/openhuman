@@ -1,8 +1,9 @@
 //! The outcome type a `tinyagents`-driven turn produces, plus the shared
 //! sinks middleware write into to build it.
 
-use crate::agent::messages::{ChatMessage, ConversationMessage};
+use tinyagents_session::transcript::TranscriptMessage;
 use tinyinference_llm::model::ResolvedModelRoute;
+use tinytools_agent::dialect::TranscriptEntry;
 
 /// The outcome of a turn driven on the `tinyagents` harness.
 #[derive(Debug, Clone)]
@@ -15,11 +16,11 @@ pub(crate) struct TinyagentsTurnOutcome {
     pub resolved_route: Option<ResolvedModelRoute>,
     /// The full transcript, converted back to openhuman messages (flat — tool
     /// calls rendered as text).
-    pub history: Vec<ChatMessage>,
+    pub history: Vec<TranscriptMessage>,
     /// The **typed** messages this turn appended (after the user turn):
     /// `AssistantToolCalls` / `ToolResults` / final assistant `Chat`. The chat
     /// session persists these to keep structured tool-call history fidelity.
-    pub conversation: Vec<ConversationMessage>,
+    pub conversation: Vec<TranscriptEntry>,
     /// Number of model calls the loop made.
     pub model_calls: usize,
     /// Number of tool calls the loop made.
@@ -31,10 +32,9 @@ pub(crate) struct TinyagentsTurnOutcome {
     /// Accumulated cached (cache-read) input tokens. Carried so the turn persists
     /// real cached usage instead of zero (issue #4249, Phase 5).
     pub cached_input_tokens: u64,
-    /// Estimated charged USD for the turn (from `cost::catalog::estimate_cost_usd`
-    /// over the observed usage). Carried so the transcript / session meters record
-    /// a real cost instead of `$0` on every non-cap turn.
-    pub charged_amount_usd: f64,
+    /// The turn's cost: each call's reported charge, else its catalog
+    /// estimate, else unknown (see [`crate::agent::cost::call_cost`]).
+    pub cost: crate::agent::cost::CostTally,
     /// Set when an early-exit tool (e.g. `ask_user_clarification`) fired: the
     /// loop paused so the caller can checkpoint and surface the question. When
     /// present, `text` holds the question. Mirrors the legacy `early_exit_tool`.
@@ -64,12 +64,36 @@ pub(crate) struct TinyagentsTurnOutcome {
     /// `text` already carries this same summary; the flag lets the status mapper
     /// distinguish a breaker halt from a genuine final answer.
     pub breaker_halt: Option<String>,
+    /// `true` when the run ended on a reply that ran out of output tokens
+    /// (`finish_reason = length`) with no visible text and no tool call — the
+    /// model spent its whole output budget reasoning, even after the harness's
+    /// truncated-empty retries and nudge (#6951). `text` is then blank, and
+    /// the closing call must say the budget ran out rather than claim the
+    /// model finished using tools.
+    pub truncated: bool,
     /// Per-tool-call execution outcomes (success + raw result content), keyed by
     /// provider call id, captured at the tool boundary. The harness folds a tool
     /// result into a `Message::tool` that drops its `error` flag, so this is the
     /// only place the caller can recover whether each call actually failed — used
     /// to build honest `ToolCallRecord`s for post-turn hooks + the cap checkpoint.
     pub tool_outcomes: Vec<ToolCallOutcome>,
+    /// The run's context compaction, when it compacted: re-applied by the
+    /// session driver to the history it persists, so the next turn starts
+    /// from the checkpoint. `None` when the run did not compact.
+    pub compaction: Option<super::CompactionCarry>,
+}
+
+/// Whether a run's final response is a reply that ran out of output tokens
+/// before producing anything: `finish_reason = length`, no visible text and no
+/// tool call. See [`TinyagentsTurnOutcome::truncated`].
+pub(crate) fn ended_out_of_output_budget(
+    final_response: Option<&tinyinference_llm::model::ModelResponse>,
+) -> bool {
+    final_response.is_some_and(|response| {
+        response.finish_reason.as_deref() == Some("length")
+            && response.message.tool_calls.is_empty()
+            && response.text().trim().is_empty()
+    })
 }
 
 /// One tool call's execution outcome, captured at the tool boundary before the
@@ -108,8 +132,8 @@ pub(crate) type HaltSummarySlot = std::sync::Arc<std::sync::Mutex<Option<String>
 /// which only exists on observed runs (`on_progress` set). Without this
 /// aggregate record a fire-and-forget turn's spend never reaches the cost
 /// dashboard / wallet surfaces (issue #4249, Phase 5 rollup gap). The bridge
-/// and this fallback are mutually exclusive, so spend is recorded exactly once
-/// either way.
+/// and this fallback are mutually exclusive, and the host budget gate does not
+/// write the ledger, so spend is recorded exactly once either way.
 ///
 /// Returns `true` when a record was attempted (any tokens observed); all-zero
 /// usage is skipped so providers that echo no usage don't inflate the request
@@ -120,7 +144,7 @@ pub(crate) fn record_unobserved_turn_usage(
     input_tokens: u64,
     output_tokens: u64,
     cached_input_tokens: u64,
-    charged_amount_usd: f64,
+    estimated_usd: Option<f64>,
 ) -> bool {
     if input_tokens == 0 && output_tokens == 0 {
         return false;
@@ -129,20 +153,21 @@ pub(crate) fn record_unobserved_turn_usage(
         model,
         input_tokens,
         output_tokens,
-        charged_usd = charged_amount_usd,
+        ?estimated_usd,
         "[tinyagents] recording unobserved-turn usage into the global cost tracker"
     );
-    crate::platform::cost::record_provider_usage(
-        model,
-        &crate::inference::provider::UsageInfo {
-            input_tokens,
-            output_tokens,
-            context_window: 0,
-            cached_input_tokens,
-            cache_creation_tokens: 0,
-            reasoning_tokens: 0,
-            charged_amount_usd,
-        },
-    );
+    let usage = crate::inference::provider::BilledUsage::from_counts(input_tokens, output_tokens)
+        .with_cached_input_tokens(cached_input_tokens);
+    // No per-call charge reached this path; record the catalog estimate when
+    // the model has one, else the record stays unpriced.
+    let usage = match estimated_usd {
+        Some(usd) => usage.with_estimated_usd(usd),
+        None => usage,
+    };
+    crate::platform::cost::record_provider_usage(model, &usage);
     true
 }
+
+#[cfg(test)]
+#[path = "turn_outcome_tests.rs"]
+mod tests;

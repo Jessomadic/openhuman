@@ -1,53 +1,13 @@
 'use client';
 
-/**
- * Upstream assistant-ui thread list. **Not mounted on `/chat`, and it cannot be
- * without a runtime change** — this note exists so that is not re-derived.
- *
- * It needs a runtime whose thread-list core is backed by a real adapter. The
- * only place it renders is `/dev/assistant-ui`, which runs
- * `useRemoteThreadListRuntime` with an `InMemoryThreadListAdapter`
- * (`pages/dev/assistant-ui-demo/MockRuntimeProvider.tsx`). Live chat runs a
- * different runtime family — `useExternalStoreRuntime`
- * (`providers/AssistantUiRuntimeProvider.tsx`) — whose thread-list core is a
- * stub when the adapter supplies no threads:
- *
- * ```js
- * // @assistant-ui/core, external-store-thread-list-runtime-core.js
- * _threads = DEFAULT_THREADS;                       // [DEFAULT_THREAD_ID]
- * const newThreadId = adapter.threadId ?? DEFAULT_THREAD_ID;
- * const newThreads  = adapter.threads  ?? EMPTY_ARRAY;
- * if (previousThreads !== newThreads) this._threads = ...;   // same frozen
- * ```                                                        // EMPTY_ARRAY, so
- *                                                            // never reassigned
- *
- * `useOpenHumanExternalStore` supplies neither `threads` nor `threadId`, so
- * `threadIds` stays `[DEFAULT_THREAD_ID]`. Mounted on `/chat` this renders
- * exactly ONE untitled row showing its `fallback="New Chat"`, no matter how many
- * threads exist — and `hasThreads` below is permanently true, because 1 > 0. It
- * would not look broken. It would look like data that had not loaded yet, which
- * is why this note is here rather than left to be discovered.
- *
- * Adoption costs one of:
- *  1. Supply `threads` + `threadId` on the external-store adapter, plus
- *     switch / archive / new handlers. This includes making `mainThreadId` real
- *     — the identity key composer state, thread-list rows and subscription
- *     teardown all hang off — which was deliberately declined in #6475 as too
- *     broad for the bug at hand. The real thread id currently travels
- *     out-of-band through `AuiThreadIdContext` instead.
- *  2. Migrate the chat surface to `useRemoteThreadListRuntime`, as the demo does.
- *
- * Neither buys a capability we lack: `features/conversations/threadList/
- * ThreadList.tsx` is live on `/chat` and already does selection, inline rename,
- * delete and search-filtered rows.
- *
- * Kept rather than deleted because the demo is the only worked reference for
- * what adoption would actually require.
+/** assistant-ui registry thread list, shared by the live sidebar and demo.
+ * Host adapters supply list data and callbacks; optional row slots add product metadata.
  */
 import { cn } from '@/components/assistant-ui/lib/utils';
 import { Button } from '@/components/assistant-ui/ui/button';
 import { Input } from '@/components/assistant-ui/ui/input';
 import { Skeleton } from '@/components/assistant-ui/ui/skeleton';
+import { useT } from '@/lib/i18n/I18nContext';
 import {
   AuiIf,
   ThreadListItemMorePrimitive,
@@ -70,6 +30,7 @@ import {
   type FC,
   forwardRef,
   Fragment,
+  type ReactNode,
   useEffect,
   useMemo,
   useRef,
@@ -96,6 +57,8 @@ export const ThreadListSearch = forwardRef<
     onValueChange: (value: string) => void;
   }
 >(({ className, value, onValueChange, ...props }, ref) => {
+  const { t } = useT();
+  const searchThreadsLabel = t('assistantUi.threadList.searchThreads', 'Search threads');
   return (
     <div data-slot="aui_thread-list-search" className="relative px-0.5 py-1">
       <SearchIcon
@@ -107,8 +70,8 @@ export const ThreadListSearch = forwardRef<
         type="search"
         value={value}
         onChange={event => onValueChange(event.target.value)}
-        aria-label="Search threads"
-        placeholder="Search threads"
+        aria-label={searchThreadsLabel}
+        placeholder={searchThreadsLabel}
         className={cn('h-8 ps-8 text-sm', className)}
         {...props}
       />
@@ -162,6 +125,7 @@ const dateGroupLabel = (date: Date | undefined, startOfToday: number): string =>
 type ThreadListGroup = { label: string; indices: number[] };
 
 const ThreadListItemGroups: FC<{ searchQuery?: string }> = ({ searchQuery = '' }) => {
+  const { t } = useT();
   const threadIds = useAuiState(s => s.threads.threadIds);
   const threadItems = useAuiState(s => s.threads.threadItems);
 
@@ -201,7 +165,7 @@ const ThreadListItemGroups: FC<{ searchQuery?: string }> = ({ searchQuery = '' }
   if (query && filteredIndices.length === 0) {
     return (
       <div data-slot="aui_thread-list-empty" className="text-muted-foreground px-2.5 py-4 text-sm">
-        No threads found
+        {t('assistantUi.threadList.noThreadsFound', 'No threads found')}
       </div>
     );
   }
@@ -236,8 +200,9 @@ const ThreadListItemGroups: FC<{ searchQuery?: string }> = ({ searchQuery = '' }
 
 export const ThreadListNew = forwardRef<
   HTMLButtonElement,
-  ComponentPropsWithoutRef<typeof Button> & { labelClassName?: string }
->(({ className, labelClassName, children, ...props }, ref) => {
+  ComponentPropsWithoutRef<typeof Button> & { labelClassName?: string; label?: string }
+>(({ className, labelClassName, label, children, ...props }, ref) => {
+  const { t } = useT();
   return (
     <ThreadListPrimitive.New
       render={
@@ -258,7 +223,7 @@ export const ThreadListNew = forwardRef<
           <span
             data-slot="aui_thread-list-new-label"
             className={cn('whitespace-nowrap', labelClassName)}>
-            New Thread
+            {label ?? t('assistantUi.threadList.newThread', 'New Thread')}
           </span>
         </>
       )}
@@ -269,13 +234,15 @@ export const ThreadListNew = forwardRef<
 ThreadListNew.displayName = 'ThreadListNew';
 
 const ThreadListSkeleton: FC = () => {
+  const { t } = useT();
+  const loadingThreadsLabel = t('assistantUi.threadList.loadingThreads', 'Loading threads');
   return (
     <div className="flex flex-col gap-0.5">
       {Array.from({ length: 5 }, (_, i) => (
         <div
           key={i}
           role="status"
-          aria-label="Loading threads"
+          aria-label={loadingThreadsLabel}
           data-slot="aui_thread-list-skeleton-wrapper"
           className="flex h-8 items-center px-2.5">
           <Skeleton data-slot="aui_thread-list-skeleton" className="h-3.5 w-full" />
@@ -285,8 +252,17 @@ const ThreadListSkeleton: FC = () => {
   );
 };
 
-export const ThreadListItem: FC = () => {
-  const isRunning = useAuiState(s => s.threadListItem.isRunning);
+export const ThreadListItem: FC<{
+  className?: string;
+  running?: boolean;
+  trailing?: ReactNode;
+  menuExtras?: ReactNode;
+  showArchive?: boolean;
+  triggerProps?: ComponentPropsWithoutRef<'button'>;
+}> = ({ className, running, trailing, menuExtras, showArchive = true, triggerProps }) => {
+  const { t } = useT();
+  const runtimeRunning = useAuiState(s => s.threadListItem.isRunning);
+  const isRunning = running ?? runtimeRunning;
   const [isRenaming, setIsRenaming] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef(false);
@@ -300,7 +276,10 @@ export const ThreadListItem: FC = () => {
   return (
     <ThreadListItemPrimitive.Root
       data-slot="aui_thread-list-item"
-      className="group hover:bg-muted focus-visible:bg-muted data-active:bg-muted has-focus-visible:bg-muted has-data-[state=open]:bg-muted relative flex h-8 items-center rounded-md transition-colors focus-visible:outline-none">
+      className={cn(
+        'group hover:bg-muted focus-visible:bg-muted data-active:bg-muted has-focus-visible:bg-muted has-data-[state=open]:bg-muted relative flex h-8 items-center rounded-md transition-colors focus-visible:outline-none',
+        className
+      )}>
       {isRenaming ? (
         <ThreadListItemRename
           onDone={restoreFocus => {
@@ -311,27 +290,42 @@ export const ThreadListItem: FC = () => {
       ) : (
         <ThreadListItemPrimitive.Trigger
           ref={triggerRef}
+          {...triggerProps}
           data-slot="aui_thread-list-item-trigger"
           className="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center rounded-md px-2.5 text-start text-sm outline-none group-hover:pe-9 group-has-focus-visible:pe-9 group-has-data-[state=open]:pe-9 group-data-active:pe-9 focus-visible:ring-1">
-          {isRunning && (
-            <Loader2Icon
-              aria-hidden
-              data-slot="aui_thread-list-item-running"
-              className="text-muted-foreground me-1.5 size-3.5 shrink-0 animate-spin"
-            />
-          )}
-          <span data-slot="aui_thread-list-item-title" className="min-w-0 flex-1 truncate">
-            <ThreadListItemPrimitive.Title fallback="New Chat" />
+          <span
+            data-slot="aui_thread-list-item-title"
+            data-running={isRunning ? 'true' : undefined}
+            aria-busy={isRunning || undefined}
+            className="min-w-0 flex-1 truncate">
+            <ThreadListItemPrimitive.Title fallback={t('chat.untitledThread')} />
           </span>
-          {isRunning && <span className="sr-only">Running</span>}
+          {trailing}
+          {isRunning && (
+            <>
+              <Loader2Icon
+                data-slot="aui_thread-list-item-running"
+                aria-hidden
+                className="ms-2 size-3.5 shrink-0 animate-spin motion-reduce:animate-none text-muted-foreground"
+              />
+              <span className="sr-only">
+                {t('conversations.backgroundTasks.statusRunning', 'Running')}
+              </span>
+            </>
+          )}
         </ThreadListItemPrimitive.Trigger>
       )}
-      <ThreadListItemMore onRename={() => setIsRenaming(true)} />
+      <ThreadListItemMore
+        onRename={() => setIsRenaming(true)}
+        showArchive={showArchive}
+        extras={menuExtras}
+      />
     </ThreadListItemPrimitive.Root>
   );
 };
 
 const ThreadListItemRename: FC<{ onDone: (restoreFocus: boolean) => void }> = ({ onDone }) => {
+  const { t } = useT();
   const aui = useAui();
   const title = useAuiState(s => s.threadListItem.title) ?? '';
   const [value, setValue] = useState(title);
@@ -375,12 +369,14 @@ const ThreadListItemRename: FC<{ onDone: (restoreFocus: boolean) => void }> = ({
       ref={inputRef}
       autoFocus
       data-slot="aui_thread-list-item-rename"
-      aria-label="Rename thread"
+      data-testid={`thread-title-input-${aui.threadListItem.getState().id}`}
+      aria-label={t('assistantUi.threadList.renameThread', 'Rename thread')}
       value={value}
       className="h-7 min-w-0 flex-1 ps-2.5 pe-9 text-sm"
       onChange={event => setValue(event.target.value)}
       onBlur={() => commit(false)}
       onKeyDown={event => {
+        if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
         if (event.key === 'Enter') {
           event.preventDefault();
           commit(true);
@@ -393,7 +389,12 @@ const ThreadListItemRename: FC<{ onDone: (restoreFocus: boolean) => void }> = ({
   );
 };
 
-const ThreadListItemMore: FC<{ onRename: () => void }> = ({ onRename }) => {
+const ThreadListItemMore: FC<{
+  onRename: () => void;
+  showArchive: boolean;
+  extras?: ReactNode;
+}> = ({ onRename, showArchive, extras }) => {
+  const { t } = useT();
   return (
     <ThreadListItemMorePrimitive.Root sharedFocusGroup>
       <ThreadListItemMorePrimitive.Trigger
@@ -406,7 +407,7 @@ const ThreadListItemMore: FC<{ onRename: () => void }> = ({ onRename }) => {
           />
         }>
         <MoreHorizontalIcon className="size-3.5" />
-        <span className="sr-only">More options</span>
+        <span className="sr-only">{t('assistantUi.threadList.moreOptions', 'More options')}</span>
       </ThreadListItemMorePrimitive.Trigger>
       <ThreadListItemMorePrimitive.Content
         side="right"
@@ -419,18 +420,21 @@ const ThreadListItemMore: FC<{ onRename: () => void }> = ({ onRename }) => {
           className="hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none"
           onSelect={onRename}>
           <PencilIcon className="size-4" />
-          Rename
+          {t('assistantUi.threadList.rename', 'Rename')}
         </ThreadListItemMorePrimitive.Item>
-        <ThreadListItemPrimitive.Archive
-          render={
-            <ThreadListItemMorePrimitive.Item
-              data-slot="aui_thread-list-item-more-item"
-              className="hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none"
-            />
-          }>
-          <ArchiveIcon className="size-4" />
-          Archive
-        </ThreadListItemPrimitive.Archive>
+        {extras}
+        {showArchive && (
+          <ThreadListItemPrimitive.Archive
+            render={
+              <ThreadListItemMorePrimitive.Item
+                data-slot="aui_thread-list-item-more-item"
+                className="hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none"
+              />
+            }>
+            <ArchiveIcon className="size-4" />
+            {t('assistantUi.threadList.archive', 'Archive')}
+          </ThreadListItemPrimitive.Archive>
+        )}
         <ThreadListItemPrimitive.Delete
           render={
             <ThreadListItemMorePrimitive.Item
@@ -439,7 +443,7 @@ const ThreadListItemMore: FC<{ onRename: () => void }> = ({ onRename }) => {
             />
           }>
           <TrashIcon className="size-4" />
-          Delete
+          {t('common.delete', 'Delete')}
         </ThreadListItemPrimitive.Delete>
       </ThreadListItemMorePrimitive.Content>
     </ThreadListItemMorePrimitive.Root>

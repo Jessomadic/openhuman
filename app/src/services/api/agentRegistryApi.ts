@@ -4,7 +4,7 @@
  * user-authored custom agents, their enable/disable state, and tool policy.
  *
  * Wire shape note: the Rust handlers return the bare controller payload
- * (RpcOutcome → `into_cli_compatible_json` serializes `data` directly), so
+ * (Outcome → `into_cli_compatible_json` serializes `data` directly), so
  * `agent_registry_list` resolves to `{ agents }`, the mutating calls to
  * `{ agent }`, and remove to `{ removed }`. Entries serialize with
  * snake_case fields (no serde rename), so the TS shape matches that.

@@ -41,23 +41,22 @@ pub use super::ops_install::{
     UninstallWorkflowParams, DEFAULT_INSTALL_TIMEOUT_SECS, MAX_INSTALL_TIMEOUT_SECS,
     MAX_INSTALL_URL_LEN, MAX_WORKFLOW_MD_BYTES,
 };
-pub use super::ops_parse::{inventory_resources, parse_workflow_md, parse_workflow_md_str};
+pub use super::ops_parse::inventory_resources;
 pub use super::ops_types::{
     Workflow, WorkflowFrontmatter, WorkflowScope, MAX_WORKFLOW_RESOURCE_BYTES,
 };
 
 #[cfg(test)]
-pub(crate) use super::ops_create::{create_workflow_inner, slugify_workflow_name};
+pub(crate) use super::ops_create::create_workflow_inner;
 #[cfg(test)]
 pub(crate) use super::ops_discover::discover_workflows_inner;
 #[cfg(test)]
 pub(crate) use super::ops_install::{
-    derive_install_slug, install_workflow_from_url_with_home, normalize_install_url,
-    should_report_install_fetch_status,
+    install_workflow_from_url_with_home, normalize_install_url, should_report_install_fetch_status,
 };
 #[cfg(test)]
 pub(crate) use super::ops_types::{
-    MAX_NAME_LEN, RESOURCE_DIRS, SKILL_MD, TRUST_MARKER, WORKFLOW_MD, WORKFLOW_TOML,
+    RESOURCE_DIRS, SKILL_MD, TRUST_MARKER, WORKFLOW_MD, WORKFLOW_TOML,
 };
 #[cfg(test)]
 pub(crate) use std::path::{Path, PathBuf};

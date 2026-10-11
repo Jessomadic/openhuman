@@ -22,9 +22,15 @@ import {
 } from '../../../services/api/embeddingsApi';
 import { isLocalSessionToken } from '../../../utils/localSession';
 import PanelPage from '../../layout/PanelPage';
-import { Alert, AlertDescription, Button, CenteredLoadingState, ConfirmDialog } from '../../ui';
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  CenteredLoadingState,
+  ConfirmDialog,
+  StatusLine,
+} from '../../ui';
 import SettingsBackButton from '../components/SettingsBackButton';
-import { SettingsStatusLine } from '../controls';
 import { useSettingsNavigation } from '../hooks/useSettingsNavigation';
 import EmbeddingsModelSection from './EmbeddingsModelSection';
 import EmbeddingsProviderList from './EmbeddingsProviderList';
@@ -443,10 +449,6 @@ const EmbeddingsPanel = ({ embedded = false }: EmbeddingsPanelProps = {}) => {
       description={embedded ? undefined : t('pages.settings.ai.embeddingsDesc')}
       leading={embedded ? undefined : <SettingsBackButton onBack={navigateBack} />}>
       <div className={embedded ? 'space-y-5' : 'p-4 space-y-5'}>
-        <p className="text-xs text-content-muted leading-relaxed">
-          {t('settings.embeddings.description')}
-        </p>
-
         {/* Provider selection */}
         <EmbeddingsProviderList
           providers={settings.providers}
@@ -479,7 +481,9 @@ const EmbeddingsPanel = ({ embedded = false }: EmbeddingsPanelProps = {}) => {
 
         {/* Vector search disabled notice */}
         {selectedProvider === 'none' && (
-          <Alert variant="warning">{t('settings.embeddings.vectorSearchDisabled')}</Alert>
+          <Alert variant="warning" density="compact">
+            <AlertDescription>{t('settings.embeddings.vectorSearchDisabled')}</AlertDescription>
+          </Alert>
         )}
 
         {/* Model & dimensions (for active provider with catalog models) */}
@@ -501,7 +505,7 @@ const EmbeddingsPanel = ({ embedded = false }: EmbeddingsPanelProps = {}) => {
           )}
 
         {/* Status bar */}
-        <SettingsStatusLine
+        <StatusLine
           saving={status.kind === 'saving'}
           savedNote={status.kind === 'saved' ? t('settings.embeddings.saved') : null}
           error={

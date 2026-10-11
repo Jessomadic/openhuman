@@ -4,9 +4,9 @@
 use serde_json::{Map, Value};
 
 use crate::core::all::{ControllerFuture, RegisteredController};
-use crate::core::{ControllerSchema, FieldSchema, TypeSchema};
+use crate::core::{ControllerSchema, FieldSchema, Outcome, TypeSchema};
 
-use super::super::store::execute_quote;
+use super::super::seams::service;
 use super::super::types::{DappCallParams, ExecuteQuoteParams};
 use super::super::{execute_inputs, json_result, opt_str, req_json};
 
@@ -69,9 +69,8 @@ fn handle_call(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let parsed: DappCallParams = serde_json::from_value(Value::Object(params))
             .map_err(|e| format!("invalid params: {e}"))?;
-        super::super::ops::prepare_dapp_call(parsed)
-            .await?
-            .into_cli_compatible_json()
+        let quote = service().prepare_dapp_call(parsed).await?;
+        Outcome::new(quote, vec!["web3 dapp call prepared".to_string()]).into_cli_compatible_json()
     })
 }
 
@@ -79,6 +78,8 @@ fn handle_execute(params: Map<String, Value>) -> ControllerFuture {
     Box::pin(async move {
         let parsed: ExecuteQuoteParams = serde_json::from_value(Value::Object(params))
             .map_err(|e| format!("invalid params: {e}"))?;
-        execute_quote(parsed).await?.into_cli_compatible_json()
+        let result = service().execute_quote(parsed).await?;
+        Outcome::new(result, vec!["web3 transaction broadcast".to_string()])
+            .into_cli_compatible_json()
     })
 }

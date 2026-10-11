@@ -38,7 +38,7 @@ const FLOW_DISCOVER_PROMPT: &str = "Discover the most useful automations you cou
 pub async fn flows_discover(
     config: &Config,
     stream: Option<FlowStreamTarget>,
-) -> Result<RpcOutcome<Vec<FlowSuggestion>>, String> {
+) -> Result<Outcome<Vec<FlowSuggestion>>, String> {
     use crate::agent::turn_origin::{with_origin, AgentTurnOrigin};
     use crate::agent::OpenHumanSessionHost;
 
@@ -116,10 +116,7 @@ pub async fn flows_discover(
         count = suggestions.len(),
         "[flows] flows_discover: returning active suggestions"
     );
-    Ok(RpcOutcome::single_log(
-        suggestions,
-        "flow discovery complete",
-    ))
+    Ok(Outcome::single_log(suggestions, "flow discovery complete"))
 }
 
 /// Lists persisted workflow suggestions. `status` filters to one lifecycle
@@ -128,20 +125,17 @@ pub async fn flows_discover(
 pub async fn flows_list_suggestions(
     config: &Config,
     status: Option<SuggestionStatus>,
-) -> Result<RpcOutcome<Vec<FlowSuggestion>>, String> {
+) -> Result<Outcome<Vec<FlowSuggestion>>, String> {
     let suggestions = store::list_suggestions(config, status, 100).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::single_log(suggestions, "suggestions listed"))
+    Ok(Outcome::single_log(suggestions, "suggestions listed"))
 }
 
 /// Marks a suggestion `dismissed` (the user rejected the card). The row is kept
 /// so a later discovery run dedupes against it and won't re-surface the idea.
-pub async fn flows_dismiss_suggestion(
-    config: &Config,
-    id: &str,
-) -> Result<RpcOutcome<Value>, String> {
+pub async fn flows_dismiss_suggestion(config: &Config, id: &str) -> Result<Outcome<Value>, String> {
     let found = store::set_suggestion_status(config, id, SuggestionStatus::Dismissed)
         .map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({ "id": id, "dismissed": found }),
         "suggestion dismissed",
     ))
@@ -152,10 +146,10 @@ pub async fn flows_dismiss_suggestion(
 pub async fn flows_mark_suggestion_built(
     config: &Config,
     id: &str,
-) -> Result<RpcOutcome<Value>, String> {
+) -> Result<Outcome<Value>, String> {
     let found = store::set_suggestion_status(config, id, SuggestionStatus::Built)
         .map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         json!({ "id": id, "built": found }),
         "suggestion marked built",
     ))

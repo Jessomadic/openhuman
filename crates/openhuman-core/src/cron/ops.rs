@@ -1,8 +1,8 @@
 use crate::config::Config;
+use crate::core::Outcome;
 use crate::cron::{
     self, add_shell_job, get_job, update_job, CronJob, CronJobPatch, CronRun, Schedule,
 };
-use crate::rpc::RpcOutcome;
 use crate::security::SecurityPolicy;
 use anyhow::Result;
 use once_cell::sync::Lazy;
@@ -18,7 +18,7 @@ static ACTIVE_RUNS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashS
 ///
 /// Ensures cleanup runs on normal completion, panic, or future cancellation —
 /// so a hung or aborted background task can never permanently lock a job_id.
-struct ActiveRunGuard {
+pub(crate) struct ActiveRunGuard {
     job_id: String,
 }
 
@@ -28,6 +28,18 @@ impl Drop for ActiveRunGuard {
             active.remove(&self.job_id);
         }
     }
+}
+
+/// Claim `job_id` as running. `None` when a run (scheduled or Run Now) already
+/// holds it; the claim is released when the guard drops.
+pub(crate) fn try_acquire_run(job_id: &str) -> Option<ActiveRunGuard> {
+    let mut active = ACTIVE_RUNS.lock().ok()?;
+    if !active.insert(job_id.to_string()) {
+        return None;
+    }
+    Some(ActiveRunGuard {
+        job_id: job_id.to_string(),
+    })
 }
 
 pub fn add_once(config: &Config, delay: &str, command: &str) -> Result<CronJob> {
@@ -149,19 +161,19 @@ pub fn parse_human_delay(input: &str) -> Result<chrono::Duration> {
     Ok(duration)
 }
 
-pub async fn cron_list(config: &Config) -> Result<RpcOutcome<Vec<CronJob>>, String> {
+pub async fn cron_list(config: &Config) -> Result<Outcome<Vec<CronJob>>, String> {
     if !config.cron.enabled {
         return Err("cron is disabled by config (cron.enabled=false)".to_string());
     }
     let jobs = cron::list_jobs(config).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::single_log(jobs, "cron jobs listed"))
+    Ok(Outcome::single_log(jobs, "cron jobs listed"))
 }
 
 pub async fn cron_update(
     config: &Config,
     job_id: &str,
     patch: CronJobPatch,
-) -> Result<RpcOutcome<CronJob>, String> {
+) -> Result<Outcome<CronJob>, String> {
     if job_id.trim().is_empty() {
         return Err("Missing 'job_id' parameter".to_string());
     }
@@ -181,7 +193,7 @@ pub async fn cron_update(
     }
 
     let updated = cron::update_job(config, job_id.trim(), patch).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         updated,
         vec![format!("cron job updated: {}", job_id.trim())],
     ))
@@ -190,7 +202,7 @@ pub async fn cron_update(
 pub async fn cron_remove(
     config: &Config,
     job_id: &str,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+) -> Result<Outcome<serde_json::Value>, String> {
     if job_id.trim().is_empty() {
         return Err("Missing 'job_id' parameter".to_string());
     }
@@ -199,16 +211,13 @@ pub async fn cron_remove(
     }
 
     cron::remove_job(config, job_id.trim()).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         json!({ "job_id": job_id.trim(), "removed": true }),
         vec![format!("cron job removed: {}", job_id.trim())],
     ))
 }
 
-pub async fn cron_run(
-    config: &Config,
-    job_id: &str,
-) -> Result<RpcOutcome<serde_json::Value>, String> {
+pub async fn cron_run(config: &Config, job_id: &str) -> Result<Outcome<serde_json::Value>, String> {
     let job_id = job_id.trim();
     if job_id.is_empty() {
         return Err("Missing 'job_id' parameter".to_string());
@@ -260,41 +269,10 @@ pub async fn cron_run(
         };
 
         tracing::debug!(job_id = %job_id_owned, "[cron_run] background task started");
-
-        let started_at = chrono::Utc::now();
-        let (success, output) = cron::scheduler::execute_job_now(&config_owned, &job).await;
-        let finished_at = chrono::Utc::now();
-        let duration_ms = (finished_at - started_at).num_milliseconds();
-        let status = if success { "ok" } else { "error" };
-
-        tracing::debug!(
-            job_id = %job_id_owned,
-            status,
-            duration_ms,
-            "[cron_run] background task finished"
-        );
-
-        // Remove the "queued" placeholder before inserting the real result
-        // so we don't leave orphaned rows in the run history.
-        let _ = cron::delete_queued_runs(&config_owned, &job.id);
-
-        let _ = cron::record_run(
-            &config_owned,
-            &job.id,
-            started_at,
-            finished_at,
-            status,
-            Some(&output),
-            duration_ms,
-        );
-        let _ = cron::record_last_run(&config_owned, &job.id, finished_at, success, &output);
-
-        // Deliver via the same path as the scheduler loop so proactive
-        // messages and alerts are sent on "Run Now" too.
-        cron::scheduler::deliver_job(&config_owned, &job, &output).await;
+        run_and_record(&config_owned, &job).await;
     });
 
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         json!({
             "job_id": job_id,
             "status": "queued",
@@ -303,11 +281,54 @@ pub async fn cron_run(
     ))
 }
 
+/// Run job `job_id` now and wait for it: the same execution, retry budget,
+/// delivery and run record as a scheduled run. Refused while a run of the job
+/// (scheduled or another Run Now) is already active.
+pub async fn run_job_now(config: &Config, job_id: &str) -> Result<(bool, String), String> {
+    let job = cron::get_job(config, job_id.trim()).map_err(|e| e.to_string())?;
+    let Some(_guard) = try_acquire_run(&job.id) else {
+        tracing::debug!(job_id = %job.id, "[cron_run] job already running; refused");
+        return Err(format!("cron job '{}' is already running", job.id));
+    };
+    Ok(run_and_record(config, &job).await)
+}
+
+/// Execute `job` once (with its retry budget), deliver its output and persist
+/// the run and its last-run state. The caller holds the job's run claim.
+async fn run_and_record(config: &Config, job: &CronJob) -> (bool, String) {
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let started_at = chrono::Utc::now();
+    let (success, output) = cron::scheduler::execute_job_now(config, job, &run_id).await;
+    let finished_at = chrono::Utc::now();
+    let duration_ms = (finished_at - started_at).num_milliseconds();
+    let status = if success { "ok" } else { "error" };
+    tracing::debug!(job_id = %job.id, status, duration_ms, "[cron_run] run finished");
+    // Remove a "queued" placeholder before inserting the real result so no
+    // orphaned rows are left in the run history.
+    let _ = cron::delete_queued_runs(config, &job.id);
+    // Deliver via the same path as the scheduler loop so proactive messages,
+    // origin replies and alerts are sent on "Run Now" too, then record the run
+    // with how the delivery went.
+    let delivery_status = cron::scheduler::deliver_job(config, job, &run_id, &output).await;
+    let _ = cron::record_run_with_delivery(
+        config,
+        &job.id,
+        started_at,
+        finished_at,
+        status,
+        Some(&output),
+        duration_ms,
+        Some(delivery_status),
+    );
+    let _ = cron::record_last_run(config, &job.id, finished_at, success, &output);
+    (success, output)
+}
+
 pub async fn cron_runs(
     config: &Config,
     job_id: &str,
     limit: Option<usize>,
-) -> Result<RpcOutcome<Vec<CronRun>>, String> {
+) -> Result<Outcome<Vec<CronRun>>, String> {
     if job_id.trim().is_empty() {
         return Err("Missing 'job_id' parameter".to_string());
     }
@@ -317,7 +338,7 @@ pub async fn cron_runs(
 
     let limit = limit.unwrap_or(20).max(1);
     let runs = cron::list_runs(config, job_id.trim(), limit).map_err(|e| e.to_string())?;
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         runs,
         vec![format!("cron run history loaded: {}", job_id.trim())],
     ))

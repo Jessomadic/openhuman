@@ -1,67 +1,114 @@
-//! Wallet execution surface — read tools (balances / supported assets /
-//! network defaults / chain status) and write tools (prepare-then-execute)
-//! for native sends, token transfers, swaps, and contract calls.
+//! Host adapters over the wallet engine: the read and write operations wrapped
+//! in the controller contract's [`Outcome`].
 //!
-//! Execution is intentionally narrower than the metadata surface:
-//! - Every write must be prepared first, then explicitly confirmed.
-//! - Secret material stays encrypted at rest in core-owned storage.
-//! - EVM (Ethereum + Base/Arbitrum/Optimism/Polygon L2s), Bitcoin (P2WPKH),
-//!   Solana (native + SPL), and Tron (native + TRC20) all sign and broadcast.
-//!   Swap broadcast is still quote-only on every chain.
-//!
-//! ## Module layout
-//!
-//! - [`types`] — wire types: chain/asset/balance snapshots, the quote
-//!   lifecycle, transaction lookups, and RPC param shapes.
-//! - [`quotes`] — the prepare→execute quote store and its chat-thread
-//!   ownership check.
-//! - [`validate`] — address/amount/calldata validation, formatting, and hex
-//!   conversions.
-//! - [`accounts`] — resolving a derived wallet account for a chain.
-//! - [`queries`] — the read-only surface: defaults, supported assets, chain
-//!   status, balances.
-//! - [`transfer`] — preparing a transfer quote.
-//! - [`tx_lookup`] — transaction status / receipt / raw lookup.
-//! - [`broadcast`] — signing, broadcasting, and `execute_prepared`.
+//! The logic (balances, transfers, lookups, the quote store) lives in
+//! `tinywallet_web3::crypto`. What this file adds is the `Outcome` envelope and
+//! its log lines, and the engine the operations run on
+//! ([`crate::web3::seams::engine`]).
 
-mod accounts;
-mod broadcast;
-mod queries;
-mod quotes;
-mod transfer;
-mod tx_lookup;
-mod types;
-mod validate;
+use crate::core::Outcome;
+use crate::web3::seams::engine;
 
-pub(crate) use accounts::require_evm_account;
-pub use broadcast::execute_prepared;
-pub(crate) use broadcast::{sign_and_broadcast_evm, sign_and_broadcast_solana};
-pub use queries::{balances, chain_status, network_defaults, supported_assets};
-pub use quotes::prepared_quotes_for_test;
-#[cfg(test)]
-pub(crate) use quotes::{insert_quote_for_test, now_ms, reset_quote_store_for_tests};
-pub use transfer::prepare_transfer;
-pub use tx_lookup::{lookup_tx, tx_receipt, tx_status};
-pub(crate) use types::RawBroadcastResult;
-pub use types::{
+pub use tinywallet_web3::crypto::execution::{
     BalanceInfo, ChainStatus, ExecutePreparedParams, ExecutionResult, PrepareTransferParams,
     PreparedKind, PreparedStatus, PreparedTransaction, ProviderStatus, SupportedAsset,
     TxLookupInfo, TxReceiptInfo, TxState, TxStatusInfo,
 };
-#[cfg(test)]
-pub(crate) use validate::compressed_public_key;
-pub(crate) use validate::validate_calldata;
-pub use validate::{hex_to_u128, u128_to_hex};
 
-#[cfg(test)]
-use parking_lot::Mutex;
-#[cfg(test)]
-use quotes::{next_quote_id, store_quote, take_quote_for};
-#[cfg(test)]
-use validate::estimated_fee_raw;
+use tinywallet_web3::crypto::defaults::{EvmNetwork, WalletNetworkDefaults};
 
-const LOG_PREFIX: &str = "[wallet]";
+use super::ops::WalletChain;
 
-#[cfg(test)]
-#[path = "execution_tests.rs"]
-mod tests;
+/// Default row for every supported network, with the host's endpoints.
+pub async fn network_defaults() -> Result<Outcome<Vec<WalletNetworkDefaults>>, String> {
+    Ok(Outcome::new(
+        engine().network_defaults(),
+        vec!["wallet network defaults listed".to_string()],
+    ))
+}
+
+/// Every asset the wallet catalogues.
+pub async fn supported_assets() -> Result<Outcome<Vec<SupportedAsset>>, String> {
+    Ok(Outcome::new(
+        engine().supported_assets(),
+        vec!["wallet supported_assets listed".to_string()],
+    ))
+}
+
+/// Which chains have an account and a provider.
+pub async fn chain_status() -> Result<Outcome<Vec<ChainStatus>>, String> {
+    Ok(Outcome::new(
+        engine().chain_status().await?,
+        vec!["wallet chain_status listed".to_string()],
+    ))
+}
+
+/// Live native balances.
+pub async fn balances() -> Result<Outcome<Vec<BalanceInfo>>, String> {
+    Ok(Outcome::new(
+        engine().balances().await?,
+        vec!["wallet balances listed".to_string()],
+    ))
+}
+
+/// Validate a transfer and store a quote for it.
+pub async fn prepare_transfer(
+    params: PrepareTransferParams,
+) -> Result<Outcome<PreparedTransaction>, String> {
+    Ok(Outcome::new(
+        engine().prepare_transfer(params).await?,
+        vec!["wallet transfer prepared".to_string()],
+    ))
+}
+
+/// Confirm and execute a prepared transfer.
+pub async fn execute_prepared(
+    params: ExecutePreparedParams,
+) -> Result<Outcome<ExecutionResult>, String> {
+    Ok(Outcome::new(
+        engine().execute_prepared(params).await?,
+        vec!["wallet transaction broadcast".to_string()],
+    ))
+}
+
+/// Check the on-chain lifecycle state of a broadcast transaction.
+pub async fn tx_status(
+    chain: WalletChain,
+    evm_network: Option<EvmNetwork>,
+    hash: &str,
+) -> Result<Outcome<TxStatusInfo>, String> {
+    Ok(Outcome::new(
+        engine().tx_status(chain, evm_network, hash).await?,
+        vec!["wallet tx status fetched".to_string()],
+    ))
+}
+
+/// Fetch the receipt of a broadcast transaction.
+pub async fn tx_receipt(
+    chain: WalletChain,
+    evm_network: Option<EvmNetwork>,
+    hash: &str,
+) -> Result<Outcome<TxReceiptInfo>, String> {
+    Ok(Outcome::new(
+        engine().tx_receipt(chain, evm_network, hash).await?,
+        vec!["wallet tx receipt fetched".to_string()],
+    ))
+}
+
+/// Look up the raw transaction payload by hash.
+pub async fn lookup_tx(
+    chain: WalletChain,
+    evm_network: Option<EvmNetwork>,
+    hash: &str,
+) -> Result<Outcome<TxLookupInfo>, String> {
+    Ok(Outcome::new(
+        engine().lookup_tx(chain, evm_network, hash).await?,
+        vec!["wallet tx looked up".to_string()],
+    ))
+}
+
+/// The quotes that can still be executed. Test support and the introspection
+/// harness read the engine's store through this.
+pub fn prepared_quotes_for_test() -> Vec<PreparedTransaction> {
+    engine().prepared_quotes()
+}

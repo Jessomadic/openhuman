@@ -45,15 +45,29 @@ const log = createDebug('app:flows:runs-sidebar');
 
 interface FlowRunsSidebarProps {
   flowId: string;
+  /**
+   * Controlled selection. When `onSelectRun` is given the host shows the run
+   * itself (the workflow editor loads it into its side panel) and this list
+   * only highlights `selectedRunId`; without it, a click opens the overlay
+   * inspector drawer as before.
+   */
+  selectedRunId?: string | null;
+  onSelectRun?: (runId: string) => void;
 }
 
-export default function FlowRunsSidebar({ flowId }: FlowRunsSidebarProps) {
+export default function FlowRunsSidebar({
+  flowId,
+  selectedRunId: controlledRunId,
+  onSelectRun,
+}: FlowRunsSidebarProps) {
   const { t } = useT();
   const navigate = useNavigate();
   const { runs, loading, error, refresh, refreshSilently } = useFlowRunsQuery({
     scope: { kind: 'flow', flowId },
   });
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [ownSelectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const controlled = onSelectRun !== undefined;
+  const selectedRunId = controlled ? (controlledRunId ?? null) : ownSelectedRunId;
 
   // "Fix with agent" (issue B22) — this sidebar is only ever mounted while
   // already on the failed run's own `/flows/:id` canvas (`FlowCanvasPage`
@@ -175,7 +189,7 @@ export default function FlowRunsSidebar({ flowId }: FlowRunsSidebarProps) {
                   variant="tertiary"
                   aria-current={active ? 'page' : undefined}
                   data-testid={`flow-runs-sidebar-run-${run.id}`}
-                  onClick={() => setSelectedRunId(run.id)}
+                  onClick={() => (onSelectRun ? onSelectRun(run.id) : setSelectedRunId(run.id))}
                   // `TwoPaneNav`'s row spec, tightened to a single line.
                   //
                   // The status used to be painted TWICE per row — a coloured
@@ -205,11 +219,13 @@ export default function FlowRunsSidebar({ flowId }: FlowRunsSidebarProps) {
         </ul>
       </div>
 
-      <FlowRunInspectorDrawer
-        runId={selectedRunId}
-        onClose={() => setSelectedRunId(null)}
-        onFixWithAgent={handleFixWithAgent}
-      />
+      {!controlled && (
+        <FlowRunInspectorDrawer
+          runId={selectedRunId}
+          onClose={() => setSelectedRunId(null)}
+          onFixWithAgent={handleFixWithAgent}
+        />
+      )}
     </div>
   );
 }

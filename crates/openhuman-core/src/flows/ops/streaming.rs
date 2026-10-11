@@ -74,7 +74,7 @@ pub(super) fn attach_flow_progress_bridge(
         "system".to_string(),
         target.thread_id.clone(),
         target.request_id.clone(),
-        crate::threads::turn_state::TurnStateStore::new(config.workspace_dir.clone()),
+        tinyagents_session::turn_state::TurnStateStore::new(config.workspace_dir.clone()),
         crate::web_chat::ChatRequestMetadata {
             source: Some(source.to_string()),
             ..Default::default()
@@ -111,11 +111,18 @@ pub(super) async fn finalize_flow_stream(
                 // stays the only persister of a flow turn's reply — unchanged
                 // from before #6034, which covered the chat surfaces.
                 None,
+                // `attach_flow_progress_bridge` discards its
+                // `ProgressBridgeHandle`, so there is no timing snapshot to
+                // forward here.
+                None,
+                // Flow Canvas copilot streaming is not the interactive chat
+                // surface follow-up suggestions are for (C5).
+                false,
             )
             .await;
         }
         Err(err) => {
-            crate::web_chat::publish_web_channel_event(crate::core::socketio::WebChannelEvent {
+            crate::web_chat::publish_web_channel_event(crate::web_chat::WebChannelEvent {
                 event: "chat_error".to_string(),
                 client_id: "system".to_string(),
                 thread_id: target.thread_id.clone(),
@@ -124,6 +131,33 @@ pub(super) async fn finalize_flow_stream(
                 error_type: Some("agent_error".to_string()),
                 ..Default::default()
             });
+        }
+    }
+    // Settle this turn's snapshot now the turn is over. `attach_flow_progress_bridge`
+    // discards its `ProgressBridgeHandle` and never waits for a drain, and the
+    // bridge is otherwise the only writer that marks a snapshot terminal — it
+    // does so on its way out, which can be minutes late or never. A snapshot
+    // left non-terminal makes `threads_turn_state_get` report the turn as still
+    // running, so re-entering the thread paints a permanent "Thinking..."
+    // indicator under a reply that already landed.
+    if let Ok(config) = crate::config::rpc::load_config_with_timeout().await {
+        let lifecycle = if result.is_ok() {
+            tinyagents_session::turn_state::TurnLifecycle::Completed
+        } else {
+            tinyagents_session::turn_state::TurnLifecycle::Interrupted
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        if let Err(err) =
+            tinyagents_session::turn_state::TurnStateStore::new(config.workspace_dir.clone())
+                .settle_turn(&target.thread_id, &target.request_id, lifecycle, &now)
+        {
+            tracing::warn!(
+                target: "flows",
+                thread_id = %target.thread_id,
+                request_id = %target.request_id,
+                error = %err,
+                "[flows] failed to settle turn snapshot"
+            );
         }
     }
     tracing::info!(

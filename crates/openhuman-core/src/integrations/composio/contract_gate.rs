@@ -1,10 +1,8 @@
 //! Contract gate for late-bound Composio actions (#4853).
 //!
-//! Per-action Composio tools handed to `integrations_agent` are built from
-//! the lightweight `list_tools` response — a one-line description with a
-//! parameter schema that is often thin or absent (see
-//! `fetch_toolkit_actions`, consumed in the
-//! sub-agent runner). The model therefore composes calls before the action's
+//! Per-action Composio tools are built from the lightweight `list_tools`
+//! response — a one-line description with a parameter schema that is often
+//! thin or absent. The model therefore composes calls before the action's
 //! FULL contract is in context and guesses argument formats — most visibly, it
 //! sends Gmail `query` strings without the quoting Gmail search syntax requires,
 //! so `GMAIL_FETCH_EMAILS` returns zero results.
@@ -37,18 +35,16 @@ use crate::integrations::composio::providers::toolkit_from_slug;
 /// so the gate blocks a given action at most once per gate instance.
 ///
 /// One [`ContractGate`] is held per [`super::action_tool::ComposioActionTool`]
-/// instance; those tools are constructed fresh per `integrations_agent` spawn
-/// and live for that spawn's tool loop. That loop is a single agent turn in the
-/// common case, so "seen" behaves as per-turn state without any task-local
-/// plumbing — but a long-lived spawn can span multiple turns, and this gate
+/// instance, so "seen" is scoped to that instance without any task-local
+/// plumbing — but an instance can span multiple turns, and this gate
 /// does NOT reset when the surfaced schema drops out of context via compaction
 /// (tracked as follow-up; see the module-level note). Interior-mutable so the
 /// gate can record state through the tool's `&self` `execute`.
 ///
 /// ## Auto-proceed safety net (#5119)
 ///
-/// When the main agent re-delegates to a fresh `integrations_agent` sub-agent,
-/// each spawn creates a new tool with a fresh `ContractGate`. Without a
+/// When a fresh tool instance is built for the same action, it carries a fresh
+/// `ContractGate`. Without a
 /// process-wide cross-instance consult counter, every fresh gate would surface
 /// the same contract and the action would never execute — causing an infinite
 /// loop ("same tool call 3× in a row" guard).
@@ -221,10 +217,10 @@ pub enum GateDecision {
 ///
 /// - **Args already satisfy the contract** (all required present, every supplied
 ///   key a known property, types compatible) → [`GateDecision::Proceed`]. The
-///   model did not need the schema, so bouncing would be pure overhead — and, on
-///   the weak text-mode `integrations_agent` path, forcing a needless retry lets
-///   a Kimi-family model corrupt the re-issued call (`<|"|>` sentinel-token leak)
-///   and loop forever without ever executing (#5119).
+///   model did not need the schema, so bouncing would be pure overhead — and
+///   forcing a needless retry lets a Kimi-family model corrupt the re-issued
+///   call (`<|"|>` sentinel-token leak) and loop forever without ever executing
+///   (#5119).
 /// - **Args do NOT satisfy the contract** (missing required, unknown key, wrong
 ///   type — i.e. the model *guessed*) → [`GateDecision::Surface`] with the
 ///   formatted contract, exactly the case the gate exists for (#4853).
@@ -237,8 +233,8 @@ pub enum GateDecision {
 ///
 /// ## Auto-proceed safety net (#5119)
 ///
-/// When the main agent re-delegates to a fresh `integrations_agent` sub-agent,
-/// each new spawn builds fresh tools with fresh [`ContractGate`] instances.
+/// When fresh tools are built for the same action, each carries a fresh
+/// [`ContractGate`] instance.
 /// Every fresh gate sees each slug for the "first time" and surfaces the
 /// full contract — so the action never executes, looping forever.
 ///

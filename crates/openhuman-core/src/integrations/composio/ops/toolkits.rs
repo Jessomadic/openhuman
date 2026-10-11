@@ -2,7 +2,7 @@
 
 use super::super::module_client::{self as connectors, methods};
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::super::providers::agent_ready_toolkits;
 use super::super::types::{ComposioCapabilitiesResponse, ComposioToolkitsResponse};
@@ -10,13 +10,13 @@ use super::error_utils::{report_composio_op_error, OpResult};
 
 pub async fn composio_list_toolkits(
     config: &Config,
-) -> OpResult<RpcOutcome<ComposioToolkitsResponse>> {
+) -> OpResult<Outcome<ComposioToolkitsResponse>> {
     tracing::debug!("[composio] rpc list_toolkits");
 
     match connectors::call_bare::<ComposioToolkitsResponse>(config, methods::LIST_TOOLKITS).await {
         Ok(resp) => {
             let count = resp.toolkits.len();
-            Ok(RpcOutcome::new(
+            Ok(Outcome::new(
                 resp,
                 vec![format!("composio: {count} toolkit(s) enabled")],
             ))
@@ -31,7 +31,7 @@ pub async fn composio_list_toolkits(
                 "[composio] list_toolkits: the live route enforces no server-side allowlist; \
                  returning an empty list"
             );
-            Ok(RpcOutcome::new(
+            Ok(Outcome::new(
                 ComposioToolkitsResponse::default(),
                 vec!["composio: direct mode — no curated allowlist (toolkits \
                      managed via app.composio.dev)"
@@ -47,7 +47,7 @@ pub async fn composio_list_toolkits(
 
 pub async fn composio_list_capabilities(
     config: &Config,
-) -> OpResult<RpcOutcome<ComposioCapabilitiesResponse>> {
+) -> OpResult<Outcome<ComposioCapabilitiesResponse>> {
     tracing::debug!("[composio] rpc list_capabilities");
     // Used to be built host-side from `tinymemory`'s engine provider
     // registry via `capability_matrix()`, deleted with the rest of the
@@ -62,7 +62,7 @@ pub async fn composio_list_capabilities(
                 format!("[composio] list_capabilities failed: {error}")
             })?;
     let count = resp.capabilities.len();
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         resp,
         vec![format!("composio: {count} capability row(s) listed")],
     ))
@@ -76,7 +76,7 @@ pub async fn composio_list_capabilities(
 /// "preview / agent integration coming soon" so users aren't led into
 /// a broken `composio_list_tools` → max-iterations loop. See #2283.
 pub async fn composio_list_agent_ready_toolkits(
-) -> OpResult<RpcOutcome<super::super::types::ComposioAgentReadyToolkitsResponse>> {
+) -> OpResult<Outcome<super::super::types::ComposioAgentReadyToolkitsResponse>> {
     tracing::debug!("[composio] rpc list_agent_ready_toolkits");
     let toolkits: Vec<String> = agent_ready_toolkits()
         .into_iter()
@@ -84,7 +84,7 @@ pub async fn composio_list_agent_ready_toolkits(
         .collect();
     let count = toolkits.len();
     let resp = super::super::types::ComposioAgentReadyToolkitsResponse { toolkits };
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         resp,
         vec![format!("composio: {count} agent-ready toolkit(s) listed")],
     ))

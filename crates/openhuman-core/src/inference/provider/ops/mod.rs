@@ -13,23 +13,20 @@ mod provider_factory;
 // ── public surface (preserves the original `pub use ops::*` contract) ──
 
 pub use http_error::{
-    api_error, body_indicates_insufficient_credits, body_indicates_quota_exhausted,
-    is_backend_auth_failure, is_backend_error_code_owned, is_budget_exhausted_http_400,
-    is_byo_provider_auth_failure_http, is_context_window_exceeded_message,
-    is_custom_openai_upstream_bad_request_http_400, is_local_provider_no_model_loaded,
-    is_ollama_cloud_internal_500, is_ollama_cloud_internal_500_message,
-    is_openai_oauth_session_expired_http, is_provider_access_policy_denied_http_403,
-    is_provider_config_rejection_http, is_provider_insufficient_credits_402,
-    is_provider_moderation_rejection_http_400, is_provider_quota_exhausted,
-    is_provider_rate_cap_exceeded_message, local_provider_no_model_loaded_user_message,
-    log_backend_error_code_owned, log_budget_exhausted_http_400, log_byo_provider_auth_failure,
-    log_context_window_exceeded, log_custom_openai_upstream_bad_request_http_400,
-    log_local_provider_no_model_loaded, log_ollama_cloud_internal_500,
-    log_openai_oauth_session_expired, log_provider_access_policy_denied_http_403,
-    log_provider_config_rejection, log_provider_insufficient_credits_402,
-    log_provider_moderation_rejection, log_provider_quota_exhausted,
-    ollama_cloud_internal_500_user_message, publish_backend_session_expired,
-    should_report_provider_http_failure,
+    api_error, is_backend_auth_failure, is_backend_error_code_owned, is_budget_exhausted_http_400,
+    is_byo_provider_auth_failure_http, is_custom_openai_upstream_bad_request_http_400,
+    is_local_provider_no_model_loaded, is_ollama_cloud_internal_500,
+    is_ollama_cloud_internal_500_message, is_openai_oauth_session_expired_http,
+    is_provider_access_policy_denied_http_403, is_provider_config_rejection_http,
+    is_provider_insufficient_credits_402, is_provider_moderation_rejection_http_400,
+    local_provider_no_model_loaded_user_message, log_backend_error_code_owned,
+    log_budget_exhausted_http_400, log_byo_provider_auth_failure, log_context_window_exceeded,
+    log_custom_openai_upstream_bad_request_http_400, log_local_provider_no_model_loaded,
+    log_ollama_cloud_internal_500, log_openai_oauth_session_expired,
+    log_provider_access_policy_denied_http_403, log_provider_config_rejection,
+    log_provider_insufficient_credits_402, log_provider_moderation_rejection,
+    log_provider_quota_exhausted, ollama_cloud_internal_500_user_message,
+    publish_backend_session_expired, should_report_provider_http_failure,
 };
 
 pub use models::{
@@ -38,9 +35,7 @@ pub use models::{
 };
 
 pub use provider_factory::{
-    canonical_china_provider_name, is_glm_alias, is_minimax_alias, is_moonshot_alias,
-    is_qianfan_alias, is_qwen_alias, is_qwen_oauth_alias, is_zai_alias, list_providers,
-    ProviderInfo, ProviderRuntimeOptions, INFERENCE_BACKEND_ID,
+    list_providers, ProviderInfo, ProviderRuntimeOptions, INFERENCE_BACKEND_ID,
 };
 
 // ── test re-exports for ops_tests.rs ──

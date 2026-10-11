@@ -1,55 +1,69 @@
-//! Domain types for the skill registry.
+//! Domain types for the skill registry. The catalog entry shape and the
+//! registry contract are owned by [`tinyskills`].
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-/// One entry in the indexed skill catalog.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CatalogEntry {
-    /// Unique id: the upstream identifier, source-qualified (e.g.
-    /// "clawhub/apple-design", "skills-sh/owner/repo/skill"), or the name for
-    /// bundled Hermes skills (e.g. "apple-notes").
-    pub id: String,
-    /// Display name.
-    pub name: String,
-    /// Short description.
-    pub description: String,
-    /// Upstream source within the aggregated catalog (e.g. "built-in",
-    /// "optional", "ClawHub", "skills.sh", "LobeHub", "browse.sh").
-    pub source: String,
-    /// Category label from the upstream catalog.
-    pub category: String,
-    /// Author name, if known.
-    pub author: Option<String>,
-    /// Version string, if declared.
-    pub version: Option<String>,
-    /// Tags for search/filter.
-    pub tags: Vec<String>,
-    /// Compatible platform hints.
-    pub platforms: Vec<String>,
-    /// Download URL for the SKILL.md file. Empty when the source publishes no
-    /// `SKILL.md` (LobeHub agents); install surfaces an actionable error
-    /// pointing at [`source_url`] instead of a misleading 404. For skills.sh
-    /// it is the most common location, resolved at install time.
-    pub download_url: String,
-    /// Human-facing source page for the skill (GitHub blob/tree, LobeHub,
-    /// ClawHub, skills.sh, …). Carried from the catalog's `sourceUrl`; used to
-    /// derive the raw download URL for GitHub-hosted community skills and to
-    /// give the user a link when no direct download exists. See issue #3741.
-    pub source_url: Option<String>,
-    /// Docs path from the Hermes catalog.
-    pub docs_path: Option<String>,
-    /// Required CLI commands.
-    pub commands: Vec<String>,
-    /// Required environment variables.
-    pub env_vars: Vec<String>,
-    /// Software license.
-    pub license: Option<String>,
+pub use tinyskills::{
+    CatalogEntry, Facet, Freshness, RegistryErrorKind, RegistryErrorSummary, RegistryFacets,
+};
+
+/// Entries per page when a caller pages without naming a size.
+pub const DEFAULT_PAGE_SIZE: usize = 25;
+/// Largest page a caller may ask for.
+pub const MAX_PAGE_SIZE: usize = 100;
+
+/// A catalog entry as the RPC and agent tools return it: the [`CatalogEntry`]
+/// fields plus the registry it came from and whether it installs directly.
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistryCatalogEntry {
+    #[serde(flatten)]
+    pub entry: CatalogEntry,
+    pub registry: String,
+    pub installable: bool,
+    pub category_label: Option<String>,
 }
 
-impl CatalogEntry {
-    /// Whether this entry has a `SKILL.md` that can be fetched directly. An
-    /// entry without one can never be installed automatically.
-    pub fn has_direct_download(&self) -> bool {
-        !self.download_url.trim().is_empty()
+/// A catalog read: free text plus filters, optionally paged.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CatalogQuery {
+    pub text: String,
+    pub upstreams: Vec<String>,
+    pub categories: Vec<String>,
+    /// 1-based page. With neither `page` nor `page_size` every match is
+    /// returned on one page.
+    pub page: Option<usize>,
+    pub page_size: Option<usize>,
+    pub force_refresh: bool,
+}
+
+impl CatalogQuery {
+    pub fn is_paged(&self) -> bool {
+        self.page.is_some() || self.page_size.is_some()
     }
+}
+
+/// One page of catalog matches and the state of the data behind it.
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogPage {
+    pub entries: Vec<RegistryCatalogEntry>,
+    pub total: usize,
+    pub page: usize,
+    pub page_size: usize,
+    pub total_pages: usize,
+    pub freshness: Freshness,
+    /// Unix seconds of the oldest catalog fetch that answered.
+    pub fetched_at: Option<u64>,
+    /// Whether a source is refreshing in the background now.
+    pub refreshing: bool,
+    /// The last refresh failure of a source that answered, if any.
+    pub last_error: Option<RegistryErrorSummary>,
+}
+
+/// Everything the registry knows about one entry.
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogDetail {
+    #[serde(flatten)]
+    pub entry: RegistryCatalogEntry,
+    pub overview: String,
+    pub install_identifier: Option<String>,
 }

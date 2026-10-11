@@ -1,127 +1,97 @@
-//! Shared JSON-RPC / CLI wire vocabulary for OpenHuman.
+//! OpenHuman's JSON-RPC protocol, on both sides of the wire.
 //!
-//! This crate is linked by `openhuman_core` (re-exported there as
-//! `openhuman_core::rpc`), the Tauri shell (`crates/openhuman-app`), and the
-//! TUI (`crates/openhuman-tui`). It is a separate crate so the producer of
-//! RPC envelopes (the core) and their decoders (the shell's HTTP relay, the
-//! TUI) compile one definition of the wire shape, and that definition depends
-//! on nothing in the core. It must stay free of domain types and runtime
-//! dependencies.
+//! The core owns what a controller *is*: its schema, the `Outcome` it
+//! returns, and in-process dispatch (`openhuman::core::invoke::invoke_method`).
+//! This crate owns how that is exposed over JSON-RPC 2.0, plus the storage,
+//! files and host boot every OpenHuman host shares. It is the top of the
+//! library chain — core → embed → tinyhumans → **rpc** → app/cli/tui — and
+//! depends on [`tinyhumans`] alone; core internals come through embed's
+//! doc-hidden `__host` list and are never re-exported from here:
 //!
-//! - [`RpcOutcome`] and [`apply_log_envelope`] define handler results and the
-//!   log envelope rule. Domain `ops.rs` operations return `RpcOutcome<T>`.
-//! - [`unwrap_rpc`] unwraps the client-side `result`/`data` envelopes.
-//! - [`StructuredRpcError`] and [`STRUCTURED_RPC_ERROR_SENTINEL`] are the
-//!   typed error envelope decoded at the transport boundary.
-//! - Behind the `http-client` feature (default-on here, but disabled by the
-//!   root workspace dependency so each consumer opts in): [`post_json_rpc`],
-//!   [`bearer_header`], [`redact_url_for_log`], and [`HttpRpcResponse`].
+//! - [`RpcRequest`], [`RpcSuccess`], [`RpcFailure`] and [`RpcError`] are the
+//!   envelopes the server reads and writes; [`request_body`] and
+//!   [`decode_response`] are the client half, and [`unwrap_rpc`] reaches a
+//!   handler's value through its log envelope.
+//! - [`is_origin_allowed_with_extra`] and [`ALLOWED_ORIGINS_ENV`] are the
+//!   browser-origin allowlist for the HTTP API.
+//! - Behind `http-client`: [`post_json_rpc`], [`bearer_header`],
+//!   [`redact_url_for_log`] and [`HttpRpcResponse`].
+//! - Behind `server`: [`server`], the core's HTTP router, Socket.IO transport
+//!   and listener, plus the `run_server*` entry points hosts call; and
+//!   [`http_host`], the static-directory file server whose `http_host.*`
+//!   controllers the server registers with the core.
+//! - Behind `session-store` (on with `server`): [`session_store`], the
+//!   on-disk session store the app, the CLI and the TUI install. The core has
+//!   no storage layout of its own, but falls back to workspace files when a
+//!   host installs no provider; this is not a guarantee that the core is
+//!   persistence-free.
+//! - [`host`]: the shared host boot, one entry per host shape
+//!   ([`host::cli`], [`host::desktop`], [`host::tui`]).
+//! - [`tinyhumans`] and [`embed`]: curated lists of the TinyHumans-layer and
+//!   embed items the hosts (app, CLI, TUI) use, so a host that depends on
+//!   this crate alone names them in one step. Neither is the layer below
+//!   re-exported wholesale.
+//!
+//! Hosts depend on `openhuman-rpc` and nothing else from this repository
+//! (`scripts/ci/check-crate-chain.mjs` enforces it). What they reach is the
+//! curated surface above; the doc-hidden `__host` list stays internal to the
+//! layers.
 
-use serde::Serialize;
-use serde_json::json;
+/// The TinyHumans layer items hosts use: the login/session owner, the
+/// session link constants and the product identity. A curated list, not the
+/// crate.
+pub mod tinyhumans {
+    pub use openhuman_tinyhumans::{
+        identity, link, product_identity, CachedUser, ClientHeaders, CoreLink, SessionError,
+        SessionEvent, SessionManager, SessionState,
+    };
+}
+
+/// The embed items hosts use: the process lifecycle helpers and the
+/// config/artifact/chat-surface/modules facades, plus the few process-level
+/// facts. A curated list, not the crate; embed's `__host` is not on it.
+pub mod embed {
+    #[cfg(feature = "modules")]
+    pub use openhuman_tinyhumans::embed::modules;
+    pub use openhuman_tinyhumans::embed::{
+        artifacts, chat_surface, config, process, schema_for_rpc_method, CoreRuntime,
+        PickListenPortError, RuntimeBuilder, RuntimeInfo, ServiceSet, HTTP_SERVER_COMPILED_IN,
+        VOICE_COMPILED_IN,
+    };
+}
+
+/// Core internals for this crate's own modules, through embed's doc-hidden
+/// `__host` list. A private binding: child modules reach it as
+/// `crate::core_host`, and it is not part of this crate's API.
+use openhuman_tinyhumans::__host as core_host;
 
 #[cfg(feature = "http-client")]
 mod client;
-mod structured_error;
+mod envelope;
+#[cfg(any(feature = "server", feature = "session-store"))]
+pub mod host;
+#[cfg(feature = "server")]
+pub mod http_host;
+mod origin;
+#[cfg(feature = "server")]
+pub mod server;
+#[cfg(feature = "session-store")]
+pub mod session_store;
 
+/// Serializes tests that touch the process-global storage backend slot.
+///
+/// `session_store` tests install a backend for a moment; any test that
+/// stores a credential meanwhile would route it to storage secrets (which
+/// need a master key CI does not have). Both take this lock.
+#[cfg(test)]
+pub(crate) static STORAGE_SLOT_TEST_LOCK: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
+pub use crate::core_host::core::unwrap_rpc;
 #[cfg(feature = "http-client")]
 pub use client::{bearer_header, post_json_rpc, redact_url_for_log, HttpRpcResponse};
-pub use structured_error::{StructuredRpcError, STRUCTURED_RPC_ERROR_SENTINEL};
-
-/// Unwrap the optional log and API envelopes used by OpenHuman RPC handlers.
-pub fn unwrap_rpc(mut value: &serde_json::Value) -> &serde_json::Value {
-    loop {
-        if let Some(next) = value.get("result").or_else(|| value.get("data")) {
-            value = next;
-        } else {
-            return value;
-        }
-    }
-}
-
-/// Successful RPC handler result: serialized JSON value plus optional log lines.
-///
-/// This type represents the result of a domain-specific RPC call, including
-/// any log messages generated during execution.
-#[derive(Debug)]
-pub struct RpcOutcome<T> {
-    /// The actual data returned by the RPC call.
-    pub value: T,
-    /// A collection of log messages for auditing or debugging.
-    pub logs: Vec<String>,
-}
-
-impl<T> RpcOutcome<T> {
-    /// Creates a new `RpcOutcome` with a value and a list of logs.
-    pub fn new(value: T, logs: Vec<String>) -> Self {
-        Self { value, logs }
-    }
-}
-
-impl<T: Serialize> RpcOutcome<T> {
-    /// Creates a new `RpcOutcome` with a value and a single log message.
-    pub fn single_log(value: T, log: impl Into<String>) -> Self {
-        Self {
-            value,
-            logs: vec![log.into()],
-        }
-    }
-
-    /// Converts the outcome into a CLI-compatible JSON value.
-    ///
-    /// The shape is decided by [`apply_log_envelope`], which is the single
-    /// definition of the rule — see its docs for the rule itself and for why
-    /// having one definition matters (#6080).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if serialization to JSON fails.
-    pub fn into_cli_compatible_json(self) -> Result<serde_json::Value, String> {
-        let RpcOutcome { value, logs } = self;
-        let value = serde_json::to_value(value).map_err(|e| e.to_string())?;
-        Ok(apply_log_envelope(value, logs))
-    }
-}
-
-/// Apply the log envelope to an already-serialized handler value.
-///
-/// **This is the one definition of the rule.** Both controller return paths go
-/// through it:
-///
-///  * the registry path — every `RpcOutcome::into_cli_compatible_json` call
-///    (152 call sites across the domains), and
-///  * the dynamic-dispatch path — `core::types::invocation_to_rpc_json`, used
-///    by `core::dispatch` for internal / legacy methods.
-///
-/// # The rule, and the defect it currently encodes (#6080)
-///
-/// ```text
-/// logs.is_empty()  ->  value                            (bare)
-/// otherwise        ->  { "result": value, "logs": … }   (wrapped)
-/// ```
-///
-/// So a controller's **wire shape is decided by its log vector, not by its
-/// schema**. Two methods in one namespace can answer differently, and a handler
-/// that later gains a log line silently changes its own response shape with no
-/// schema change — which is #6080. That defect is deliberately **preserved
-/// byte-for-byte here**: normalising it is a wire change across every
-/// controller and needs a maintainer's ruling, not a quiet fix inside a
-/// refactor.
-///
-/// What this function buys today is that the rule exists **once**. Before it,
-/// the same six lines were written independently in `rpc::RpcOutcome` and in
-/// `core::types::invocation_to_rpc_json`; a fix applied to one would have left
-/// the other on the old behaviour, and nothing linked them. When the ruling
-/// lands, this is the only body that has to change.
-#[must_use]
-pub fn apply_log_envelope(value: serde_json::Value, logs: Vec<String>) -> serde_json::Value {
-    if logs.is_empty() {
-        value
-    } else {
-        json!({ "result": value, "logs": logs })
-    }
-}
-
-#[cfg(test)]
-#[path = "lib_tests.rs"]
-mod tests;
+pub use envelope::{
+    decode_response, request_body, RpcError, RpcFailure, RpcRequest, RpcSuccess, JSONRPC_VERSION,
+    SERVER_ERROR_CODE,
+};
+pub use origin::{is_origin_allowed_with_extra, ALLOWED_ORIGINS_ENV};

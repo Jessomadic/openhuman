@@ -66,25 +66,30 @@ pub async fn pricing_for_config(
 }
 
 /// Helper: build an `Arc<IntegrationClient>` from the root config, or
-/// `None` if the user isn't signed in yet.
+/// `None` if there is no backend credential. A local offline credential keeps
+/// the core signed in but cannot authenticate hosted integration routes.
 ///
-/// Both the backend URL and the auth token come from **core defaults**:
+/// Both the backend URL and the credential come from **core defaults**:
 ///
-/// - backend URL → [`crate::api::config::effective_backend_api_url`]
+/// - backend URL → [`crate::backend::base_url`]
 ///   applied to `config.api_url`. Unlike the plain
-///   [`crate::api::config::effective_api_url`] resolver (which honours a
+///   [`crate::backend::inference_base_url`] resolver (which honours a
 ///   user-set local-AI endpoint so chat completions still work), the
 ///   backend resolver detects local-AI URLs and falls back to the
 ///   `BACKEND_URL` / `VITE_BACKEND_URL` env vars (and finally the hosted
 ///   default) so backend paths don't get concatenated onto a local
 ///   Ollama/vLLM endpoint and 404.
-/// - auth token → [`crate::api::jwt::get_session_token`], i.e. the
-///   app-session JWT written by `auth_store_session` — the same token
-///   that billing, team, webhooks, referral, memory, etc. all use.
+/// - credential → [`resolve_backend_credential`], the same resolver every
+///   other backend caller uses: the stored TinyHumans API key when there is
+///   one (sent as `x-api-key`), else the live app-session JWT (sent as
+///   `Authorization: Bearer`). The local offline token and an expired session
+///   both resolve to an error, so no client is built for them.
 ///
 /// There are no per-feature toggles for the shared client itself —
-/// callers that need a kill switch (e.g. twilio, google_places,
-/// parallel) gate tool registration at their own level.
+/// callers that need a kill switch (e.g. google_places, parallel,
+/// stock_prices) gate tool registration at their own level.
+///
+/// [`resolve_backend_credential`]: crate::security::credentials::session_support::resolve_backend_credential
 pub fn build_client(config: &crate::config::Config) -> Option<Arc<IntegrationClient>> {
     // Use the integrations-specific resolver: when `config.api_url` is set
     // to a local-AI endpoint (Ollama, vLLM, …), it would still be perfect
@@ -94,43 +99,76 @@ pub fn build_client(config: &crate::config::Config) -> Option<Arc<IntegrationCli
     // which 404 against the local LLM and flooded Sentry
     // (OPENHUMAN-TAURI-51 / -80 / -7Z). The helper falls through to env /
     // default backend in that case so integrations actually work.
-    let backend_url = crate::api::config::effective_backend_api_url(&config.api_url);
-
-    // Primary: app-session JWT from the auth profile store.
-    let session_token = match crate::api::jwt::get_session_token(config) {
-        Ok(Some(tok)) => {
-            let trimmed = tok.trim().to_string();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed)
-            }
-        }
-        Ok(None) => None,
-        Err(e) => {
-            tracing::warn!("[integrations] failed to read session token: {e}");
-            None
+    let backend_url = match crate::backend::base_url(&config.api_url) {
+        Ok(url) => url,
+        Err(_) => {
+            tracing::debug!(
+                "[integrations] no backend transport — integrations client unavailable"
+            );
+            return None;
         }
     };
 
-    match session_token {
-        Some(token) => {
-            tracing::debug!(
-                backend_url = %backend_url,
-                "[integrations] client built (session token resolved)"
-            );
-            Some(Arc::new(IntegrationClient::new_with_budget_config(
-                backend_url,
-                token,
-                Arc::new(config.clone()),
-            )))
-        }
-        None => {
-            tracing::warn!(
-                "[integrations] no auth token available — user is not signed in \
-                 (no app-session JWT)"
-            );
-            None
-        }
-    }
+    let credential =
+        match crate::security::credentials::session_support::resolve_backend_credential(config) {
+            Ok(credential) => Some(credential),
+            Err(e) => {
+                tracing::debug!("[integrations] no backend credential: {e}");
+                None
+            }
+        };
+
+    build_client_with_credential(config, backend_url, credential)
 }
+
+/// The credential decision is separate from profile-store lookup so callers
+/// can test the backend boundary without process-wide auth-store state.
+fn build_client_with_credential(
+    config: &crate::config::Config,
+    backend_url: String,
+    credential: Option<crate::security::credentials::session_support::BackendCredential>,
+) -> Option<Arc<IntegrationClient>> {
+    use crate::security::credentials::session_support::BackendCredential;
+
+    let credential = match credential {
+        Some(BackendCredential::Session(token))
+            if crate::security::credentials::session_support::is_local_session_token(
+                token.trim(),
+            ) =>
+        {
+            // Offline identity is valid for the local core, but the hosted
+            // integrations API cannot authenticate it. Never send it as a
+            // backend JWT: a predictable 401 would publish a global
+            // SessionExpired event into an otherwise healthy local chat.
+            tracing::debug!(
+                "[integrations] local offline credential has no hosted integrations client"
+            );
+            return None;
+        }
+        Some(BackendCredential::Session(token)) => {
+            BackendCredential::Session(token.trim().to_owned())
+        }
+        Some(BackendCredential::ApiKey(key)) => BackendCredential::ApiKey(key.trim().to_owned()),
+        None => return None,
+    };
+    if credential.secret().is_empty() {
+        tracing::warn!("[integrations] no auth token available — not signed in and no API key set");
+        return None;
+    }
+    tracing::debug!(
+        backend_url = %backend_url,
+        api_key = credential.is_api_key(),
+        "[integrations] client built (backend credential resolved)"
+    );
+    Some(Arc::new(
+        IntegrationClient::new_with_credential_and_budget_config(
+            backend_url,
+            credential,
+            Arc::new(config.clone()),
+        ),
+    ))
+}
+
+#[cfg(test)]
+#[path = "pricing_tests.rs"]
+mod tests;

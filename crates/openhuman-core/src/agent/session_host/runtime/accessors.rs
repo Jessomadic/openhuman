@@ -3,12 +3,11 @@
 //! (which rebuilds the tool policy snapshot on every change).
 
 use super::super::types::{OpenHumanSessionHost, SessionHostBuilder};
-use crate::agent::messages::ConversationMessage;
-use crate::memory::Memory;
 use crate::tools::agent_policy::ToolPolicyEngine;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tinytools::{Tool, ToolSpec};
+use tinytools_agent::dialect::TranscriptEntry;
 
 impl OpenHumanSessionHost {
     // ─────────────────────────────────────────────────────────────────
@@ -24,7 +23,7 @@ impl OpenHumanSessionHost {
     }
 
     /// The agent definition id this session is running
-    /// (`"welcome"`, `"orchestrator"`, `"integrations_agent"`, …).
+    /// (`"welcome"`, `"orchestrator"`, `"planner"`, …).
     ///
     /// Exposed so callers that build sessions via
     /// [`OpenHumanSessionHost::from_config_for_agent`] can stamp the resolved id onto
@@ -67,15 +66,6 @@ impl OpenHumanSessionHost {
     /// registration time (issue #4452).
     pub fn tools_arc(&self) -> Arc<Vec<Box<dyn Tool>>> {
         Arc::clone(&self.tools)
-    }
-
-    /// Clone the agent's synthesised delegation tools `Arc`.
-    ///
-    /// Replaced wholesale on every [`OpenHumanSessionHost::refresh_delegation_tools`], so a
-    /// clone taken here is a stable snapshot for the rest of the caller's turn
-    /// even if the connection set changes underneath it.
-    pub fn synthesized_tools_arc(&self) -> Arc<Vec<Box<dyn Tool>>> {
-        Arc::clone(&self.synthesized_tools)
     }
 
     /// Every tool this agent can execute: the durable registry first, then the
@@ -135,24 +125,12 @@ impl OpenHumanSessionHost {
         &self.tool_policy_session
     }
 
-    #[cfg(test)]
-    pub(crate) fn subagent_tool_ceiling_names_for_test(
-        &self,
-    ) -> &std::collections::HashSet<String> {
-        &self.subagent_tool_ceiling_names
-    }
-
-    /// Borrow the agent's memory backing store as an `Arc`.
-    pub fn memory_arc(&self) -> Arc<dyn Memory> {
-        Arc::clone(&self.memory)
-    }
-
     /// The full host [`Config`](crate::config::Config) this session
-    /// was built with, when it was built through the factory.
+    /// was built with, through the factory or an explicitly configured model.
     ///
     /// `None` on the bare-builder path (`SessionHostBuilder` without
-    /// `AgentFactory`), which is used by tests and by callers assembling a
-    /// session by hand. Every capability adapter that needs host config treats
+    /// `AgentFactory` or `SessionHostBuilder::chat_model_with_config`), used by
+    /// tests and callers assembling a session by hand. Adapters needing config treat
     /// `None` as "not available" rather than loading one itself — see
     /// [`Self::host_capabilities_available`].
     pub fn runtime_config(&self) -> Option<Arc<crate::config::Config>> {
@@ -163,7 +141,7 @@ impl OpenHumanSessionHost {
     /// the factory had one, else the process registry's entry for
     /// `agent_definition_id`.
     ///
-    /// Prefer this over a bare `AgentDefinitionRegistry::global().get(..)` in
+    /// Prefer this over a bare `AgentDefinitionRegistry::current().get(..)` in
     /// turn-path code that needs the agent's *own* settings (`sandbox_mode`,
     /// `subagents`): a session built from an explicit definition must not have
     /// them replaced by a same-id registry entry.
@@ -171,43 +149,10 @@ impl OpenHumanSessionHost {
         &self,
     ) -> Option<Arc<crate::agent::harness::definition::AgentDefinition>> {
         self.definition.clone().or_else(|| {
-            crate::agent::harness::definition::AgentDefinitionRegistry::global()
-                .and_then(|registry| registry.get(&self.agent_definition_id))
-                .cloned()
+            crate::agent::harness::definition::AgentDefinitionRegistry::current()
+                .and_then(|registry| registry.get(&self.agent_definition_id).cloned())
                 .map(Arc::new)
         })
-    }
-
-    /// Whether the config-dependent capability adapters can be built from this
-    /// session.
-    ///
-    /// Four of the ten host capabilities (`BudgetGate`, `ContextComposer`,
-    /// `ModelResolver`, and the policy half of `SecurityGate`) need a full
-    /// `Config`, which only the factory path supplies. This is the one-line
-    /// check a caller uses before reaching for them, so "this session cannot
-    /// answer that" stays distinguishable from "the capability failed" — the
-    /// same absence-versus-failure rule the traits themselves are built on.
-    pub fn host_capabilities_available(&self) -> bool {
-        self.runtime_config.is_some()
-    }
-
-    /// OpenHuman's [`AgentMemory`](tinyagents_harness::host::AgentMemory)
-    /// capability over this session's memory backend.
-    ///
-    /// Built on demand rather than stored: it is a thin adapter over an `Arc`
-    /// the session already holds, so constructing one is a refcount bump, and
-    /// storing it would create a second handle that could drift from
-    /// `self.memory` if the backend were ever swapped.
-    pub fn host_agent_memory(&self) -> crate::agent::tinyagents::host::OpenHumanAgentMemory {
-        crate::agent::tinyagents::host::OpenHumanAgentMemory::new(self.memory_arc())
-    }
-
-    /// OpenHuman's [`ExperienceStore`](tinyagents_harness::host::ExperienceStore)
-    /// capability over this session's memory backend.
-    pub fn host_experience_store(
-        &self,
-    ) -> crate::agent::tinyagents::host::OpenHumanExperienceStore {
-        crate::agent::tinyagents::host::OpenHumanExperienceStore::new(self.memory_arc())
     }
 
     /// The agent's working directory.
@@ -296,18 +241,13 @@ impl OpenHumanSessionHost {
     /// Returns a presentation projection of the runtime-owned history.
     ///
     /// This intentionally returns an owned value: retaining a second borrowed
-    /// or mutable `ConversationMessage` accumulator in the host would recreate
+    /// or mutable `TranscriptEntry` accumulator in the host would recreate
     /// the session state now owned by `tinyagents_runtime::Session`.
-    pub fn history(&self) -> Vec<ConversationMessage> {
+    pub fn history(&self) -> Vec<TranscriptEntry> {
         self.runtime_session
             .as_ref()
             .map(|session| {
-                session
-                    .history()
-                    .iter()
-                    .filter_map(crate::agent::message_convert::message_to_native_chat_message)
-                    .map(ConversationMessage::Chat)
-                    .collect()
+                crate::agent::message_convert::messages_to_history_projection(session.history())
             })
             .unwrap_or_default()
     }
@@ -328,10 +268,18 @@ impl OpenHumanSessionHost {
     /// transcript, and it inherits its parent's thread id only for
     /// correlation.
     pub fn set_thread_id(&mut self, thread_id: Option<impl AsRef<str>>) {
-        self.thread_id = thread_id.and_then(|thread_id| {
+        let thread_id = thread_id.and_then(|thread_id| {
             let thread_id = thread_id.as_ref().trim();
             (!thread_id.is_empty()).then(|| thread_id.to_owned())
         });
+        // The runtime session caches its prompt and declaration snapshot from
+        // the first turn. Changing identity after that would desynchronize
+        // thread-scoped tools from the cached session state.
+        if self.runtime_session.is_some() && thread_id != self.thread_id {
+            tracing::warn!("cannot change thread id after runtime session initialization");
+            return;
+        }
+        self.thread_id = thread_id;
         self.session = match (&self.thread_id, self.session_parent_prefix.is_some()) {
             (Some(thread_id), false) => Some(tinyagents_session::transcript::SessionRef::scoped(
                 thread_id.clone(),
@@ -352,23 +300,6 @@ impl OpenHumanSessionHost {
     /// addresses the transcript, and it is stamped into `_meta.session_id`.
     pub fn session_id(&self) -> Option<String> {
         self.session.as_ref().map(|session| session.session_id())
-    }
-
-    /// Every generation of this conversation, oldest first.
-    ///
-    /// A compaction seals a generation and opens the next rather than
-    /// rewriting history, so a long conversation is a chain of transcripts.
-    /// The model sees only the head; this is how a host reads back the whole
-    /// thing. Empty when nothing has been persisted yet.
-    pub fn session_generations(&self) -> Vec<String> {
-        let Some(session) = self.session.as_ref() else {
-            return Vec::new();
-        };
-        self.session_locator()
-            .session_chain(session)
-            .iter()
-            .map(|generation| generation.session_id())
-            .collect()
     }
 
     /// Override the agent definition name used for session transcript
@@ -420,6 +351,10 @@ impl OpenHumanSessionHost {
         &mut self,
         tx: Option<tokio::sync::mpsc::Sender<crate::agent::progress::AgentProgress>>,
     ) {
+        // A warm runtime retains the last turn's prelude. Release its sender
+        // along with the host sender so the finished turn's bridge can drain
+        // and persist the final text without waiting for another turn.
+        self.update_runtime_prelude_progress(tx.clone());
         self.on_progress = tx;
     }
 
@@ -496,15 +431,18 @@ impl OpenHumanSessionHost {
     /// wherever either set changes; a no-op for a belt that never opted into
     /// discovery.
     pub(in crate::agent::session_host) fn recompute_deferred_tool_names(&mut self) {
+        self.visible_tool_names
+            .extend(self.permanent_tool_names.iter().cloned());
         if !self.discovery_enabled {
             self.deferred_tool_names.clear();
             return;
         }
-        let mut deferred =
-            crate::tools::implementations::meta::deferred_tool_names(self.tools.as_slice());
-        deferred.extend(crate::tools::implementations::meta::deferred_tool_names(
+        let mut deferred = crate::tools::implementations::meta::deferred_set(
+            self.tools.as_slice(),
             self.synthesized_tools.as_slice(),
-        ));
+            &self.requested_deferred_tools,
+        );
+        deferred.retain(|name| !self.permanent_tool_names.contains(name));
         self.visible_tool_names
             .retain(|name| !deferred.contains(name));
         self.deferred_tool_names = deferred;
@@ -615,5 +553,35 @@ impl OpenHumanSessionHost {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .pending_turn_overrides = overrides;
+    }
+
+    /// Set the reply-language instruction every following user message
+    /// carries (next to the `Current Date & Time` line), or clear it with
+    /// `None`. Sent per message rather than baked into the system prompt, so
+    /// the cached prompt prefix stays byte-stable and a changed interface
+    /// locale applies from the next turn.
+    pub fn set_reply_language_directive(&mut self, directive: Option<String>) {
+        self.runtime_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .reply_language_directive = directive;
+    }
+
+    /// The user's IANA time zone, which the date line on each later user
+    /// message is stamped in (`None`: the device's).
+    pub fn set_time_zone(&mut self, zone: Option<String>) {
+        self.runtime_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .time_zone = zone;
+    }
+
+    /// The reply-language instruction the next user message will carry.
+    pub fn reply_language_directive(&self) -> Option<String> {
+        self.runtime_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .reply_language_directive
+            .clone()
     }
 }

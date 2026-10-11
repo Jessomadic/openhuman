@@ -6,6 +6,7 @@ import { ToastContainer } from '../components/intelligence/Toast';
 import WorkflowsTab from '../components/intelligence/WorkflowsTab';
 import ChipTabs from '../components/layout/ChipTabs';
 import PageSectionHeader from '../components/layout/PageSectionHeader';
+import { Badge } from '../components/ui';
 import {
   useIntelligenceSocket,
   useIntelligenceSocketManager,
@@ -101,11 +102,7 @@ export default function Activity() {
           label: (
             <span className="inline-flex items-center gap-1.5">
               <span>{tab.label}</span>
-              {tab.comingSoon && (
-                <span className="rounded-full border border-line bg-surface-muted px-1.5 py-0.5 text-[10px] text-content-muted">
-                  {t('misc.beta')}
-                </span>
-              )}
+              {tab.comingSoon && <Badge dot={false}>{t('misc.beta')}</Badge>}
             </span>
           ),
         }))}

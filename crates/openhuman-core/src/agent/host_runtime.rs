@@ -17,6 +17,12 @@ pub trait RuntimeAdapter: Send + Sync {
     fn memory_budget(&self) -> u64 {
         0
     }
+    /// The shell family [`Self::build_shell_command`] runs commands under, so
+    /// what the `shell` tool tells the model matches what actually executes.
+    /// Defaults to the host's own shell.
+    fn shell_flavor(&self) -> platform_shell::ShellFlavor {
+        platform_shell::ShellFlavor::current()
+    }
     fn build_shell_command(
         &self,
         command: &str,
@@ -86,7 +92,7 @@ impl RuntimeAdapter for NativeRuntime {
         // actionable message naming the path, instead of an opaque OS error 267
         // (ERROR_DIRECTORY) from CreateProcessW on Windows / a raw ENOENT on
         // Unix when the process is spawned. Covers all three shell-family tools
-        // (shell / node_exec / npm_exec) since they all route through here.
+        // (shell) since it routes through here.
         // (#3353, Fix 2)
         crate::config::ensure_usable_cwd(workspace_dir)?;
         cmd.current_dir(workspace_dir);
@@ -156,6 +162,12 @@ impl RuntimeAdapter for DockerRuntime {
 
     fn memory_budget(&self) -> u64 {
         self.config.memory_limit_mb.unwrap_or(0)
+    }
+
+    /// Commands run under `sh -lc` inside the container on every host,
+    /// including Windows, so the model must be told POSIX, not cmd.exe.
+    fn shell_flavor(&self) -> platform_shell::ShellFlavor {
+        platform_shell::ShellFlavor::Posix
     }
 
     fn build_shell_command(

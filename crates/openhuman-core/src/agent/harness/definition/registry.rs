@@ -6,6 +6,15 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
+/// Whether two definitions serialise identically, which covers every
+/// authored field (the process-local `source` and `graph` are not serialised).
+fn same_definition(a: &AgentDefinition, b: &AgentDefinition) -> bool {
+    match (serde_json::to_value(a), serde_json::to_value(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// In-memory registry of all known [`AgentDefinition`]s.
 ///
 /// One singleton instance is initialised at startup via
@@ -108,6 +117,20 @@ impl AgentDefinitionRegistry {
         self.by_id.is_empty()
     }
 
+    /// Whether this registry is exactly the built-in set: the same ids
+    /// and contents as [`Self::builtins_only`], and no definition loaded from
+    /// a file or synthesized from a user entry. SaaS boot refuses anything else.
+    pub fn holds_builtins_only(&self) -> bool {
+        let builtins = Self::builtins_only();
+        self.len() == builtins.len()
+            && self.list().iter().all(|def| {
+                def.source == super::DefinitionSource::Builtin
+                    && builtins
+                        .get(&def.id)
+                        .is_some_and(|builtin| same_definition(def, builtin))
+            })
+    }
+
     // ── singleton API ──────────────────────────────────────────────────
 
     /// Initialise the global registry. Subsequent calls are no-ops (the
@@ -151,4 +174,29 @@ impl AgentDefinitionRegistry {
     pub fn global_arc() -> Option<Arc<Self>> {
         GLOBAL.get().cloned()
     }
+
+    /// The catalogue sub-agent lookups resolve through: the ambient agent
+    /// context's own registry when it carries one, else the process registry.
+    pub fn current() -> Option<Arc<Self>> {
+        crate::core::runtime::CoreContext::current()
+            .and_then(|ctx| ctx.definitions())
+            .or_else(Self::global_arc)
+    }
+
+    /// A copy of this registry with `definitions` added, replacing any
+    /// definition with the same id.
+    pub fn with_definitions(&self, definitions: impl IntoIterator<Item = AgentDefinition>) -> Self {
+        let mut registry = Self::default();
+        for definition in self.list() {
+            registry.insert(definition.clone());
+        }
+        for definition in definitions {
+            registry.insert(definition);
+        }
+        registry
+    }
 }
+
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+mod tests;

@@ -11,7 +11,7 @@
 //!
 //! | File                | Contents                                                       |
 //! | ------------------- | -------------------------------------------------------------- |
-//! | `provider.rs`       | `resolve_subagent_source`, `user_is_signed_in_to_composio`, `LazyToolkitResolver` |
+//! | `provider.rs`       | `resolve_subagent_source`, `user_is_signed_in_to_composio`       |
 //! | `prompt.rs`         | Role-contract suffix, `append_subagent_role_contract`, `dedup_tool_specs_by_name` |
 //! | `runner.rs`         | `run_subagent`, `run_typed_mode`                               |
 //! | `graph.rs`          | `run_subagent_via_graph` — the sub-agent turn graph + tools    |
@@ -24,7 +24,6 @@ mod pause_checkpoint;
 // The checkpoint filename validator, shared with `continue_subagent`: the
 // model-authored `task_id` must be rejected at the tool boundary as well as at
 // the write, so the read path cannot traverse either.
-pub(crate) use graph::run_agent_turn_request_via_default_graph;
 pub(crate) use pause_checkpoint::is_safe_task_id;
 mod prompt;
 mod provider;
@@ -36,7 +35,7 @@ pub(crate) use runner::run_subagent_direct;
 
 // `user_is_signed_in_to_composio` is the mode-aware "can the user call
 // composio at all?" probe added in Wave 2 (#1710). Re-exported here so
-// non-composio probe sites (registration gates, heartbeat telemetry)
+// non-composio probe sites (registration gates, telemetry)
 // can call it as
 // `crate::agent::subagent_host::user_is_signed_in_to_composio`
 // without reaching into a private sibling module.
@@ -48,16 +47,12 @@ pub(crate) use provider::resolve_subagent_source;
 // Re-exports for test companion modules that use `use super::*`.
 // These provide the same flat namespace the original ops.rs had.
 // `append_subagent_role_contract` is already re-exported (pub(crate)) above.
-// `dedup_tool_specs_by_name` and `normalize_slug` are private in their source
-// modules and cannot be `pub`-re-exported; a plain `use` still makes them
+// `dedup_tool_specs_by_name` is private in its source
+// module and cannot be `pub`-re-exported; a plain `use` still makes them
 // reachable from the `#[cfg(test)]` companion modules via their `use super::*`
 // (descendants can name ancestor-private imports).
 #[cfg(test)]
 use prompt::dedup_tool_specs_by_name;
-#[cfg(test)]
-use provider::normalize_slug;
-#[cfg(test)]
-pub(super) use provider::LazyToolkitResolver;
 // filter_tool_indices lives in tool_prep (sibling of ops).
 #[cfg(test)]
 pub(super) use super::tool_prep::filter_tool_indices;
@@ -81,7 +76,3 @@ mod tests;
 #[cfg(test)]
 #[path = "../ops_dedup_tests.rs"]
 mod dedup_tests;
-
-#[cfg(test)]
-#[path = "../ops_truncation_tests.rs"]
-mod truncation_tests;

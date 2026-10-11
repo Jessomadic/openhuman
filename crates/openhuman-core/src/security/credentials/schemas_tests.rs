@@ -3,14 +3,6 @@ use super::*;
 // ── Schema catalog coverage ────────────────────────────────────
 
 #[test]
-fn catalog_counts_match() {
-    let schemas = all_controller_schemas();
-    let handlers = all_registered_controllers();
-    assert_eq!(schemas.len(), handlers.len());
-    assert!(schemas.len() >= 13, "auth namespace should expose ≥13 fns");
-}
-
-#[test]
 fn all_schemas_use_auth_namespace_and_have_descriptions() {
     for s in all_controller_schemas() {
         assert_eq!(s.namespace, "auth", "function {}", s.function);
@@ -21,13 +13,6 @@ fn all_schemas_use_auth_namespace_and_have_descriptions() {
             s.function
         );
     }
-}
-
-#[test]
-fn unknown_function_returns_unknown_fallback() {
-    let s = schemas("no_such_fn");
-    assert_eq!(s.function, "unknown");
-    assert_eq!(s.namespace, "auth");
 }
 
 #[test]
@@ -51,15 +36,9 @@ fn every_known_schema_key_returns_a_non_unknown_schema() {
         "auth_clear_credential",
         "auth_get_state",
         "auth_get_session_token",
-        "auth_create_channel_link_token",
         "auth_store_provider_credentials",
         "auth_remove_provider_credentials",
         "auth_list_provider_credentials",
-        "auth_oauth_connect",
-        "auth_oauth_list_integrations",
-        "auth_oauth_fetch_integration_tokens",
-        "auth_oauth_fetch_client_key",
-        "auth_oauth_revoke_integration",
     ];
     for k in keys {
         let s = schemas(k);
@@ -78,13 +57,6 @@ fn list_provider_credentials_schema_has_optional_provider_filter() {
     let provider = s.inputs.iter().find(|f| f.name == "provider");
     assert!(provider.is_some(), "must expose `provider` input");
     assert!(!provider.unwrap().required);
-}
-
-#[test]
-fn oauth_connect_schema_requires_provider() {
-    let s = schemas("auth_oauth_connect");
-    let provider = s.inputs.iter().find(|f| f.name == "provider").unwrap();
-    assert!(provider.required);
 }
 
 #[test]
@@ -213,9 +185,9 @@ fn deserialize_params_parses_optional_provider_filter() {
 
 #[test]
 fn to_json_emits_logs_and_result_envelope() {
-    let outcome = RpcOutcome::single_log(serde_json::json!({"ok": true}), "my-log");
+    let outcome = Outcome::single_log(serde_json::json!({"ok": true}), "my-log");
     let v = to_json(outcome).unwrap();
-    // `into_cli_compatible_json` wraps RpcOutcome as `{logs, result}`.
+    // `into_cli_compatible_json` wraps Outcome as `{logs, result}`.
     assert!(v.get("logs").is_some(), "expected a `logs` field: {v}");
     assert!(
         v.get("result").is_some(),

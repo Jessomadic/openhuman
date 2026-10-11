@@ -5,6 +5,9 @@ import { renderWithProviders } from '../../../test/test-utils';
 import { SidebarProvider } from '../../ui';
 import AppSidebar from './AppSidebar';
 
+const mockIsWindowsDesktop = vi.fn(() => false);
+vi.mock('./WindowsWindowControls', () => ({ isWindowsDesktop: () => mockIsWindowsDesktop() }));
+
 /** `AppSidebar` reads `useSidebar()` — it must render inside a `<SidebarProvider>`. */
 function renderAppSidebar(
   options?: Parameters<typeof renderWithProviders>[1],
@@ -34,17 +37,21 @@ vi.mock('../../../lib/i18n/I18nContext', () => ({ useT: () => ({ t: (k: string) 
 describe('nav separator visibility', () => {
   it('shows the separator on a route whose region opens with a plain list', () => {
     renderAppSidebar({ initialEntries: ['/settings'] });
-    expect(screen.getByTestId('sidebar-nav-separator').className).not.toContain('opacity-0');
+    const separator = screen.getByTestId('sidebar-nav-separator');
+    expect(separator.className).not.toContain('opacity-0');
+    expect(separator).toHaveClass('my-2.5');
   });
 
-  it('hides it on chat, whose region opens with its own outlined button', () => {
+  it('shows the standard separator on chat', () => {
     renderAppSidebar({ initialEntries: ['/chat'] });
-    expect(screen.getByTestId('sidebar-nav-separator').className).toContain('opacity-0');
+    const separator = screen.getByTestId('sidebar-nav-separator');
+    expect(separator.className).not.toContain('opacity-0');
+    expect(separator).toHaveClass('my-2.5');
   });
 
-  it('hides it on a chat thread route too', () => {
+  it('shows it on a chat thread route too', () => {
     renderAppSidebar({ initialEntries: ['/chat/abc123'] });
-    expect(screen.getByTestId('sidebar-nav-separator').className).toContain('opacity-0');
+    expect(screen.getByTestId('sidebar-nav-separator').className).not.toContain('opacity-0');
   });
 
   it('keeps the separator mounted when hidden', () => {
@@ -70,7 +77,10 @@ vi.mock('./SidebarAppRail', () => ({ default: () => null }));
 // bypassing the mocked SidebarHeader/SidebarNav above so the real collapsed
 // branch (drag strip, reopen trigger, CollapsedNavRail) is under test.
 describe('AppSidebar — collapsed rail', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsWindowsDesktop.mockReturnValue(false);
+  });
 
   it('renders the reopen trigger and collapsed nav rail instead of the header/nav', () => {
     renderAppSidebar({ initialEntries: ['/chat'] }, { open: false });
@@ -83,11 +93,21 @@ describe('AppSidebar — collapsed rail', () => {
   it('reserves a strip above the reopen trigger for the macOS traffic lights', () => {
     const { container } = renderAppSidebar({ initialEntries: ['/chat'] }, { open: false });
     // A spacer now, not a drag region of its own — the column around it drags.
-    expect(container.querySelector('.h-7.w-full.flex-none')).toBeInTheDocument();
+    const spacer = container.querySelector('.h-7.w-full.flex-none');
+    expect(spacer).toBeInTheDocument();
+    expect(spacer).toHaveClass('mb-2');
+  });
+
+  it('uses a smaller top gap for collapsed controls on Windows', () => {
+    mockIsWindowsDesktop.mockReturnValue(true);
+    const { container } = renderAppSidebar({ initialEntries: ['/chat'] }, { open: false });
+    const spacer = container.querySelector('.w-full.flex-none');
+    expect(spacer).toHaveClass('h-2', 'mb-1');
+    expect(screen.getByTestId('root-shell-reopen')).toBeInTheDocument();
   });
 
   // The drag region is the whole column, not just that strip. `drag.js` drags a
-  // bare region only on a direct hit, so the ~12px of column either side of each
+  // bare region only on a direct hit, so the 28px of column either side of each
   // 32px rail button — the band sitting between the traffic lights and the rail
   // — was dead chrome. Assert the *value* and that the controls are inside it:
   // presence alone passed before the fix and would pass again after a revert.
@@ -96,6 +116,7 @@ describe('AppSidebar — collapsed rail', () => {
     const region = container.querySelector('[data-tauri-drag-region]') as HTMLElement;
     expect(region.getAttribute('data-tauri-drag-region')).toBe('deep');
     expect(region.className).toContain('h-full');
+    expect(region.className).toContain('items-center');
     // Only `"deep"` reaches descendants, so containment is what makes the
     // margins around these controls draggable. They stay clickable because
     // `isDragRegion` short-circuits on a clickable element first — which is

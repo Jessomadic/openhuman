@@ -121,7 +121,7 @@ impl Tool for UpdateApplyTool {
             tracing::debug!(target: "update_apply", "{log}");
         }
         let body = serde_json::to_string_pretty(&outcome.value)?;
-        // `RpcOutcome<Value>` does not carry an explicit status flag, so
+        // `Outcome<Value>` does not carry an explicit status flag, so
         // we have to read the shape: a `{"error": …}` body is the obvious
         // failure case, but `update_run`'s soft-failure paths
         // ("already current", "no platform asset for this target",

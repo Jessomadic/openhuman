@@ -1,5 +1,12 @@
-import { type ReactNode, useId } from 'react';
-import { LuFilter, LuSearch } from 'react-icons/lu';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Filter,
+  Search,
+} from 'lucide-react';
+import { type ReactNode, useId, useState } from 'react';
 
 import { cn } from '../../lib/cn';
 import { useT } from '../../lib/i18n/I18nContext';
@@ -11,6 +18,7 @@ import {
   DropdownMenuRoot,
   DropdownMenuTrigger,
 } from './DropdownMenu';
+import { SelectContent, SelectItem, SelectRoot, SelectTrigger, SelectValue } from './Select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './Table';
 import TextField from './TextField';
 
@@ -27,7 +35,7 @@ export interface DataTableColumn<T> {
   headClassName?: string;
   /** Cell-only classes. */
   cellClassName?: string;
-  /** Right-aligns the header and the generated cell (action columns). */
+  /** Right-aligns the header and the generated cell (numbers, actions). */
   align?: 'left' | 'right';
 }
 
@@ -53,6 +61,30 @@ export interface DataTableSearch {
   testId?: string;
 }
 
+/**
+ * Paging. Two modes, picked by whether `onPageChange` is passed:
+ *
+ * - **Client** (no `onPageChange`): the table slices `rows` itself and keeps
+ *   page / page size in local state. Pass `pageSize` to change the default.
+ * - **Server** (`onPageChange` set): `rows` is the current page only; the host
+ *   loads pages and owns `page` / `pageSize`. Give `total` when it is known, or
+ *   `hasNextPage` for cursor-style "is there more" loading.
+ */
+export interface DataTablePagination {
+  /** 1-based current page (server mode). */
+  page?: number;
+  pageSize?: number;
+  /** Choices for the rows-per-page selector. Default 10 / 25 / 50 / 100. */
+  pageSizeOptions?: number[];
+  /** Total row count across all pages (server mode, when known). */
+  total?: number;
+  /** Whether another page exists (server mode, when `total` is unknown). */
+  hasNextPage?: boolean;
+  onPageChange?: (page: number) => void;
+  onPageSizeChange?: (pageSize: number) => void;
+  testId?: string;
+}
+
 export interface DataTableProps<T> {
   columns: DataTableColumn<T>[];
   rows: readonly T[];
@@ -61,48 +93,66 @@ export interface DataTableProps<T> {
 
   /**
    * Custom row rendering. Return a `<TableRow>` (or anything valid inside
-   * `<tbody>`); the `columns` are still used for the header, so the two stay
-   * aligned. Omit it and rows are generated from each column's `cell`.
-   *
-   * Both modes exist because the two are genuinely different jobs: a read-only
-   * table wants the generated body, while a row that is itself a button — with
-   * its own `onKeyDown`, `data-testid` and hover group — has to own its
-   * `<tr>`. Forcing the second through a per-cell API would mean passing row
-   * props through the column list, which is how a "simple" table primitive
-   * turns into a framework.
+   * `<tbody>`); the `columns` still drive the header, so the two stay aligned.
+   * Omit it and rows are generated from each column's `cell`.
    */
   renderRow?: (row: T, index: number) => ReactNode;
+  /** Makes generated rows clickable (ignored with `renderRow`). */
+  onRowClick?: (row: T) => void;
+  /** Extra classes / attributes per generated row. */
+  rowClassName?: (row: T, index: number) => string | undefined;
+  rowTestId?: string;
 
-  /** Debounced-or-not search box. The host owns filtering. */
+  /** Card heading. With neither title nor `actions`, the header is omitted. */
+  title?: ReactNode;
+  description?: ReactNode;
+  /** Right side of the card header (primary actions such as "Add"). */
+  actions?: ReactNode;
+
+  /** Search box — the host owns filtering. */
   search?: DataTableSearch;
-  /** Facet dropdowns rendered after the search box. */
+  /** Facet dropdowns rendered right of the search box. */
   filters?: DataTableFilter[];
-  /** Toolbar content before the search box (tabs, primary actions). */
+  /** A full-width row above the search bar (tabs, segmented controls). */
+  toolbarTop?: ReactNode;
+  /** Left of the search box. */
   toolbarStart?: ReactNode;
-  /** Toolbar content after the filters (refresh, overflow menus). */
+  /** Right of the filters (refresh, export, overflow menus). */
   toolbarEnd?: ReactNode;
 
-  /** Replaces the table body region entirely while true. */
+  pagination?: DataTablePagination | boolean;
+
+  /** Draws skeleton rows in the body while true. */
   loading?: boolean;
-  /** How many skeleton rows to draw while `loading`. */
   loadingRows?: number;
-  /** `data-testid` for the loading region (its rows get `${id}-row`). */
   loadingTestId?: string;
-  /** Accessible label for the loading region. */
   loadingLabel?: string;
-  /** Rendered above the table when set. */
+  /** Rendered above the rows when set. */
   error?: ReactNode;
-  /** Rendered instead of the table when `rows` is empty and not loading. */
+  /** Rendered in the body when there are no rows and nothing is loading. */
   empty?: ReactNode;
-  /** Rendered below the table inside the scroll region (paging, counts). */
+  /** Rendered under the rows inside the scroll region (e.g. "Load more"). */
   footer?: ReactNode;
+
+  /**
+   * Fill the parent's height (default). The card is `flex-1 min-h-0` and only
+   * its body scrolls, so the page itself never does — the parent must be a
+   * height-bounded flex column (e.g. `SettingsPanel scrollable={false}`).
+   * Pass `false` for a table that sits in a scrolling page among other cards;
+   * it is then capped at `maxHeight` and scrolls internally past that.
+   */
+  fill?: boolean;
+  /** Body height cap when `fill` is false. Default `28rem`. */
+  maxHeight?: string;
 
   ariaLabel?: string;
   className?: string;
   testId?: string;
 }
 
-export function DataTableFilterMenu({ filter }: { filter: DataTableFilter }) {
+const DEFAULT_PAGE_SIZES = [10, 25, 50, 100];
+
+function DataTableFilterMenu({ filter }: { filter: DataTableFilter }) {
   const { t } = useT();
   const partial = filter.selected.size > 0 && filter.selected.size < filter.options.length;
 
@@ -114,22 +164,21 @@ export function DataTableFilterMenu({ filter }: { filter: DataTableFilter }) {
           variant="secondary"
           size="sm"
           data-testid={filter.testId}
-          leadingIcon={<LuFilter className="h-3.5 w-3.5" />}
+          leadingIcon={<Filter className="h-3.5 w-3.5" aria-hidden />}
           aria-label={filter.ariaLabel ?? filter.label}
           className="shrink-0">
           {filter.label}
           {partial ? ` (${filter.selected.size})` : ''}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-48">
+      <DropdownMenuContent align="end" className="min-w-48">
         {filter.options.map(option => {
           const active = filter.selected.has(option.value);
           return (
             <DropdownMenuItem
               key={option.value}
               // Keep the menu open: toggling several facets in a row is the
-              // normal interaction, and a menu that closed per click would
-              // make it four round-trips instead of one.
+              // normal interaction.
               onSelect={event => {
                 event.preventDefault();
                 const next = new Set(filter.selected);
@@ -155,40 +204,168 @@ export function DataTableFilterMenu({ filter }: { filter: DataTableFilter }) {
   );
 }
 
+interface PaginationBarProps {
+  page: number;
+  pageSize: number;
+  pageSizeOptions: number[];
+  /** Rows on this page. */
+  pageRows: number;
+  total?: number;
+  hasNextPage: boolean;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (size: number) => void;
+  testId?: string;
+}
+
+/** Footer: rows-per-page selector, "from–to of total", and page stepping. */
+function DataTablePaginationBar({
+  page,
+  pageSize,
+  pageSizeOptions,
+  pageRows,
+  total,
+  hasNextPage,
+  onPageChange,
+  onPageSizeChange,
+  testId,
+}: PaginationBarProps) {
+  const { t } = useT();
+  const pageCount = total != null ? Math.max(1, Math.ceil(total / pageSize)) : null;
+  const from = pageRows === 0 ? 0 : (page - 1) * pageSize + 1;
+  const to = (page - 1) * pageSize + pageRows;
+  const range =
+    total != null
+      ? t('dataTable.rangeOf')
+          .replace('{from}', String(from))
+          .replace('{to}', String(to))
+          .replace('{total}', String(total))
+      : t('dataTable.range').replace('{from}', String(from)).replace('{to}', String(to));
+
+  const pager = (label: string, icon: ReactNode, target: number, disabled: boolean) => (
+    <Button
+      type="button"
+      variant="secondary"
+      size="sm"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={() => onPageChange(target)}
+      className="h-8 w-8 px-0">
+      {icon}
+    </Button>
+  );
+
+  return (
+    <div
+      className="flex shrink-0 flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-line px-4 py-2.5 text-xs text-content-muted"
+      data-testid={testId}>
+      <div className="flex items-center gap-2">
+        <span>{t('dataTable.rowsPerPage')}</span>
+        <SelectRoot
+          value={String(pageSize)}
+          onValueChange={value => onPageSizeChange(Number(value))}>
+          <SelectTrigger
+            inputSize="sm"
+            className="h-8 w-18"
+            aria-label={t('dataTable.rowsPerPage')}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {pageSizeOptions.map(size => (
+              <SelectItem key={size} value={String(size)}>
+                {size}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </SelectRoot>
+      </div>
+      <div className="flex items-center gap-4">
+        <span className="tabular-nums">{range}</span>
+        {pageCount != null && (
+          <span className="tabular-nums">
+            {t('dataTable.pageOf')
+              .replace('{page}', String(page))
+              .replace('{pages}', String(pageCount))}
+          </span>
+        )}
+        <div className="flex items-center gap-1">
+          {pageCount != null &&
+            pager(
+              t('dataTable.firstPage'),
+              <ChevronsLeft className="h-4 w-4" aria-hidden />,
+              1,
+              page <= 1
+            )}
+          {pager(
+            t('dataTable.previousPage'),
+            <ChevronLeft className="h-4 w-4" aria-hidden />,
+            page - 1,
+            page <= 1
+          )}
+          {pager(
+            t('dataTable.nextPage'),
+            <ChevronRight className="h-4 w-4" aria-hidden />,
+            page + 1,
+            !hasNextPage
+          )}
+          {pageCount != null &&
+            pager(
+              t('dataTable.lastPage'),
+              <ChevronsRight className="h-4 w-4" aria-hidden />,
+              pageCount,
+              page >= pageCount
+            )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
- * The app's standard table surface: a fixed toolbar (custom slots + search +
- * facet filters) over a single scrolling region whose header row stays pinned.
+ * The app's standard table: a card with an optional title / description /
+ * actions header, a toolbar (slot above, search in the middle with slots to
+ * its left and right), one scrolling body with a pinned header row, and an
+ * optional pagination footer.
  *
- * ## Why the scrolling is arranged this way
+ * ## Layout
  *
- * There is exactly **one** scroll container — the `div` below — and it owns
- * both axes. That is what makes `sticky top-0` on the header work, and it is
- * the part that hand-rolled tables kept getting wrong: wrapping a table in a
- * horizontal scroller nested inside the page's vertical scroller gives the
- * header an ancestor that never scrolls, so it never sticks. `Table` is
- * therefore rendered with `containerClassName="w-full"` (see its docs).
+ * By default the card fills its parent (`flex-1 min-h-0`) and **only the rows
+ * scroll** — the header, toolbar and footer stay put, and the page itself
+ * never scrolls. That needs a height-bounded flex-column parent; in Settings
+ * that is `<SettingsPanel scrollable={false} bodyClassName="flex h-full
+ * min-h-0 flex-col gap-4">`. A table among other cards on a scrolling page
+ * passes `fill={false}` and scrolls internally past `maxHeight`.
  *
- * The host is expected to give this a bounded height — it is
- * `flex h-full min-h-0 flex-col`, so a parent with a real height makes the body
- * scroll and the toolbar stay put. Inside a `min-h-full` parent nothing is
- * bounded, so the region grows and the sticky header has no scroll to survive.
+ * ## Why one scroll container
  *
- * ## Filtering is the host's job
+ * The rows region is the only scroller and owns both axes, which is what makes
+ * `sticky top-0` on the header work. `Table` is rendered with
+ * `containerClassName="w-full"` so it does not add its own `overflow-x-auto`
+ * wrapper — a nested scroller would capture the sticky header (see `Table`).
  *
- * `search` and `filters` are controlled inputs that render the chrome and
- * report changes; this component never filters `rows` itself. Sorting,
- * debouncing and server-side querying differ per table, and a primitive that
- * guessed at them would be wrong more often than right.
+ * ## Filtering and sorting are the host's job
+ *
+ * `search` and `filters` are controlled inputs; the table never filters rows.
+ * Client-side paging is the one data operation it does itself, because it is
+ * the same everywhere.
  */
 export default function DataTable<T>({
   columns,
   rows,
   rowKey,
   renderRow,
+  onRowClick,
+  rowClassName,
+  rowTestId,
+  title,
+  description,
+  actions,
   search,
   filters,
+  toolbarTop,
   toolbarStart,
   toolbarEnd,
+  pagination,
   loading = false,
   loadingRows = 6,
   loadingTestId,
@@ -196,14 +373,57 @@ export default function DataTable<T>({
   error,
   empty,
   footer,
+  fill = true,
+  maxHeight = '28rem',
   ariaLabel,
   className,
   testId,
 }: DataTableProps<T>) {
   const { t } = useT();
   const searchId = useId();
+
+  // ── Paging ────────────────────────────────────────────────────────────
+  const paging: DataTablePagination | null =
+    pagination === true ? {} : pagination ? pagination : null;
+  const serverMode = paging?.onPageChange != null;
+  const pageSizeOptions = paging?.pageSizeOptions ?? DEFAULT_PAGE_SIZES;
+  const [localPage, setLocalPage] = useState(1);
+  const [localSize, setLocalSize] = useState(paging?.pageSize ?? pageSizeOptions[1] ?? 25);
+
+  const pageSize = serverMode ? (paging?.pageSize ?? localSize) : localSize;
+  const total = serverMode ? paging?.total : rows.length;
+  const pageCount = total != null ? Math.max(1, Math.ceil(total / pageSize)) : null;
+  // Clamp at render: a shrinking result set (new search) must not strand the
+  // view on an empty page past the end.
+  const rawPage = serverMode ? (paging?.page ?? 1) : localPage;
+  const page = pageCount != null ? Math.min(Math.max(1, rawPage), pageCount) : Math.max(1, rawPage);
+
+  const visibleRows =
+    paging && !serverMode ? rows.slice((page - 1) * pageSize, page * pageSize) : rows;
+  const hasNextPage = serverMode
+    ? (paging?.hasNextPage ?? (pageCount != null && page < pageCount))
+    : pageCount != null && page < pageCount;
+
+  const changePage = (next: number) => {
+    if (serverMode) paging?.onPageChange?.(next);
+    else setLocalPage(next);
+  };
+  const changePageSize = (size: number) => {
+    if (serverMode) {
+      paging?.onPageSizeChange?.(size);
+      paging?.onPageChange?.(1);
+    } else {
+      setLocalSize(size);
+      setLocalPage(1);
+    }
+  };
+
+  // ── Chrome ────────────────────────────────────────────────────────────
+  const hasHeader = title != null || actions != null;
   const hasToolbar = Boolean(toolbarStart || search || filters?.length || toolbarEnd);
-  const showTable = !loading && rows.length > 0;
+  const showTable = !loading && visibleRows.length > 0;
+  // 16px gutters on the outer columns, for generated AND custom rows.
+  const edgeCells = '[&_tr>*:first-child]:pl-4 [&_tr>*:last-child]:pr-4';
 
   const head = (
     <TableHeader>
@@ -211,11 +431,9 @@ export default function DataTable<T>({
         {columns.map(column => (
           <TableHead
             key={column.id}
-            // The sticky cell carries its own opaque fill: rows scroll
-            // *underneath* it, and a transparent header would show them
-            // through. `bg-surface` matches the region's own fill.
+            // Opaque fill: rows scroll underneath the pinned header.
             className={cn(
-              'sticky top-0 z-10 bg-surface',
+              'sticky top-0 z-10 bg-surface-muted',
               column.align === 'right' && 'text-right',
               column.className,
               column.headClassName
@@ -229,11 +447,30 @@ export default function DataTable<T>({
 
   const body = (
     <TableBody>
-      {rows.map((row, index) =>
+      {visibleRows.map((row, index) =>
         renderRow ? (
           renderRow(row, index)
         ) : (
-          <TableRow key={rowKey(row, index)}>
+          <TableRow
+            key={rowKey(row, index)}
+            data-testid={rowTestId}
+            onClick={onRowClick ? () => onRowClick(row) : undefined}
+            onKeyDown={
+              onRowClick
+                ? event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      onRowClick(row);
+                    }
+                  }
+                : undefined
+            }
+            tabIndex={onRowClick ? 0 : undefined}
+            className={cn(
+              onRowClick &&
+                'cursor-pointer focus-visible:bg-surface-hover focus-visible:outline-hidden',
+              rowClassName?.(row, index)
+            )}>
             {columns.map(column => (
               <TableCell
                 key={column.id}
@@ -252,61 +489,78 @@ export default function DataTable<T>({
   );
 
   return (
-    <div className={cn('flex h-full min-h-0 flex-col', className)} data-testid={testId}>
-      {hasToolbar && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 pb-3">
-          {toolbarStart}
-          {search && (
-            <div className="relative min-w-40 flex-1">
-              <LuSearch
-                aria-hidden
-                className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-content-faint"
-              />
-              <TextField
-                id={searchId}
-                type="search"
-                data-testid={search.testId}
-                value={search.value}
-                onChange={event => search.onChange(event.target.value)}
-                placeholder={search.placeholder ?? t('common.search')}
-                aria-label={search.ariaLabel ?? search.placeholder ?? t('common.search')}
-                className="pl-9 pr-3 text-xs shadow-xs"
-              />
-            </div>
-          )}
-          {filters?.map(filter => (
-            <DataTableFilterMenu key={filter.id} filter={filter} />
-          ))}
-          {toolbarEnd}
+    <section
+      data-slot="data-table"
+      data-testid={testId}
+      className={cn(
+        'flex flex-col overflow-hidden rounded-xl border border-line bg-surface',
+        fill && 'min-h-0 flex-1',
+        className
+      )}>
+      {hasHeader && (
+        <div className="flex shrink-0 items-start justify-between gap-3 px-4 pt-4">
+          <div className="min-w-0">
+            {title != null && <h3 className="text-sm font-semibold text-content">{title}</h3>}
+            {description != null && (
+              <p className="mt-0.5 text-xs leading-relaxed text-content-muted">{description}</p>
+            )}
+          </div>
+          {actions != null && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
         </div>
       )}
 
-      {error != null && <div className="shrink-0 pb-3">{error}</div>}
+      {(toolbarTop != null || hasToolbar) && (
+        <div className="shrink-0 space-y-3 px-4 py-3">
+          {toolbarTop}
+          {hasToolbar && (
+            <div className="flex flex-wrap items-center gap-2">
+              {toolbarStart}
+              {search && (
+                <div className="relative min-w-48 flex-1">
+                  <Search
+                    aria-hidden
+                    className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-content-faint"
+                  />
+                  <TextField
+                    id={searchId}
+                    type="search"
+                    inputSize="sm"
+                    data-testid={search.testId}
+                    value={search.value}
+                    onChange={event => {
+                      search.onChange(event.target.value);
+                      if (!serverMode) setLocalPage(1);
+                    }}
+                    placeholder={search.placeholder ?? t('common.search')}
+                    aria-label={search.ariaLabel ?? search.placeholder ?? t('common.search')}
+                    className="pl-9"
+                  />
+                </div>
+              )}
+              {filters?.map(filter => (
+                <DataTableFilterMenu key={filter.id} filter={filter} />
+              ))}
+              {toolbarEnd}
+            </div>
+          )}
+        </div>
+      )}
 
-      {/* The ONE scroll container, and the card itself.
-          These cannot be two elements: `overflow-hidden` on an inner card
-          wrapper is also a scroll container, so a `sticky top-0` header inside
-          it binds to a box that never scrolls and silently stops sticking —
-          the same trap `Table`'s default `overflow-x-auto` wrapper sets, one
-          level further in. Border and radius therefore go on the scroller, and
-          only while a table is actually rendered, so the empty and loading
-          states are not framed. */}
+      {error != null && <div className="shrink-0 px-4 pb-3">{error}</div>}
+
+      {/* The ONE scroll container (both axes) — see the component docs. */}
       <div
-        className={cn(
-          'min-h-0 flex-1 overflow-auto',
-          showTable && 'rounded-xl border border-line bg-surface'
-        )}>
+        className={cn('min-h-0 overflow-auto border-t border-line', fill && 'flex-1')}
+        style={fill ? undefined : { maxHeight }}>
         {loading ? (
-          // Skeleton ROWS, not a centred spinner: the columns are already known
-          // while the data is not, so keeping the grid means the table does not
-          // collapse and then jolt back to full width when the rows land.
+          // Skeleton rows keep the column grid, so the table does not collapse
+          // and jolt back when the data lands.
           <div
             role="status"
             aria-busy="true"
             aria-label={loadingLabel ?? t('common.loading')}
-            data-testid={loadingTestId}
-            className="rounded-xl border border-line bg-surface">
-            <Table containerClassName="w-full">
+            data-testid={loadingTestId}>
+            <Table containerClassName="w-full" className={edgeCells}>
               {head}
               <TableBody>
                 {Array.from({ length: loadingRows }).map((_, rowIndex) => (
@@ -325,18 +579,34 @@ export default function DataTable<T>({
               </TableBody>
             </Table>
           </div>
-        ) : rows.length === 0 ? (
-          (empty ?? null)
-        ) : (
+        ) : showTable ? (
           <>
-            <Table containerClassName="w-full" aria-label={ariaLabel}>
+            <Table containerClassName="w-full" className={edgeCells} aria-label={ariaLabel}>
               {head}
               {body}
             </Table>
             {footer}
           </>
+        ) : (
+          <div className="flex h-full min-h-40 items-center justify-center p-6">
+            {empty ?? <p className="text-sm text-content-muted">{t('common.noResults')}</p>}
+          </div>
         )}
       </div>
-    </div>
+
+      {paging && (showTable || (serverMode && page > 1)) && (
+        <DataTablePaginationBar
+          page={page}
+          pageSize={pageSize}
+          pageSizeOptions={pageSizeOptions}
+          pageRows={visibleRows.length}
+          total={total}
+          hasNextPage={hasNextPage}
+          onPageChange={changePage}
+          onPageSizeChange={changePageSize}
+          testId={paging.testId}
+        />
+      )}
+    </section>
   );
 }

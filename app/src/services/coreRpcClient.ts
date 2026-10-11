@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri as isTauriRuntime } from '@tauri-apps/api/core';
 import debug from 'debug';
 
 import { dispatchLocalAiMethod } from '../lib/ai/localCoreAiMemory';
@@ -95,6 +95,17 @@ let resolvingShellEndpoint: Promise<{ url: string; token: string } | null> | nul
 
 /** Active transport set by TransportManager for non-local profiles. */
 let _activeTransport: CoreTransport | null = null;
+
+/** Desktop controls in the UI target only the native app's resolved local core. */
+export async function isLocalDesktopHost(): Promise<boolean> {
+  if (!isTauriRuntime() || _activeTransport !== null) return false;
+  try {
+    const host = new URL(await getCoreRpcUrl()).hostname;
+    return host === '127.0.0.1' || host === 'localhost' || host === '[::1]';
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Override the active transport used by `callCoreRpc`.
@@ -583,6 +594,25 @@ export function rpcUrlNeedsShellRelay(rpcUrl: string): boolean {
   return !isPotentiallyTrustworthyHost(parsed.hostname);
 }
 
+export interface CoreSocketEndpoint {
+  baseUrl: string;
+  path: string;
+  liveVoicePath?: string;
+  transports?: Array<'websocket' | 'polling'>;
+}
+
+/** Resolve a Socket.IO endpoint, relaying private-LAN plain HTTP through Rust. */
+export async function resolveCoreSocketEndpoint(baseUrl: string): Promise<CoreSocketEndpoint> {
+  const rpcUrl = new URL(baseUrl);
+  rpcUrl.pathname = '/rpc';
+  rpcUrl.search = '';
+  rpcUrl.hash = '';
+  if (!isTauri() || !rpcUrlNeedsShellRelay(rpcUrl.toString())) {
+    return { baseUrl, path: '/socket.io/' };
+  }
+  return invoke<CoreSocketEndpoint>('relay_remote_socket', { url: rpcUrl.toString() });
+}
+
 /**
  * Perform a JSON-RPC POST via the Rust host (`relay_http_rpc` Tauri command),
  * returning a synthesized `Response` so callers reuse their existing
@@ -661,6 +691,41 @@ export async function testCoreRpcConnection(
     headers.Authorization = `Bearer ${token}`;
   }
   return fetch(rpcUrl, { method: 'POST', headers, body, signal: init?.signal });
+}
+
+/** Outcome of [`probeCoreRealtime`]. */
+export type CoreRealtimeProbe = 'ok' | 'disabled' | 'unknown';
+
+/**
+ * Checks whether the core's realtime (Socket.IO) endpoint is on, without
+ * opening a socket: a Socket.IO-disabled core (`--jsonrpc-only`) answers
+ * `/socket.io/` with HTTP 503 and `{ error: "socketio_disabled" }` (#5656).
+ *
+ * Only that exact response yields `'disabled'`. Any network error, relay-only
+ * runtime or unexpected status is `'unknown'`, so a flaky probe never blocks or
+ * misreports an otherwise working RPC connection.
+ */
+export async function probeCoreRealtime(
+  url: string,
+  init?: { signal?: AbortSignal }
+): Promise<CoreRealtimeProbe> {
+  try {
+    const target = new URL(normalizeRpcUrl(url));
+    target.pathname = '/socket.io/';
+    target.search = 'EIO=4&transport=polling';
+    target.hash = '';
+    // The mixed-content shell relay is POST-only; skip rather than guess.
+    if (isTauri() && rpcUrlNeedsShellRelay(target.toString())) return 'unknown';
+    const response = await fetch(target.toString(), { method: 'GET', signal: init?.signal });
+    if (response.status === 503) {
+      const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+      return body?.error === 'socketio_disabled' ? 'disabled' : 'unknown';
+    }
+    return response.status === 200 ? 'ok' : 'unknown';
+  } catch (err) {
+    coreRpcLog('[rpc] realtime probe inconclusive: %o', err);
+    return 'unknown';
+  }
 }
 
 export async function getCoreHttpBaseUrl(): Promise<string> {

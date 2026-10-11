@@ -93,7 +93,7 @@ async fn dry_run_exercises_agent_ref_node_via_mock_agent_runner() {
         "nodes": [
             { "id": "t", "kind": "trigger", "name": "Manual" },
             { "id": "a", "kind": "agent", "name": "Plan",
-              "config": { "agent_ref": "researcher", "prompt": "outline it" } }
+              "config": { "agent_ref": "planner", "prompt": "outline it" } }
         ],
         "edges": [ { "from_node": "t", "to_node": "a" } ]
     });
@@ -255,7 +255,7 @@ async fn dry_run_flags_tool_call_arg_null_resolved_from_unschemad_agent() {
         "nodes": [
             { "id": "t", "kind": "trigger", "name": "Manual" },
             { "id": "summarize", "kind": "agent", "name": "Summarize",
-              "config": { "agent_ref": "researcher", "prompt": "summarize" } },
+              "config": { "agent_ref": "planner", "prompt": "summarize" } },
             { "id": "post", "kind": "tool_call", "name": "Post",
               "config": { "slug": "oh:noop",
                 "args": { "channel": "=nodes.summarize.item.json.channel" } } }
@@ -410,7 +410,7 @@ async fn dry_run_passes_when_agent_schema_matches_tool_call_binding() {
         "nodes": [
             { "id": "t", "kind": "trigger", "name": "Manual" },
             { "id": "summarize", "kind": "agent", "name": "Summarize",
-              "config": { "agent_ref": "researcher", "prompt": "summarize",
+              "config": { "agent_ref": "planner", "prompt": "summarize",
                 "output_parser": { "schema": { "type": "object",
                     "required": ["channel"],
                     "properties": { "channel": { "type": "string" } } } } } },
@@ -569,7 +569,7 @@ async fn dry_run_passes_when_agent_enum_schema_binds_to_tool_call() {
         "nodes": [
             { "id": "t", "kind": "trigger", "name": "Manual" },
             { "id": "triage", "kind": "agent", "name": "Triage",
-              "config": { "agent_ref": "researcher", "prompt": "triage this",
+              "config": { "agent_ref": "planner", "prompt": "triage this",
                 "output_parser": { "schema": { "type": "object",
                     "required": ["priority"],
                     "properties": {

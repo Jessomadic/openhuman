@@ -5,9 +5,11 @@
 
 pub mod bus;
 pub mod crypto;
+mod owner;
 pub mod rpc;
 pub mod schemas;
 pub mod store;
+mod store_documents;
 pub mod tunnel_client;
 pub mod types;
 

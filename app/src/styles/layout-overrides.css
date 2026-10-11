@@ -1,0 +1,40 @@
+/*
+ * Appearance → Layout → "Show borders on". `ThemeProvider` sets
+ * `data-borders-<area>="off"` on <html> for each area the user switched off
+ * (see `lib/theme/layout.ts`). Imported unlayered, after Tailwind, so these
+ * beat utility classes without `!important`.
+ */
+
+/* Cards and panels: `Card`, contained / card-style accordions. */
+html[data-borders-cards='off']
+  :is(
+    [data-slot='card'],
+    [data-slot='accordion'][data-variant='contained'],
+    [data-slot='accordion-item'][data-variant='card']
+  ) {
+  border-color: transparent;
+}
+
+/* Form controls: text fields, text areas, selects. */
+html[data-borders-controls='off']
+  :is(
+    input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']),
+    textarea,
+    select,
+    [data-slot='select-trigger'],
+    [data-slot='native-select'],
+    [data-slot='input-group'],
+    [data-slot='number-field']
+  ) {
+  border-color: transparent;
+}
+
+/* Hairlines between rows (`divide-y` / `divide-x` lists). */
+html[data-borders-dividers='off'] :is([class*='divide-y'], [class*='divide-x']) > * {
+  border-color: transparent;
+}
+
+/* The edge around the main content card. */
+html[data-borders-frame='off'] {
+  --shadow-content-edge: 0 0 #0000;
+}

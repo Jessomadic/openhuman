@@ -3,13 +3,22 @@
 //! Tinyagents owns the goal types, lifecycle, persistence, prompt rendering,
 //! graph continuation, and native harness tools. This module contains the
 //! remaining OpenHuman-specific adapters: workspace-store resolution, domain
-//! events, heartbeat dispatch, and bridges for
+//! events, and bridges for
 //! OpenHuman's `Tool` and `StopHook` traits.
 
-pub mod continuation;
 pub mod runtime;
 pub mod store;
 pub mod tools;
 
 pub use tinyagents_graph::goals::{ThreadGoal, ThreadGoalStatus};
-pub use tools::{GoalCompleteTool, GoalGetTool, GoalSetTool};
+pub use tools::goal_tools;
+
+/// Serialize a [`ThreadGoal`] for the `goal` field on `ThreadGoalUpdated` /
+/// `threads.goal_get`. `ThreadGoal` is owned by `tinyagents-graph`, so this is
+/// kept as a raw `Value` rather than a typed field on the event. Falls back to
+/// `Value::Null` on an (unexpected) serialization failure rather than
+/// panicking or dropping the event.
+#[must_use]
+pub fn goal_to_value(goal: &ThreadGoal) -> serde_json::Value {
+    serde_json::to_value(goal).unwrap_or(serde_json::Value::Null)
+}

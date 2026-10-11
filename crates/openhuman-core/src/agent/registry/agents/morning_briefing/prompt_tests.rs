@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::prompts::{LearnedContextData, ToolCallFormat, UserIdentity};
+use crate::agent::prompts::{ToolCallFormat, UserIdentity};
 use std::collections::HashSet;
 
 fn ctx_with_identity(identity: Option<UserIdentity>) -> PromptContext<'static> {
@@ -15,14 +15,10 @@ fn ctx_with_identity(identity: Option<UserIdentity>) -> PromptContext<'static> {
         tools: &[],
         workflows: &[],
         dispatcher_instructions: "",
-        learned: LearnedContextData::default(),
         visible_tool_names: visible,
         tool_call_format: ToolCallFormat::PFormat,
         connected_integrations: &[],
         connected_identities_md: String::new(),
-        include_profile: false,
-        include_memory_md: false,
-        curated_snapshot: None,
         user_identity: identity,
         personality_roster: vec![],
         agents_md_global: None,
@@ -56,7 +52,7 @@ fn build_includes_runtime_and_datetime_sections() {
         .nth(1)
         .expect("datetime section must follow its heading");
     assert!(
-        dt.contains("match the actual local hour"),
+        dt.contains("match greetings") && dt.contains("local hour"),
         "datetime section must carry the greeting-grounding rule (#3602); got:\n{dt}"
     );
 }

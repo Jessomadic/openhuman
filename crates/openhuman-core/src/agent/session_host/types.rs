@@ -7,14 +7,11 @@
 //! crate gaining field access.
 
 use crate::agent::context::ContextManager;
-use crate::agent::harness::archivist::ArchivistHook;
-use crate::agent::harness::definition::TriggerMemoryAgent;
 use crate::agent::hooks::PostTurnHook;
 use crate::agent::progress::AgentProgress;
 use crate::agent::prompts::SystemPromptBuilder;
 use crate::agent::tinyagents::TurnModelSource;
 use crate::agent::tool_policy::ToolPolicy;
-use crate::memory::Memory;
 use crate::tools::agent_policy::ToolPolicySession;
 use std::sync::Arc;
 use tinytools::{Tool, ToolSpec};
@@ -31,8 +28,7 @@ use tinytools_agent::dialect::ToolDialect;
 ///
 /// The motivating case (opencompany issue #1725) is a bare greeting / small-talk
 /// turn that should run as a cheap conversational reply instead of the full
-/// agentic task loop: no tools to loop on, no pre-turn memory-agent retrieval,
-/// and no stale per-thread goal re-injected from a prior task. Each field is an
+/// agentic task loop: no tools to loop on and no stale per-thread goal re-injected from a prior task. Each field is an
 /// independent, additive suppression so a caller can compose exactly the
 /// reduction it wants.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -48,10 +44,6 @@ pub struct TurnOverrides {
     /// `tools` / `tool_specs` are left untouched, so the next (un-overridden)
     /// turn has its full toolbelt back.
     pub suppress_tools: bool,
-    /// Force [`TriggerMemoryAgent::Never`] behaviour for this turn — skip the
-    /// pre-turn `agent_memory` retrieval even when the agent's policy is
-    /// `Always`. The agent's built policy is left untouched for later turns.
-    pub suppress_memory_agent: bool,
     /// Skip auto-resuming this turn from the agent's most-recent on-disk
     /// transcript (`try_load_session_transcript`, which resolves the *latest*
     /// transcript for the agent name -- NOT thread-scoped). A host that has just
@@ -61,6 +53,78 @@ pub struct TurnOverrides {
     /// resumes by durable session identity (`ResumeMode::Session`), which is an
     /// exact lookup and can never reach another thread's transcript.
     pub suppress_transcript_autoload: bool,
+}
+
+/// What the runtime hook hands one user turn's request enrichment: this
+/// turn's [`TurnOverrides`] (consumed) and the reply-language instruction the
+/// host armed with `set_reply_language_directive` (kept for later turns).
+#[derive(Debug, Default)]
+pub(crate) struct TurnInputs {
+    pub(crate) overrides: TurnOverrides,
+    pub(crate) reply_language_directive: Option<String>,
+    pub(crate) time_zone: Option<String>,
+}
+
+impl TurnInputs {
+    /// What leads this turn's user message: the date line in the user's time
+    /// zone, then the reply-language instruction.
+    pub(crate) fn preamble(&self) -> String {
+        crate::agent::prompts::turn_preamble(
+            self.reply_language_directive.as_deref(),
+            self.time_zone.as_deref(),
+        )
+    }
+}
+
+impl super::runtime_session::OpenHumanSessionState {
+    /// Takes this turn's overrides (they apply once) and copies the
+    /// reply-language instruction (it applies until the host changes it).
+    pub(super) fn take_turn_inputs(&mut self) -> TurnInputs {
+        TurnInputs {
+            overrides: std::mem::take(&mut self.active_turn_overrides),
+            reply_language_directive: self.reply_language_directive.clone(),
+            time_zone: self.time_zone.clone(),
+        }
+    }
+}
+
+impl OpenHumanSessionHost {
+    /// How this turn resumes its history.
+    ///
+    /// `suppress_transcript_autoload` is decided here, BEFORE `turn()` runs its
+    /// explicit identity-keyed resume. `begin_turn_resume` applies the same
+    /// override later, inside the lifecycle's resume hook, which is too late for
+    /// a thread-bound session: that resume has already loaded the thread's own
+    /// transcript into the history, so the override suppressed nothing (#6377).
+    pub(super) fn turn_resume_mode(&self) -> tinyagents_runtime::ResumeMode {
+        use tinyagents_runtime::ResumeMode;
+        let suppressed = self
+            .runtime_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pending_turn_overrides
+            .suppress_transcript_autoload;
+        if suppressed {
+            tracing::debug!(
+                thread_id = ?self.thread_id,
+                "[session_host] transcript autoload suppressed for this turn"
+            );
+            ResumeMode::Never
+        } else if self.session.is_some() {
+            // Exact, identity-keyed resume. Unlike `LatestForAgent` it cannot
+            // splice a different thread's transcript into this turn, and the
+            // file it reads is the file the turn appends to.
+            ResumeMode::Session
+        } else if self
+            .runtime_session
+            .as_ref()
+            .is_some_and(|session| session.history().is_empty())
+        {
+            ResumeMode::LatestForAgent
+        } else {
+            ResumeMode::Never
+        }
+    }
 }
 
 /// An autonomous or semi-autonomous AI agent.
@@ -154,16 +218,21 @@ pub struct OpenHumanSessionHost {
     /// [`ToolExposure::Deferred`](tinytools::ToolExposure): never in
     /// [`Self::visible_tool_names`], never in the prompt's spec list, but
     /// handed to the harness beside the visible set so its intrinsic
-    /// `tool_search` / `tool_call` bridge can find and run them. Empty for a
+    /// `tool_search` bridge can find them, and they are called by name. Empty for a
     /// belt that did not opt into discovery. Classified `Allow` by the
     /// policy session exactly like a visible tool — a found tool the gate
     /// refused as "prompt-hidden" would be the old unusable find again.
     pub(super) deferred_tool_names: std::collections::HashSet<String>,
+    pub(super) permanent_tool_names: std::collections::HashSet<String>,
     /// Whether this belt reaches deferred tools at all: a wildcard belt
     /// always does, a `[tools] named` belt only by listing `tool_search`.
     /// Fixed at build; the refresh paths use it to recompute
     /// [`Self::deferred_tool_names`] when the synthesised set changes.
     pub(super) discovery_enabled: bool,
+    /// The agent definition's `deferred_tools`: `Direct` tools this agent
+    /// reaches through `tool_search` instead of its wire. Kept so every
+    /// recompute of [`Self::deferred_tool_names`] applies it again.
+    pub(super) requested_deferred_tools: Arc<[String]>,
     /// Explicit profile/channel ceiling inherited by delegated agents.
     ///
     /// This is deliberately separate from [`Self::visible_tool_names`]: a
@@ -171,11 +240,6 @@ pub struct OpenHumanSessionHost {
     /// specialist with broader tools. Empty means no inherited ceiling.
     pub(super) subagent_tool_ceiling_names: std::collections::HashSet<String>,
     pub(super) tool_policy_session: ToolPolicySession,
-    pub(super) memory: Arc<dyn Memory>,
-    /// Lane C — the gated pre-turn recall of facts about the user (#6040).
-    /// `None` when the session was built without a memory binding (tests,
-    /// embedders that bring their own `Memory`); the lane then stays silent.
-    pub(super) auto_recall: Option<Arc<crate::memory::auto_recall::AutoRecall>>,
     // `Arc` (not `Box`) so the tinyagents turn path can hold a cheap clone of
     // the dispatcher without borrowing the `OpenHumanSessionHost` while session state mutates.
     pub(super) tool_dispatcher: Arc<dyn ToolDialect>,
@@ -195,25 +259,10 @@ pub struct OpenHumanSessionHost {
     /// `action_dir` cwd behaviour.
     pub(super) workspace_descriptor: Option<tinytools::WorkspaceDescriptor>,
     pub(super) workflows: Vec<crate::skills::Workflow>,
-    /// OpenHumanSessionHost workflows discovered at session start.
-    pub(super) auto_save: bool,
-    /// Last memory context loaded for the current turn. Stored so it can
-    /// be forwarded to subagents via `ParentExecutionContext`.
+    /// Last per-turn context block (active goal, running sub-agents) built for
+    /// the current turn. Stored so it can be forwarded to subagents via
+    /// `ParentExecutionContext`.
     pub(super) last_memory_context: Option<String>,
-    /// Citation metadata collected from memory recall for the most recent turn.
-    /// Consumed by web-channel delivery to render source chips in the UI.
-    /// In-flight citation recall for the current turn.
-    ///
-    /// Citations are UI-only — they render source chips and never enter the
-    /// prompt — but collecting them is a full recall, which on a large memory
-    /// store is one of the most expensive things a turn does. Running it inline
-    /// before the model call meant every reply waited on a scan whose result the
-    /// model never sees.
-    ///
-    /// It is spawned instead, so the scan overlaps the inference round-trip, and
-    /// joined only when a consumer actually asks for the citations — which
-    /// happens after the turn returns. The contract is unchanged: callers still
-    /// get the citations for the turn they just ran.
     /// Holistic token/cost/context accounting for the most recent turn (parent +
     /// any sub-agents spawned during it). Consumed by web-channel delivery to
     /// surface session token/cost/context meters in the UI footer. `None` until
@@ -228,11 +277,6 @@ pub struct OpenHumanSessionHost {
     /// question" or "the agent finished" — `run_single` only returns the
     /// checkpoint/final text, with no other signal for which case occurred.
     pub(super) post_turn_hooks: Vec<Arc<dyn PostTurnHook>>,
-    pub(super) learning_enabled: bool,
-    /// When `true`, pinned preferences stored via `remember_preference` are
-    /// fetched from the `user_profile` namespace and injected into the system
-    /// prompt on every turn, independent of `learning_enabled`.
-    pub(super) explicit_preferences_enabled: bool,
     pub(super) event_session_id: String,
     pub(super) event_channel: String,
     /// Backend/session thread explicitly owned by this agent run. It is kept
@@ -240,7 +284,7 @@ pub struct OpenHumanSessionHost {
     /// necessarily user conversation threads.
     pub(super) thread_id: Option<String>,
     /// Human-readable agent definition name (e.g. `"main"`,
-    /// `"code_executor"`). Used as the `{agent}` component in session
+    /// `"task_manager_agent"`). Used as the `{agent}` component in session
     /// transcript paths: `sessions/DDMMYYYY/{agent}_{index}.md`.
     ///
     /// May be rewritten mid-session by
@@ -252,7 +296,7 @@ pub struct OpenHumanSessionHost {
     pub(super) agent_definition_name: String,
     /// Canonical agent id as registered in
     /// [`AgentDefinitionRegistry`] (e.g. `"orchestrator"`,
-    /// `"integrations_agent"`). Set once at build time and never
+    /// `"planner"`). Set once at build time and never
     /// rewritten — `set_agent_definition_name` only touches the
     /// transcript-facing `agent_definition_name`, so registry lookups
     /// (e.g. `refresh_delegation_tools` re-resolving the agent's
@@ -275,6 +319,24 @@ pub struct OpenHumanSessionHost {
     /// reading the old directory.
     pub(super) session_history_locator:
         Option<std::sync::Arc<dyn tinyagents_session::transcript::TranscriptLocator>>,
+    /// First-call memo for [`OpenHumanSessionHost::session_locator`][Self::session_locator]'s
+    /// lazily-constructed `FileTranscriptLocator` (the `session_history_locator` `None` branch).
+    ///
+    /// tinyagents' `SessionBuilder` only accepts a later transcript-target
+    /// change when it is the *same* locator object (`Arc::ptr_eq`), not merely
+    /// an equivalent one — see `tinyagents_session::transcript`'s
+    /// `TranscriptTarget::same_binding`. `session_locator` is called from more
+    /// than one place while building a session's runtime turn machinery (the
+    /// `before_resume` resume target and the eager construction-time bind), and
+    /// without this memo each call minted a fresh `Arc` over the same
+    /// destination, so the second bind was rejected with "cannot change a
+    /// transcript target after it is bound or committed" even though both
+    /// calls agreed on the file. `OnceLock` keeps the resolution lazy — still
+    /// read from `workspace_dir` at first use, not frozen at struct-build time
+    /// — while guaranteeing every later caller in this host's lifetime gets
+    /// back the identical `Arc`.
+    pub(super) session_history_locator_memo:
+        std::sync::OnceLock<std::sync::Arc<dyn tinyagents_session::transcript::TranscriptLocator>>,
     /// Unique transcript key for this session, formatted as
     /// `"{unix_ts}_{agent_id}"`. Generated once at agent-build time so
     /// every transcript write in this session uses the same filename
@@ -347,16 +409,17 @@ pub struct OpenHumanSessionHost {
     /// keeps those settings instead of having them silently replaced by
     /// whatever the process-global registry holds under the same id.
     pub(super) definition: Option<Arc<crate::agent::harness::definition::AgentDefinition>>,
-    /// Mirrors the agent definition's `omit_profile` flag. Threaded into
-    /// [`PromptContext::include_profile`] in `turn::build_system_prompt`
-    /// so only user-facing agents (welcome, orchestrator, triggers)
-    /// inject `PROFILE.md`. Defaults to `true` (omit) for custom / legacy
-    /// agents built without a definition.
-    pub(super) omit_profile: bool,
-    /// Mirrors the agent definition's `omit_memory_md` flag. Forwarded to
-    /// [`PromptContext::include_memory_md`] at prompt-build time. Same
-    /// session-freeze contract as `omit_profile`.
-    pub(super) omit_memory_md: bool,
+    /// Built by `from_config_host_only`: the belt is the host's tools alone.
+    pub(super) host_only: bool,
+    /// The next messages are untrusted data, so `run_single` skips the
+    /// prompt guard. Only ever set on a `host_only` session; see
+    /// [`OpenHumanSessionHost::set_untrusted_input`].
+    pub(super) untrusted_input: bool,
+    /// Mirrors the agent definition's `omit_memory_context` flag: when set,
+    /// a new session does not get the compiled `context.md` prepended to its
+    /// first user message. Defaults to `false` (inject) for agents built
+    /// without a definition.
+    pub(super) omit_memory_context: bool,
     /// Optional payload-summarizer wired in at agent-build time.
     /// Currently set only for the orchestrator session
     /// (see [`super::builder`]). TinyAgents `ToolOutputMiddleware` uses this
@@ -364,10 +427,6 @@ pub struct OpenHumanSessionHost {
     /// they enter agent history.
     pub(super) payload_summarizer:
         Option<Arc<dyn crate::agent::tinyagents::payload_summarizer::PayloadSummarizer>>,
-    /// Mirrors the agent definition's `trigger_memory_agent` policy.
-    /// `Always` runs the dedicated memory retrieval agent once before
-    /// the user's prompt is sent to this agent.
-    pub(super) trigger_memory_agent: TriggerMemoryAgent,
     /// Per-agent TokenJuice profile for tool results entering this session's
     /// model context.
     pub(super) tokenjuice_compression: crate::inference::tokenjuice::AgentTokenjuiceCompression,
@@ -425,9 +484,10 @@ pub struct OpenHumanSessionHost {
     pub(super) announced_mcp_servers: std::collections::HashSet<String>,
     /// MCP servers that connected mid-session and still need announcing on the
     /// next user message. The MCP analogue of
-    /// [`Self::pending_integration_announcement`]. `use_mcp_server` is a single
-    /// static delegate (no per-server schema to refresh), so this prose note on
-    /// the user turn is the entire mid-session-connect mechanism for MCP. The
+    /// [`Self::pending_integration_announcement`]. Connected servers' tools are
+    /// `Deferred` registrations found through `tool_search` (no per-server
+    /// schema on the wire to refresh), so this prose note on the user turn is
+    /// the entire mid-session-connect mechanism for MCP. The
     /// note rides the user turn (NOT the system prompt) so the KV-cache prefix
     /// stays byte-identical. Order-preserving + de-duped on insert.
     pub(super) pending_mcp_announcement: Vec<String>,
@@ -449,21 +509,15 @@ pub struct OpenHumanSessionHost {
     /// each newly-installed skill is announced exactly once and never
     /// re-announced per turn. Seeded from the session-build catalogue.
     pub(super) announced_skills: std::collections::HashSet<String>,
-    /// Optional reference to the `ArchivistHook` registered in
-    /// `post_turn_hooks`. Kept separately so the turn loop can call
-    /// `flush_open_segment` at session-memory-extraction time (the
-    /// closest available signal to "session is ending") to finalize the
-    /// trailing open segment with an LLM recap + embedding.
-    pub(super) archivist_hook: Option<Arc<ArchivistHook>>,
     /// Names of every tool currently in [`OpenHumanSessionHost::synthesized_tools`] — those
     /// produced by [`crate::tools::orchestrator_tools::collect_orchestrator_tools`]
     /// (i.e. `delegate_<toolkit>` skill tools and archetype-delegation
-    /// tools like `delegate_archivist`). Tracked so
+    /// tools). Tracked so
     /// [`OpenHumanSessionHost::refresh_delegation_tools`] can drop the entire
     /// previously-synthesised subset of [`OpenHumanSessionHost::tool_specs`] on each refresh
     /// and append the fresh set — without that mask we'd risk either leaking
     /// stale `delegate_<toolkit>` specs on revoke or accidentally removing
-    /// direct tools (`query_memory`, `cron_add`, …) that share a name
+    /// direct tools (`cron_add`, …) that share a name
     /// prefix.
     ///
     /// Seeded by [`SessionHostBuilder::build`] from the set handed to
@@ -480,19 +534,24 @@ pub struct OpenHumanSessionHost {
 
 /// A builder for creating `OpenHumanSessionHost` instances with custom configuration.
 pub struct SessionHostBuilder {
+    pub(super) permanent_tool_names: std::collections::HashSet<String>,
     pub(super) turn_model_source: Option<TurnModelSource>,
+    /// Explicit host config for injected-model attachment staging and services.
+    pub(super) runtime_config: Option<Arc<crate::config::Config>>,
     pub(super) tools: Option<Vec<Box<dyn Tool>>>,
     /// Delegation tools synthesised for the session's initial connection set.
     /// Held in [`OpenHumanSessionHost::synthesized_tools`], never inside [`OpenHumanSessionHost::tools`].
     pub(super) synthesized_tools: Option<Vec<Box<dyn Tool>>>,
     /// When set, restricts which tools the main agent sees/calls.
     pub(super) visible_tool_names: Option<std::collections::HashSet<String>>,
+    /// Names removed from the final provider-visible set after wildcard
+    /// expansion and tool synthesis.
+    pub(super) withheld_tool_names: std::collections::HashSet<String>,
+    /// See [`SessionHostBuilder::deferred_tools`].
+    pub(super) deferred_tools: Vec<String>,
     /// Optional explicit profile ceiling for tools delegated agents may inherit.
     /// Channel-policy restrictions are intersected during [`Self::build`].
     pub(super) subagent_tool_ceiling_names: Option<std::collections::HashSet<String>>,
-    pub(super) memory: Option<Arc<dyn Memory>>,
-    /// Forwarded to [`OpenHumanSessionHost::auto_recall`] at build time. Defaults to `None`.
-    pub(super) auto_recall: Option<Arc<crate::memory::auto_recall::AutoRecall>>,
     pub(super) prompt_builder: Option<SystemPromptBuilder>,
     pub(super) tool_dispatcher: Option<Box<dyn ToolDialect>>,
     pub(super) config: Option<crate::config::AgentConfig>,
@@ -512,10 +571,7 @@ pub struct SessionHostBuilder {
     pub(super) workflows: Option<Vec<crate::skills::Workflow>>,
     /// OpenHumanSessionHost workflows to surface in the prompt. Populated from `load_workflows`
     /// at session start; defaults to empty when not explicitly set.
-    pub(super) auto_save: Option<bool>,
     pub(super) post_turn_hooks: Vec<Arc<dyn PostTurnHook>>,
-    pub(super) learning_enabled: bool,
-    pub(super) explicit_preferences_enabled: bool,
     pub(super) event_session_id: Option<String>,
     pub(super) event_channel: Option<String>,
     pub(super) agent_definition_name: Option<String>,
@@ -549,29 +605,19 @@ pub struct SessionHostBuilder {
     /// to substitute the transcript backing store for the whole turn path.
     pub(super) session_history_locator:
         Option<std::sync::Arc<dyn tinyagents_session::transcript::TranscriptLocator>>,
-    /// Forwarded to [`OpenHumanSessionHost::omit_profile`] at `build()` time. Mirrors the
-    /// target definition's `omit_profile` flag; `None` means "fall back
-    /// to the safe default" (omit).
-    pub(super) omit_profile: Option<bool>,
-    /// Forwarded to [`OpenHumanSessionHost::omit_memory_md`]. Same shape as
-    /// `omit_profile` — `None` falls back to the "omit" default.
-    pub(super) omit_memory_md: Option<bool>,
+    /// Forwarded to [`OpenHumanSessionHost::omit_memory_context`] at `build()`
+    /// time; `None` falls back to `false` (inject `context.md`).
+    pub(super) omit_memory_context: Option<bool>,
     /// Optional payload-summarizer threaded through to [`OpenHumanSessionHost`] at
     /// build time. Defaults to `None`; the orchestrator branch in
     /// [`super::builder::OpenHumanSessionHost::build_session_agent_inner`] sets this
     /// to a `SubagentPayloadSummarizer` instance.
     pub(super) payload_summarizer:
         Option<Arc<dyn crate::agent::tinyagents::payload_summarizer::PayloadSummarizer>>,
-    /// Forwarded to [`OpenHumanSessionHost::trigger_memory_agent`] at build time.
-    pub(super) trigger_memory_agent: Option<TriggerMemoryAgent>,
     /// Per-agent TokenJuice tool-output compression profile.
     pub(super) tokenjuice_compression: crate::inference::tokenjuice::AgentTokenjuiceCompression,
     /// Optional pre-execution tool policy. Defaults to allow-all.
     pub(super) tool_policy: Option<Arc<dyn ToolPolicy>>,
-    /// Optional reference to the production `ArchivistHook`. Set when
-    /// `config.learning.episodic_capture_enabled` is true. Used to call
-    /// `flush_open_segment` at the closest available session-end signal.
-    pub(super) archivist_hook: Option<Arc<ArchivistHook>>,
 }
 
 impl Default for SessionHostBuilder {

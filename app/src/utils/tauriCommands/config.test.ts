@@ -27,12 +27,11 @@ describe('tauriCommands/config', () => {
   });
 
   describe('openhumanUpdateLocalAiSettings', () => {
-    test('throws when not running in Tauri', async () => {
+    test('calls core RPC when not running in Tauri', async () => {
       mockIsTauri.mockReturnValue(false);
-      await expect(openhumanUpdateLocalAiSettings({ runtime_enabled: true })).rejects.toThrow(
-        'Not running in Tauri'
-      );
-      expect(mockCallCoreRpc).not.toHaveBeenCalled();
+      mockCallCoreRpc.mockResolvedValue({ result: {}, logs: [] });
+      await openhumanUpdateLocalAiSettings({ runtime_enabled: true });
+      expect(mockCallCoreRpc).toHaveBeenCalledTimes(1);
     });
 
     test('forwards the patch to openhuman.inference_update_local_settings', async () => {
@@ -48,7 +47,6 @@ describe('tauriCommands/config', () => {
         model_id: 'local-model',
         chat_model_id: 'local-model',
         usage_embeddings: true,
-        usage_subconscious: false,
       };
       await openhumanUpdateLocalAiSettings(patch);
       expect(mockCallCoreRpc).toHaveBeenCalledWith({
@@ -59,12 +57,11 @@ describe('tauriCommands/config', () => {
   });
 
   describe('openhumanUpdateAutonomySettings', () => {
-    test('throws when not running in Tauri', async () => {
+    test('calls core RPC when not running in Tauri', async () => {
       mockIsTauri.mockReturnValue(false);
-      await expect(openhumanUpdateAutonomySettings({ max_actions_per_hour: 100 })).rejects.toThrow(
-        'Not running in Tauri'
-      );
-      expect(mockCallCoreRpc).not.toHaveBeenCalled();
+      mockCallCoreRpc.mockResolvedValue({ result: {}, logs: [] });
+      await openhumanUpdateAutonomySettings({ max_actions_per_hour: 100 });
+      expect(mockCallCoreRpc).toHaveBeenCalledTimes(1);
     });
 
     test('forwards the patch to openhuman.config_update_autonomy_settings', async () => {
@@ -81,10 +78,11 @@ describe('tauriCommands/config', () => {
   });
 
   describe('openhumanGetAutonomySettings', () => {
-    test('throws when not running in Tauri', async () => {
+    test('calls core RPC when not running in Tauri', async () => {
       mockIsTauri.mockReturnValue(false);
-      await expect(openhumanGetAutonomySettings()).rejects.toThrow('Not running in Tauri');
-      expect(mockCallCoreRpc).not.toHaveBeenCalled();
+      mockCallCoreRpc.mockResolvedValue({ result: {}, logs: [] });
+      await openhumanGetAutonomySettings();
+      expect(mockCallCoreRpc).toHaveBeenCalledTimes(1);
     });
 
     test('reads via openhuman.config_get_autonomy_settings', async () => {
@@ -105,12 +103,11 @@ describe('tauriCommands/config', () => {
       openhumanUpdateComposioTriggerSettings = actual.openhumanUpdateComposioTriggerSettings;
     });
 
-    test('throws when not running in Tauri', async () => {
+    test('calls core RPC when not running in Tauri', async () => {
       mockIsTauri.mockReturnValue(false);
-      await expect(
-        openhumanUpdateComposioTriggerSettings({ triage_disabled: true })
-      ).rejects.toThrow('Not running in Tauri');
-      expect(mockCallCoreRpc).not.toHaveBeenCalled();
+      mockCallCoreRpc.mockResolvedValue({ result: {}, logs: [] });
+      await openhumanUpdateComposioTriggerSettings({ triage_disabled: true });
+      expect(mockCallCoreRpc).toHaveBeenCalledTimes(1);
     });
 
     test('forwards the patch to openhuman.config_update_composio_trigger_settings', async () => {
@@ -150,10 +147,11 @@ describe('tauriCommands/config', () => {
       openhumanGetComposioTriggerSettings = actual.openhumanGetComposioTriggerSettings;
     });
 
-    test('throws when not running in Tauri', async () => {
+    test('calls core RPC when not running in Tauri', async () => {
       mockIsTauri.mockReturnValue(false);
-      await expect(openhumanGetComposioTriggerSettings()).rejects.toThrow('Not running in Tauri');
-      expect(mockCallCoreRpc).not.toHaveBeenCalled();
+      mockCallCoreRpc.mockResolvedValue({ result: {}, logs: [] });
+      await openhumanGetComposioTriggerSettings();
+      expect(mockCallCoreRpc).toHaveBeenCalledTimes(1);
     });
 
     test('reads via openhuman.config_get_composio_trigger_settings', async () => {

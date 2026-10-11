@@ -1,4 +1,6 @@
 use super::*;
+use tinyagents_harness::tool::response_fields_from_schema;
+use tinyflows::nodes::integration::agent_prompt::scale_timeout_for_iteration_cap;
 
 /// The tier gate an `http_request` (Network-class) node calls: BLOCKED under
 /// a read-only tier, and passed through (to the ApprovalGate) under
@@ -380,54 +382,6 @@ fn nested_harness_does_not_escalate_without_an_origin() {
 
 // ── Issue #4868 — agent-node iteration cap + timeout scaling ───────────
 
-#[test]
-fn scale_timeout_for_iteration_cap_leaves_default_cap_unscaled() {
-    // An agent whose effective cap is at or below the old global default
-    // (10) doesn't need extra wall-clock time.
-    assert_eq!(scale_timeout_for_iteration_cap(240, 10), 240);
-    assert_eq!(scale_timeout_for_iteration_cap(240, 3), 240);
-}
-
-#[test]
-fn scale_timeout_for_iteration_cap_scales_extended_agents_up() {
-    // 50 iterations * 12s/iter = 600s, exactly the existing ceiling.
-    assert_eq!(scale_timeout_for_iteration_cap(240, 50), 600);
-}
-
-#[test]
-fn scale_timeout_for_iteration_cap_never_lowers_an_explicit_request() {
-    // A caller-requested timeout higher than the scaled floor must win.
-    assert_eq!(scale_timeout_for_iteration_cap(600, 50), 600);
-}
-
-#[test]
-fn scale_timeout_for_iteration_cap_caps_at_600_even_for_very_high_iteration_counts() {
-    assert_eq!(scale_timeout_for_iteration_cap(240, 200), 600);
-}
-
-/// Post-merge Codex P2 finding on issue #4868: an explicit `timeout_secs`
-/// the node config supplied (a caller-chosen fast-fail/SLA bound) must be
-/// honored as-is — never scaled up just because the agent's iteration cap
-/// is high — while the absence of one still gets the iteration-cap
-/// scaling so a 50-iteration agent isn't killed by the 240s default.
-#[test]
-fn resolve_run_timeout_secs_preserves_an_explicit_request_even_for_a_high_cap_agent() {
-    assert_eq!(resolve_run_timeout_secs(Some(120), 50), 120);
-}
-
-#[test]
-fn resolve_run_timeout_secs_scales_the_default_up_for_a_high_cap_agent() {
-    // No explicit timeout_secs (None) -> default 240s, scaled by the
-    // 50-iteration cap to min(50*12, 600) = 600.
-    assert_eq!(resolve_run_timeout_secs(None, 50), 600);
-}
-
-#[test]
-fn resolve_run_timeout_secs_leaves_low_cap_agents_unscaled_either_way() {
-    assert_eq!(resolve_run_timeout_secs(None, 10), 240);
-    assert_eq!(resolve_run_timeout_secs(Some(120), 10), 120);
-}
-
 /// Regression for issue #4868: the agent-node runtime path
 /// (`OpenHumanAgentRunner::run_via_harness`) must build an `Agent` that
 /// carries `agent_ref`'s definition's effective cap (50 for an
@@ -445,14 +399,14 @@ fn agent_node_runtime_resolves_to_the_definitions_effective_iteration_cap() {
         .expect("agent registry init");
     let def = crate::agent::harness::definition::AgentDefinitionRegistry::global()
         .expect("registry initialised")
-        .get("code_executor")
-        .expect("code_executor definition registered")
+        .get("planner")
+        .expect("planner definition registered")
         .clone();
     let expected = def.effective_max_iterations();
     assert_eq!(expected, 50);
 
-    let agent = crate::agent::OpenHumanSessionHost::from_config_for_agent(&config, "code_executor")
-        .expect("build code_executor agent");
+    let agent = crate::agent::OpenHumanSessionHost::from_config_for_agent(&config, "planner")
+        .expect("build planner agent");
     assert_eq!(agent.agent_config().max_tool_iterations, expected);
 
     // And the timeout scaling this cap feeds into actually widens the
@@ -623,22 +577,4 @@ fn response_fields_from_schema_empty_for_none_or_non_object() {
     assert!(response_fields_from_schema(None).is_empty());
     assert!(response_fields_from_schema(Some(&json!("not an object"))).is_empty());
     assert!(response_fields_from_schema(Some(&json!({}))).is_empty());
-}
-
-// ── unsupported_arg_names (B13) ──────────────────────────────────────────
-// Direct unit tests for the pure name-validity check — see
-// `openhuman::flows::ops_tests` for the end-to-end
-// `validate_tool_contracts` coverage of the same behavior.
-
-#[test]
-fn unsupported_arg_names_flags_a_name_not_in_properties() {
-    let schema = json!({
-        "type": "object",
-        "properties": { "channel": {"type": "string"}, "markdown_text": {"type": "string"} }
-    });
-    let args = json!({ "channel": "#general", "text": "hi" });
-    assert_eq!(
-        unsupported_arg_names(Some(&schema), &args),
-        Some(vec!["text".to_string()])
-    );
 }

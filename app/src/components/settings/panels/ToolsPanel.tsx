@@ -1,3 +1,19 @@
+import {
+  AlarmClock,
+  Brain,
+  Calendar,
+  FileInput,
+  FilePen,
+  GitBranch,
+  Globe,
+  Image,
+  type LucideIcon,
+  MousePointerClick,
+  Network,
+  Search,
+  SquareTerminal,
+  Wrench,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { useT } from '../../../lib/i18n/I18nContext';
@@ -12,16 +28,37 @@ import {
 } from '../../../utils/toolDefinitions';
 import PanelPage from '../../layout/PanelPage';
 import Button from '../../ui/Button';
-import { SettingsRow, SettingsSection, SettingsStatusLine, SettingsSwitch } from '../controls';
+import Card from '../../ui/Card';
+import { Tile } from '../../ui/TileGrid';
+import { SettingsStatusLine, SettingsSwitch } from '../controls';
 import SettingsPanel from '../layout/SettingsPanel';
+
+/** Tile icon per UI tool toggle id. */
+const TOOL_ICONS: Record<string, LucideIcon> = {
+  shell: SquareTerminal,
+  git_operations: GitBranch,
+  file_read: FileInput,
+  file_write: FilePen,
+  image_info: Image,
+  browser_open: Globe,
+  browser: MousePointerClick,
+  http_request: Network,
+  web_search: Search,
+  memory: Brain,
+  cron: AlarmClock,
+  schedule: Calendar,
+};
 
 interface ToolsPanelProps {
   /** When true, render without the SettingsHeader chrome (used when embedded
    *  inside the onboarding custom wizard). */
   embedded?: boolean;
+  /** Body only, no page chrome — for a host that already draws the page
+   *  header and gutter (the Connections pane). */
+  bare?: boolean;
 }
 
-const ToolsPanel = ({ embedded = false }: ToolsPanelProps = {}) => {
+const ToolsPanel = ({ embedded = false, bare = false }: ToolsPanelProps = {}) => {
   const { t } = useT();
   const { snapshot, setOnboardingTasks } = useCoreState();
   const toolsByCategory = getToolsByCategory();
@@ -75,8 +112,6 @@ const ToolsPanel = ({ embedded = false }: ToolsPanelProps = {}) => {
 
       await setOnboardingTasks({
         accessibilityPermissionGranted: onboardingTasks?.accessibilityPermissionGranted ?? false,
-        localModelConsentGiven: onboardingTasks?.localModelConsentGiven ?? false,
-        localModelDownloadStarted: onboardingTasks?.localModelDownloadStarted ?? false,
         enabledTools,
         connectedSources: onboardingTasks?.connectedSources ?? [],
         updatedAtMs: Date.now(),
@@ -97,34 +132,45 @@ const ToolsPanel = ({ embedded = false }: ToolsPanelProps = {}) => {
 
   const body = (
     <>
-      <p className="text-content-muted text-sm">{t('settings.tools.chooseCapabilities')}</p>
-
-      <div className="max-h-[420px] overflow-y-auto pr-1 space-y-4">
+      {/* Category cards flow into a two-column masonry: they are narrow and
+          uneven in length, so stacking them full-width wasted the page. */}
+      <div className="gap-4 lg:columns-2 [&>*]:mb-4 [&>*]:break-inside-avoid">
         {TOOL_CATEGORIES.map(category => {
           const tools = toolsByCategory[category];
           if (tools.length === 0) return null;
           return (
-            <SettingsSection
+            <Card
               key={category}
               title={category}
-              description={CATEGORY_DESCRIPTIONS[category]}>
-              {tools.map(tool => (
-                <SettingsRow
-                  key={tool.id}
-                  htmlFor={`tool-switch-${tool.id}`}
-                  label={tool.displayName}
-                  description={tool.description}
-                  control={
-                    <SettingsSwitch
-                      id={`tool-switch-${tool.id}`}
-                      checked={Boolean(enabled[tool.id])}
-                      onCheckedChange={() => toggle(tool.id)}
-                      aria-label={tool.displayName}
+              description={CATEGORY_DESCRIPTIONS[category]}
+              divided={false}
+              className="border-line-strong"
+              data-testid={`tools-category-${category.toLowerCase()}`}>
+              <div className="space-y-2 p-4">
+                {tools.map(tool => {
+                  const Icon = TOOL_ICONS[tool.id] ?? Wrench;
+                  const on = Boolean(enabled[tool.id]);
+                  return (
+                    <Tile
+                      key={tool.id}
+                      htmlFor={`tool-switch-${tool.id}`}
+                      icon={<Icon />}
+                      iconActive={on}
+                      title={tool.displayName}
+                      description={tool.description}
+                      control={
+                        <SettingsSwitch
+                          id={`tool-switch-${tool.id}`}
+                          checked={on}
+                          onCheckedChange={() => toggle(tool.id)}
+                          aria-label={tool.displayName}
+                        />
+                      }
                     />
-                  }
-                />
-              ))}
-            </SettingsSection>
+                  );
+                })}
+              </div>
+            </Card>
           );
         })}
       </div>
@@ -149,6 +195,8 @@ const ToolsPanel = ({ embedded = false }: ToolsPanelProps = {}) => {
       />
     </>
   );
+
+  if (bare) return <div className="space-y-4">{body}</div>;
 
   // Embedded (onboarding custom wizard) keeps the headerless PanelPage branch.
   if (embedded) {

@@ -3,10 +3,10 @@
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
+use crate::core::Outcome;
 use crate::core::{FieldSchema, TypeSchema};
-use crate::rpc::RpcOutcome;
 
-pub(super) fn to_json<T: serde::Serialize>(outcome: RpcOutcome<T>) -> Result<Value, String> {
+pub(super) fn to_json<T: serde::Serialize>(outcome: Outcome<T>) -> Result<Value, String> {
     let json_val =
         serde_json::to_value(outcome.value).map_err(|e| format!("serialize error: {e}"))?;
     Ok(json_val)

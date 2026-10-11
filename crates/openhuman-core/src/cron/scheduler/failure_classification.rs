@@ -4,7 +4,7 @@
 use crate::agent::error::AgentError;
 use crate::cron::JobType;
 
-pub(super) const AGENT_JOB_USER_FAILURE_MESSAGE: &str = "Something went wrong. Please try again.\nThis error has been reported. You can also report it on Discord.\n<openhuman-link path=\"community/discord-report\">Report on Discord</openhuman-link>";
+pub(super) const AGENT_JOB_USER_FAILURE_MESSAGE: &str = "Something went wrong. Please try again.";
 // Actionable, static failure copy for the three permanent cron halt states
 // (TAURI-RUST-514 / -BMW / -HCK). Surfaced verbatim in the alerts tab + run
 // history in place of the generic `AGENT_JOB_USER_FAILURE_MESSAGE`, so a user
@@ -50,16 +50,9 @@ pub(super) fn agent_error_to_user_message(err: &AgentError) -> &'static str {
             "Too many tool iterations. Raise the iteration cap in Connections \u{2192} API keys \u{2192} LLM or simplify the task."
         }
         AgentError::EmptyProviderResponse { .. } => {
-            // Issue #3335: the prior copy named a "local provider"
-            // remedy that doesn't exist on the Managed route. This
-            // shorter form (≤120 chars per the
-            // `agent_error_to_user_message_canned_strings_are_short`
-            // contract, for clean notification-drawer rendering) names
-            // the two highest-signal remedies — credits and model
-            // configuration. The richer three-remedy copy lives on the
-            // chat-surface side (`web_chat/web_errors.rs`'s
-            // empty_response arm) where there's no drawer-width limit.
-            "Empty model response. Out of credits (Settings \u{2192} Billing) or try another model in Connections \u{2192} API keys \u{2192} LLM."
+            // Empty content alone cannot establish a billing problem. Keep
+            // the notification short and point to a retry or model change.
+            "Empty model response. Retry the job or try another model in Connections \u{2192} API keys \u{2192} LLM."
         }
         AgentError::CompactionFailed { .. } => {
             "Automatic history compaction failed. The next run will start with a fresh context."
@@ -193,7 +186,7 @@ pub(super) fn is_budget_exhausted_failure(
         return false;
     }
     let signal = last_agent_error.unwrap_or(last_output);
-    crate::api::classify::is_budget_exhausted_message(signal)
+    tinyinference_providers::is_budget_exhausted_message(signal)
 }
 
 /// TAURI-RUST-HCK — a cron **agent** job pinned to a provider with no
@@ -262,7 +255,7 @@ pub(super) fn is_local_provider_unreachable_failure(
 pub(super) fn is_local_provider_no_model_loaded_message(signal: &str) -> bool {
     let lower = signal.to_ascii_lowercase();
     (lower.contains("local inference server") && lower.contains("no model loaded"))
-        || lower.contains("no models loaded")
+        || tinyinference_llm::failure::body_indicates_no_model_loaded(signal)
 }
 
 /// Static, leak-safe actionable alert copy for a permanent cron halt state.

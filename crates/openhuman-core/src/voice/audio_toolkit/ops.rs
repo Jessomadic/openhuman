@@ -5,7 +5,7 @@ use lettre::message::{header::ContentType, Attachment, Mailbox, MultiPart, Singl
 use lettre::Message;
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 use crate::voice::{create_tts_provider, DEFAULT_PIPER_VOICE};
 use tinychannels::providers::email_channel::EmailChannel;
 
@@ -22,7 +22,7 @@ const EMAIL_CAPTURE_ENV: &str = "OPENHUMAN_EMAIL_CAPTURE_DIR";
 pub async fn generate_podcast(
     config: &Config,
     request: AudioGenerateRequest,
-) -> Result<RpcOutcome<AudioGeneratedArtifact>, String> {
+) -> Result<Outcome<AudioGeneratedArtifact>, String> {
     let trimmed = request.text.trim();
     if trimmed.is_empty() {
         return Err("text is required".to_string());
@@ -77,7 +77,7 @@ pub async fn generate_podcast(
         chars_synthesized: trimmed.chars().count(),
     };
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         result,
         "audio podcast synthesized to workspace file",
     ))
@@ -86,7 +86,7 @@ pub async fn generate_podcast(
 pub async fn email_podcast(
     config: &Config,
     request: EmailPodcastRequest,
-) -> Result<RpcOutcome<AudioEmailDeliveryResult>, String> {
+) -> Result<Outcome<AudioEmailDeliveryResult>, String> {
     let to = request.to.trim();
     let subject = request.subject.trim();
     let body = request.body.trim();
@@ -154,7 +154,7 @@ pub async fn email_podcast(
             mode: "capture".to_string(),
             capture_path: Some(capture_rel),
         };
-        return Ok(RpcOutcome::single_log(
+        return Ok(Outcome::single_log(
             result,
             "audio email captured to workspace file",
         ));
@@ -170,7 +170,7 @@ pub async fn email_podcast(
         .send_message(email)
         .map_err(|e| format!("failed to send email attachment: {e}"))?;
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         AudioEmailDeliveryResult {
             to: to.to_string(),
             subject: subject.to_string(),
@@ -186,14 +186,14 @@ pub async fn generate_and_email_podcast(
     config: &Config,
     generate_request: AudioGenerateRequest,
     email_request: EmailPodcastRequest,
-) -> Result<RpcOutcome<AudioToolkitGenerateAndEmailResult>, String> {
+) -> Result<Outcome<AudioToolkitGenerateAndEmailResult>, String> {
     let generated = generate_podcast(config, generate_request).await?;
     let email_request = EmailPodcastRequest {
         audio_path: generated.value.output_path.clone(),
         ..email_request
     };
     let emailed = email_podcast(config, email_request).await?;
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         AudioToolkitGenerateAndEmailResult {
             audio: generated.value,
             email: emailed.value,

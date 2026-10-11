@@ -9,6 +9,7 @@
 import { waitForAppReady, waitForAuthBootstrap as waitForAuthenticatedCore } from './app-helpers';
 import { triggerAuthDeepLink } from './deep-link-helpers';
 import {
+  clickButton,
   clickText,
   dumpAccessibilityTree,
   textExists,
@@ -145,16 +146,14 @@ async function clickFirstMatch(candidates, timeout = 5_000) {
 const HASH_TO_SIDEBAR_LABEL = {
   '/chat': 'Chat',
   '/human': 'Human',
-  '/brain': 'Brain',
   '/connections': 'Connections',
   '/settings': 'Settings',
 };
 
 /**
- * Routes that AppRoutes.tsx serves via <Navigate replace>. Navigating to the
- * key lands the router on the value, so the hash-settle wait must expect the
- * resolved target rather than the requested route. Keep in sync with
- * app/src/AppRoutes.tsx.
+ * Routes that AppRoutes.tsx serves via <Navigate replace>. A route can redirect
+ * through another retired route, so resolve the full chain before waiting for
+ * the final hash. Keep in sync with app/src/AppRoutes.tsx.
  */
 const HASH_REDIRECTS = {
   '/home': '/chat',
@@ -168,7 +167,9 @@ const HASH_REDIRECTS = {
   '/settings/features': '/settings',
   '/settings/screen-intelligence': '/settings',
   '/settings/screen-awareness-debug': '/settings',
-  '/settings/mascot': '/settings/personality#face',
+  '/settings/mascot': '/settings/face',
+  '/settings/notifications': '/settings/account',
+  '/settings/tools': '/connections?tab=agent-tools',
   '/settings/composio-triggers': '/connections?tab=composio-key',
   '/settings/autonomy': '/settings/agent-access',
   '/settings/composio-routing': '/connections?tab=composio-key',
@@ -180,11 +181,26 @@ const HASH_REDIRECTS = {
   '/settings/llm': '/connections?tab=llm',
   '/settings/voice': '/connections?tab=voice',
   '/settings/search': '/connections?tab=search',
+  // Memory v2: the retired Brain page and the v1 memory settings panels all
+  // land on a chip of the Memory page (Connections → Memory, `?brain=`).
+  '/brain': '/connections?tab=brain',
+  '/settings/intelligence': '/connections?tab=brain',
+  '/settings/memory-engine': '/connections?tab=brain&brain=engine',
+  '/settings/memory-data': '/connections?tab=brain&brain=brain',
+  '/settings/memory-sync': '/connections?tab=brain&brain=brain',
+  '/settings/memory-debug': '/connections?tab=brain&brain=ask',
+  '/settings/tasks': '/connections?tab=brain&brain=ask',
 };
 
 /** Resolve a requested hash to where the router actually settles. */
 function resolveRedirect(normalized) {
-  return HASH_REDIRECTS[normalized] || normalized;
+  let resolved = normalized;
+  const seen = new Set();
+  while (HASH_REDIRECTS[resolved] && !seen.has(resolved)) {
+    seen.add(resolved);
+    resolved = HASH_REDIRECTS[resolved];
+  }
+  return resolved;
 }
 
 function normalizeHash(value) {
@@ -202,7 +218,10 @@ function routeReadySelector(hash) {
     '/settings/privacy': '[data-testid="settings-privacy-panel"]',
     '/settings/migration': '[data-testid="migration-form"]',
     '/settings/voice': '[data-testid="voice-providers-section"]',
-    '/settings/memory-data': '[data-testid="memory-workspace"]',
+    '/connections?tab=brain': '[data-testid="memory-page"]',
+    '/connections?tab=brain&brain=engine': '[data-testid="memory-page"]',
+    '/connections?tab=brain&brain=brain': '[data-testid="memory-page"]',
+    '/connections?tab=brain&brain=ask': '[data-testid="memory-page"]',
     '/settings/recovery-phrase': '[data-testid="recovery-phrase-panel"]',
   };
   return selectors[path] || null;
@@ -226,7 +245,7 @@ async function waitForHashRouteReady(hash, options = {}) {
   // readyState + the resolved hash (and a route-ready selector when known).
   // A stable but unrelated hash is not evidence of navigation: accepting one
   // masks failed route changes (for example, a test continuing on /chat after
-  // asking to open /brain?tab=sources).
+  // asking to open /connections?tab=brain).
   await browser.waitUntil(
     async () => {
       const res = await browser.execute(
@@ -245,7 +264,8 @@ async function waitForHashRouteReady(hash, options = {}) {
       if (res.loading) return false;
       // A known route-ready selector being present is a definitive signal the
       // target panel rendered — accept it regardless of the hash, since routes
-      // can redirect to a different hash (e.g. /settings/memory-data → /brain).
+      // can redirect to a different hash (e.g. /settings/memory-data →
+      // /connections?tab=brain&brain=brain).
       if (res.hasSelector) return true;
       // Otherwise require the resolved target hash. Redirects are accounted
       // for above when computing `expected`.
@@ -849,38 +869,14 @@ export async function logoutViaSettings(logPrefix = '[E2E]') {
   // renders the buttons.
   await navigateViaHash('/settings/account');
 
-  const loggedOut = await browser.execute(() => {
-    const candidates = ['Log out', 'Logout', 'Sign out'];
-    const allElements = document.querySelectorAll('*');
-    for (const label of candidates) {
-      for (const el of allElements) {
-        const text = el.textContent?.trim() || '';
-        if (text !== label) continue;
-        const clickable = el.closest(
-          'button, [role="button"], a, [class*="MenuItem"]'
-        ) as HTMLElement | null;
-        if (clickable) {
-          clickable.click();
-          return label;
-        }
-        (el as HTMLElement).click();
-        return label;
-      }
-    }
-    return null;
-  });
-
-  if (!loggedOut) {
-    const clicked = await clickFirstMatch(['Log out', 'Logout', 'Sign out'], 10_000);
-    if (!clicked) {
-      const tree = await dumpAccessibilityTree();
-      console.log(`${logPrefix} Logout button not found. Tree:\n`, tree.slice(0, 4000));
-      throw new Error('Could not find logout button in Settings');
-    }
-    console.log(`${logPrefix} Logout clicked via text helper: "${clicked}"`);
-  } else {
-    console.log(`${logPrefix} Logout clicked: "${loggedOut}"`);
+  try {
+    await clickButton('Log out', 10_000);
+  } catch (err) {
+    const tree = await dumpAccessibilityTree();
+    console.log(`${logPrefix} Logout button not found. Tree:\n`, tree.slice(0, 4000));
+    throw new Error('Could not find logout button in Settings', { cause: err });
   }
+  console.log(`${logPrefix} Logout clicked through the account action button`);
 
   await browser.pause(2_000);
 

@@ -12,7 +12,7 @@ import {
   MusicIcon,
   VideoIcon,
 } from 'lucide-react';
-import { type FC, memo } from 'react';
+import { memo } from 'react';
 
 const fileVariants = cva(
   'aui-file-root inline-flex items-center gap-3 rounded-lg transition-colors',
@@ -32,29 +32,6 @@ const fileVariants = cva(
     defaultVariants: { variant: 'outline', size: 'default' },
   }
 );
-
-function getMimeTypeIcon(mimeType: string): FC<{ className?: string }> {
-  const type = mimeType.toLowerCase();
-  if (type.startsWith('image/')) {
-    return ImageIcon;
-  }
-  if (type === 'application/pdf') {
-    return FileTextIcon;
-  }
-  if (type === 'application/json') {
-    return BracesIcon;
-  }
-  if (type.startsWith('text/')) {
-    return FileTextIcon;
-  }
-  if (type.startsWith('audio/')) {
-    return MusicIcon;
-  }
-  if (type.startsWith('video/')) {
-    return VideoIcon;
-  }
-  return FileIcon;
-}
 
 function renderMimeTypeIcon(mimeType: string | undefined) {
   const type = mimeType?.toLowerCase();
@@ -225,16 +202,4 @@ File.Name = FileName;
 File.Size = FileSize;
 File.Download = FileDownload;
 
-export {
-  File,
-  FileRoot,
-  FileIconDisplay,
-  FileName,
-  FileSize,
-  FileDownload,
-  fileVariants,
-  getMimeTypeIcon,
-  getFileDataKind,
-  getBase64Size,
-  formatFileSize,
-};
+export { File };

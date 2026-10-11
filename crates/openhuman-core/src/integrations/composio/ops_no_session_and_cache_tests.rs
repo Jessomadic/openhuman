@@ -1,45 +1,5 @@
 use super::*;
 
-#[test]
-fn parse_sync_reason_accepts_known_values() {
-    assert_eq!(parse_sync_reason(None).unwrap(), SyncReason::Manual);
-    assert_eq!(
-        parse_sync_reason(Some("manual")).unwrap(),
-        SyncReason::Manual
-    );
-    assert_eq!(
-        parse_sync_reason(Some("periodic")).unwrap(),
-        SyncReason::Periodic
-    );
-    assert_eq!(
-        parse_sync_reason(Some("connection_created")).unwrap(),
-        SyncReason::ConnectionCreated
-    );
-}
-
-#[test]
-fn parse_sync_reason_rejects_unknown_values() {
-    let err = parse_sync_reason(Some("scheduled")).unwrap_err();
-    assert!(err.contains("unrecognized sync reason"));
-    assert!(err.contains("scheduled"));
-    // Typo of a real value should also fail rather than coerce.
-    assert!(parse_sync_reason(Some("Periodic")).is_err());
-    assert!(parse_sync_reason(Some("")).is_err());
-}
-
-#[test]
-fn resolve_client_errors_without_session() {
-    let tmp = tempfile::tempdir().unwrap();
-    let config = test_config(&tmp);
-    // `ComposioClient` intentionally doesn't implement `Debug` — use a
-    // pattern match instead of `.unwrap_err()`.
-    let Err(err) = resolve_client(&config) else {
-        panic!("expected auth error when no session is stored");
-    };
-    assert!(err.contains("composio unavailable"));
-    assert!(err.contains("auth_store_session"));
-}
-
 #[tokio::test]
 async fn composio_list_toolkits_errors_without_session() {
     let _serialised = module_guard().await;
@@ -70,7 +30,7 @@ async fn composio_list_capabilities_does_not_require_session() {
         .value
         .capabilities
         .iter()
-        .any(|entry| { entry.toolkit == "gmail" && entry.native_provider && entry.memory_ingest }));
+        .any(|entry| { entry.toolkit == "gmail" && entry.native_provider }));
     // Capabilities now come from the connector module, rather than the old
     // host-side TinyMemory provider matrix. The module's current contract has
     // no Google Calendar row; keep this regression focused on the sessionless
@@ -121,7 +81,7 @@ async fn composio_authorize_errors_without_session() {
         .unwrap_err();
     // Backend mode (default) without a session — the mode-aware factory
     // surfaces "no backend session token" once `composio_authorize`
-    // routes through `create_composio_client`. Accept either the
+    // routes through `resolve_composio_route`. Accept either the
     // legacy `composio unavailable` prefix or the new factory phrasing.
     assert!(
         err.to_lowercase().contains("composio")
@@ -137,7 +97,7 @@ async fn composio_delete_connection_errors_without_session() {
     let _serialised = module_guard().await;
     let tmp = tempfile::tempdir().unwrap();
     let config = test_config(&tmp);
-    let err = composio_delete_connection(&config, "c-1", false)
+    let err = composio_delete_connection(&config, "c-1")
         .await
         .unwrap_err();
     assert!(
@@ -198,28 +158,6 @@ async fn composio_get_user_profile_errors_without_session() {
 }
 
 #[tokio::test]
-async fn composio_sync_errors_without_session() {
-    let _serialised = module_guard().await;
-    let tmp = tempfile::tempdir().unwrap();
-    let config = test_config(&tmp);
-    let err = composio_sync(&config, "c-1", None).await.unwrap_err();
-    assert!(err.to_lowercase().contains("composio"), "{err}");
-}
-
-#[tokio::test]
-async fn composio_sync_rejects_invalid_reason_before_client_check() {
-    let _serialised = module_guard().await;
-    let tmp = tempfile::tempdir().unwrap();
-    let config = test_config(&tmp);
-    // Invalid reason → should fail at parse step *before* touching the
-    // client, so the error message references the reason, not auth.
-    let err = composio_sync(&config, "c-1", Some("weird".into()))
-        .await
-        .unwrap_err();
-    assert!(err.contains("unrecognized sync reason"));
-}
-
-#[tokio::test]
 async fn composio_list_trigger_history_errors_when_store_not_init() {
     let _serialised = module_guard().await;
     let tmp = tempfile::tempdir().unwrap();
@@ -248,7 +186,7 @@ fn cache_key_is_based_on_config_path_string() {
 
 #[tokio::test]
 async fn fetch_connected_integrations_returns_empty_without_auth() {
-    let _guard = cache_guard();
+    let _guard = cache_guard_async().await;
     let tmp = tempfile::tempdir().unwrap();
     let config = test_config(&tmp);
     let integrations = fetch_connected_integrations(&config).await;
@@ -449,8 +387,6 @@ async fn composio_delete_connection_via_mock() {
     let base = start_mock_backend(app).await;
     let tmp = tempfile::tempdir().unwrap();
     let config = config_with_backend(&tmp, base);
-    let outcome = composio_delete_connection(&config, "c1", false)
-        .await
-        .unwrap();
+    let outcome = composio_delete_connection(&config, "c1").await.unwrap();
     assert!(outcome.value.deleted);
 }

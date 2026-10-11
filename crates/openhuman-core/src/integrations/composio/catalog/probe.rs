@@ -10,10 +10,7 @@ use serde_json::Value;
 use super::contract::COMPOSIO_CATALOG_CACHE_TTL;
 use super::contract::{CacheEntry, ToolContract};
 use crate::config::Config;
-use crate::integrations::composio::client::{
-    create_composio_client, direct_execute, ComposioClientKind,
-};
-use crate::json_schema::compute_primary_array_path_from_value;
+use tinyagents_harness::tool::compute_primary_array_path_from_value;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Real-output probe (systemic tool-contract fix, Part 3 / B12)
@@ -44,7 +41,7 @@ use crate::json_schema::compute_primary_array_path_from_value;
 /// arrays in practice, but the skip is explicit so a future envelope field
 /// can't silently win a shallowest-wins tie against a real nested array.
 /// `pub(crate)` because the workflow adapter seam passes this into the
-/// vendor-neutral walker in [`crate::json_schema`]. That walker
+/// vendor-neutral walker in `tinyagents_harness::tool::schema_walk`. That walker
 /// deliberately takes the skip-list as a parameter rather than knowing any
 /// provider's envelope shape, so this constant is the piece of Composio
 /// knowledge the caller supplies — exporting it is the seam, not a leak.
@@ -311,19 +308,12 @@ pub(crate) async fn probe_tool_output_sample(
         "[flows] get_tool_output_sample: probing the real live response (read-only, bounded, one call)"
     );
 
-    let kind = create_composio_client(config).map_err(|e| e.to_string())?;
     let args_opt = if args.is_null() { None } else { Some(args) };
-    let resp = match kind {
-        ComposioClientKind::Backend(client) => client
-            .execute_tool(slug, args_opt)
-            .await
-            .map_err(|e| format!("get_tool_output_sample: real call to `{slug}` failed: {e}"))?,
-        ComposioClientKind::Direct(tool) => {
-            direct_execute(&tool, slug, args_opt, &config.composio.entity_id, None)
-                .await
-                .map_err(|e| format!("get_tool_output_sample: real call to `{slug}` failed: {e}"))?
-        }
-    };
+    let resp = crate::integrations::composio::execute_dispatch::execute_composio_action(
+        config, slug, args_opt, None,
+    )
+    .await
+    .map_err(|e| format!("get_tool_output_sample: real call to `{slug}` failed: {e}"))?;
 
     if !resp.successful {
         let detail = resp

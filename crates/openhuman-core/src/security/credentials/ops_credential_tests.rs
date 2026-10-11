@@ -1,6 +1,57 @@
 use super::*;
 use crate::security::credentials::api_key;
 
+#[tokio::test]
+async fn same_token_refresh_preserves_issuing_backend_and_refuses_rebinding() {
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp);
+    let key = crate::security::credentials::session_support::SESSION_ISSUING_BACKEND_META;
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert("user_id".into(), "test-user".into());
+    metadata.insert(key.into(), "https://issuer.example".into());
+    AuthService::from_config(&config)
+        .store_provider_token(
+            APP_SESSION_PROVIDER,
+            DEFAULT_AUTH_PROFILE_NAME,
+            "synthetic-session",
+            metadata,
+            true,
+        )
+        .unwrap();
+    let state = set_credential(
+        &config,
+        SetCredentialRequest {
+            token: "synthetic-session".into(),
+            user_id: Some("test-user".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .value;
+    assert_eq!(
+        state.issuing_backend.as_deref(),
+        Some("https://issuer.example")
+    );
+    let error = set_credential(
+        &config,
+        SetCredentialRequest {
+            token: "synthetic-session".into(),
+            user_id: Some("test-user".into()),
+            issuing_backend: Some("https://different.example".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.starts_with("SESSION_BACKEND_MISMATCH"));
+    let stored = crate::security::credentials::session_support::load_app_session_profile(&config)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.metadata.get(key).unwrap(), "https://issuer.example");
+}
+
 // ── secret_store_for_config ────────────────────────────────────
 
 #[test]
@@ -114,12 +165,10 @@ async fn set_credential_requires_a_user_id_for_a_session() {
 
 #[tokio::test]
 async fn set_credential_installs_a_session_without_touching_the_backend() {
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("workspace")).unwrap();
-    let _home = EnvVarGuard::set_to_path("HOME", tmp.path());
+    let _home = EnvVarGuard::set("HOME", tmp.path());
     let mut config = test_config(&tmp);
     // A backend that would reject everything: it must never be consulted.
     config.api_url = Some(spawn_auth_me_status(StatusCode::UNAUTHORIZED).await);
@@ -164,12 +213,10 @@ async fn set_credential_installs_a_session_without_touching_the_backend() {
 
 #[tokio::test]
 async fn set_credential_derives_the_user_id_from_the_jwt_subject() {
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("workspace")).unwrap();
-    let _home = EnvVarGuard::set_to_path("HOME", tmp.path());
+    let _home = EnvVarGuard::set("HOME", tmp.path());
     let config = test_config(&tmp);
     let token = jwt_with_payload(json!({
         "sub": "from-claims",
@@ -191,12 +238,10 @@ async fn set_credential_derives_the_user_id_from_the_jwt_subject() {
 
 #[tokio::test]
 async fn set_credential_with_the_same_token_and_user_is_a_cheap_refresh() {
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("workspace")).unwrap();
-    let _home = EnvVarGuard::set_to_path("HOME", tmp.path());
+    let _home = EnvVarGuard::set("HOME", tmp.path());
     let config = test_config(&tmp);
     let token = jwt_with_payload(json!({
         "sub": "user-7",
@@ -236,12 +281,10 @@ async fn set_credential_with_the_same_token_and_user_is_a_cheap_refresh() {
 
 #[tokio::test]
 async fn set_credential_for_a_different_user_signs_the_previous_one_out_first() {
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("workspace")).unwrap();
-    let _home = EnvVarGuard::set_to_path("HOME", tmp.path());
+    let _home = EnvVarGuard::set("HOME", tmp.path());
     let config = test_config(&tmp);
     let exp = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp();
     store_session(
@@ -319,12 +362,10 @@ async fn set_and_clear_api_key_credential() {
 // directory the key was stored beside.
 #[tokio::test]
 async fn clearing_the_session_preserves_a_coexisting_api_key() {
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("workspace")).unwrap();
-    let _home = EnvVarGuard::set_to_path("HOME", tmp.path());
+    let _home = EnvVarGuard::set("HOME", tmp.path());
     let config = test_config(&tmp);
 
     // Install the session first: this activates the user-scoped directory.
@@ -394,12 +435,10 @@ async fn clearing_the_session_preserves_a_coexisting_api_key() {
 // let an unrelated leftover key silently become the effective one.
 #[tokio::test]
 async fn clearing_the_session_preserves_the_active_key_over_a_stale_destination_key() {
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("workspace")).unwrap();
-    let _home = EnvVarGuard::set_to_path("HOME", tmp.path());
+    let _home = EnvVarGuard::set("HOME", tmp.path());
     // `test_config` also binds the memory diagnostics `store_session` below
     // needs; its own config_path is a plain tmp fixture unrelated to the real
     // pre-login layout, so it is not where the RPC dispatcher would actually
@@ -472,12 +511,10 @@ async fn clearing_the_session_preserves_the_active_key_over_a_stale_destination_
 // location and leave it clearable/resurrectable later.
 #[tokio::test]
 async fn clearing_without_a_kind_removes_a_user_scoped_api_key_at_its_source() {
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("workspace")).unwrap();
-    let _home = EnvVarGuard::set_to_path("HOME", tmp.path());
+    let _home = EnvVarGuard::set("HOME", tmp.path());
     let config = test_config(&tmp);
 
     let exp = chrono::Utc::now() + chrono::Duration::hours(1);
@@ -526,12 +563,10 @@ async fn clearing_without_a_kind_removes_a_user_scoped_api_key_at_its_source() {
 
 #[tokio::test]
 async fn clear_credential_without_a_kind_removes_everything() {
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("workspace")).unwrap();
-    let _home = EnvVarGuard::set_to_path("HOME", tmp.path());
+    let _home = EnvVarGuard::set("HOME", tmp.path());
     let config = test_config(&tmp);
     set_credential(
         &config,
@@ -555,42 +590,6 @@ async fn clear_credential_without_a_kind_removes_everything() {
     );
 }
 
-// ── authed routes keep the SESSION_EXPIRED sentinel ───────────
-
-/// #5307 — a lapsed session on an authed backend route must stay classifiable
-/// as session expiry: the dispatcher (`core::jsonrpc::invoke_method`) keys
-/// both the Sentry skip and the `DomainEvent::SessionExpired` publish off the
-/// `SESSION_EXPIRED:` sentinel `flatten_authed_error` produces.
-#[tokio::test]
-async fn auth_create_channel_link_token_401_stays_classifiable_as_session_expiry() {
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let tmp = TempDir::new().unwrap();
-    let _home = EnvVarGuard::set_to_path("HOME", tmp.path());
-    let mut config = store_live_session("user-5307");
-    let app = Router::new().route(
-        "/auth/channels/telegram/link-token",
-        axum::routing::post(|| async { StatusCode::UNAUTHORIZED }),
-    );
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    config.api_url = Some(format!("http://{addr}"));
-
-    let err = auth_create_channel_link_token(&config, "telegram")
-        .await
-        .unwrap_err();
-
-    assert!(
-        err.starts_with("SESSION_EXPIRED:"),
-        "a 401 on the channel link-token route must carry the SESSION_EXPIRED \
-         sentinel, got: {err}"
-    );
-}
-
 // ── set_credential (local session) ─────────────────────────────
 
 /// A local session token requires a non-empty user payload — the backend
@@ -598,12 +597,10 @@ async fn auth_create_channel_link_token_401_stays_classifiable_as_session_expiry
 /// user from an API response.
 #[tokio::test]
 async fn store_session_local_token_rejects_missing_user_payload() {
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("workspace")).unwrap();
-    let _home = EnvVarGuard::set_to_path("HOME", tmp.path());
+    let _home = EnvVarGuard::set("HOME", tmp.path());
     let config = test_config(&tmp);
     let local_token = "header.payload.local";
     let err = store_session(&config, local_token, None, None)
@@ -621,12 +618,10 @@ async fn store_session_local_token_rejects_missing_user_payload() {
 /// summary.
 #[tokio::test]
 async fn store_session_local_token_succeeds_without_network_and_forces_local_user_id() {
-    let _env_guard = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env_guard = crate::config::TEST_ENV_LOCK.lock().await;
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("workspace")).unwrap();
-    let _home = EnvVarGuard::set_to_path("HOME", tmp.path());
+    let _home = EnvVarGuard::set("HOME", tmp.path());
     let config = test_config(&tmp);
     let local_token = "header.payload.local";
     let user = serde_json::json!({

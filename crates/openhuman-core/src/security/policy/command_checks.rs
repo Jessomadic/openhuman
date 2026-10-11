@@ -1,14 +1,17 @@
 use crate::util::floor_char_boundary;
+use std::path::{Path, PathBuf};
 
-use super::policy_command::{
-    classify_segment, command_basename, contains_unquoted_char, contains_unquoted_single_ampersand,
-    has_dangerous_env_prefix, has_hidden_execution, has_leading_env_assignment,
-    is_command_executor, normalized_command_name, skip_env_assignments, split_unquoted_segments,
-    strip_quoted_heredoc_bodies,
-};
 use super::types::{
     AutonomyLevel, CommandClass, CommandRiskLevel, GateDecision, SecurityPolicy,
     POLICY_BLOCKED_MARKER,
+};
+use tinybox_core::shell::classify::{classify_segment, has_hidden_execution};
+use tinybox_core::shell::env_guard::has_dangerous_env_prefix;
+use tinybox_core::shell::executor::is_command_executor;
+use tinybox_core::shell::scan::{
+    command_basename, contains_unquoted_char, contains_unquoted_single_ampersand,
+    has_leading_env_assignment, normalized_command_name, skip_env_assignments,
+    split_unquoted_segments, strip_quoted_heredoc_bodies,
 };
 
 impl SecurityPolicy {
@@ -199,6 +202,7 @@ impl SecurityPolicy {
     /// Returns the classified [`CommandClass`] on success.
     pub fn check_gated_command(&self, command: &str) -> Result<CommandClass, String> {
         let class = self.classify_command(command);
+        self.check_protected_path_literals(command)?;
         if !self.enabled {
             return Ok(class);
         }
@@ -218,6 +222,42 @@ impl SecurityPolicy {
             ));
         }
         Ok(class)
+    }
+
+    /// Refuse literal references to the protected-path floor before launching
+    /// a command, including when the autonomy policy is disabled. This is a
+    /// guard for direct path arguments and source literals; arbitrary shell or
+    /// interpreter code still needs a filesystem sandbox to enforce the floor.
+    pub fn check_protected_path_literals(&self, input: &str) -> Result<(), String> {
+        for word in strip_quoted_heredoc_bodies(input).split(|c: char| {
+            c.is_whitespace() || matches!(c, '\'' | '"' | '(' | ')' | '[' | ']' | ',' | ';' | '=')
+        }) {
+            let word = word.trim_matches(|c: char| matches!(c, ':' | '<' | '>' | '&' | '|'));
+            if word.is_empty() || word.contains("://") {
+                continue;
+            }
+            let word = ["${HOME}", "$HOME", "%USERPROFILE%"]
+                .iter()
+                .find_map(|prefix| word.strip_prefix(prefix).map(|rest| format!("~{rest}")))
+                .unwrap_or_else(|| word.to_string());
+            let candidate = PathBuf::from(self.expand_tilde(&word));
+            let candidate = if candidate.is_absolute() {
+                candidate
+            } else {
+                self.action_dir.join(candidate)
+            };
+            if Self::is_always_forbidden(&candidate)
+                || candidate
+                    .canonicalize()
+                    .ok()
+                    .is_some_and(|path| Self::is_always_forbidden(Path::new(&path)))
+            {
+                return Err(format!(
+                    "{POLICY_BLOCKED_MARKER} Command references a protected path"
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Parse an LLM-declared command category. This is an **escalate-only**

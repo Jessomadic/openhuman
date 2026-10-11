@@ -1,5 +1,3 @@
-#![cfg(any())] // TODO(#6382): migrate this legacy TinyAgents fixture to the hosted public API.
-
 //! RPC-level e2e coverage for `openhuman.billing_*`, `openhuman.cost_*` and
 //! `openhuman.dashboard_model_health`.
 //!
@@ -19,6 +17,18 @@ mod support;
 
 use serde_json::{json, Value};
 use support::{assert_error, assert_no_error, error_message, logs, mock_log, peel, Harness};
+
+/// Bind the process-global cost tracker to this test's workspace.
+///
+/// `resolve_tracker` prefers the process-global tracker, which the first core
+/// boot in the binary binds to *its* workspace and later boots leave alone. The
+/// aggregated target runs several harnesses in one process, so without this a
+/// test's answer depends on which test happened to boot first.
+fn bind_cost_tracker(workspace: &std::path::Path, cost: Value) {
+    let cost: openhuman_core::config::CostConfig =
+        serde_json::from_value(cost).expect("cost config");
+    openhuman_core::platform::cost::rebind_global(cost, workspace);
+}
 
 /// Every persisted cost record the seeding helper writes, as one JSONL line.
 fn cost_record_line(id: &str, model: &str, cost_usd: f64, input: u64, output: u64) -> String {
@@ -50,7 +60,7 @@ fn cost_record_line(id: &str, model: &str, cost_usd: f64, input: u64, output: u6
 #[tokio::test]
 async fn billing_uncovered_controllers_round_trip_against_the_backend() {
     crate::tinyhumans_boot::boot();
-    let _lock = support::env_lock();
+    let _lock = support::env_lock_async().await;
     let harness = Harness::start("", false).await;
     let log = mock_log();
     log.clear();
@@ -246,7 +256,11 @@ async fn billing_uncovered_controllers_round_trip_against_the_backend() {
     let coupons_arr = coupons
         .as_array()
         .unwrap_or_else(|| panic!("expected an array of coupons: {coupons}"));
-    assert_eq!(coupons_arr.len(), 1, "seeded one redeemed coupon: {coupons}");
+    assert_eq!(
+        coupons_arr.len(),
+        1,
+        "seeded one redeemed coupon: {coupons}"
+    );
     assert_eq!(
         coupons_arr[0].get("code").and_then(Value::as_str),
         Some("WELCOME10")
@@ -258,7 +272,7 @@ async fn billing_uncovered_controllers_round_trip_against_the_backend() {
 #[tokio::test]
 async fn billing_rejects_bad_input_before_it_reaches_the_backend() {
     crate::tinyhumans_boot::boot();
-    let _lock = support::env_lock();
+    let _lock = support::env_lock_async().await;
     let harness = Harness::start("", false).await;
     harness.login().await;
     let log = mock_log();
@@ -283,7 +297,11 @@ async fn billing_rejects_bad_input_before_it_reaches_the_backend() {
     log.clear();
 
     let blank_code = harness
-        .call(31, "openhuman.billing_redeem_coupon", json!({ "code": "  " }))
+        .call(
+            31,
+            "openhuman.billing_redeem_coupon",
+            json!({ "code": "  " }),
+        )
         .await;
     assert!(
         error_message(&blank_code, "blank coupon").contains("code is required"),
@@ -314,7 +332,7 @@ async fn billing_rejects_bad_input_before_it_reaches_the_backend() {
 #[tokio::test]
 async fn billing_without_a_session_refuses_locally() {
     crate::tinyhumans_boot::boot();
-    let _lock = support::env_lock();
+    let _lock = support::env_lock_async().await;
     let harness = Harness::start("", false).await;
     let log = mock_log();
     log.clear();
@@ -324,8 +342,7 @@ async fn billing_without_a_session_refuses_locally() {
         .await;
     let message = error_message(&balance, "billing_get_balance with no session");
     assert!(
-        message.contains("no backend session token")
-            && message.contains("auth_store_session"),
+        message.contains("no backend session token") && message.contains("auth_store_session"),
         "the error must name the missing session *and* the call that fixes it, \
          so the UI can route to sign-in rather than show a bare failure; got: {message}"
     );
@@ -356,7 +373,7 @@ async fn billing_without_a_session_refuses_locally() {
 #[tokio::test]
 async fn cost_controllers_report_seeded_usage_and_split_managed_from_byok() {
     crate::tinyhumans_boot::boot();
-    let _lock = support::env_lock();
+    let _lock = support::env_lock_async().await;
     let harness = Harness::start(
         r#"
 [cost]
@@ -394,6 +411,19 @@ alert_threshold = 0.9
         0,
     ));
     std::fs::write(state_dir.join("costs.jsonl"), &jsonl).expect("seed costs.jsonl");
+    bind_cost_tracker(
+        &harness.workspace(),
+        json!({
+            "enabled": true,
+            "monthly_limit_usd": 10.0,
+            "dashboard": {
+                "enabled": true,
+                "currency": "USD",
+                "warn_threshold": 0.5,
+                "alert_threshold": 0.9
+            }
+        }),
+    );
 
     // --- cost_get_summary ---------------------------------------------------
     let summary = harness
@@ -469,7 +499,11 @@ alert_threshold = 0.9
         .get("by_model")
         .and_then(Value::as_array)
         .unwrap_or_else(|| panic!("dashboard must carry `by_model`: {dashboard}"));
-    assert_eq!(by_model.len(), 3, "three distinct models seeded: {by_model:?}");
+    assert_eq!(
+        by_model.len(),
+        3,
+        "three distinct models seeded: {by_model:?}"
+    );
     let managed = by_model
         .iter()
         .find(|m| m.get("model").and_then(Value::as_str) == Some("chat-v1"))
@@ -493,11 +527,7 @@ alert_threshold = 0.9
 
     // --- cost_get_daily_history --------------------------------------------
     let history = harness
-        .call(
-            52,
-            "openhuman.cost_get_daily_history",
-            json!({ "days": 3 }),
-        )
+        .call(52, "openhuman.cost_get_daily_history", json!({ "days": 3 }))
         .await;
     let history = peel(assert_no_error(&history, "cost_get_daily_history"));
     let entries = history
@@ -567,7 +597,9 @@ alert_threshold = 0.9
         .map(|c| {
             (
                 c.get("category").and_then(Value::as_str).unwrap_or(""),
-                c.get("cost_usd").and_then(Value::as_f64).unwrap_or(f64::NAN),
+                c.get("cost_usd")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(f64::NAN),
             )
         })
         .collect();
@@ -582,8 +614,9 @@ alert_threshold = 0.9
         .unwrap_or_else(|| panic!("usage log must carry `records`: {usage}"));
     assert_eq!(records.len(), 3);
     assert!(
-        records.iter().all(|r| r.get("cost_source").and_then(Value::as_str)
-            == Some("estimated")),
+        records
+            .iter()
+            .all(|r| r.get("cost_source").and_then(Value::as_str) == Some("estimated")),
         "persisted cost provenance must survive into the DTO: {records:?}"
     );
 
@@ -602,14 +635,77 @@ alert_threshold = 0.9
         "limit is documented as clamped to [1, 1000]: {capped}"
     );
     assert_eq!(capped.get("days").and_then(Value::as_u64), Some(1));
+
+    // --- cost_report / cost_cache_report ------------------------------------
+    let report = harness
+        .call(56, "openhuman.cost_report", json!({ "groupBy": ["model"] }))
+        .await;
+    let report = peel(assert_no_error(&report, "cost_report"));
+    let totals = report
+        .get("totals")
+        .unwrap_or_else(|| panic!("report must carry `totals`: {report}"));
+    assert_eq!(totals.get("calls").and_then(Value::as_u64), Some(3));
+    assert_eq!(totals.get("cost_usd").and_then(Value::as_f64), Some(10.5));
+    assert_eq!(
+        totals.get("estimated_usd").and_then(Value::as_f64),
+        Some(10.5),
+        "seeded records are all estimated, none provider-charged: {report}"
+    );
+    assert_eq!(totals.get("charged_usd").and_then(Value::as_f64), Some(0.0));
+    assert!(
+        report
+            .get("rows")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| !rows.is_empty()
+                && rows.iter().all(|r| r["key"].get("model").is_some())),
+        "rows are grouped by the requested key: {report}"
+    );
+
+    let cache = harness
+        .call(57, "openhuman.cost_cache_report", json!({}))
+        .await;
+    let cache = peel(assert_no_error(&cache, "cost_cache_report"));
+    assert_eq!(
+        cache.get("calls").and_then(Value::as_array).map(Vec::len),
+        Some(3),
+        "one cache row per seeded call: {cache}"
+    );
+    // The seeded records predate attribution: no thread, so no call can be a
+    // repeat, none is cold, and nothing was read from the cache.
+    assert_eq!(cache.get("cold_calls").and_then(Value::as_u64), Some(0), "{cache}");
+    assert_eq!(cache.get("cache_hit_ratio").and_then(Value::as_f64), Some(0.0), "{cache}");
+    assert_eq!(cache.get("cached_input_tokens").and_then(Value::as_u64), Some(0), "{cache}");
+    assert!(
+        cache
+            .get("uncached_premium_usd")
+            .and_then(Value::as_f64)
+            .is_some_and(|p| p >= 0.0),
+        "{cache}"
+    );
+    let misspelt = harness
+        .call(
+            59,
+            "openhuman.cost_cache_report",
+            json!({ "filter": { "threadId": "t1" } }),
+        )
+        .await;
+    assert_error(&misspelt, "cost_cache_report with a misspelt filter key");
+
+    // The wire spelling is `groupBy`; anything the schema does not declare is
+    // refused rather than silently ignored.
+    let snake = harness
+        .call(58, "openhuman.cost_report", json!({ "group_by": ["model"] }))
+        .await;
+    assert_error(&snake, "cost_report with an undeclared param");
 }
 
 /// The empty-workspace path: no `costs.jsonl` at all must still answer, not error.
 #[tokio::test]
 async fn cost_controllers_answer_on_a_workspace_with_no_history() {
     crate::tinyhumans_boot::boot();
-    let _lock = support::env_lock();
+    let _lock = support::env_lock_async().await;
     let harness = Harness::start("", true).await;
+    bind_cost_tracker(&harness.workspace(), json!({}));
 
     let summary = harness
         .call(60, "openhuman.cost_get_summary", json!({}))
@@ -635,7 +731,10 @@ async fn cost_controllers_answer_on_a_workspace_with_no_history() {
         "no records, but the envelope must still be well formed: {usage}"
     );
     assert_eq!(
-        usage.get("by_category").and_then(Value::as_array).map(Vec::len),
+        usage
+            .get("by_category")
+            .and_then(Value::as_array)
+            .map(Vec::len),
         Some(0)
     );
 }
@@ -647,7 +746,7 @@ async fn cost_controllers_answer_on_a_workspace_with_no_history() {
 #[tokio::test]
 async fn dashboard_model_health_projects_the_registry_and_thresholds() {
     crate::tinyhumans_boot::boot();
-    let _lock = support::env_lock();
+    let _lock = support::env_lock_async().await;
     let harness = Harness::start(
         r#"
 [dashboard.model_health]
@@ -697,7 +796,10 @@ vision = false
         2,
         "one row per registry entry, in registry order: {health}"
     );
-    assert_eq!(models[0].get("id").and_then(Value::as_str), Some("w4/alpha"));
+    assert_eq!(
+        models[0].get("id").and_then(Value::as_str),
+        Some("w4/alpha")
+    );
     assert_eq!(
         models[0].get("cost_per_1m_output").and_then(Value::as_f64),
         Some(6.0),
@@ -708,7 +810,10 @@ vision = false
         Some(200_000)
     );
     assert_eq!(models[0].get("vision").and_then(Value::as_bool), Some(true));
-    assert_eq!(models[1].get("vision").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        models[1].get("vision").and_then(Value::as_bool),
+        Some(false)
+    );
 
     // The placeholder contract, which the frontend reads as "no signal".
     for row in models {
@@ -755,7 +860,7 @@ vision = false
 #[tokio::test]
 async fn dashboard_model_health_refuses_when_disabled() {
     crate::tinyhumans_boot::boot();
-    let _lock = support::env_lock();
+    let _lock = support::env_lock_async().await;
     let harness = Harness::start(
         r#"
 [dashboard.model_health]

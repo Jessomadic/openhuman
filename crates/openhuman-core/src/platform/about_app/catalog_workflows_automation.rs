@@ -66,6 +66,21 @@ Capability {
         privacy: DERIVED_TO_BACKEND,
     },
 Capability {
+        id: "workflows.web_search",
+        name: "Web Search, Answers and Page Contents",
+        domain: "workflows",
+        category: CapabilityCategory::Workflows,
+        description:
+            "Search the web, get grounded answers with citations, and read page contents through several providers at once. Signed-in users get Exa and Gemini with Google Search grounding included; Brave, Tavily, Querit, Parallel, Seltz, SearXNG, and your own Exa or Gemini keys can be added. Each capability falls back to the next provider when one is unavailable.",
+        how_to: "Connections > Search to choose providers and their order, then ask the assistant to look something up",
+        status: CapabilityStatus::Beta,
+        privacy: Some(CapabilityPrivacy {
+            leaves_device: true,
+            data_kind: PrivacyDataKind::Derived,
+            destinations: &["OpenHuman backend (managed search)", "Your configured search providers"],
+        }),
+    },
+Capability {
         id: "workflows.tinyfish_web_automation",
         name: "TinyFish Web Automation",
         domain: "workflows",
@@ -75,6 +90,20 @@ Capability {
         how_to: "Conversations > Ask the assistant to search, fetch, or automate a website with TinyFish",
         status: CapabilityStatus::Beta,
         privacy: DERIVED_TO_BACKEND,
+    },
+Capability {
+        id: "workflows.computer_browser_automation",
+        name: "Browser Automation",
+        domain: "workflows",
+        category: CapabilityCategory::Workflows,
+        description: "Inspect pages and run bounded browser tasks in Chrome through TinyComputer, with a rescue model for failed steps. A finished task's plan and the page elements it found are kept per site in the core's workspace, so the next task there starts sooner.",
+        how_to: "Connections > Computer > Browser, then ask the assistant to use the browser; What tasks learn turns learning off or forgets learned sites",
+        status: CapabilityStatus::Beta,
+        privacy: Some(CapabilityPrivacy {
+            leaves_device: true,
+            data_kind: PrivacyDataKind::Raw,
+            destinations: &["Visited websites", "OpenRouter, OpenHuman backend, OpenJev or Sage for task decisions"],
+        }),
     },
 Capability {
         id: "workflows.toggle_enabled",
@@ -211,7 +240,7 @@ Capability {
         domain: "flows",
         category: CapabilityCategory::Automation,
         description: "A read-only discovery agent (\"Flow Scout\") reads your memory, past \
-                      conversations, known people, connected apps, and existing flows to figure \
+                      conversations, connected apps, and existing flows to figure \
                       out which automations would actually help you, then proposes a handful of \
                       concrete, buildable workflow suggestions. Each card explains why it was \
                       suggested; \"Build this\" hands it to the workflow builder to author a real \
@@ -226,8 +255,8 @@ Capability {
         domain: "flows",
         category: CapabilityCategory::Automation,
         description: "A `memory` node inside a saved workflow graph, giving the flow direct, \
-                      in-graph memory access with no agent turn involved. It can recall/search/ \
-                      read style-flavour/look up people from your durable, cross-flow memory \
+                      in-graph memory access with no agent turn involved. It can recall/search \
+                      your durable, cross-flow memory \
                       (read-only — a flow can never write there) or from other flows' own \
                       memory (also read-only), and can remember/forget entries in its OWN \
                       private, flow-scoped memory namespace — never the user's personal memory, \
@@ -266,7 +295,7 @@ Capability {
         name: "View Cron Jobs",
         domain: "automation",
         category: CapabilityCategory::Automation,
-        description: "Review scheduled jobs available to the runtime.",
+        description: "Review scheduled jobs available to the runtime. A reminder or scheduled task you ask for in a chat (web or a channel such as Telegram) is delivered back into that same conversation.",
         how_to: "Settings > Cron Jobs",
         status: CapabilityStatus::Stable,
         privacy: None,
@@ -303,16 +332,15 @@ Capability {
     },
 Capability {
         id: "automation.crypto_agent",
-        name: "Crypto Agent",
+        name: "Crypto Wallet",
         domain: "automation",
         category: CapabilityCategory::Automation,
-        description: "Dedicated wallet & market specialist sub-agent. The orchestrator \
-                      routes transfers, swaps, contract calls, balance lookups, and \
-                      exchange trading requests here. The agent enforces a read → \
-                      simulate → confirm → execute flow, refuses to fabricate chain ids \
-                      or token addresses, and gates every write call behind explicit \
-                      user confirmation.",
-        how_to: "Automatic — invoked by the orchestrator when a crypto wallet or market action is requested. Connect a wallet via Settings > Recovery Phrase first.",
+        description: "Wallet and market actions as a built-in skill (`web3`): quotes, \
+                      swaps, bridges, contract calls and x402 payments. The assistant \
+                      follows a read → quote → confirm → execute flow, refuses to \
+                      fabricate chain ids or token addresses, and runs no swap, bridge \
+                      or contract call without explicit user confirmation.",
+        how_to: "Automatic — the assistant loads the web3 skill when a crypto wallet or market action is requested. Connect a wallet via Settings > Recovery Phrase first.",
         status: CapabilityStatus::Beta,
         privacy: LOCAL_CREDENTIALS,
     },

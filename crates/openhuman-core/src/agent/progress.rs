@@ -74,6 +74,21 @@ pub enum AgentProgress {
         /// the chat "View processing" timeline renders. `None` on success and
         /// on legacy snapshots. See `crate::tools::status`.
         failure: Option<crate::tools::status::ClassifiedFailure>,
+        /// Server-computed human label recomputed from the tool's OWN
+        /// [`tinytools::Tool::display_label`] using the real call arguments
+        /// (the matching `ToolCallStarted.display_label` was computed with no
+        /// arguments, since the harness start event carries none). Forwarded
+        /// on the wire as `tool_display_label` so a completed row can pick up
+        /// a label that only became knowable once the arguments existed.
+        display_label: Option<String>,
+        /// Server-computed contextual detail (e.g. "steven@gmail.com"),
+        /// recomputed the same way from `Tool::display_detail`.
+        display_detail: Option<String>,
+        /// Structured, tool-specific result payload copied from
+        /// [`tinytools::ToolResult::metadata`] when it is a JSON object
+        /// carrying a `"kind"` discriminator (e.g. `{"kind":"web_search",...}`).
+        /// `None` for tools that don't populate metadata of that shape.
+        structured: Option<serde_json::Value>,
     },
 
     /// A sub-agent was spawned during tool execution.
@@ -106,6 +121,13 @@ pub enum AgentProgress {
         /// as the subagent span's input so a delegation is inspectable
         /// end-to-end in Langfuse.
         prompt: String,
+        /// The parent turn's tool-call id (the `spawn_subagent` /
+        /// dispatch call) this spawn is attributed to. `None` until
+        /// every emit site is updated to pass it through; additive so
+        /// existing consumers reading only the other fields are
+        /// unaffected. Mirrors
+        /// [`crate::web_chat::SubagentProgressDetail::parent_call_id`].
+        parent_call_id: Option<String>,
     },
 
     /// A sub-agent completed successfully.
@@ -115,7 +137,7 @@ pub enum AgentProgress {
         elapsed_ms: u64,
         /// Number of LLM iterations the sub-agent actually used. The
         /// UI surfaces this in the parent thread's subagent row so a
-        /// completed delegation reads as "researcher · 3 turns · 4.2s"
+        /// completed delegation reads as "code_executor · 3 turns · 4.2s"
         /// instead of just "done".
         iterations: u32,
         /// Character length of the sub-agent's final assistant text.
@@ -155,6 +177,11 @@ pub enum AgentProgress {
         /// run. A dirty worktree must not be auto-removed — surfaced so the UI
         /// can require an explicit user decision. `None` for non-isolated.
         dirty_status: Option<bool>,
+        /// Set when the sub-agent's own turn was stopped early (failure
+        /// breaker or iteration cap) and handed back as incomplete. The trace
+        /// collector closes the subagent span at `WARNING` with it. `None` for
+        /// a sub-agent that finished normally.
+        stop: Option<crate::agent::turn_stop::TurnStop>,
     },
 
     /// A sub-agent failed.
@@ -249,6 +276,14 @@ pub enum AgentProgress {
         /// a failed sub-agent row carries the same "why + what to do next" copy
         /// instead of discarding the already-computed classification (#4459).
         failure: Option<crate::tools::status::ClassifiedFailure>,
+        /// Mirrors [`Self::ToolCallCompleted::display_label`], recomputed from
+        /// the child tool's own `Tool::display_label` using the real call
+        /// arguments.
+        display_label: Option<String>,
+        /// Mirrors [`Self::ToolCallCompleted::display_detail`].
+        display_detail: Option<String>,
+        /// Mirrors [`Self::ToolCallCompleted::structured`].
+        structured: Option<serde_json::Value>,
     },
 
     /// A chunk of a sub-agent's visible assistant text arrived from the
@@ -373,15 +408,21 @@ pub enum AgentProgress {
         cache_creation_tokens: u64,
         /// Reasoning/thinking tokens, when the provider reports them.
         reasoning_tokens: u64,
-        /// Best-available USD cost for this single call (charged when the
-        /// backend reported it, else a catalog estimate).
-        cost_usd: f64,
+        /// USD cost of this single call: the backend's reported charge, else
+        /// the catalog's list-price estimate; `None` when neither exists.
+        cost_usd: Option<f64>,
     },
 
     /// The turn completed with a final text response.
     TurnCompleted {
         /// Total iterations used.
         iterations: u32,
+        /// Set when the harness stopped the turn early (failure breaker,
+        /// deadline wind-down, iteration cap) even though it reached this
+        /// completion path. Content-free; the trace collector closes the turn
+        /// span at `WARNING` with it. `None` for a turn that finished on its
+        /// own.
+        stop: Option<crate::agent::turn_stop::TurnStop>,
     },
 
     /// The turn's content: the user's prompt and the model's final reply.
@@ -395,4 +436,15 @@ pub enum AgentProgress {
         /// The model's final reply for this turn.
         output: Option<String>,
     },
+}
+
+impl AgentProgress {
+    /// A [`Self::TurnCompleted`] for a turn that finished on its own (no
+    /// early stop).
+    pub fn turn_completed(iterations: u32) -> Self {
+        Self::TurnCompleted {
+            iterations,
+            stop: None,
+        }
+    }
 }

@@ -9,8 +9,9 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, MemoryRouter, Route, RouterProvider, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { SidebarSlotOutlet, SidebarSlotProvider } from '../../components/layout/shell/SidebarSlot';
 import type { WorkflowGraph } from '../../lib/flows/types';
-import type { Flow } from '../../services/api/flowsApi';
+import type { Flow, FlowRun } from '../../services/api/flowsApi';
 import type { WorkflowProposal } from '../../store/chatRuntimeSlice';
 import FlowCanvasPage, {
   asCopilotBuildSeed,
@@ -27,6 +28,13 @@ const validateFlow = vi.hoisted(() => vi.fn());
 const listFlowConnections = vi.hoisted(() => vi.fn());
 const runFlowDetached = vi.hoisted(() => vi.fn());
 const setFlowEnabled = vi.hoisted(() => vi.fn());
+// Backs the projected `FlowRunsSidebar` (real, not stubbed): now that the Back
+// button + run history live in the shell's sidebar region (`SidebarContent`),
+// every `renderEditor` mounts a `SidebarSlotProvider`/`SidebarSlotOutlet`, so
+// this sidebar actually renders (and calls `listFlowRuns`) in every describe
+// block, not just the side-panel-switching tests. Default to an empty list so
+// `useFlowRunsQuery`/`useFlowRunsLiveRefresh` always see a real array.
+const listFlowRuns = vi.hoisted(() => vi.fn<(flowId: string) => Promise<FlowRun[]>>());
 vi.mock('../../services/api/flowsApi', () => ({
   getFlow,
   updateFlow,
@@ -35,7 +43,11 @@ vi.mock('../../services/api/flowsApi', () => ({
   listFlowConnections,
   runFlowDetached,
   setFlowEnabled,
+  listFlowRuns,
 }));
+// Default to an empty list (see the doc comment above) — overridden per test
+// via `listFlowRuns.mockResolvedValue(...)` where the run list itself matters.
+listFlowRuns.mockResolvedValue([]);
 
 // F-M1: a tiny in-memory socket stand-in (same shape as
 // `EditableFlowCanvas.runOverlay.test.tsx`) so a `flow:run_progress` event can
@@ -357,12 +369,18 @@ describe('FlowCanvasPage', () => {
   });
 
   function renderEditor(id = 'test-id') {
+    // The Back button now lives in the shell's dynamic sidebar region
+    // (`SidebarContent`), so the outlet + provider must be mounted for it to
+    // portal anywhere and be clickable.
     return render(
       <MemoryRouter initialEntries={[`/flows/${id}`]}>
-        <Routes>
-          <Route path="/flows/:id" element={<FlowCanvasPage />} />
-          <Route path="/flows" element={<div data-testid="flows-list">Flows list</div>} />
-        </Routes>
+        <SidebarSlotProvider>
+          <SidebarSlotOutlet />
+          <Routes>
+            <Route path="/flows/:id" element={<FlowCanvasPage />} />
+            <Route path="/flows" element={<div data-testid="flows-list">Flows list</div>} />
+          </Routes>
+        </SidebarSlotProvider>
       </MemoryRouter>
     );
   }
@@ -706,6 +724,110 @@ describe('FlowCanvasPage', () => {
   });
 });
 
+describe('FlowCanvasPage side panel switching', () => {
+  beforeEach(() => {
+    getFlow.mockReset();
+    updateFlow.mockReset();
+    createFlow.mockReset();
+    validateFlow.mockReset();
+    listFlowConnections.mockReset();
+    runFlowDetached.mockReset();
+    setFlowEnabled.mockReset();
+    listFlowRuns.mockReset();
+    validateFlow.mockResolvedValue({ valid: true, errors: [], warnings: [] });
+    listFlowConnections.mockResolvedValue([]);
+    listFlowRuns.mockResolvedValue([]);
+    socketHandlers.clear();
+    socketOn.mockClear();
+    socketOff.mockClear();
+  });
+
+  function renderEditor(id = 'test-id') {
+    return render(
+      <MemoryRouter initialEntries={[`/flows/${id}`]}>
+        <SidebarSlotProvider>
+          <SidebarSlotOutlet />
+          <Routes>
+            <Route path="/flows/:id" element={<FlowCanvasPage />} />
+            <Route path="/flows" element={<div data-testid="flows-list">Flows list</div>} />
+          </Routes>
+        </SidebarSlotProvider>
+      </MemoryRouter>
+    );
+  }
+
+  it('opens with the Copilot tab shown by default', async () => {
+    getFlow.mockResolvedValue(makeFlow());
+    renderEditor();
+    await waitFor(() => expect(screen.getByTestId('flow-canvas')).toBeInTheDocument());
+
+    expect(screen.getByTestId('flow-canvas-side-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('stub-copilot-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('flow-canvas-copilot-toggle')).toHaveAttribute('data-state', 'on');
+  });
+
+  it('switches to Manual (the node palette) via the toggle', async () => {
+    getFlow.mockResolvedValue(makeFlow());
+    renderEditor();
+    await waitFor(() => expect(screen.getByTestId('flow-canvas')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('flow-canvas-legend-toggle'));
+
+    expect(screen.getByTestId('flow-node-palette')).toBeInTheDocument();
+    expect(screen.queryByTestId('stub-copilot-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('flow-canvas-legend-toggle')).toHaveAttribute('data-state', 'on');
+  });
+
+  it('closes the side panel and shows the open-panel button on the canvas toolbar', async () => {
+    getFlow.mockResolvedValue(makeFlow());
+    renderEditor();
+    await waitFor(() => expect(screen.getByTestId('flow-canvas')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('flow-canvas-close-panel'));
+
+    expect(screen.queryByTestId('flow-canvas-side-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('flow-canvas-open-panel')).toBeInTheDocument();
+  });
+
+  it("reopens the side panel (back to Copilot) from the toolbar's open-panel button", async () => {
+    getFlow.mockResolvedValue(makeFlow());
+    renderEditor();
+    await waitFor(() => expect(screen.getByTestId('flow-canvas')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('flow-canvas-close-panel'));
+    fireEvent.click(screen.getByTestId('flow-canvas-open-panel'));
+
+    expect(screen.getByTestId('flow-canvas-side-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('stub-copilot-panel')).toBeInTheDocument();
+  });
+
+  it('selecting a run in the runs sidebar opens the Run tab in the side panel', async () => {
+    getFlow.mockResolvedValue(makeFlow());
+    listFlowRuns.mockResolvedValue([
+      {
+        id: 'run-1',
+        flow_id: 'test-id',
+        thread_id: 'run-1',
+        status: 'completed',
+        started_at: '2026-01-01T00:00:00Z',
+        finished_at: '2026-01-01T00:05:00Z',
+        steps: [],
+        pending_approvals: [],
+      },
+    ]);
+    renderEditor();
+    await waitFor(() => expect(screen.getByTestId('flow-canvas')).toBeInTheDocument());
+
+    const runRow = await screen.findByTestId('flow-runs-sidebar-run-run-1');
+    fireEvent.click(runRow);
+
+    expect(screen.getByTestId('flow-canvas-run-toggle')).toHaveAttribute('data-state', 'on');
+    expect(screen.getByTestId('flow-run-inspector-panel')).toBeInTheDocument();
+    // The run panel replaces the copilot — only one side-panel body at a time.
+    expect(screen.queryByTestId('stub-copilot-panel')).not.toBeInTheDocument();
+  });
+});
+
 describe('isPlaceholderTitle', () => {
   it('treats an empty or whitespace-only title as a placeholder', () => {
     expect(isPlaceholderTitle('', 'New workflow')).toBe(true);
@@ -803,12 +925,18 @@ describe('FlowCanvasPage copilot proposal name adoption', () => {
   });
 
   function renderEditor(id = 'test-id') {
+    // The Back button now lives in the shell's dynamic sidebar region
+    // (`SidebarContent`), so the outlet + provider must be mounted for it to
+    // portal anywhere and be clickable.
     return render(
       <MemoryRouter initialEntries={[`/flows/${id}`]}>
-        <Routes>
-          <Route path="/flows/:id" element={<FlowCanvasPage />} />
-          <Route path="/flows" element={<div data-testid="flows-list">Flows list</div>} />
-        </Routes>
+        <SidebarSlotProvider>
+          <SidebarSlotOutlet />
+          <Routes>
+            <Route path="/flows/:id" element={<FlowCanvasPage />} />
+            <Route path="/flows" element={<div data-testid="flows-list">Flows list</div>} />
+          </Routes>
+        </SidebarSlotProvider>
       </MemoryRouter>
     );
   }

@@ -10,7 +10,8 @@ use tokio::sync::mpsc::Sender;
 use tinyinference_llm::usage::Usage;
 
 use crate::agent::progress::AgentProgress;
-use crate::inference::provider::UsageInfo;
+use crate::inference::provider::BilledUsage;
+use tinytools::humanize_tool_name;
 
 use super::cap_pauser::{
     IterationCursor, ProviderUsageCarry, SubagentScope, ToolFailureMap, ToolNameMap,
@@ -21,7 +22,8 @@ pub(super) struct BridgeState {
     pub(super) input_tokens: u64,
     pub(super) output_tokens: u64,
     pub(super) cached_input_tokens: u64,
-    pub(super) charged_amount_usd: f64,
+    /// Every call's cost: reported charge, catalog estimate, or unknown.
+    pub(super) cost: crate::agent::cost::CostTally,
     /// Local response-cache hits observed on this turn (issue #4249, 03.2). A hit
     /// means the harness served a model call from its [`ResponseCache`] without
     /// invoking the provider. Additive counters — a follow-up (coordinated with
@@ -38,7 +40,8 @@ pub(super) struct BridgeState {
 /// the same numbers as the wallet accounting.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ResolvedCallFigures {
-    pub(super) cost_usd: f64,
+    /// `None` when the call's cost is unknown.
+    pub(super) cost_usd: Option<f64>,
     pub(super) cache_creation_tokens: u64,
     pub(super) reasoning_tokens: u64,
 }
@@ -67,7 +70,7 @@ pub(crate) struct OpenhumanEventBridge {
     /// side-channel written by `ToolOutcomeCaptureMiddleware`; read when
     /// projecting `ToolCallCompleted`.
     pub(super) failure_map: ToolFailureMap,
-    /// Shared FIFO carry of the per-call provider `UsageInfo` the model adapter
+    /// Shared FIFO carry of the per-call provider `BilledUsage` the model adapter
     /// observed; drained in `record_usage` to restore backend-charged USD +
     /// context-window + cache-creation/reasoning tokens the crate `Usage` drops.
     pub(super) usage_carry: ProviderUsageCarry,
@@ -87,6 +90,21 @@ pub(crate) struct OpenhumanEventBridge {
     /// `ToolStarted` and taken on `ToolCompleted` so the projected completion
     /// event carries a real `elapsed_ms` (the crate event has no timing).
     pub(super) tool_started_at: Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    /// `call_id → requested tool name` for calls the crate answered as an
+    /// unknown tool (`AgentEvent::UnknownToolCall`, recovery `tool_error`).
+    /// The crate then emits an ordinary `ToolStarted`/`ToolCompleted` pair for
+    /// the same call id (`recover_tool_call`); this map lets that pair carry
+    /// the "unavailable" label and the `NotFound` class instead of the bridge
+    /// projecting a second row of its own.
+    pub(super) unknown_calls: Mutex<std::collections::HashMap<String, String>>,
+    /// The turn's registered tool sets, retained (cheap `Arc` clones — never
+    /// the tools themselves) so the bridge can resolve a live `&dyn Tool` by
+    /// name and call its own [`tinytools::Tool::display_label`] /
+    /// [`tinytools::Tool::display_detail`] instead of only ever guessing from
+    /// the bare tool name (issue: tool-call presentation). Empty for a bridge
+    /// built without a turn's tool sets (e.g. a bare unit-test bridge), in
+    /// which case every lookup falls back to [`humanize_tool_name`].
+    pub(super) tool_sets: Vec<Arc<Vec<Box<dyn tinytools::Tool>>>>,
     pub(super) state: Mutex<BridgeState>,
     /// Ordered overflow buffer for progress events that hit backpressure
     /// (channel `Full`). Once ANY event spills here, `draining` stays set and
@@ -123,12 +141,17 @@ impl OpenhumanEventBridge {
             Arc::default(),
             Arc::default(),
             Arc::default(),
+            Vec::new(),
         )
     }
 
     /// Build a bridge, optionally child-scoped, sharing `cursor` (iteration
     /// attribution) and `tool_names` (tool-call name lookup for the streamed
-    /// argument fragments) with the model adapter.
+    /// argument fragments) with the model adapter. `tool_sets` is the turn's
+    /// registered tool sets (cheap `Arc` clones), used to resolve a live
+    /// `&dyn Tool` for `display_label`/`display_detail` — pass `Vec::new()`
+    /// when none are available (e.g. tests).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_scope(
         on_progress: Option<Sender<AgentProgress>>,
         model: impl Into<String>,
@@ -139,6 +162,7 @@ impl OpenhumanEventBridge {
         tool_names: ToolNameMap,
         failure_map: ToolFailureMap,
         usage_carry: ProviderUsageCarry,
+        tool_sets: Vec<Arc<Vec<Box<dyn tinytools::Tool>>>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             on_progress,
@@ -153,29 +177,70 @@ impl OpenhumanEventBridge {
             recorded_iterations: Mutex::new(std::collections::HashSet::new()),
             resolved_calls: Mutex::new(std::collections::HashMap::new()),
             tool_started_at: Mutex::new(std::collections::HashMap::new()),
+            unknown_calls: Mutex::new(std::collections::HashMap::new()),
+            tool_sets,
             state: Mutex::new(BridgeState::default()),
             overflow: Arc::default(),
         })
+    }
+
+    /// Resolve `tool_name` against the turn's registered tool sets and
+    /// compute the presentation pair from the tool's OWN
+    /// [`tinytools::Tool::display_label`] / [`tinytools::Tool::display_detail`]
+    /// using `args` (the real call arguments when known, `Null` at call-start
+    /// before they've arrived). Unknown tools (not found in any set — the
+    /// unknown-tool-call path never registers one) fall back to a humanized
+    /// name with no detail, matching the pre-existing behavior.
+    pub(super) fn resolve_display(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> (Option<String>, Option<String>) {
+        match self
+            .tool_sets
+            .iter()
+            .flat_map(|set| set.iter())
+            .find(|t| t.name() == tool_name)
+        {
+            Some(tool) => {
+                let label = tool.display_label(args);
+                let detail = tool.display_detail(args);
+                tracing::trace!(
+                    tool_name,
+                    label = ?label,
+                    detail = ?detail,
+                    "[tool-presentation] resolved display label/detail from registered tool"
+                );
+                (label, detail)
+            }
+            None => {
+                tracing::debug!(
+                    tool_name,
+                    "[tool-presentation] tool not found in turn's registered sets — \
+                     falling back to humanized name"
+                );
+                (Some(humanize_tool_name(tool_name)), None)
+            }
+        }
     }
 
     /// Cumulative `(input_tokens, output_tokens, charged_usd)` observed so far.
     #[cfg(test)]
     pub(super) fn totals(&self) -> (u64, u64, f64) {
         let s = self.state.lock().unwrap();
-        (s.input_tokens, s.output_tokens, s.charged_amount_usd)
+        (s.input_tokens, s.output_tokens, s.cost.known_usd)
     }
 
-    /// Cumulative `(input_tokens, output_tokens, cached_input_tokens, charged_usd)`
+    /// Cumulative `(input_tokens, output_tokens, cached_input_tokens, cost)`
     /// observed so far — the full accounting the turn persists (transcript cost /
-    /// session meters), so a normal turn no longer records `$0` and zero cached
-    /// tokens despite real usage.
-    pub(crate) fn totals_with_cost(&self) -> (u64, u64, u64, f64) {
+    /// session meters). `cost` says whether every call was priced.
+    pub(crate) fn totals_with_cost(&self) -> (u64, u64, u64, crate::agent::cost::CostTally) {
         let s = self.state.lock().unwrap();
         (
             s.input_tokens,
             s.output_tokens,
             s.cached_input_tokens,
-            s.charged_amount_usd,
+            s.cost,
         )
     }
 
@@ -305,24 +370,28 @@ impl OpenhumanEventBridge {
             .unwrap_or_else(|p| p.into_inner())
             .pop_front();
 
-        // Estimate as the floor via the tier-aware `agent::cost` table (managed
-        // handles like `hint:chat`/`hint:burst` + the vendor catalog + heuristics —
-        // the catalog-only lookup priced every managed-tier call as $0); prefer
-        // the provider's own charged amount when it reported one (charged >
-        // estimate precedence, so credit-metered backends surface real billing
-        // rather than a token-rate estimate).
-        let estimate = Self::estimate_call_cost(&self.model, usage);
-        let call_cost = carried
+        // The provider's reported charge wins; without one, the catalog's list
+        // price; without that, the call's cost is unknown (never a default
+        // rate).
+        let provider_cost = carried
             .as_ref()
+            .filter(|u| u.charge_reported && !u.cost_is_estimate)
             .map(|u| u.charged_amount_usd)
-            .filter(|c| c.is_finite() && *c > 0.0)
-            .unwrap_or(estimate);
+            .filter(|c| c.is_finite() && *c >= 0.0);
+        let cost = match provider_cost {
+            Some(charged) => crate::agent::cost::CallCost::Charged(charged),
+            None => match Self::estimate_call_cost(&self.model, usage) {
+                Some(estimate) => crate::agent::cost::CallCost::Estimated(estimate),
+                None => crate::agent::cost::CallCost::Unknown,
+            },
+        };
+        let call_cost = cost.usd();
         // The context window + cache-creation/reasoning breakdown only exist on
         // the carried provider usage (the crate `Usage` mapping drops them); fall
         // back to the catalogue window and the crate token counts when absent.
         let context_window = carried
             .as_ref()
-            .map(|u| u.context_window)
+            .map(|u| u.context_window())
             .filter(|w| *w > 0)
             .unwrap_or_else(|| {
                 crate::platform::cost::catalog::lookup(&self.model)
@@ -342,11 +411,7 @@ impl OpenhumanEventBridge {
         tracing::trace!(
             model = %self.model,
             iteration,
-            charged_from_provider = carried
-                .as_ref()
-                .map(|u| u.charged_amount_usd > 0.0)
-                .unwrap_or(false),
-            call_cost,
+            ?cost,
             context_window,
             "[cost] recording per-call usage (charged>estimate precedence via provider carry)"
         );
@@ -370,25 +435,26 @@ impl OpenhumanEventBridge {
             s.input_tokens += usage.input_tokens;
             s.output_tokens += usage.output_tokens;
             s.cached_input_tokens += usage.cache_read_tokens;
-            s.charged_amount_usd += call_cost;
+            s.cost.add(cost);
             (
                 s.input_tokens,
                 s.output_tokens,
                 s.cached_input_tokens,
-                s.charged_amount_usd,
+                s.cost.known_usd,
             )
         };
 
         // Feed the authoritative global cost tracker (same call the legacy
         // observer made), so the wallet/cost surfaces stay accurate.
-        let usage_info = UsageInfo {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            context_window,
-            cached_input_tokens: usage.cache_read_tokens,
-            cache_creation_tokens,
-            reasoning_tokens,
-            charged_amount_usd: call_cost,
+        let usage_info = BilledUsage::from_counts(usage.input_tokens, usage.output_tokens)
+            .with_context_window(context_window)
+            .with_cached_input_tokens(usage.cache_read_tokens)
+            .with_cache_creation_tokens(cache_creation_tokens)
+            .with_reasoning_tokens(reasoning_tokens);
+        let usage_info = match cost {
+            crate::agent::cost::CallCost::Charged(usd) => usage_info.with_charged_usd(usd),
+            crate::agent::cost::CallCost::Estimated(usd) => usage_info.with_estimated_usd(usd),
+            crate::agent::cost::CallCost::Unknown => usage_info,
         };
         if reasoning_tokens > 0 || cache_creation_tokens > 0 {
             log::debug!(
@@ -398,7 +464,15 @@ impl OpenhumanEventBridge {
                 cache_creation_tokens
             );
         }
-        crate::platform::cost::record_provider_usage(&self.model, &usage_info);
+        let subagent = self
+            .scope
+            .as_ref()
+            .map(|child| (child.agent_id.as_str(), child.task_id.as_str()));
+        crate::platform::cost::record_provider_usage_scoped(
+            &self.model,
+            &usage_info,
+            crate::platform::cost::UsageScope::ambient(Some(&self.provider_id), subagent),
+        );
 
         // The cost footer is a top-level surface; for a child run the global
         // cost tracker feed above is the authoritative accounting and the parent
@@ -425,18 +499,14 @@ impl OpenhumanEventBridge {
     /// like `hint:chat`/`hint:burst` + the vendor catalog + heuristics) — the
     /// previous `cost::catalog::estimate_cost_usd` only knew concrete vendor
     /// ids, so every managed-tier call priced as $0 in traces and the footer.
-    pub(super) fn estimate_call_cost(model: &str, usage: &Usage) -> f64 {
+    /// `None` for a model the catalog does not price.
+    pub(super) fn estimate_call_cost(model: &str, usage: &Usage) -> Option<f64> {
         crate::agent::cost::estimate_call_cost_usd(
             model,
-            &UsageInfo {
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                context_window: 0,
-                cached_input_tokens: usage.cache_read_tokens,
-                cache_creation_tokens: usage.cache_creation_tokens,
-                reasoning_tokens: usage.reasoning_tokens,
-                charged_amount_usd: 0.0,
-            },
+            &BilledUsage::from_counts(usage.input_tokens, usage.output_tokens)
+                .with_cached_input_tokens(usage.cache_read_tokens)
+                .with_cache_creation_tokens(usage.cache_creation_tokens)
+                .with_reasoning_tokens(usage.reasoning_tokens),
         )
     }
 }

@@ -79,7 +79,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use tinyagents_harness::error::{Result as TaResult, TinyAgentsError};
+use tinyagents_harness::error::Result as TaResult;
 use tinyagents_harness::host::security_gate::{
     ContentOrigin, GateDecision, ScreenOutcome, SecurityGate, ToolCallRequest,
 };
@@ -127,7 +127,7 @@ pub struct OpenHumanSecurityGate {
     /// Fallback policy used when no process-global live policy is installed.
     ///
     /// Per-call resolution prefers
-    /// [`crate::security::live_policy::current`] so an autonomy
+    /// [`crate::security::live_policy::effective`] so an autonomy
     /// change made mid-session is observed on the very next tool call — the
     /// same live-first / snapshot-fallback discipline `ApprovalGate` uses for
     /// `auto_approve`. The trait explicitly forbids the runtime caching a
@@ -152,6 +152,20 @@ pub struct OpenHumanSecurityGate {
     /// second approval card for a call the user already approved once — see
     /// mismatch (2) in the module header.
     pending_audit: Mutex<HashMap<String, String>>,
+    /// `false` for a host-only turn reading untrusted data
+    /// ([`with_untrusted_input_turn`]): its input is data, not instructions.
+    screens_input: bool,
+}
+
+tokio::task_local! {
+    static UNTRUSTED_INPUT_TURN: ();
+}
+
+/// Run `fut` as a turn whose input is untrusted data: gates built for it do
+/// not screen input. Scoped only by `agent_chat_reply_for`, and only after the
+/// session accepted untrusted input, which only a host-only session does.
+pub(crate) async fn with_untrusted_input_turn<F: std::future::Future>(fut: F) -> F::Output {
+    UNTRUSTED_INPUT_TURN.scope((), Box::pin(fut)).await
 }
 
 impl OpenHumanSecurityGate {
@@ -168,6 +182,8 @@ impl OpenHumanSecurityGate {
             tool_policy: None,
             tool_sets,
             pending_audit: Mutex::new(HashMap::new()),
+            // Read here, on the turn's own task: a screen may run elsewhere.
+            screens_input: UNTRUSTED_INPUT_TURN.try_with(|_| ()).is_err(),
         }
     }
 
@@ -195,10 +211,10 @@ impl OpenHumanSecurityGate {
             .remove(call_id)
     }
 
-    /// The policy to answer this call against: the live process-global one when
+    /// The policy to answer this call against: the agent's or the live one when
     /// installed, else the constructor snapshot.
     fn effective_policy(&self) -> Arc<SecurityPolicy> {
-        crate::security::live_policy::current().unwrap_or_else(|| self.policy.clone())
+        crate::security::live_policy::effective().unwrap_or_else(|| self.policy.clone())
     }
 
     /// Finds the registered [`Tool`] named `name`, if any.
@@ -305,11 +321,15 @@ impl OpenHumanSecurityGate {
 
     /// Parks the turn on the human approval flow and reports how it settled.
     ///
-    /// Returns [`GateDecision::Prompted`] whichever way it resolves — including
-    /// the TTL timeout, which `ApprovalGate` itself renders as a `Deny`. That is
-    /// the whole point of the `Prompted` variant: the interactive flow stays
-    /// host-side and the runtime only sees the settled answer, never a hint that
-    /// a human was (or was not) at the keyboard.
+    /// An approval returns [`GateDecision::Prompted`]; a refusal — a Deny, the
+    /// TTL timeout, or a dropped channel, all of which `ApprovalGate` renders as
+    /// a `Deny` — returns [`GateDecision::Deny`] via [`decision_for_outcome`].
+    /// A `Prompted { approved: false }` carries no reason, so the harness fell
+    /// back to a bare "tool call was not approved": the model then asked the
+    /// user to approve, or reached the same result through `shell` instead.
+    /// The Deny text gives it the parity `ApprovalSecurityMiddleware` already
+    /// had, while still never hinting that a human was (or was not) at the
+    /// keyboard.
     async fn park_for_approval(&self, call: &ToolCallRequest) -> GateDecision {
         let Some(gate) = ApprovalGate::try_global() else {
             // Parity with `ApprovalSecurityMiddleware`: no gate installed means
@@ -340,33 +360,26 @@ impl OpenHumanSecurityGate {
         let (outcome, request_id) = gate
             .intercept_audited(&call.tool_name, &summary, redacted)
             .await;
-        match outcome {
-            GateOutcome::Allow => {
-                // Only an approval that persisted a row yields an id; the
-                // session-allowlist shortcut returns `None` and has nothing to
-                // record. A call with no `call_id` cannot be correlated back,
-                // so the id is dropped rather than stored under a key no
-                // executor can ask for.
-                if let (Some(request_id), Some(call_id)) = (request_id, call.call_id.as_ref()) {
-                    self.pending_audit
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .insert(call_id.as_str().to_string(), request_id);
-                }
-                GateDecision::Prompted { approved: true }
-            }
-            GateOutcome::Deny { reason } => {
-                tracing::warn!(
-                    target: "tinyagents",
-                    tool = %call.tool_name,
-                    reason = %reason,
-                    "[tinyagents::host::security] approval flow declined the tool call"
-                );
-                GateDecision::Prompted { approved: false }
+        if matches!(outcome, GateOutcome::Allow) {
+            // Only an approval that persisted a row yields an id; the
+            // session-allowlist shortcut returns `None` and has nothing to
+            // record. A call with no `call_id` cannot be correlated back, so
+            // the id is dropped rather than stored under a key no executor can
+            // ask for.
+            if let (Some(request_id), Some(call_id)) = (request_id, call.call_id.as_ref()) {
+                self.pending_audit
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(call_id.as_str().to_string(), request_id);
             }
         }
+        decision_for_outcome(&call.tool_name, outcome)
     }
 }
+
+#[path = "security_gate_approval.rs"]
+mod approval;
+use approval::decision_for_outcome;
 
 #[async_trait]
 impl SecurityGate for OpenHumanSecurityGate {
@@ -390,7 +403,34 @@ impl SecurityGate for OpenHumanSecurityGate {
     /// choice. A refusal at any stage is still terminal, and `channel_approved`
     /// is carried forward so a later prompting stage does not ask twice.
     async fn authorize_tool(&self, call: &ToolCallRequest) -> TaResult<GateDecision> {
+        // A nested call (made by a running tool, not the model) can never be
+        // parked for a human, and the stages below prompt. Fail closed rather
+        // than prompt or guess which stages would have: nested calls are off
+        // (`RunLimits::max_nested_depth = 0`) and stay refused here until the
+        // host decides how to authorize them.
+        if call.is_nested() {
+            tracing::warn!(
+                target: "tinyagents",
+                tool = %call.tool_name,
+                "[tinyagents::host::security] nested tool call refused (fail closed)"
+            );
+            return Ok(GateDecision::deny(
+                PolicyDenial::PolicyDenied {
+                    tool: &call.tool_name,
+                    policy: "nested tool calls",
+                    reason: "Tools may not call other tools in this session.",
+                }
+                .render(),
+            ));
+        }
         let policy = self.effective_policy();
+        #[cfg(feature = "modules")]
+        let desktop_approval_disabled = match self.resolve_tool(&call.tool_name) {
+            Some(tool) => crate::desktop::control::approvals_disabled_for(tool).await,
+            None => false,
+        };
+        #[cfg(not(feature = "modules"))]
+        let desktop_approval_disabled = false;
         tracing::debug!(
             target: "tinyagents",
             tool = %call.tool_name,
@@ -414,6 +454,10 @@ impl SecurityGate for OpenHumanSecurityGate {
                     "[tinyagents::host::security] denied by the session tool policy"
                 );
                 return Ok(GateDecision::Deny { reason });
+            }
+            ToolPolicyVerdict::RequireApproval if desktop_approval_disabled => {
+                tracing::debug!(tool = %call.tool_name,
+                    "[desktop] channel approval park skipped by desktop setting");
             }
             ToolPolicyVerdict::RequireApproval => {
                 // The channel says a human must approve. Unlike the shell and
@@ -473,6 +517,29 @@ impl SecurityGate for OpenHumanSecurityGate {
                 call.tool_name
             )));
         };
+
+        // A scheduled prompt is data, not an open-ended approval for later
+        // actions. Keep cron agent turns within a read-only tool capability.
+        // This check precedes the shell shortcut and all approval settings,
+        // including installations where the approval gate is disabled.
+        if matches!(
+            crate::agent::turn_origin::current(),
+            Some(
+                crate::agent::turn_origin::AgentTurnOrigin::TrustedAutomation {
+                    source: crate::agent::turn_origin::TrustedAutomationSource::Cron,
+                    ..
+                }
+            )
+        ) && (call.tool_name == SHELL_TOOL
+            || tool.permission_level_with_args(&call.arguments) > PermissionLevel::ReadOnly
+            || tool.external_effect_with_args(&call.arguments))
+        {
+            return Ok(GateDecision::deny(format!(
+                "{} Scheduled agent turns may use read-only tools only; '{}' needs a live user action.",
+                crate::security::POLICY_DENIED_MARKER,
+                call.tool_name
+            )));
+        }
 
         // 3. `shell` is the one tool whose arguments carry a classifiable
         //    command, and `gate_decision` already encodes the autonomy tier —
@@ -566,7 +633,7 @@ impl SecurityGate for OpenHumanSecurityGate {
 
         // 5. Everything else: the tool's own external-effect classification
         //    decides whether a human is asked.
-        if tool.external_effect_with_args(&call.arguments) {
+        if tool.external_effect_with_args(&call.arguments) && !desktop_approval_disabled {
             return Ok(self.park_once(call, channel_approved).await);
         }
 
@@ -597,6 +664,9 @@ impl SecurityGate for OpenHumanSecurityGate {
     /// `redact_text(&str) -> String` out of `approval::redact` or add one to
     /// `security::pii`, then map "PII found, injection clean" to `Redacted`.
     async fn screen_input(&self, text: &str, origin: ContentOrigin) -> TaResult<ScreenOutcome> {
+        if !self.screens_input {
+            return Ok(ScreenOutcome::Pass);
+        }
         let source = match origin {
             ContentOrigin::User => "agent.user",
             ContentOrigin::Tool => "agent.tool_output",
@@ -639,16 +709,6 @@ impl SecurityGate for OpenHumanSecurityGate {
             }
         }
     }
-}
-
-/// Marks a verdict the gate could not reach at all (storage down, config
-/// unreadable). Callers fail closed on it; a *policy* refusal is a `Deny`, not
-/// an error. Nothing in this adapter currently produces one — every branch
-/// reaches a decision — but the helper keeps the distinction explicit for the
-/// storage-backed checks a later slice may add.
-#[allow(dead_code)]
-pub(crate) fn gate_unavailable(detail: impl std::fmt::Display) -> TinyAgentsError {
-    TinyAgentsError::Capability(format!("security gate could not reach a verdict: {detail}"))
 }
 
 #[cfg(test)]

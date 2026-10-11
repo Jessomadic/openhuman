@@ -27,7 +27,6 @@ import { CheckIcon } from './icons';
 
 export const SelectRoot = SelectPrimitive.Root;
 export const SelectValue = SelectPrimitive.Value;
-export const SelectGroup = SelectPrimitive.Group;
 
 export type SelectSize = 'sm' | 'md';
 
@@ -131,31 +130,5 @@ export const SelectItem = forwardRef<
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = 'SelectItem';
-
-export const SelectLabel = forwardRef<
-  HTMLDivElement,
-  ComponentPropsWithoutRef<typeof SelectPrimitive.Label>
->(({ className, ...rest }, ref) => (
-  <SelectPrimitive.Label
-    ref={ref}
-    data-slot="select-label"
-    className={cn('px-2.5 py-1.5 text-micro font-medium uppercase text-content-muted', className)}
-    {...rest}
-  />
-));
-SelectLabel.displayName = 'SelectLabel';
-
-export const SelectSeparator = forwardRef<
-  HTMLDivElement,
-  ComponentPropsWithoutRef<typeof SelectPrimitive.Separator>
->(({ className, ...rest }, ref) => (
-  <SelectPrimitive.Separator
-    ref={ref}
-    data-slot="select-separator"
-    className={cn('my-1 h-px bg-line-subtle', className)}
-    {...rest}
-  />
-));
-SelectSeparator.displayName = 'SelectSeparator';
 
 export default SelectRoot;

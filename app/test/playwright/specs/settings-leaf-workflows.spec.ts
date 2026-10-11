@@ -2,7 +2,6 @@ import { expect, type Page, test } from '@playwright/test';
 
 import {
   bootAuthenticatedPage,
-  callCoreRpc,
   dismissWalkthroughIfPresent,
   waitForAppReady,
 } from '../helpers/core-rpc';
@@ -60,48 +59,17 @@ function unwrap<T>(value: T | { result: T }): T {
 
 test.describe('Settings leaf workflows', () => {
   test('appearance theme persists in app state', async ({ page }) => {
-    await openSettings(page, 'pw-settings-appearance', '/settings/appearance');
+    await openSettings(page, 'pw-settings-appearance', '/settings/theme');
 
-    // Panel title dropped in the PanelPage migration; the theme radios confirm
-    // the Appearance panel mounted.
-    await expect(page.getByRole('radio', { name: /Dark/ })).toBeVisible();
-    await page.getByRole('radio', { name: /Dark/ }).click();
+    const dark = page.getByLabel('Theme variant').getByText('Dark', { exact: true });
+    await expect(dark).toBeVisible();
+    await dark.click();
     await expect.poll(() => themeState(page)).toMatchObject({ mode: 'dark' });
     await expect.poll(() => persistedThemeState(page)).toMatchObject({ mode: 'dark' });
 
     await page.reload();
     await waitForAppReady(page);
     await expect.poll(() => themeState(page)).toMatchObject({ mode: 'dark' });
-  });
-
-  test('agents/new creates a custom agent that appears in the registry', async ({ page }) => {
-    const agentId = `pw-researcher-${Date.now()}`;
-    await openSettings(page, 'pw-settings-agent-new', '/settings/agents/new');
-
-    // Page title dropped in the PanelPage migration; the Name field confirms the
-    // agent editor mounted.
-    await expect(page.getByRole('textbox', { name: 'Name' })).toBeVisible();
-    await page.getByRole('textbox', { name: 'Name' }).fill('Playwright Researcher');
-    await page.getByRole('textbox', { name: 'ID', exact: true }).fill(agentId);
-    await page.getByLabel('Description').fill('Validates settings agent authoring in E2E.');
-    await page.getByLabel('Model (optional)').selectOption('hint:reasoning');
-    await page
-      .getByLabel('System prompt (optional)')
-      .fill('Prefer concise citations and explain uncertainty.');
-    await page.getByRole('button', { name: 'Add tools' }).click();
-    await page.getByRole('button', { name: /Allow all tools/ }).click();
-    await page.getByRole('button', { name: 'Done', exact: true }).click();
-    await page.getByRole('button', { name: 'Create agent' }).click();
-
-    await expect(page).toHaveURL(/#\/settings\/agents$/);
-    const agent = await callCoreRpc<{
-      agent?: { id: string; model?: string; tool_allowlist?: string[] };
-    }>('openhuman.agent_registry_get', { id: agentId });
-    expect(agent.agent).toMatchObject({
-      id: agentId,
-      model: 'hint:reasoning',
-      tool_allowlist: ['*'],
-    });
   });
 
   test('retired task sources route lands on Connections', async ({ page }) => {

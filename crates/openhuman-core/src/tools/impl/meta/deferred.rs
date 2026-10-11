@@ -12,7 +12,7 @@
 //!
 //! `Deferred` takes such a tool off the wire without removing the capability.
 //! The tinyagents harness owns the other half of that bargain — the intrinsic
-//! `tool_search` / `tool_call` bridge, the BM25 catalogue, and the pluggable
+//! `tool_search` bridge, the BM25 catalogue, and the pluggable
 //! ranker a decision model plugs into (`tool::discover`). This host used to
 //! register a `tool_search` of its own, which the harness honoured over its
 //! intrinsic; that tool could *find* a deferred tool but the turn allowlist
@@ -81,6 +81,31 @@ pub fn deferred_tool_names(tools: &[Box<dyn Tool>]) -> HashSet<String> {
         .filter(|tool| tool.exposure() == ToolExposure::Deferred)
         .map(|tool| tool.name().to_string())
         .collect()
+}
+
+/// The deferred set of a belt that opted into discovery: every
+/// [`ToolExposure::Deferred`] tool in `durable` and `synthesized`, plus the
+/// `Direct` tools its agent definition lists in `deferred_tools`.
+///
+/// Exposure is a property of the tool and applies to every agent; a
+/// definition's `deferred_tools` is the per-agent half. It takes a tool that
+/// other belts keep advertised (`file_read` for a coding worker) off this
+/// agent's wire only, where it stays registered, searchable through
+/// `tool_search`, and callable by its own name. A requested name that is not
+/// registered, or is `Hidden`, is ignored: deferral only ever subtracts.
+pub fn deferred_set(
+    durable: &[Box<dyn Tool>],
+    synthesized: &[Box<dyn Tool>],
+    requested: &[String],
+) -> HashSet<String> {
+    let mut deferred = deferred_tool_names(durable);
+    deferred.extend(deferred_tool_names(synthesized));
+    for tool in durable.iter().chain(synthesized.iter()) {
+        if tool.exposure() == ToolExposure::Direct && requested.iter().any(|r| r == tool.name()) {
+            deferred.insert(tool.name().to_string());
+        }
+    }
+    deferred
 }
 
 #[cfg(test)]

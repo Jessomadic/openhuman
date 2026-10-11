@@ -37,6 +37,17 @@ pub(super) fn create_chat_model_with_model_id_inner(
     role: &str,
     config: &Config,
 ) -> anyhow::Result<(Arc<dyn ChatModel<()>>, String)> {
+    if let Some(model) = crate::core::runtime::CoreContext::current_host_overrides()
+        .and_then(|local| local.model_for(role))
+    {
+        return Ok((
+            model,
+            config
+                .default_model
+                .clone()
+                .unwrap_or_else(|| "host-model".into()),
+        ));
+    }
     #[cfg(any(test, feature = "e2e-test-support", feature = "rss-bench"))]
     if let Some(model) = test_provider_override::current() {
         return Ok((model, "mock-model".to_string()));
@@ -249,6 +260,15 @@ pub(super) struct DefaultTemperatureChatModel {
 impl ChatModel<()> for DefaultTemperatureChatModel {
     fn profile(&self) -> Option<&tinyinference_llm::model::ModelProfile> {
         self.inner.profile()
+    }
+
+    fn supports_input(
+        &self,
+        modality: tinyinference_llm::model::InputModality,
+        mime: &str,
+        source: tinyinference_llm::model::InputSource,
+    ) -> bool {
+        self.inner.supports_input(modality, mime, source)
     }
 
     fn cache_identity(&self) -> Option<String> {

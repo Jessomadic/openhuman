@@ -50,6 +50,21 @@ pub(super) async fn map_turn_run_error(
     if let Some(depth_err) = tinyagents_depth_error(&e) {
         return anyhow::Error::new(depth_err);
     }
+    // A timeout or cancellation is the run's own failure, not a provider's: a
+    // provider error left in the slot by an earlier attempt must not be
+    // re-surfaced as its cause (#6724).
+    if matches!(
+        e,
+        tinyagents_harness::TinyAgentsError::Timeout(_)
+            | tinyagents_harness::TinyAgentsError::CallTimeout(_)
+            | tinyagents_harness::TinyAgentsError::Cancelled
+    ) {
+        error_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        return anyhow::anyhow!("tinyagents harness run failed: {e}");
+    }
     // Otherwise prefer the original typed provider error (preserves
     // `AgentError` downcasts the caller relies on) over the harness's
     // string wrap — this is where a genuine model/provider failure that
@@ -70,3 +85,7 @@ pub(super) async fn map_turn_run_error(
     }
     anyhow::anyhow!("tinyagents harness run failed: {e}")
 }
+
+#[cfg(test)]
+#[path = "turn_run_error_tests.rs"]
+mod tests;

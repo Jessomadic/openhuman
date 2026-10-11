@@ -30,36 +30,29 @@ fn catalog_mirrors_builtins() {
 
 #[test]
 fn list_resources_returns_all_catalog_entries() {
-    let result = list_resources_result();
-    let resources = result["resources"].as_array().expect("resources array");
+    let resources = resource_specs();
     assert_eq!(
         resources.len(),
         RESOURCE_CATALOG.len(),
         "resources/list count mismatch"
     );
-    // Every entry has required fields
-    for entry in resources {
-        assert!(entry["uri"].is_string(), "uri must be string");
-        assert!(entry["name"].is_string(), "name must be string");
-        assert_eq!(entry["mimeType"], "text/markdown");
+    for entry in &resources {
+        assert!(!entry.uri.is_empty(), "uri must be set");
+        assert!(!entry.name.is_empty(), "name must be set");
+        assert_eq!(entry.mime_type.as_deref(), Some("text/markdown"));
     }
 }
 
 #[test]
 fn list_resources_includes_core_and_agent_uris() {
-    let result = list_resources_result();
-    let uris: Vec<&str> = result["resources"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["uri"].as_str().unwrap())
-        .collect();
+    let resources = resource_specs();
+    let uris: Vec<&str> = resources.iter().map(|r| r.uri.as_str()).collect();
     for expected in [
         "openhuman://prompts/identity",
         "openhuman://prompts/soul",
         "openhuman://prompts/user",
         "openhuman://prompts/agents/orchestrator",
-        "openhuman://prompts/agents/mcp_agent",
+        "openhuman://prompts/agents/planner",
     ] {
         assert!(uris.contains(&expected), "missing URI {expected}");
     }
@@ -67,8 +60,7 @@ fn list_resources_includes_core_and_agent_uris() {
 
 #[test]
 fn read_resource_returns_content_for_known_uri() {
-    let params = json!({ "uri": "openhuman://prompts/identity" });
-    let result = read_resource_result(&params).expect("should succeed");
+    let result = read_resource("openhuman://prompts/identity").expect("should succeed");
     let contents = result["contents"].as_array().expect("contents array");
     assert_eq!(contents.len(), 1);
     assert_eq!(contents[0]["uri"], "openhuman://prompts/identity");
@@ -78,17 +70,10 @@ fn read_resource_returns_content_for_known_uri() {
 
 #[test]
 fn read_resource_returns_minus_32002_for_unknown_uri() {
-    let params = json!({ "uri": "openhuman://prompts/agents/nonexistent" });
-    let err = read_resource_result(&params).expect_err("should fail for unknown URI");
-    assert_eq!(err.0, -32002);
-    assert!(err.2.contains("nonexistent"));
-}
-
-#[test]
-fn read_resource_returns_minus_32602_for_missing_uri() {
-    let params = json!({});
-    let err = read_resource_result(&params).expect_err("should fail without uri");
-    assert_eq!(err.0, -32602);
+    let err = read_resource("openhuman://prompts/agents/nonexistent")
+        .expect_err("should fail for unknown URI");
+    assert_eq!(err.code(), -32002);
+    assert!(err.message().contains("nonexistent"));
 }
 
 #[test]
@@ -96,8 +81,7 @@ fn read_resource_returns_content_for_each_subagent() {
     use crate::agent::registry::agents::BUILTINS;
     for b in BUILTINS {
         let uri = format!("openhuman://prompts/agents/{}", b.id);
-        let params = json!({ "uri": uri });
-        let result = read_resource_result(&params)
+        let result = read_resource(&uri)
             .unwrap_or_else(|_| panic!("read_resource failed for agent `{}`", b.id));
         let text = result["contents"][0]["text"].as_str().unwrap_or("");
         assert!(
@@ -106,18 +90,6 @@ fn read_resource_returns_content_for_each_subagent() {
             b.id
         );
     }
-}
-
-#[test]
-fn list_resource_templates_returns_empty_array() {
-    let result = list_resource_templates_result();
-    let templates = result["resourceTemplates"]
-        .as_array()
-        .expect("resourceTemplates must be a JSON array");
-    assert!(
-        templates.is_empty(),
-        "resources/templates/list must return an empty array — the catalog is static"
-    );
 }
 
 #[test]

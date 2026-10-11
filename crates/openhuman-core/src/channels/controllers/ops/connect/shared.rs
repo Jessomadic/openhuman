@@ -1,10 +1,8 @@
 //! Small helpers shared across the connect/disconnect/status operations.
 
-use serde_json::Value;
-
 pub(crate) use tinychannels::controllers::{
     channel_config_connected, channel_credential_provider as credential_provider,
-    parse_allowed_users,
+    parse_allowed_users, parse_optional_bool,
 };
 
 /// Merge a channel's live supervised-listener health into its credential/config
@@ -32,21 +30,5 @@ pub(crate) fn merge_listener_health(
         Some("error") => (false, health_last_error.map(str::to_string)),
         Some("ok") => (true, None),
         _ => (presence_connected, None),
-    }
-}
-
-pub(super) fn parse_optional_bool(value: Option<&Value>) -> Option<bool> {
-    match value {
-        Some(Value::Bool(b)) => Some(*b),
-        Some(Value::Number(n)) => n.as_i64().map(|v| v != 0),
-        Some(Value::String(s)) => {
-            let normalized = s.trim().to_ascii_lowercase();
-            match normalized.as_str() {
-                "1" | "true" | "yes" | "on" => Some(true),
-                "0" | "false" | "no" | "off" => Some(false),
-                _ => None,
-            }
-        }
-        _ => None,
     }
 }

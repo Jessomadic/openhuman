@@ -11,7 +11,7 @@
 
 use crate::agent::harness::definition::AgentDefinitionRegistry;
 use crate::agent::subagent_host::{run_subagent_with_parent, SubagentRunOptions};
-use crate::memory::conversations;
+use crate::threads::store as conversations;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -88,14 +88,14 @@ impl Tool for SpawnWorkerThreadTool {
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
-        let agent_ids: Vec<String> = AgentDefinitionRegistry::global()
+        let agent_ids: Vec<String> = AgentDefinitionRegistry::current()
             .map(|reg| reg.list().iter().map(|d| d.id.clone()).collect())
             .unwrap_or_default();
 
         let agent_id_schema = if agent_ids.is_empty() {
             json!({
                 "type": "string",
-                "description": "Sub-agent id (e.g. code_executor, researcher, planner)."
+                "description": "Sub-agent id (e.g. code_executor, critic, planner)."
             })
         } else {
             json!({
@@ -121,10 +121,6 @@ impl Tool for SpawnWorkerThreadTool {
                 "context": {
                     "type": "string",
                     "description": "Optional context blob from prior task results. Rendered as a `[Context]` block before the prompt."
-                },
-                "toolkit": {
-                    "type": "string",
-                    "description": "Composio toolkit slug to scope this spawn to (e.g. `gmail`, `notion`)."
                 },
                 "model": {
                     "type": "string",
@@ -215,10 +211,6 @@ impl SpawnWorkerThreadTool {
             .get("context")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let toolkit_override = args
-            .get("toolkit")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
         let model_override = args
             .get("model")
             .and_then(|v| v.as_str())
@@ -251,7 +243,6 @@ impl SpawnWorkerThreadTool {
             agent_id = %agent_id,
             task_title = %task_title,
             current_thread_id = %current_thread_id,
-            toolkit_override = ?toolkit_override,
             has_context = context.is_some(),
             "[spawn_worker_thread] invoked"
         );
@@ -278,7 +269,7 @@ impl SpawnWorkerThreadTool {
             }
         }
 
-        let registry = AgentDefinitionRegistry::global()
+        let registry = AgentDefinitionRegistry::current()
             .ok_or_else(|| anyhow::anyhow!("AgentDefinitionRegistry not initialised"))?;
 
         let definition = registry
@@ -337,7 +328,6 @@ impl SpawnWorkerThreadTool {
         let progress_sink = run_context.progress.clone();
         let options = SubagentRunOptions {
             skill_filter_override: None,
-            toolkit_override,
             context,
             model_override,
             task_id: None,

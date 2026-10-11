@@ -15,6 +15,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/assistant-ui/ui/tooltip';
+import { useT } from '@/lib/i18n/I18nContext';
 import {
   AttachmentPrimitive,
   ComposerPrimitive,
@@ -63,11 +64,12 @@ const useAttachmentSrc = () => {
 type AttachmentPreviewProps = { src: string };
 
 const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src }) => {
+  const { t } = useT();
   const [isLoaded, setIsLoaded] = useState(false);
   return (
     <img
       src={src}
-      alt="Attachment preview"
+      alt={t('attachment.previewAlt', 'Attachment preview')}
       className={cn(
         'block h-auto max-h-[80vh] w-auto max-w-full rounded-sm object-contain transition-opacity duration-300 motion-reduce:transition-none',
         isLoaded
@@ -80,6 +82,7 @@ const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src }) => {
 };
 
 const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
+  const { t } = useT();
   const src = useAttachmentSrc();
 
   if (!src) return children;
@@ -92,7 +95,9 @@ const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
         render={isValidElement(children) ? children : <button type="button" />}
       />
       <DialogContent className="aui-attachment-preview-dialog-content [&>button]:bg-foreground/60 [&>button]:hover:bg-foreground/80 [&_svg]:text-background p-2 sm:max-w-3xl [&>button]:rounded-full [&>button]:p-1 [&>button]:opacity-100 [&>button]:ring-0!">
-        <DialogTitle className="aui-sr-only sr-only">Image Attachment Preview</DialogTitle>
+        <DialogTitle className="aui-sr-only sr-only">
+          {t('attachment.imagePreviewTitle', 'Image Attachment Preview')}
+        </DialogTitle>
         <div className="aui-attachment-preview bg-background relative mx-auto flex max-h-[80dvh] w-full items-center justify-center overflow-hidden rounded-sm">
           <AttachmentPreview src={src} />
         </div>
@@ -102,13 +107,14 @@ const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
 };
 
 const AttachmentThumb: FC = () => {
+  const { t } = useT();
   const src = useAttachmentSrc();
 
   return (
     <Avatar className="aui-attachment-tile-avatar h-full w-full rounded-none after:hidden">
       <AvatarImage
         src={src}
-        alt="Attachment preview"
+        alt={t('attachment.previewAlt', 'Attachment preview')}
         className="aui-attachment-tile-image rounded-none object-cover"
       />
       <AvatarFallback>
@@ -222,7 +228,7 @@ const AttachmentRemove: FC = () => {
 
 export const UserMessageAttachments: FC = () => {
   return (
-    <div className="aui-user-message-attachments-end col-span-full col-start-1 row-start-1 flex w-full flex-row justify-end gap-2">
+    <div className="aui-user-message-attachments-end col-span-full col-start-1 row-start-1 flex w-full flex-row justify-end gap-2 empty:hidden">
       <MessagePrimitive.Attachments>{() => <AttachmentUI />}</MessagePrimitive.Attachments>
     </div>
   );
@@ -237,6 +243,7 @@ export const ComposerAttachments: FC = () => {
 };
 
 export const ComposerAddAttachment: FC = () => {
+  const { t } = useT();
   return (
     <ComposerPrimitive.AddAttachment
       render={
@@ -246,7 +253,7 @@ export const ComposerAddAttachment: FC = () => {
           variant="ghost"
           size="icon"
           className="aui-composer-add-attachment text-muted-foreground hover:text-foreground hover:bg-muted-foreground/15 dark:border-muted-foreground/15 dark:hover:bg-muted-foreground/30 size-7 rounded-full active:scale-[0.96] motion-reduce:transition-none"
-          aria-label="Add Attachment"
+          aria-label={t('attachment.addAria', 'Add Attachment')}
         />
       }>
       <PlusIcon className="aui-attachment-add-icon size-4" />

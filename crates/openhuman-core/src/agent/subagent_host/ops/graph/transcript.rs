@@ -1,8 +1,8 @@
 //! Persisting a sub-agent turn's (or a failed run's) raw transcript to
 //! `session_raw`, mirroring the removed `SubagentObserver::persist_transcript`.
 
-use crate::agent::messages::ChatMessage;
 use crate::agent::subagent_host::types::SubagentRunError;
+use tinyagents_session::transcript::TranscriptMessage;
 
 use super::dispatch::AggregatedUsage;
 use super::worker_mirror::mirror_worker_thread_from_history;
@@ -17,9 +17,9 @@ use super::worker_mirror::mirror_worker_thread_from_history;
 /// snapshot (the run failed before its first model call) recovers nothing, as
 /// before.
 pub(super) fn failed_run_history(
-    original: &[ChatMessage],
+    original: &[TranscriptMessage],
     snapshot: &crate::agent::tinyagents::TranscriptSnapshot,
-) -> (Vec<ChatMessage>, Option<String>) {
+) -> (Vec<TranscriptMessage>, Option<String>) {
     if snapshot.messages.is_empty() {
         return (Vec::new(), None);
     }
@@ -47,7 +47,7 @@ pub(super) fn persist_subagent_transcript(
     task_id: &str,
     provider_label: &str,
     model: &str,
-    history: &[ChatMessage],
+    history: &[TranscriptMessage],
     usage: &AggregatedUsage,
     thread_id: Option<&str>,
     context_window: u64,
@@ -56,7 +56,8 @@ pub(super) fn persist_subagent_transcript(
 ) {
     use tinyagents_session::transcript;
 
-    let path = match transcript::resolve_keyed_transcript_path(workspace_dir, transcript_stem) {
+    let root = crate::agent::session_store::transcript_root(workspace_dir);
+    let path = match transcript::resolve_keyed_transcript_path(&root, transcript_stem) {
         Ok(p) => p,
         Err(err) => {
             tracing::debug!(
@@ -76,7 +77,15 @@ pub(super) fn persist_subagent_transcript(
             output: usage.output_tokens,
             cached_input: usage.cached_input_tokens,
             context_window,
-            cost_usd: usage.charged_amount_usd,
+            cost_usd: usage.cost.known_usd,
+            cost_source: Some(match usage.cost.source {
+                crate::agent::cost::CostSource::Charged => transcript::UsageCostSource::Charged,
+                crate::agent::cost::CostSource::Estimated => transcript::UsageCostSource::Estimated,
+                crate::agent::cost::CostSource::Unknown => transcript::UsageCostSource::Unknown,
+            }),
+            // No per-call figure reaches here; readers fall back to the mean
+            // request size (`spend::context_tokens_of`).
+            ..Default::default()
         },
         ts: now.clone(),
         reasoning_content: None,
@@ -95,20 +104,15 @@ pub(super) fn persist_subagent_transcript(
         created: now.clone(),
         updated: now,
         turn_count: 1,
+        prefix_message_count: None,
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         cached_input_tokens: usage.cached_input_tokens,
-        charged_amount_usd: usage.charged_amount_usd,
+        charged_amount_usd: usage.cost.known_usd,
         thread_id: thread_id.map(str::to_owned),
         task_id: Some(task_id.to_string()),
     };
-    let durable_history: Vec<_> = history
-        .iter()
-        .map(crate::agent::messages::transcript_message_from_chat)
-        .collect();
-    if let Err(err) =
-        transcript::write_transcript(&path, &durable_history, &meta, Some(&turn_usage))
-    {
+    if let Err(err) = transcript::write_transcript(&path, history, &meta, Some(&turn_usage)) {
         tracing::debug!(
             agent_id,
             error = %err,
@@ -134,7 +138,7 @@ pub(super) fn persist_failed_run(
     task_id: &str,
     provider_label: &str,
     model: &str,
-    recovered: &[ChatMessage],
+    recovered: &[TranscriptMessage],
     usage: &AggregatedUsage,
     thread_id: Option<&str>,
     unanswered_steps: Option<&str>,
@@ -149,7 +153,7 @@ pub(super) fn persist_failed_run(
         None => format!("[subagent run failed before completion: {error}]"),
     };
     let mut history = recovered.to_vec();
-    history.push(ChatMessage::assistant(marker.clone()));
+    history.push(TranscriptMessage::assistant(marker.clone()));
 
     persist_subagent_transcript(
         workspace_dir,

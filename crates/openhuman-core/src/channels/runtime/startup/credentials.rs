@@ -97,7 +97,7 @@ pub(super) fn resolve_email_password(
 /// backend and timeouts are the embedding host's business. This is where
 /// OpenHuman's runtime proxy settings get applied, per channel, using the same
 /// `channel.<name>` identifiers the config UI shows.
-pub(super) struct RuntimeProxyClients;
+pub(crate) struct RuntimeProxyClients;
 
 impl tinychannels::HttpClientFactory for RuntimeProxyClients {
     fn client_for(&self, channel: &str) -> reqwest::Client {
@@ -124,7 +124,7 @@ impl tinychannels::HttpClientFactory for RuntimeProxyClients {
 /// keyring, an environment variable or the config, and only this host knows
 /// which. It therefore expects an already-hydrated config, and this is where
 /// that happens — on a clone, so the persisted config is never mutated.
-pub(super) fn hydrate_channel_credentials(config: &Config) -> tinychannels::ChannelsConfig {
+pub(crate) fn hydrate_channel_credentials(config: &Config) -> tinychannels::ChannelsConfig {
     let mut hydrated = config.channels_config.clone();
     if let Some(email_cfg) = hydrated.email.take() {
         hydrated.email = Some(resolve_email_password(email_cfg, config));

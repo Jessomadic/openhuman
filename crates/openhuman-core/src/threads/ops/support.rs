@@ -4,52 +4,15 @@
 
 use crate::config::Config;
 use crate::core::runtime::context::CoreContext;
-use crate::memory::conversations;
-use crate::memory::conversations::{ConversationMessage, ConversationThread};
-use crate::memory::{
-    ApiEnvelope, ApiMeta, ConversationMessageRecord, ConversationThreadSummary, PaginationMeta,
-};
-use crate::rpc::RpcOutcome;
-use crate::threads::title::{
-    title_from_user_message, title_log_fingerprint, THREAD_TITLE_LOG_PREFIX,
-};
-use serde::Serialize;
-use std::collections::BTreeMap;
+use crate::threads::store as conversations;
+use crate::threads::store::{ConversationMessage, ConversationThread};
+use crate::threads::THREAD_TITLE_LOG_PREFIX;
+use crate::threads::{ConversationMessageRecord, ConversationThreadSummary};
 use std::path::PathBuf;
+use tinyagents_harness::title::{title_from_user_message, title_log_fingerprint};
 
-pub(super) fn request_id() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
-pub(super) fn counts(
-    entries: impl IntoIterator<Item = (&'static str, usize)>,
-) -> BTreeMap<String, usize> {
-    entries
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect()
-}
-
-pub(super) fn envelope<T: Serialize>(
-    data: T,
-    counts: Option<BTreeMap<String, usize>>,
-    pagination: Option<PaginationMeta>,
-) -> RpcOutcome<ApiEnvelope<T>> {
-    RpcOutcome::new(
-        ApiEnvelope {
-            data: Some(data),
-            error: None,
-            meta: ApiMeta {
-                request_id: request_id(),
-                latency_seconds: None,
-                cached: None,
-                counts,
-                pagination,
-            },
-        },
-        vec![],
-    )
-}
+// One envelope/counts implementation for every ApiEnvelope-returning domain.
+pub(super) use crate::core::envelope::{counts, envelope};
 
 pub(super) async fn workspace_dir() -> Result<PathBuf, String> {
     Config::load_or_init()
@@ -113,6 +76,7 @@ pub(super) fn thread_to_summary(thread: ConversationThread) -> ConversationThrea
         parent_thread_id: thread.parent_thread_id,
         labels: thread.labels,
         personality_id: thread.personality_id,
+        action_dir: thread.working_dir,
     }
 }
 

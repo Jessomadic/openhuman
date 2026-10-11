@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useT } from '../../../lib/i18n/I18nContext';
 import { callCoreRpc } from '../../../services/coreRpcClient';
 import { openUrl } from '../../../utils/openUrl';
-import { isTauri } from '../../../utils/tauriCommands/common';
 
 // Connect/disconnect surface for OpenAI "Sign in with ChatGPT" (inference
 // OAuth). The Rust core owns the flow via the `openhuman.inference_openai_oauth_*`
@@ -56,9 +55,6 @@ const OpenAiOAuthConnect = ({
   }, []);
 
   const refreshStatus = useCallback(async () => {
-    if (!isTauri()) {
-      return;
-    }
     const revision = statusRevision.current;
     try {
       const res = await callCoreRpc<{ result: OpenAiOAuthStatus }>({
@@ -82,10 +78,6 @@ const OpenAiOAuthConnect = ({
   }, [refreshStatus]);
 
   const handleStart = async () => {
-    if (!isTauri()) {
-      setError(t('settings.ai.openaiOauthDesktopOnly'));
-      return;
-    }
     // A status probe started before this explicit action must not overwrite it.
     statusRevision.current += 1;
     setBusy(true);

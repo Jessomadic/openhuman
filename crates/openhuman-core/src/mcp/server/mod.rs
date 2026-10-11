@@ -4,7 +4,7 @@
 //! Stdio mode writes newline-delimited JSON-RPC to stdout; HTTP mode speaks
 //! Streamable HTTP + SSE on a local bind address. Diagnostics go through stderr logging.
 //!
-//! Most tools (memory tree reads, core/agent introspection) are read-only and
+//! Most tools (memory reads, core/agent introspection) are read-only and
 //! gated through `SecurityPolicy` with `ToolOperation::Read`. The one
 //! exception is `agent.run_subagent`, which runs through `ToolOperation::Act`
 //! and is advertised to clients via MCP tool annotations
@@ -27,16 +27,14 @@
 // `local`/`stdio` gate their own HTTP-serve paths so `openhuman mcp` (stdio)
 // and the Claude-Code in-process MCP bridge still degrade gracefully when
 // `http-server` is off.
+#[cfg(feature = "mcp")]
+mod handler;
 #[cfg(all(feature = "mcp", feature = "http-server"))]
 mod http;
 #[cfg(feature = "mcp")]
 mod local;
 #[cfg(feature = "mcp")]
-mod protocol;
-#[cfg(feature = "mcp")]
 mod resources;
-#[cfg(feature = "mcp")]
-mod session;
 #[cfg(feature = "mcp")]
 mod stdio;
 #[cfg(feature = "mcp")]
@@ -70,3 +68,13 @@ pub use tools::McpToolSpec;
 mod stub;
 #[cfg(not(feature = "mcp"))]
 pub use stub::*;
+
+// Golden wire fixtures, and the one seam they call through (see each file).
+#[cfg(all(test, feature = "mcp", feature = "http-server"))]
+#[path = "http_golden_tests.rs"]
+mod http_golden_tests;
+#[cfg(all(test, feature = "mcp"))]
+mod test_support;
+#[cfg(all(test, feature = "mcp"))]
+#[path = "wire_golden_tests.rs"]
+mod wire_golden_tests;

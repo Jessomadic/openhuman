@@ -72,11 +72,11 @@ pub fn local_only_blocks(mode: PrivacyMode, desc: &EgressDescriptor) -> bool {
 ///
 /// 1. **Any path outside the user-data tool namespace** — i.e. it is *not* under
 ///    `/agent-integrations/`. Today every user-data integration call (composio
-///    execute, parallel / tinyfish / financial-apis / google-places / twilio /
-///    apify research + actions, file-storage uploads) routes through
+///    execute, parallel / tinyfish / financial-apis / google-places research +
+///    actions, file-storage uploads) routes through
 ///    `IntegrationClient` under `/agent-integrations/…`, while session / team /
 ///    billing / auth round-trips (`/teams/me/usage`, `/payments/…`, `/auth/…`)
-///    go through `api::rest` and never build an egress descriptor at all. Any
+///    go through `backend::client` and never build an egress descriptor at all. Any
 ///    such path only reaches here if a future caller re-homes a control-plane
 ///    call onto this descriptor — exempt it defensively so a re-home can never
 ///    brick login (per the epic's "do not block control-plane" directive).

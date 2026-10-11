@@ -12,7 +12,7 @@
  *   - `flows_get`       — a single flow by id, graph included (B5b.1 canvas)
  *
  * Wire shape note: every `crates/openhuman-core/src/flows/ops.rs` handler returns its
- * value via `RpcOutcome::single_log(value, "...")`, which
+ * value via `Outcome::single_log(value, "...")`, which
  * `into_cli_compatible_json` ALWAYS wraps as `{ result: value, logs: [...] }`
  * (see `crates/openhuman-rpc/src/mod.rs`) because a log message is always attached. `callCoreRpc`
  * already unwraps the outer JSON-RPC envelope, so the value this client
@@ -340,11 +340,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Every `flows_*` handler goes through `RpcOutcome::single_log`, so the value
+ * Every `flows_*` handler goes through `Outcome::single_log`, so the value
  * `callCoreRpc` resolves is always `{ result: <payload>, logs: string[] }`.
  * Peel that back to `<payload>`. Falls through unchanged if the shape doesn't
  * match (defensive — keeps this client working if a future handler switches
- * to a log-less `RpcOutcome::new` and stops wrapping).
+ * to a log-less `Outcome::new` and stops wrapping).
  */
 function unwrapCliEnvelope<T>(payload: unknown): T {
   const record = asRecord(payload);
@@ -477,7 +477,7 @@ export async function getFlowRun(runId: string): Promise<FlowRun> {
  * B5a). No params. Unlike the run-surface calls above, the payload IS the
  * `Flow[]` array directly — there is no outer `{ flows: [...] }` wrapper (see
  * `crates/openhuman-core/src/flows/ops.rs::flows_list`, which returns `Vec<Flow>`
- * straight through `RpcOutcome::single_log`).
+ * straight through `Outcome::single_log`).
  */
 export async function listFlows(): Promise<Flow[]> {
   log('listFlows: request');
@@ -508,7 +508,7 @@ export async function setFlowEnabled(id: string, enabled: boolean): Promise<Flow
  * Canvas, B5b.1). Returns the `Flow` directly (same no-wrapper shape as
  * `flows_list`'s elements and `flows_set_enabled` — see
  * `crates/openhuman-core/src/flows/schemas.rs::handle_get`, which delegates straight to
- * `ops::flows_get` through `RpcOutcome::single_log`).
+ * `ops::flows_get` through `Outcome::single_log`).
  */
 export async function getFlow(id: string): Promise<Flow> {
   log('getFlow: request id=%s', id);

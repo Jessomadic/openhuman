@@ -1,10 +1,11 @@
 use tinyagents_orchestration::subagent::{
-    PersistedSubagentPause, SubagentOutcome, SubagentPause, SubagentPausePersistenceDisposition,
-    SubagentPersistence, SubagentResume, SubagentStatus, SubagentTaskKey,
+    PersistedSubagentPause, SubagentOutcome, SubagentOutcomeKind, SubagentPause,
+    SubagentPausePersistenceDisposition, SubagentPersistence, SubagentResume, SubagentTaskKey,
 };
 
 use super::lifecycle::{
-    load_subagent_checkpoint, merged_resume_history, HostInFlight, OpenHumanPersistence,
+    host_in_flight, load_subagent_checkpoint, merged_resume_history, HostInFlight,
+    OpenHumanPersistence,
 };
 use super::{SubagentMode, SubagentRunOutcome, SubagentRunStatus, SubagentUsage};
 
@@ -22,12 +23,14 @@ fn paused_outcome(question: &str, resume: SubagentResume) -> SubagentOutcome {
         task_id: "task".into(),
         output: "partial result".into(),
         history: resume.history.clone(),
-        status: SubagentStatus::AwaitingInput(SubagentPause {
+        status: SubagentOutcomeKind::AwaitingInput(SubagentPause {
             reason: question.into(),
             resume,
         }),
         usage: Default::default(),
         artifacts: Vec::new(),
+        schema_error: None,
+        artifact_error: None,
     }
 }
 
@@ -131,10 +134,10 @@ async fn persistence_inserts_one_terminal_and_returns_the_durable_winner() {
     let persistence = OpenHumanPersistence::new(directory.path().to_path_buf());
     let key = key();
     let mut winner = SubagentOutcome::cancelled("task");
-    winner.status = SubagentStatus::Completed;
+    winner.status = SubagentOutcomeKind::Completed;
     winner.output = "winner".into();
     let mut loser = SubagentOutcome::cancelled("task");
-    loser.status = SubagentStatus::Completed;
+    loser.status = SubagentOutcomeKind::Completed;
     loser.output = "loser".into();
 
     assert_eq!(
@@ -194,7 +197,7 @@ async fn continuation_replaces_only_the_pause_it_loaded_and_stale_duplicate_gets
     let winner = persistence.load_pause(&key).await.unwrap().unwrap();
     assert!(matches!(
         winner.status,
-        SubagentStatus::AwaitingInput(SubagentPause { ref reason, .. })
+        SubagentOutcomeKind::AwaitingInput(SubagentPause { ref reason, .. })
             if reason == "replacement question"
     ));
 }
@@ -222,7 +225,7 @@ async fn task_id_index_retains_scoped_collisions_and_terminal_does_not_reopen_pa
     assert!(load_subagent_checkpoint(directory.path(), "task").is_err());
 
     let mut terminal = SubagentOutcome::cancelled("task");
-    terminal.status = SubagentStatus::Completed;
+    terminal.status = SubagentOutcomeKind::Completed;
     assert_eq!(
         persistence
             .record_terminal(&first, &terminal, None)
@@ -254,7 +257,7 @@ async fn terminal_and_pause_race_leave_only_one_authoritative_state() {
         std::sync::Arc::new(OpenHumanPersistence::new(directory.path().to_path_buf()));
     let key = key();
     let mut terminal = SubagentOutcome::cancelled("task");
-    terminal.status = SubagentStatus::Completed;
+    terminal.status = SubagentOutcomeKind::Completed;
     let (pause, terminal_write) = tokio::join!(
         persistence.save_pause(persisted_pause(key.clone(), "question", None)),
         persistence.record_terminal(&key, &terminal, None),
@@ -316,4 +319,22 @@ async fn host_coalescer_keeps_the_leader_winner_and_cancels_only_the_observer() 
         follower.persistence_disposition,
         tinyagents_orchestration::subagent::SubagentPersistenceDisposition::TerminalExisting
     );
+}
+
+#[tokio::test]
+async fn each_agent_dedupes_its_own_in_flight_sub_agents() {
+    use crate::core::runtime::agent_scope::test_agent_context;
+    use crate::core::runtime::{context::CoreContext, DomainSet};
+    use std::sync::Arc;
+
+    let root = CoreContext::for_test(DomainSet::full(), None);
+    let alpha = test_agent_context(&root, "alpha");
+    let beta = test_agent_context(&root, "beta");
+
+    let alpha_map = CoreContext::scope(Arc::clone(&alpha), async { host_in_flight() }).await;
+    let beta_map = CoreContext::scope(beta, async { host_in_flight() }).await;
+    let alpha_again = CoreContext::scope(alpha, async { host_in_flight() }).await;
+
+    assert!(!Arc::ptr_eq(&alpha_map, &beta_map));
+    assert!(Arc::ptr_eq(&alpha_map, &alpha_again));
 }

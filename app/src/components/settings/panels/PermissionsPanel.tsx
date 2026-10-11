@@ -4,7 +4,6 @@ import { useT } from '../../../lib/i18n/I18nContext';
 import {
   type AgentPaths,
   type AutonomyLevel,
-  isTauri,
   openhumanGetAgentPaths,
   openhumanGetAutonomySettings,
   openhumanUpdateAgentPaths,
@@ -77,10 +76,6 @@ const PermissionsPanel = () => {
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      if (!isTauri()) {
-        setIsLoading(false);
-        return;
-      }
       try {
         const autonomyResp = await openhumanGetAutonomySettings();
         if (cancelled) return;
@@ -113,7 +108,6 @@ const PermissionsPanel = () => {
   // so we don't accidentally clobber what the advanced panel may have set.
   const persistTier = async (nextLevel: AutonomyLevel) => {
     const seq = ++persistSeqRef.current;
-    if (!isTauri()) return;
     setError(null);
     setSavedNote(null);
     setIsSaving(true);
@@ -160,7 +154,6 @@ const PermissionsPanel = () => {
   };
 
   const saveActionDir = async () => {
-    if (!isTauri()) return;
     const seq = ++dirSeqRef.current;
     setActionDirSaving(true);
     setActionDirError(null);
@@ -186,12 +179,6 @@ const PermissionsPanel = () => {
   return (
     <SettingsPanel>
       <div className="space-y-5">
-        {!isTauri() && (
-          <p className="text-sm text-coral-600 dark:text-coral-300">
-            {t('settings.agentAccess.desktopOnly')}
-          </p>
-        )}
-
         {isLoading ? (
           <p className="text-sm text-content-muted">{t('settings.agentAccess.loading')}</p>
         ) : (

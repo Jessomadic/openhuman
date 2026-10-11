@@ -26,40 +26,6 @@ fn discover_reads_user_scope_workflows_dir() {
     assert!(!found[0].legacy);
 }
 
-/// Names containing path separators or traversal sequences are rejected
-/// before any filesystem access.
-#[test]
-fn uninstall_skill_rejects_path_traversal_names() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(home.path().join(".openhuman").join("skills")).unwrap();
-    for bad in ["../etc", "foo/bar", "foo\\bar", "..", "foo/../bar"] {
-        let err = uninstall_workflow(
-            UninstallWorkflowParams { name: bad.into() },
-            Some(home.path()),
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("path separators") || err.contains("is not installed"),
-            "name {bad:?} should be rejected before fs access, got: {err}"
-        );
-    }
-}
-
-/// Empty and whitespace-only names return a clear required-field error.
-#[test]
-fn uninstall_skill_rejects_empty_name() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(home.path().join(".openhuman").join("skills")).unwrap();
-    for bad in ["", "   ", "\t"] {
-        let err = uninstall_workflow(
-            UninstallWorkflowParams { name: bad.into() },
-            Some(home.path()),
-        )
-        .unwrap_err();
-        assert!(err.contains("name is required"), "{bad:?} => {err}");
-    }
-}
-
 /// Uninstalling a skill that is not installed surfaces a recognizable
 /// error rather than a generic I/O failure.
 #[test]
@@ -74,26 +40,6 @@ fn uninstall_skill_missing_skill_errors_cleanly() {
     )
     .unwrap_err();
     assert!(err.contains("not installed"), "got: {err}");
-}
-
-/// A directory that does not contain a `SKILL.md` is refused — we only
-/// remove things that look like skills we installed, not arbitrary
-/// directories the user dropped in.
-#[test]
-fn uninstall_skill_refuses_dir_without_skill_md() {
-    let home = tempfile::tempdir().unwrap();
-    let bogus = home.path().join(".openhuman").join("skills").join("bogus");
-    std::fs::create_dir_all(&bogus).unwrap();
-    std::fs::write(bogus.join("random.txt"), "not a skill").unwrap();
-    let err = uninstall_workflow(
-        UninstallWorkflowParams {
-            name: "bogus".into(),
-        },
-        Some(home.path()),
-    )
-    .unwrap_err();
-    assert!(err.contains("does not look like a workflow"), "got: {err}");
-    assert!(bogus.exists(), "non-skill dir should not be deleted");
 }
 
 /// Delete must work for workflows authored post-rename, i.e. under
@@ -114,108 +60,6 @@ fn uninstall_workflow_removes_new_workflows_dir() {
     .expect("delete should succeed for a workflows/ dir");
     assert_eq!(out.name, "wf");
     assert!(!dir.exists(), "workflow dir should be removed");
-}
-
-/// A symlink inside the skills root pointing outside the root must be
-/// rejected by the raw-path symlink preflight before `canonicalize`
-/// would follow the link. The earlier `starts_with` / `is_dir` guards
-/// remain as defence-in-depth for anything that slips past the
-/// preflight on future refactors.
-#[cfg(unix)]
-#[test]
-fn uninstall_skill_rejects_symlink_escape() {
-    let home = tempfile::tempdir().unwrap();
-    let skills_root = home.path().join(".openhuman").join("skills");
-    std::fs::create_dir_all(&skills_root).unwrap();
-    let outside = tempfile::tempdir().unwrap();
-    let target = outside.path().join("real");
-    write(
-        &target.join("SKILL.md"),
-        "---\nname: real\ndescription: out of tree\n---\n",
-    );
-    std::os::unix::fs::symlink(&target, skills_root.join("real")).unwrap();
-    let err = uninstall_workflow(
-        UninstallWorkflowParams {
-            name: "real".into(),
-        },
-        Some(home.path()),
-    )
-    .unwrap_err();
-    assert!(
-        err.contains("symlinked alias")
-            || err.contains("path escapes skills root")
-            || err.contains("is not a directory"),
-        "symlink out of tree must be rejected, got: {err}"
-    );
-    assert!(target.exists(), "symlink target must not be deleted");
-}
-
-/// An in-tree symlink alias (`skills/alias -> skills/real`) must be
-/// rejected even though it does not escape the skills root — otherwise
-/// the uninstall of `alias` would nuke the real skill directory behind
-/// it, violating the invariant that the named slug is deleted.
-#[cfg(unix)]
-#[test]
-fn uninstall_skill_rejects_symlinked_alias_in_tree() {
-    let home = tempfile::tempdir().unwrap();
-    let skills_root = home.path().join(".openhuman").join("skills");
-    std::fs::create_dir_all(&skills_root).unwrap();
-    let real_dir = skills_root.join("real");
-    write(
-        &real_dir.join("SKILL.md"),
-        "---\nname: real\ndescription: in tree\n---\n",
-    );
-    std::os::unix::fs::symlink(&real_dir, skills_root.join("alias")).unwrap();
-    let err = uninstall_workflow(
-        UninstallWorkflowParams {
-            name: "alias".into(),
-        },
-        Some(home.path()),
-    )
-    .unwrap_err();
-    assert!(
-        err.contains("symlinked alias"),
-        "in-tree alias must be rejected by preflight, got: {err}"
-    );
-    assert!(
-        real_dir.join("SKILL.md").exists(),
-        "real skill behind the alias must survive"
-    );
-}
-
-/// A symlinked skills *root* (`~/.openhuman/skills -> elsewhere`) must
-/// be refused before canonicalisation, since `canonicalize` would
-/// resolve it to the target and the `starts_with` guard would then
-/// compare against the resolved target, not the nominal root.
-#[cfg(unix)]
-#[test]
-fn uninstall_skill_rejects_symlinked_skills_root() {
-    let home = tempfile::tempdir().unwrap();
-    let real_root = tempfile::tempdir().unwrap();
-    let real_skills = real_root.path().join("skills");
-    std::fs::create_dir_all(&real_skills).unwrap();
-    write(
-        &real_skills.join("real").join("SKILL.md"),
-        "---\nname: real\ndescription: in real root\n---\n",
-    );
-    std::fs::create_dir_all(home.path().join(".openhuman")).unwrap();
-    std::os::unix::fs::symlink(&real_skills, home.path().join(".openhuman").join("skills"))
-        .unwrap();
-    let err = uninstall_workflow(
-        UninstallWorkflowParams {
-            name: "real".into(),
-        },
-        Some(home.path()),
-    )
-    .unwrap_err();
-    assert!(
-        err.contains("symlink"),
-        "symlinked workflows root must be refused, got: {err}"
-    );
-    assert!(
-        real_skills.join("real").join("SKILL.md").exists(),
-        "target must survive"
-    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

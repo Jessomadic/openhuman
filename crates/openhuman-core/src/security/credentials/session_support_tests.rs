@@ -14,6 +14,77 @@ fn test_config(tmp: &TempDir) -> Config {
     }
 }
 
+#[test]
+fn bound_session_token_release_requires_issuing_backend() {
+    let tmp = TempDir::new().unwrap();
+    let mut config = test_config(&tmp);
+    config.api_url = Some("https://issuer.example/".into());
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert(
+        SESSION_ISSUING_BACKEND_META.into(),
+        "https://issuer.example".into(),
+    );
+    AuthService::from_config(&config)
+        .store_provider_token(
+            APP_SESSION_PROVIDER,
+            DEFAULT_AUTH_PROFILE_NAME,
+            "synthetic-session",
+            metadata,
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        get_session_token(&config).unwrap().as_deref(),
+        Some("synthetic-session")
+    );
+    assert!(matches!(
+        resolve_backend_credential(&config).unwrap(),
+        BackendCredential::Session(_)
+    ));
+    let state = build_session_state(&config).unwrap();
+    assert_eq!(
+        state.issuing_backend.as_deref(),
+        Some("https://issuer.example")
+    );
+    config.api_url = Some("https://different.example".into());
+    assert!(get_session_token(&config)
+        .unwrap_err()
+        .starts_with("SESSION_BACKEND_MISMATCH"));
+    assert!(resolve_backend_credential(&config)
+        .unwrap_err()
+        .starts_with("SESSION_BACKEND_MISMATCH"));
+    assert!(direct_backend_credential(&config, "test").is_none());
+    crate::security::credentials::api_key::store_api_key(&config, "synthetic-key").unwrap();
+    assert!(matches!(
+        resolve_backend_credential(&config).unwrap(),
+        BackendCredential::ApiKey(_)
+    ));
+}
+
+#[test]
+fn issuing_backend_normalizes_origin_and_rejects_url_secrets() {
+    assert_eq!(
+        normalize_session_backend("HTTPS://ISSUER.EXAMPLE:443/path/").unwrap(),
+        "https://issuer.example"
+    );
+    for invalid in [
+        "https://operator:secret@issuer.example",
+        "https://issuer.example?token=secret",
+        "https://issuer.example#secret",
+        "file:///private",
+    ] {
+        assert_eq!(
+            normalize_session_backend(invalid).unwrap_err(),
+            "invalid issuing backend"
+        );
+    }
+    let legacy: AuthStateResponse = serde_json::from_value(
+        json!({"isAuthenticated":false,"userId":null,"user":null,"profileId":null}),
+    )
+    .unwrap();
+    assert!(legacy.issuing_backend.is_none());
+}
+
 // ── profile_name_or_default ────────────────────────────────────
 
 #[test]
@@ -256,6 +327,64 @@ fn get_session_token_returns_stored_token_when_present() {
     assert!(state.profile_id.is_some());
 }
 
+#[test]
+fn backend_bearer_secret_prefers_api_key_and_returns_none_when_empty() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp);
+    assert_eq!(backend_bearer_secret(&config).unwrap(), None);
+    crate::security::credentials::api_key::store_api_key(&config, "th_test_key")
+        .expect("store API key");
+    assert_eq!(
+        backend_bearer_secret(&config).unwrap().as_deref(),
+        Some("th_test_key")
+    );
+}
+
+#[test]
+fn backend_bearer_secret_falls_back_to_session_token() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp);
+    AuthService::from_config(&config)
+        .store_provider_token(
+            APP_SESSION_PROVIDER,
+            DEFAULT_AUTH_PROFILE_NAME,
+            "raw-session-token",
+            std::collections::HashMap::new(),
+            true,
+        )
+        .expect("store session token");
+    assert_eq!(
+        backend_bearer_secret(&config).unwrap().as_deref(),
+        Some("raw-session-token")
+    );
+}
+
+#[test]
+fn offline_local_token_is_never_a_backend_bearer() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp);
+    AuthService::from_config(&config)
+        .store_provider_token(
+            APP_SESSION_PROVIDER,
+            DEFAULT_AUTH_PROFILE_NAME,
+            "desktop.test.local",
+            std::collections::HashMap::new(),
+            true,
+        )
+        .unwrap();
+    let error = resolve_backend_credential(&config).unwrap_err();
+    assert_eq!(error, LOCAL_SESSION_BACKEND_UNAVAILABLE);
+    assert!(crate::core::observability::is_backend_unavailable_message(
+        &error
+    ));
+    // Regression (Sentry 36649): the local-session refusal must classify as
+    // expected, not reach Sentry as an `rpc.invoke_method` error.
+    assert!(matches!(
+        crate::core::observability::expected_error_kind(&error),
+        Some(crate::core::observability::ExpectedErrorKind::BackendUnavailable)
+    ));
+}
+
 /// Regression: when both an app-session profile and a stored API key are
 /// present, `auth.get_state` must report `credential: "api-key"`, matching
 /// `resolve_backend_credential`'s precedence — every backend request the
@@ -363,5 +492,48 @@ fn classify_expired_within_skew_window() {
     assert_eq!(
         classify_session_token(Some(&p), now),
         SessionTokenCheck::Expired
+    );
+}
+
+// ── direct_backend_credential ──────────────────────────────────
+
+#[test]
+fn direct_backend_credential_skips_without_a_usable_credential() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp);
+    // Signed out: nothing to authenticate a direct backend call with.
+    assert!(direct_backend_credential(&config, "test").is_none());
+
+    // The offline local session has no TinyHumans account (Sentry 36649).
+    AuthService::from_config(&config)
+        .store_provider_token(
+            APP_SESSION_PROVIDER,
+            DEFAULT_AUTH_PROFILE_NAME,
+            "desktop.test.local",
+            std::collections::HashMap::new(),
+            true,
+        )
+        .unwrap();
+    assert!(direct_backend_credential(&config, "test").is_none());
+}
+
+#[test]
+fn direct_backend_credential_returns_a_live_session() {
+    let tmp = TempDir::new().unwrap();
+    let config = test_config(&tmp);
+    AuthService::from_config(&config)
+        .store_provider_token(
+            APP_SESSION_PROVIDER,
+            DEFAULT_AUTH_PROFILE_NAME,
+            "raw-session-token",
+            std::collections::HashMap::new(),
+            true,
+        )
+        .unwrap();
+    // Unit tests resolve the plain test transport, so the transport gate passes.
+    assert!(crate::backend::transport::is_installed());
+    assert_eq!(
+        direct_backend_credential(&config, "test"),
+        Some(BackendCredential::Session("raw-session-token".into()))
     );
 }

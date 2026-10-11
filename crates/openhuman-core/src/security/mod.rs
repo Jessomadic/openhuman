@@ -10,24 +10,19 @@ pub mod audit;
 // `Guard<D>` decorator draws from, and a swapped driver must never see any of
 // it. None of them is gated — the family is kernel, permanently.
 pub mod approval;
-pub mod bubblewrap;
 pub mod credentials;
-pub mod detect;
 pub mod devices;
-pub mod docker;
 pub mod egress;
 pub mod encryption;
-pub mod firejail;
 pub mod keyring;
 pub mod keyring_consent;
-pub mod landlock;
 pub mod live_policy;
 pub mod pairing;
 pub mod pii;
 pub mod policy;
 pub mod prompt_injection;
+pub mod scrub;
 pub mod secrets;
-pub mod traits;
 
 #[allow(unused_imports)]
 pub use self::keyring::SecretStore;
@@ -37,8 +32,6 @@ pub use audit::{
     CommandExecutionLog,
 };
 pub use core::*;
-#[allow(unused_imports)]
-pub use detect::create_sandbox;
 #[allow(unused_imports)]
 pub use egress::{
     emit_external_transfer, enforce_egress, local_only_blocks, local_only_tool_block, DataKind,
@@ -62,8 +55,6 @@ pub use policy::{CommandClass, GateDecision};
 #[allow(unused_imports)]
 pub use policy::{TrustedAccess, TrustedRoot};
 pub use policy::{POLICY_BLOCKED_MARKER, POLICY_DENIED_MARKER};
-#[allow(unused_imports)]
-pub use traits::{NoopSandbox, Sandbox};
 
 pub use schemas::{
     all_controller_schemas as all_security_controller_schemas,

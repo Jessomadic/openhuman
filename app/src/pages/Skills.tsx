@@ -1,6 +1,8 @@
+import { Brain, Check, ChevronRight, Info, MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
+import { renderChannelIcon } from '../components/channels/channelIcon';
 import ChannelSetupModal from '../components/channels/ChannelSetupModal';
 import McpServersPage from '../components/channels/mcp/McpServersPage';
 import ComposioConnectModal from '../components/composio/ComposioConnectModal';
@@ -18,9 +20,12 @@ import TwoPaneNav from '../components/layout/TwoPaneNav';
 import { SettingsLayoutProvider } from '../components/settings/layout/SettingsLayoutContext';
 import SettingsTabbedPage from '../components/settings/layout/SettingsTabbedPage';
 import ComposioPanel from '../components/settings/panels/ComposioPanel';
+import ComputerPanel, { type ComputerSection } from '../components/settings/panels/ComputerPanel';
 import EmbeddingsPanel from '../components/settings/panels/EmbeddingsPanel';
+import LiveVoicePanel from '../components/settings/panels/LiveVoicePanel';
 import LlmConnectionsPanel from '../components/settings/panels/LlmConnectionsPanel';
 import SearchPanel from '../components/settings/panels/SearchPanel';
+import ToolsPanel from '../components/settings/panels/ToolsPanel';
 import UsagePanel from '../components/settings/panels/UsagePanel';
 import VoiceConnectionsPanel from '../components/settings/panels/VoiceConnectionsPanel';
 import WalletPanel from '../components/settings/panels/WalletPanel';
@@ -39,7 +44,8 @@ import {
 import SkillSearchBar from '../components/skills/SkillSearchBar';
 import SkillsPage from '../components/skills/SkillsPage';
 import VoiceSetupModal from '../components/skills/VoiceSetupModal';
-import Badge from '../components/ui/Badge';
+import { Alert, AlertDescription } from '../components/ui/Alert';
+import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import { useVoiceSkillStatus } from '../features/voice/useVoiceSkillStatus';
@@ -59,6 +65,7 @@ import type { ToastNotification } from '../types/intelligence';
 import { IS_DEV } from '../utils/config';
 import { isLocalSessionToken } from '../utils/localSession';
 import { openhumanComposioGetMode } from '../utils/tauriCommands';
+import Memory from './Memory';
 
 /** Small inline icon helper for the Connections sidebar nav. */
 const navIcon = (d: string) => (
@@ -80,16 +87,16 @@ function channelStatusLabel(status: ChannelConnectionStatus, t: (key: string) =>
   }
 }
 
-function channelStatusColor(status: ChannelConnectionStatus): string {
+function channelStatusVariant(status: ChannelConnectionStatus): BadgeVariant {
   switch (status) {
     case 'connected':
-      return 'text-sage-600 dark:text-sage-300';
+      return 'success';
     case 'connecting':
-      return 'text-amber-600 dark:text-amber-300';
+      return 'warning';
     case 'error':
-      return 'text-coral-600 dark:text-coral-300';
+      return 'danger';
     default:
-      return 'text-content-faint';
+      return 'neutral';
   }
 }
 
@@ -223,19 +230,23 @@ function ComposioConnectorTile({
                 : 'border-line bg-surface hover:bg-surface-hover'
       }`}>
       {isPreview && (
-        <span
+        <Badge
+          variant="warning"
+          dot={false}
           data-testid={`composio-preview-badge-${meta.slug}`}
-          className="absolute right-1.5 top-1.5 max-w-18 truncate rounded-full border border-amber-200 bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase leading-none text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-200"
+          className="absolute right-1.5 top-1.5 max-w-18 truncate"
           title={t('composio.previewTooltip')}>
           {t('composio.previewBadge')}
-        </span>
+        </Badge>
       )}
       {!isPreview && activeConnectionCount > 1 && (
-        <span
-          className="absolute right-1.5 top-1.5 rounded-full border border-sage-200 bg-sage-100 px-1.5 py-0.5 text-[9px] font-semibold leading-none text-sage-800 dark:border-sage-500/40 dark:bg-sage-500/15 dark:text-sage-200"
+        <Badge
+          variant="success"
+          dot={false}
+          className="absolute right-1.5 top-1.5"
           title={t('composio.connect.connectedAccounts')}>
           {activeConnectionCount}
-        </span>
+        </Badge>
       )}
       <div className="relative flex h-12 w-12 shrink-0 items-center justify-center text-content-secondary [&_img]:max-h-10 [&_img]:max-w-10 [&_svg]:h-8 [&_svg]:w-8">
         {meta.icon}
@@ -288,37 +299,23 @@ function ChannelTile({
 }: ChannelTileProps) {
   const { t } = useT();
   const isConnected = status === 'connected';
-  const isPending = status === 'connecting';
-  const isError = status === 'error';
   const statusLabel = channelStatusLabel(status, t);
   const ctaLabel = isConnected ? t('skills.configure') : t('channels.setup');
 
-  // Horizontal tile: icon on the left; name → status → default control stacked
-  // on the right. The tile is a container (not one button) so "configure" (the
-  // icon + name row) and "set as default" stay distinct, focusable controls —
-  // collapsing the old two-selector layout (connect grid + separate picker)
-  // into one place. "Set as default" only appears for channels you can actually
-  // route through (connected); the default badge still shows on whichever
-  // channel is persisted as default, connected or not.
+  // The tile is a container, not one button, so "configure" (icon + name row)
+  // and "set as default" stay distinct, focusable controls. Status is a Badge;
+  // the default channel gets the primary selection border used by every
+  // picker tile in Settings. "Set as default" only appears for channels you
+  // can route through (connected); the Default badge follows the persisted
+  // default whether or not it is currently connected.
   const showDefaultControl = isDefault || isConnected;
 
   return (
     <div
-      className={`group flex flex-col gap-2 rounded-2xl border p-3 transition-colors ${
-        isConnected
-          ? 'border-sage-300 bg-sage-50/80 shadow-[0_0_0_1px_rgba(34,197,94,0.12)] dark:border-sage-500/30 dark:bg-sage-500/10'
-          : isPending
-            ? 'border-amber-200 bg-amber-50/40 dark:border-amber-500/30 dark:bg-amber-500/10'
-            : isError
-              ? 'border-coral-200 bg-coral-50/30 dark:border-coral-500/30 dark:bg-coral-500/10'
-              : 'border-line bg-surface'
-      } ${
-        // The default channel keeps its connection-status colour but gains a
-        // primary ring so "which one is the default" reads at a glance without
-        // masking whether it is connected.
+      className={`flex h-full flex-col rounded-xl border bg-surface transition-colors ${
         isDefault
-          ? 'ring-2 ring-primary-400 ring-offset-1 ring-offset-white dark:ring-offset-neutral-900'
-          : ''
+          ? 'border-primary-500 ring-1 ring-primary-500'
+          : 'border-line hover:border-line-strong'
       }`}>
       <Button
         type="button"
@@ -328,50 +325,89 @@ function ChannelTile({
         onClick={onOpen}
         title={`${def.display_name} — ${def.description}`}
         aria-label={`${def.display_name}, ${statusLabel}. ${ctaLabel}.`}
-        className="h-auto w-full justify-start gap-3 rounded-xl p-0 text-left">
-        <div className="relative flex h-10 w-10 shrink-0 items-center justify-center text-content-secondary [&>span]:h-10 [&>span]:w-10 [&>span]:rounded-2xl [&_svg]:h-6 [&_svg]:w-6">
-          {icon}
-        </div>
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="line-clamp-2 text-xs font-semibold leading-tight text-content">
+        className="h-auto w-full justify-start gap-3 rounded-b-none rounded-t-xl px-3 py-3 text-left">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-muted text-content-secondary [&>span]:h-9 [&>span]:w-9 [&>span]:rounded-lg [&_svg]:h-5 [&_svg]:w-5">
+          {/* Branded badge when there is one, else the definition's own icon,
+              else a generic chat glyph — never an empty tile. */}
+          {icon ?? renderChannelIcon(def.icon) ?? <MessageSquare aria-hidden />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-semibold text-content">
             {def.display_name}
           </span>
-          <span className={`line-clamp-1 text-[11px] font-medium ${channelStatusColor(status)}`}>
-            {statusLabel}
+          <span className="mt-0.5 block truncate text-xs font-normal text-content-muted">
+            {def.description}
           </span>
-        </div>
+        </span>
+        <ChevronRight className="h-4 w-4 shrink-0 text-content-faint" aria-hidden />
       </Button>
-      {showDefaultControl && (
-        // Aligns under the name/status text (icon 2.5rem + gap 0.75rem).
-        <div className="pl-13">
-          {isDefault ? (
-            <Badge
-              data-testid={setDefaultTestId}
-              variant="primary"
-              className="gap-1 border-primary-400/60 bg-primary-100/70 text-primary-700 dark:border-primary-500/40 dark:bg-primary-500/15 dark:text-primary-200">
-              <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path
-                  fillRule="evenodd"
-                  d="M16.704 5.29a1 1 0 010 1.42l-7.5 7.5a1 1 0 01-1.42 0l-3.5-3.5a1 1 0 111.42-1.42l2.79 2.79 6.79-6.79a1 1 0 011.42 0z"
-                  clipRule="evenodd"
-                />
-              </svg>
+      <div className="mt-auto flex min-h-11 items-center justify-between gap-2 border-t border-line-subtle px-3 py-2">
+        <Badge variant={channelStatusVariant(status)}>{statusLabel}</Badge>
+        {showDefaultControl &&
+          (isDefault ? (
+            <Badge data-testid={setDefaultTestId} variant="primary" dot={false}>
+              <Check className="h-3 w-3" aria-hidden />
               {t('channels.defaultBadge')}
             </Badge>
           ) : (
             <Button
               type="button"
-              variant="secondary"
+              variant="tertiary"
               size="xs"
               data-testid={setDefaultTestId}
               onClick={onSetDefault}
-              disabled={setDefaultBusy}
-              className="text-content-muted hover:border-primary-300 hover:text-primary-600 dark:hover:border-primary-500/40 dark:hover:text-primary-300">
+              disabled={setDefaultBusy}>
               {t('channels.setAsDefault')}
             </Button>
-          )}
-        </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Connections → Channels body: connected channels first, then the ones still
+ * to set up, each in its own card with a count, and the Slack pointer as a
+ * quiet note underneath.
+ */
+function ChannelsOverview({
+  defs,
+  statusFor,
+  renderTile,
+}: {
+  defs: ChannelDefinition[];
+  statusFor: (def: ChannelDefinition) => ChannelConnectionStatus;
+  renderTile: (def: ChannelDefinition, status: ChannelConnectionStatus) => React.ReactNode;
+}) {
+  const { t } = useT();
+  const withStatus = defs.map(def => ({ def, status: statusFor(def) }));
+  const connected = withStatus.filter(d => d.status === 'connected');
+  const available = withStatus.filter(d => d.status !== 'connected');
+  const grid = 'grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3';
+
+  return (
+    // `skills-channels` is the product-tour anchor for this surface.
+    <div className="space-y-4" data-testid="channels-overview" data-walkthrough="skills-channels">
+      {connected.length > 0 && (
+        <Card
+          title={t('skills.connected')}
+          description={t('channels.connectedDesc')}
+          headerRight={<Badge variant="success">{connected.length}</Badge>}>
+          <div className={grid}>{connected.map(d => renderTile(d.def, d.status))}</div>
+        </Card>
       )}
+      {available.length > 0 && (
+        <Card
+          title={t('skills.available')}
+          description={t('channels.availableDesc')}
+          headerRight={<Badge variant="neutral">{available.length}</Badge>}>
+          <div className={grid}>{available.map(d => renderTile(d.def, d.status))}</div>
+        </Card>
+      )}
+      <Alert density="compact">
+        <Info className="h-4 w-4 shrink-0 text-content-muted" aria-hidden />
+        <AlertDescription>{t('channels.connectHelp.slackNote')}</AlertDescription>
+      </Alert>
     </div>
   );
 }
@@ -445,10 +481,14 @@ type ConnectionsTab =
   | 'channels'
   | 'mcp'
   | 'skills'
+  | 'brain'
+  | 'agent-tools'
   | 'llm'
   | 'voice'
+  | 'voice-agents'
   | 'embeddings'
   | 'search'
+  | 'computer'
   | 'usage'
   | 'composio-key'
   | 'wallet';
@@ -485,20 +525,26 @@ const INTELLIGENCE_HEADERS: Partial<Record<ConnectionsTab, { titleKey: string; d
 /** Intelligence tabs whose panel renders its own header card (with chip tabs in
  *  it), so the Connections pane skips the shared header + card wrapper. */
 const SELF_HEADER_TABS: ReadonlySet<ConnectionsTab> = new Set<ConnectionsTab>([
+  'agent-tools',
   'llm',
   'voice',
+  'voice-agents',
   'embeddings',
   'search',
+  'computer',
   'composio-key',
   'usage',
   'wallet',
 ]);
 
 const INTELLIGENCE_TABS: ReadonlySet<ConnectionsTab> = new Set<ConnectionsTab>([
+  'agent-tools',
   'llm',
   'voice',
+  'voice-agents',
   'embeddings',
   'search',
+  'computer',
   'usage',
   'composio-key',
   'wallet',
@@ -523,10 +569,14 @@ export default function Skills() {
       raw === 'channels' ||
       raw === 'mcp' ||
       raw === 'skills' ||
+      raw === 'brain' ||
+      raw === 'agent-tools' ||
       raw === 'llm' ||
       raw === 'voice' ||
+      raw === 'voice-agents' ||
       raw === 'embeddings' ||
       raw === 'search' ||
+      raw === 'computer' ||
       raw === 'usage' ||
       raw === 'composio-key' ||
       raw === 'wallet'
@@ -537,14 +587,39 @@ export default function Skills() {
     if (raw === 'messaging') return 'channels';
     if (raw === 'tools') return 'mcp';
     if (raw === 'explorer') return 'skills';
+    // Live voice agents: singular and feature-name spellings.
+    if (raw === 'voice-agent' || raw === 'live-voice') return 'voice-agents';
+    // Browser and Desktop are sub-tabs of Computer now.
+    if (raw === 'browser' || raw === 'desktop') return 'computer';
     // Default landing is the Welcome overview for the Connections page.
     return 'welcome';
   }, [location.search]);
+
+  // `?section=` picks Computer's sub-tab; the legacy `?tab=browser|desktop`
+  // deep links land on the matching one.
+  const computerSection = useMemo<ComputerSection>(() => {
+    const params = new URLSearchParams(location.search);
+    const raw = params.get('section') ?? params.get('tab');
+    return raw === 'browser' || raw === 'models' ? raw : 'desktop';
+  }, [location.search]);
+
+  const handleComputerSection = useCallback(
+    (section: ComputerSection) => {
+      const params = new URLSearchParams(location.search);
+      params.set('tab', 'computer');
+      params.set('section', section);
+      navigate({ pathname: location.pathname, search: `?${params.toString()}` });
+    },
+    [location.pathname, location.search, navigate]
+  );
 
   const handleTabChange = useCallback(
     (tab: ConnectionsTab) => {
       const params = new URLSearchParams(location.search);
       params.set('tab', tab);
+      // Memory's own chip param (and v1's `view`) must not leak into other tabs.
+      params.delete('brain');
+      params.delete('view');
       navigate({ pathname: location.pathname, search: `?${params.toString()}` });
     },
     [location.pathname, location.search, navigate]
@@ -966,6 +1041,27 @@ export default function Skills() {
                     ),
                   },
                   {
+                    // Memory v2: engine, ask, learnings, conversations,
+                    // documents and context (formerly the top-level /brain page).
+                    value: 'brain',
+                    label: t('nav.brain'),
+                    icon: <Brain className="h-4 w-4" aria-hidden />,
+                  },
+                  {
+                    // Built-in agent tools, relocated from Settings. (`?tab=tools`
+                    // is a legacy alias for MCP, hence the distinct value.)
+                    value: 'agent-tools',
+                    label: t('pages.settings.features.tools'),
+                    icon: navIcon(
+                      'M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z'
+                    ),
+                  },
+                  {
+                    value: 'computer',
+                    label: t('computer.title'),
+                    icon: navIcon('M4 5h16v11H4zM8 20h8m-4-4v4'),
+                  },
+                  {
                     // Wallet balances relocated from Settings → Data.
                     value: 'wallet',
                     label: t('pages.settings.account.walletBalances'),
@@ -997,6 +1093,13 @@ export default function Skills() {
                     label: t('pages.settings.ai.voice'),
                     icon: navIcon(
                       'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z'
+                    ),
+                  },
+                  {
+                    value: 'voice-agents',
+                    label: t('connections.tabs.voiceAgents'),
+                    icon: navIcon(
+                      'M3 18v-6a9 9 0 0118 0v6M21 19a2 2 0 01-2 2h-1a2 2 0 01-2-2v-3a2 2 0 012-2h3zM3 19a2 2 0 002 2h1a2 2 0 002-2v-3a2 2 0 00-2-2H3z'
                     ),
                   },
                   {
@@ -1082,11 +1185,17 @@ export default function Skills() {
             panels (description, no title; the back button hides because the
             Connections sidebar owns navigation), so they fill the content pane
             and own their scroll directly. */
-        activeTab === 'mcp' || activeTab === 'skills' ? (
+        activeTab === 'mcp' || activeTab === 'skills' || activeTab === 'brain' ? (
           // The MCP and Skills pages own their own header and tab strip, like
           // the LLM page does, so they take the pane whole.
           <div className="h-full p-4">
-            {activeTab === 'mcp' ? <McpServersPage /> : <SkillsPage onToast={addToast} />}
+            {activeTab === 'mcp' ? (
+              <McpServersPage />
+            ) : activeTab === 'brain' ? (
+              <Memory />
+            ) : (
+              <SkillsPage onToast={addToast} />
+            )}
           </div>
         ) : INTELLIGENCE_TABS.has(activeTab) ? (
           // API-keys / provider panels were orphaned flush on the shell — give
@@ -1101,6 +1210,7 @@ export default function Skills() {
               <SettingsLayoutProvider value={{ inTwoPaneShell: true, headerless: true }}>
                 {activeTab === 'llm' && <LlmConnectionsPanel />}
                 {activeTab === 'voice' && <VoiceConnectionsPanel />}
+                {activeTab === 'voice-agents' && <LiveVoicePanel />}
                 {activeTab === 'embeddings' && (
                   <SettingsTabbedPage
                     title={t('pages.settings.ai.embeddings')}
@@ -1108,13 +1218,21 @@ export default function Skills() {
                     <EmbeddingsPanel embedded />
                   </SettingsTabbedPage>
                 )}
-                {activeTab === 'search' && (
+                {activeTab === 'agent-tools' && (
                   <SettingsTabbedPage
-                    title={t('settings.search.title')}
-                    description={t('connections.header.search')}>
-                    <SearchPanel embedded />
+                    title={t('pages.settings.features.tools')}
+                    description={t('pages.settings.features.toolsDesc')}>
+                    <ToolsPanel bare />
                   </SettingsTabbedPage>
                 )}
+                {activeTab === 'computer' && (
+                  <ComputerPanel
+                    section={computerSection}
+                    onSectionChange={handleComputerSection}
+                  />
+                )}
+                {/* Search owns its page shell (header switch + chip tabs), like LLM. */}
+                {activeTab === 'search' && <SearchPanel />}
                 {activeTab === 'composio-key' && (
                   <SettingsTabbedPage
                     title={t('connections.tabs.composioKey')}
@@ -1122,13 +1240,8 @@ export default function Skills() {
                     <ComposioPanel embedded />
                   </SettingsTabbedPage>
                 )}
-                {activeTab === 'usage' && (
-                  <SettingsTabbedPage
-                    title={t('settings.usage.title')}
-                    description={t('settings.usage.menuDesc')}>
-                    <UsagePanel />
-                  </SettingsTabbedPage>
-                )}
+                {/* Usage owns its page shell (header chip tabs), like LLM. */}
+                {activeTab === 'usage' && <UsagePanel />}
                 {activeTab === 'wallet' && <WalletPanel />}
               </SettingsLayoutProvider>
             ) : (
@@ -1182,84 +1295,32 @@ export default function Skills() {
                 {
                   <>
                     {activeTab === 'channels' && channelsGroup && (
-                      <Card className="animate-fade-up">
-                        <div className="p-3">
-                          <div className="px-1 pb-3 pt-1">
-                            <h2
-                              className="flex items-center gap-2 text-sm font-semibold text-content"
-                              data-walkthrough="skills-channels">
-                              <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-surface-subtle">
-                                <SkillCategoryIcon
-                                  category="Channels"
-                                  className={skillCategoryHeadingClassName('Channels')}
-                                />
-                              </span>
-                              {t('skills.channels')}
-                            </h2>
-                            <p className="mt-0.5 text-[11px] leading-relaxed text-content-muted">
-                              {t('channels.defaultMessaging')}
-                            </p>
-                            <p className="mt-1 text-[11px] leading-relaxed text-content-faint">
-                              {t('channels.connectHelp.slackNote')}
-                            </p>
-                          </div>
-                          {/* One unified surface: each tile shows connection status,
-                          opens setup/configure on click, and owns the "default
-                          messaging channel" selection via its footer control.
-                          Connected channels and not-yet-connected channels are
-                          rendered as two separate grids (no divider/label) so
-                          each group occupies its own rows. */}
-                          {(() => {
-                            // The built-in web channel needs no connection — treat it
-                            // as always available so it stays selectable as default.
-                            const statusFor = (def: ChannelDefinition): ChannelConnectionStatus =>
-                              def.id === 'web'
-                                ? 'connected'
-                                : bestChannelStatus(def.id as ChannelType);
-                            const renderTile = (def: ChannelDefinition) => {
-                              const channelId = def.id as ChannelType;
-                              return (
-                                <div key={channelId} data-testid={`skill-row-channel-${channelId}`}>
-                                  <ChannelTile
-                                    def={def}
-                                    status={statusFor(def)}
-                                    icon={channelIcons[def.icon]}
-                                    testId={`skill-install-channel-${channelId}`}
-                                    onOpen={() => setChannelModalDef(def)}
-                                    isDefault={
-                                      channelConnections.defaultMessagingChannel === channelId
-                                    }
-                                    onSetDefault={() => void handleSetDefaultChannel(channelId)}
-                                    setDefaultTestId={`channel-select-${channelId}`}
-                                    setDefaultBusy={defaultChannelBusy !== null}
-                                  />
-                                </div>
-                              );
-                            };
-                            const connected = channelDefs.filter(d => statusFor(d) === 'connected');
-                            const notConnected = channelDefs.filter(
-                              d => statusFor(d) !== 'connected'
-                            );
-                            const gridStyle = {
-                              gridTemplateColumns: 'repeat(auto-fill, minmax(13rem, 1fr))',
-                            };
-                            return (
-                              <div className="space-y-2 sm:space-y-3">
-                                {connected.length > 0 && (
-                                  <div className="grid gap-2 sm:gap-3" style={gridStyle}>
-                                    {connected.map(renderTile)}
-                                  </div>
-                                )}
-                                {notConnected.length > 0 && (
-                                  <div className="grid gap-2 sm:gap-3" style={gridStyle}>
-                                    {notConnected.map(renderTile)}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })()}
-                        </div>
-                      </Card>
+                      <ChannelsOverview
+                        defs={channelDefs}
+                        statusFor={def =>
+                          // The built-in web channel needs no connection, so it
+                          // stays selectable as the default.
+                          def.id === 'web' ? 'connected' : bestChannelStatus(def.id as ChannelType)
+                        }
+                        renderTile={(def, status) => {
+                          const channelId = def.id as ChannelType;
+                          return (
+                            <div key={channelId} data-testid={`skill-row-channel-${channelId}`}>
+                              <ChannelTile
+                                def={def}
+                                status={status}
+                                icon={channelIcons[def.icon]}
+                                testId={`skill-install-channel-${channelId}`}
+                                onOpen={() => setChannelModalDef(def)}
+                                isDefault={channelConnections.defaultMessagingChannel === channelId}
+                                onSetDefault={() => void handleSetDefaultChannel(channelId)}
+                                setDefaultTestId={`channel-select-${channelId}`}
+                                setDefaultBusy={defaultChannelBusy !== null}
+                              />
+                            </div>
+                          );
+                        }}
+                      />
                     )}
 
                     {activeTab === 'composio' && (

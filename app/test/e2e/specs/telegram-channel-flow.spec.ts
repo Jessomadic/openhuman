@@ -163,7 +163,7 @@ describe('Telegram channel — connect / receive / send / disconnect', () => {
 
     expect(out.ok).toBe(true);
 
-    // channels_list wraps its result in RpcOutcome — drill one level down.
+    // channels_list wraps its result in Outcome — drill one level down.
     const resultRaw = (out.result as Record<string, unknown> | null) ?? {};
     const channels: unknown[] = Array.isArray(resultRaw)
       ? resultRaw

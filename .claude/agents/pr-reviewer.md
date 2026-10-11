@@ -44,11 +44,11 @@ Skipping this step produces shallow reviews that miss architectural/consistency 
 
 ### 4. Analyze against these axes
 
-**Correctness** — logic bugs, off-by-one, null/undefined, async/await misuse, race conditions, error propagation (`Result<T>` / `RpcOutcome<T>` / thrown errors).
+**Correctness** — logic bugs, off-by-one, null/undefined, async/await misuse, race conditions, error propagation (`Result<T>` / `Outcome<T>` / thrown errors).
 
 **Project standards** (from `AGENTS.md`; `CLAUDE.md` is a symlink to it)
 - New Rust functionality lives in a subdirectory under `crates/openhuman-core/src/<domain>/`, not flat `crates/openhuman-core/src/*.rs` files or `crates/openhuman-core/src/core/`.
-- Controllers exposed via `schemas.rs` + registry, not ad-hoc branches in `core/cli.rs` / `core/jsonrpc.rs`.
+- Controllers exposed via `schemas.rs` + registry, not ad-hoc branches in `core/cli.rs` / `openhuman-rpc/src/server/`.
 - No dynamic `import()` in production `app/src` code.
 - Frontend reads `VITE_*` via `app/src/utils/config.ts`, not `import.meta.env` directly.
 - `crates/openhuman-app` is desktop-only; no Android/iOS branches there.
@@ -145,7 +145,7 @@ sequenceDiagram
 
 ## Verified / looks good
 <Short bullets of things you explicitly checked and consider correct — signals the review was thorough, not just looking for things to complain about.>
-- Error paths in `foo.rs` propagate `RpcOutcome<T>` correctly.
+- Error paths in `foo.rs` propagate `Outcome<T>` correctly.
 - New Vitest in `Foo.test.tsx` exercises the empty + error states.
 
 ---

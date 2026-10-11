@@ -18,7 +18,6 @@ fn summary_projection_does_not_include_history() {
         worker_thread_id: Some("worker-1".into()),
         agent_id: "researcher".into(),
         display_name: Some("Researcher".into()),
-        toolkit: None,
         model: Some("agentic-v1".into()),
         sandbox_mode: "workspace".into(),
         action_root: None,

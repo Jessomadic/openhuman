@@ -17,14 +17,11 @@
 
 use log::{debug, warn};
 use reqwest::Method;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::api::config::effective_backend_api_url;
-use crate::api::jwt::get_session_token;
-use crate::api::BackendOAuthClient;
+use crate::backend::BackendClient;
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 const LOG_PREFIX: &str = "[voice_reply]";
 
@@ -73,35 +70,9 @@ pub mod test_seam {
     }
 }
 
-/// One frame on the viseme timeline. `viseme` is an Oculus / Microsoft
-/// 15-set code (`sil, PP, FF, TH, DD, kk, CH, SS, nn, RR, aa, E, I, O, U`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct VisemeFrame {
-    pub viseme: String,
-    pub start_ms: u64,
-    pub end_ms: u64,
-}
-
-/// Char-level timing returned by some backends (e.g. ElevenLabs alignment).
-/// Not directly rendered, but kept so the UI can derive a fallback timeline
-/// when the backend does not ship visemes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AlignmentFrame {
-    pub char: String,
-    pub start_ms: u64,
-    pub end_ms: u64,
-}
-
-/// Normalized response handed to the UI — matches the existing TS shape so
-/// the frontend swap is a one-line change.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReplySpeechResult {
-    pub audio_base64: String,
-    pub audio_mime: String,
-    pub visemes: Vec<VisemeFrame>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alignment: Option<Vec<AlignmentFrame>>,
-}
+// The response types and the tolerant-shape parsers live in
+// `tinyinference_voice::reply`; the UI contract is unchanged.
+use tinyinference_voice::reply::{normalize_response, ReplySpeech as ReplySpeechResult};
 
 /// Caller-tunable knobs.
 #[derive(Debug, Default, Clone)]
@@ -118,7 +89,7 @@ pub struct ReplySpeechOptions {
 
 /// Synthesize the agent's reply through the hosted backend.
 ///
-/// Uses [`BackendOAuthClient`] for the same reason `referral` does: the
+/// Uses [`BackendClient`] for the same reason `referral` does: the
 /// desktop WebView's `fetch` to the backend can fail with an opaque
 /// "Load failed" (CORS/TLS quirks), and routing through the core gives us
 /// a consistent auth + retry surface.
@@ -126,7 +97,7 @@ pub async fn synthesize_reply(
     config: &Config,
     text: &str,
     opts: &ReplySpeechOptions,
-) -> Result<RpcOutcome<ReplySpeechResult>, String> {
+) -> Result<Outcome<ReplySpeechResult>, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err("text is required".to_string());
@@ -146,7 +117,7 @@ pub async fn synthesize_reply(
             .lock()
             .unwrap()
             .push(trimmed.to_string());
-        return Ok(RpcOutcome::single_log(
+        return Ok(Outcome::single_log(
             ReplySpeechResult {
                 audio_base64: String::new(),
                 audio_mime: "audio/mpeg".to_string(),
@@ -157,20 +128,12 @@ pub async fn synthesize_reply(
         ));
     }
 
-    let token = get_session_token(config)
-        .map_err(|e| e.to_string())?
-        .and_then(|t| {
-            let s = t.trim().to_string();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        })
-        .ok_or_else(|| "no backend session token; sign in first".to_string())?;
+    // API key (sent as `x-api-key`) or live session JWT (sent as Bearer).
+    let credential =
+        crate::security::credentials::session_support::resolve_backend_credential(config)?;
 
-    let api_url = effective_backend_api_url(&config.api_url);
-    let client = BackendOAuthClient::new(&api_url).map_err(|e| e.to_string())?;
+    let api_url = crate::backend::require_base_url(&config.api_url)?;
+    let client = BackendClient::new(&api_url).map_err(|e| e.to_string())?;
 
     let mut body = serde_json::Map::new();
     body.insert("text".to_string(), json!(trimmed));
@@ -222,13 +185,13 @@ pub async fn synthesize_reply(
     // keeps its full `{e:#}` anyhow chain so genuine TTS failures still report.
     let raw = client
         .authed_json(
-            &token,
+            &credential,
             Method::POST,
             "/openai/v1/audio/speech",
             Some(Value::Object(body)),
         )
         .await
-        .map_err(crate::api::flatten_authed_error)?;
+        .map_err(crate::backend::flatten_authed_error)?;
 
     let result = normalize_response(&raw);
     debug!(
@@ -238,144 +201,10 @@ pub async fn synthesize_reply(
         result.alignment.as_ref().map_or(0, Vec::len)
     );
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         result,
         "voice reply synthesized via POST /openai/v1/audio/speech",
     ))
-}
-
-/// Translate the backend's tolerant response shape into the UI contract.
-/// Accepts `visemes` / `cues` / `viseme_cues`, and per-frame
-/// `start_ms`+`end_ms` or `time_ms`+`duration_ms`.
-fn normalize_response(raw: &Value) -> ReplySpeechResult {
-    let audio_base64 = raw
-        .get("audio_base64")
-        .or_else(|| raw.get("audio"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let audio_mime = raw
-        .get("audio_mime")
-        .or_else(|| raw.get("mime"))
-        .and_then(Value::as_str)
-        .unwrap_or("audio/mpeg")
-        .to_string();
-
-    let cues = raw
-        .get("visemes")
-        .or_else(|| raw.get("cues"))
-        .or_else(|| raw.get("viseme_cues"));
-    let visemes = cues
-        .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(parse_cue).collect::<Vec<_>>())
-        .unwrap_or_default();
-
-    let alignment = raw
-        .get("alignment")
-        .or_else(|| raw.get("characters"))
-        .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(parse_alignment).collect::<Vec<_>>());
-
-    ReplySpeechResult {
-        audio_base64,
-        audio_mime,
-        visemes,
-        alignment,
-    }
-}
-
-fn parse_cue(v: &Value) -> Option<VisemeFrame> {
-    let viseme = v
-        .get("viseme")
-        .or_else(|| v.get("v"))
-        .or_else(|| v.get("code"))
-        .and_then(Value::as_str)?
-        .to_string();
-    if viseme.is_empty() {
-        return None;
-    }
-    // Accept millisecond keys, or seconds keys (`startSeconds`/`endSeconds`, the
-    // shape the cloud backend actually ships) converted to ms. Without the
-    // seconds keys every frame collapsed to start=0/end=80 — the mascot mouth
-    // then froze on the first viseme because the whole track had no real timing.
-    let start = read_ms(
-        v,
-        &["start_ms", "time_ms", "t"],
-        &["startSeconds", "start_seconds", "startSec"],
-    )
-    .unwrap_or(0);
-    let end = read_ms(v, &["end_ms"], &["endSeconds", "end_seconds", "endSec"])
-        .or_else(|| {
-            let t = read_ms(
-                v,
-                &["time_ms", "t"],
-                &["startSeconds", "start_seconds", "startSec"],
-            )?;
-            let d = read_ms(
-                v,
-                &["duration_ms", "d"],
-                &["durationSeconds", "duration_seconds", "durationSec"],
-            )?;
-            Some(t + d)
-        })
-        .unwrap_or(start + 80);
-    if end <= start {
-        return None;
-    }
-    Some(VisemeFrame {
-        viseme,
-        start_ms: start,
-        end_ms: end,
-    })
-}
-
-fn parse_alignment(v: &Value) -> Option<AlignmentFrame> {
-    let ch = v.get("char").and_then(Value::as_str)?.to_string();
-    let start = read_ms(v, &["start_ms"], &["startSeconds", "start_seconds"])?;
-    let end = read_ms(v, &["end_ms"], &["endSeconds", "end_seconds"])?;
-    if end <= start {
-        return None;
-    }
-    Some(AlignmentFrame {
-        char: ch,
-        start_ms: start,
-        end_ms: end,
-    })
-}
-
-fn read_u64(v: &Value, keys: &[&str]) -> Option<u64> {
-    for k in keys {
-        if let Some(n) = v.get(*k).and_then(Value::as_u64) {
-            return Some(n);
-        }
-        if let Some(f) = v.get(*k).and_then(Value::as_f64) {
-            if f.is_finite() && f >= 0.0 {
-                return Some(f as u64);
-            }
-        }
-    }
-    None
-}
-
-/// Read a time value in milliseconds. Tries `ms_keys` first (integer or float
-/// ms), then `sec_keys` interpreted as seconds and converted to ms. This lets
-/// the parser tolerate both the `*_ms` contract and the backend's
-/// `*Seconds` shape without the caller caring which arrived.
-fn read_ms(v: &Value, ms_keys: &[&str], sec_keys: &[&str]) -> Option<u64> {
-    if let Some(ms) = read_u64(v, ms_keys) {
-        return Some(ms);
-    }
-    for k in sec_keys {
-        if let Some(f) = v.get(*k).and_then(Value::as_f64) {
-            if f.is_finite() && f >= 0.0 {
-                return Some((f * 1000.0).round() as u64);
-            }
-        }
-        if let Some(n) = v.get(*k).and_then(Value::as_u64) {
-            return Some(n.saturating_mul(1000));
-        }
-    }
-    None
 }
 
 #[cfg(test)]

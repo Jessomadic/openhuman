@@ -86,6 +86,6 @@ fn json_output_builds_required_json_field() {
 
 #[test]
 fn to_json_wraps_result_and_logs() {
-    let v = to_json(RpcOutcome::single_log(json!({"ok": true}), "log")).unwrap();
+    let v = to_json(Outcome::single_log(json!({"ok": true}), "log")).unwrap();
     assert!(v.get("result").is_some() || v.get("logs").is_some());
 }

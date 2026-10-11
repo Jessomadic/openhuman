@@ -32,7 +32,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use tinymcp::{
     AuditStore, McpClientConfig, McpClientIdentityConfig, McpProxyConfig, McpRegistry,
-    McpServerConfig, McpServerRegistry, Store,
+    McpServerRegistry, Store,
 };
 
 use crate::config::Config;
@@ -94,6 +94,13 @@ pub struct McpHost {
     audit: AuditStore,
 }
 
+/// Lets `tinymcp::Supervisor::run_many` reach the registry inside a host.
+impl AsRef<McpRegistry> for McpHost {
+    fn as_ref(&self) -> &McpRegistry {
+        &self.dynamic
+    }
+}
+
 impl McpHost {
     /// Builds a host from `config`, without installing it as the process one.
     ///
@@ -109,7 +116,7 @@ impl McpHost {
     /// client cannot be built.
     pub fn open(config: &Config) -> anyhow::Result<Self> {
         let client = client_config(config);
-        Self::from_client_config(config.workspace_dir.as_path(), &client)
+        Self::from_client_config(&host_key(config), &client)
     }
 
     /// Builds a host over `workspace` from an already-converted client
@@ -119,6 +126,9 @@ impl McpHost {
     /// conversion: a host and the entry stored beside it can never disagree
     /// about which identity and proxy they were built with.
     fn from_client_config(workspace: &Path, client: &McpClientConfig) -> anyhow::Result<Self> {
+        std::fs::create_dir_all(workspace).map_err(|error| {
+            anyhow::anyhow!("failed to create the mcp store directory: {error}")
+        })?;
         Ok(Self {
             dynamic: McpRegistry::new(
                 Store::open(workspace)
@@ -173,7 +183,7 @@ impl McpHost {
 /// race; if one did, its service is returned and the freshly-built one is
 /// dropped.
 pub fn for_config(config: &Config) -> anyhow::Result<Arc<McpHost>> {
-    let workspace = config.workspace_dir.clone();
+    let workspace = host_key(config);
 
     // A host already under this workspace needs no re-opening: it would be
     // wasteful (and, on the common path, a plain Mutex of the shared map held
@@ -204,6 +214,7 @@ pub fn for_config(config: &Config) -> anyhow::Result<Arc<McpHost>> {
         return Ok(Arc::clone(&existing.host));
     }
 
+    tracing::debug!(key = ?workspace, "[mcp] opened host");
     hosts.insert(
         workspace,
         HostEntry {
@@ -214,6 +225,40 @@ pub fn for_config(config: &Config) -> anyhow::Result<Arc<McpHost>> {
     );
 
     Ok(service)
+}
+
+/// The service for `config` when one exists, without creating an agent's.
+///
+/// Outside an agent context this is [`for_config`]. Under one, an agent that
+/// never installed a server has no store on disk, and a read (listing
+/// connections or tools) must not create one: it answers with an error the
+/// read paths already treat as "nothing connected".
+///
+/// # Errors
+///
+/// When the agent has no host yet, or [`for_config`] fails.
+pub fn lookup(config: &Config) -> anyhow::Result<Arc<McpHost>> {
+    let key = host_key(config);
+    // A SaaS profile's default agent keeps its host at its own workspace root
+    // (no agent id), and a read must not create one there either.
+    let tenant_owned = key != config.workspace_dir
+        || crate::core::runtime::current_tenant().map_or(true, |t| t.profile.is_some());
+    if tenant_owned {
+        let open = HOSTS.get().and_then(|hosts| {
+            hosts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&key)
+                .map(|entry| Arc::clone(&entry.host))
+        });
+        if let Some(host) = open {
+            return Ok(host);
+        }
+        if !Store::path_for(&key).exists() {
+            anyhow::bail!("the agent has no mcp host yet");
+        }
+    }
+    for_config(config)
 }
 
 /// Opens the service for `config` and marks its workspace the default.
@@ -256,12 +301,72 @@ pub fn init(config: &Config) -> anyhow::Result<()> {
 /// [`for_config`] would still report nothing connected.
 #[must_use]
 pub fn try_service() -> Option<Arc<McpHost>> {
+    if let Some(agent_host) = current_agent_host() {
+        return agent_host;
+    }
     let hosts = HOSTS
         .get()?
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     resolve(DEFAULT_WORKSPACE.get().map(PathBuf::as_path), &hosts)
+}
+
+/// Removes the host of agent `agent_id` on `workspace_dir` from the open set
+/// and hands it back, so the caller can close its connections. `None` when
+/// the agent never opened one.
+pub fn take_agent_host(workspace_dir: &Path, agent_id: &str) -> Option<Arc<McpHost>> {
+    let key = workspace_dir.join("agents").join(agent_id);
+    let entry = HOSTS
+        .get()?
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&key)?;
+    tracing::debug!(agent = %agent_id, "[mcp] agent host evicted");
+    Some(entry.host)
+}
+
+/// Where the host for `config` keeps its stores: the workspace, or the
+/// agent's own directory beneath it when an agent context is current. A SaaS
+/// profile's workspace is its own, so its default agent's host sits at the
+/// workspace root and never meets another profile's.
+fn host_key(config: &Config) -> PathBuf {
+    crate::core::runtime::agent_scope_dir(config)
+}
+
+/// The current tenant's host, when a turn runs under an embedded agent's or
+/// a SaaS profile's context.
+///
+/// `None` outside both (the desktop's own sessions); `Some(None)` when the
+/// tenant's host cannot be opened, or a SaaS task has no tenant scope, which
+/// must not fall back to another tenant's or the default one.
+fn current_agent_host() -> Option<Option<Arc<McpHost>>> {
+    let tenant = match crate::core::runtime::current_tenant() {
+        Ok(tenant) if !tenant.is_scoped() => return None,
+        Ok(tenant) => tenant,
+        Err(no_tenant) => {
+            tracing::debug!("[mcp] {no_tenant}; no host");
+            return Some(None);
+        }
+    };
+    let Some(opened) = crate::core::runtime::CoreContext::with_current_embedder_config(lookup)
+    else {
+        // A scoped tenant always carries its own config; without one there is
+        // no host it may use.
+        return tenant.profile.is_some().then_some(None);
+    };
+    Some(match opened {
+        Ok(host) => Some(host),
+        Err(error) => {
+            tracing::debug!(
+                agent = tenant.agent.as_deref().unwrap_or(""),
+                profile_scoped = tenant.profile.is_some(),
+                ?error,
+                "[mcp] tenant host unavailable"
+            );
+            None
+        }
+    })
 }
 
 /// The rule [`try_service`] applies, as a function of its inputs.
@@ -335,7 +440,7 @@ pub fn client_config(config: &Config) -> McpClientConfig {
             .servers
             .iter()
             .filter(|server| credentialed_endpoint_transport_allowed(server))
-            .map(server_config)
+            .map(|server| server.server.clone())
             .collect(),
         proxy: proxy_for_mcp(),
         ..McpClientConfig::default()
@@ -345,41 +450,16 @@ pub fn client_config(config: &Config) -> McpClientConfig {
     client.client_identity.title = config.mcp_client.client_identity.title.clone();
     client.client_identity.version = config.mcp_client.client_identity.version.clone();
 
-    client
-        .registry_auth
-        .smithery_api_key
-        .clone_from(&config.mcp_client.registry_auth.smithery_api_key);
-    client
-        .registry_auth
-        .mcp_official_base
-        .clone_from(&config.mcp_client.registry_auth.mcp_official_base);
-    client
-        .registry_auth
-        .mcp_official_token
-        .clone_from(&config.mcp_client.registry_auth.mcp_official_token);
+    client.registry_auth = config.mcp_client.registry_auth.clone();
 
-    // The documentation server is seeded here rather than by the module: it is
-    // this application's own, and `tinymcp` has no business knowing about it.
-    if config.gitbooks.enabled
-        && !client
-            .servers
-            .iter()
-            .any(|server| server.name == GITBOOKS_SERVER_NAME)
-    {
-        client.servers.push(McpServerConfig {
-            name: GITBOOKS_SERVER_NAME.to_string(),
-            endpoint: config.gitbooks.endpoint.clone(),
-            description: Some("OpenHuman GitBook documentation MCP server.".to_string()),
-            timeout_secs: config.gitbooks.timeout_secs,
-            ..McpServerConfig::default()
-        });
-    }
+    // The documentation server is deliberately not seeded as an MCP server:
+    // `gitbooks_search` / `gitbooks_get_page` are hard-coded deferred tools
+    // (`tools::implementations::network::gitbooks`). Seeding it here made every
+    // first turn dial the endpoint for `tools/list` and register the generic
+    // MCP bridge tools for nothing.
 
     client
 }
-
-/// The name the documentation server is registered under.
-pub const GITBOOKS_SERVER_NAME: &str = "gitbooks";
 
 /// Whether a declared server's transport may be dialed with its configured
 /// credentials attached.
@@ -427,61 +507,6 @@ fn credentialed_endpoint_transport_allowed(server: &crate::config::McpServerConf
         server.name
     );
     false
-}
-
-/// Converts one declared server.
-fn server_config(server: &crate::config::McpServerConfig) -> McpServerConfig {
-    McpServerConfig {
-        name: server.name.clone(),
-        endpoint: server.endpoint.clone(),
-        command: server.command.clone(),
-        args: server.args.clone(),
-        // Ordered on the way across, so the serialized form does not depend on
-        // hash iteration order.
-        env: server
-            .env
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect(),
-        cwd: server.cwd.clone(),
-        description: server.description.clone(),
-        enabled: server.enabled,
-        allowed_tools: server.allowed_tools.clone(),
-        disallowed_tools: server.disallowed_tools.clone(),
-        timeout_secs: server.timeout_secs,
-        auth: auth_config(&server.auth),
-    }
-}
-
-/// Converts one server's credentials.
-fn auth_config(auth: &crate::config::McpAuthConfig) -> tinymcp::McpAuthConfig {
-    use crate::config::McpAuthConfig as Host;
-    use tinymcp::McpAuthConfig as Module;
-
-    match auth {
-        Host::None => Module::None,
-        Host::BearerToken { token } => Module::BearerToken {
-            token: token.clone(),
-        },
-        Host::Basic { username, password } => Module::Basic {
-            username: username.clone(),
-            password: password.clone(),
-        },
-        Host::Header { name, value } => Module::Header {
-            name: name.clone(),
-            value: value.clone(),
-        },
-        Host::Headers { headers } => Module::Headers {
-            headers: headers
-                .iter()
-                .map(|header| tinymcp::HttpHeader::new(&header.name, &header.value))
-                .collect(),
-        },
-        Host::QueryParam { name, value } => Module::QueryParam {
-            name: name.clone(),
-            value: value.clone(),
-        },
-    }
 }
 
 /// The statically declared server set, built from this application's
@@ -564,3 +589,7 @@ pub fn proxy_for_mcp() -> Option<McpProxyConfig> {
 #[cfg(test)]
 #[path = "host_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "host_agent_tests.rs"]
+mod agent_tests;

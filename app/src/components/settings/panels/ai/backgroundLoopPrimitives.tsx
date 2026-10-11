@@ -4,7 +4,6 @@
  */
 import type { ComposioConnection } from '../../../../lib/composio/types';
 import type { CreditTransaction } from '../../../../services/api/creditsApi';
-import type { ProviderRef } from './aiPanelTypes';
 
 export const USD = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -15,11 +14,12 @@ export const USD = new Intl.NumberFormat('en-US', {
 
 export const WEEK_MINUTES = 7 * 24 * 60;
 export const COMPOSIO_PERIODIC_TICK_MINUTES = 20;
-export const LEARNING_REBUILD_MINUTES = 30;
-export const MEMORY_WORKERS = 4;
-export const MEMORY_POLL_SECONDS = 5;
 
-export const formatUsd = (value: number): string => USD.format(Number.isFinite(value) ? value : 0);
+export const formatUsd = (value: number): string => {
+  const safe = Number.isFinite(value) ? value : 0;
+  if (safe > 0 && safe < 0.000001) return `<${USD.format(0.000001)}`;
+  return USD.format(safe);
+};
 
 export const spendAmount = (tx: CreditTransaction): number => {
   const amount = Number(tx.amountUsd);
@@ -98,24 +98,6 @@ export function summarizeSpendSample(transactions: CreditTransaction[]) {
   return { rows, total, avgRowUsd, sampleHours, spendPerHour, rowsPerHour };
 }
 
-/** Minimal cloud-provider shape consumed by `describeProvider` — only
- *  slug/label/id are read. Accepting this narrower shape lets external panels
- *  (UsagePanel) feed in the API view (`CloudProviderView`) without copying the
- *  AIPanel-internal extras (`authStyle`, `maskedKey`). */
-export type BackgroundLoopProviderView = { id: string; slug: string; label: string };
-
-export function describeProvider(
-  ref: ProviderRef,
-  providers: BackgroundLoopProviderView[]
-): string {
-  if (ref.kind === 'openhuman') return 'Managed · OpenHuman';
-  if (ref.kind === 'default') return 'Default route';
-  if (ref.kind === 'local') return `Local ${ref.model}`;
-  if (ref.kind === 'claude-code') return `Claude Code CLI ${ref.model || 'default model'}`;
-  const provider = providers.find(p => p.slug === ref.providerSlug);
-  return `${provider?.label ?? ref.providerSlug} ${ref.model || 'custom model'}`;
-}
-
 export const MetricTile = ({
   label,
   value,
@@ -125,12 +107,10 @@ export const MetricTile = ({
   value: string;
   detail?: string;
 }) => (
-  <div className="min-w-0 overflow-hidden rounded-md bg-surface-muted px-3 py-2">
-    <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-content-faint">
-      {label}
-    </div>
-    <div className="mt-1 truncate text-sm font-semibold text-content">{value}</div>
-    {detail ? <div className="mt-0.5 truncate text-[11px] text-content-muted">{detail}</div> : null}
+  <div className="min-w-0 overflow-hidden rounded-lg bg-surface-muted px-3 py-2.5">
+    <div className="truncate text-xs text-content-muted">{label}</div>
+    <div className="mt-0.5 truncate text-lg font-semibold tabular-nums text-content">{value}</div>
+    {detail ? <div className="mt-0.5 truncate text-xs text-content-faint">{detail}</div> : null}
   </div>
 );
 
@@ -143,11 +123,11 @@ export const FormulaRow = ({
   value: string;
   detail: string;
 }) => (
-  <div className="min-w-0 overflow-hidden rounded-md border border-line bg-surface px-3 py-2">
-    <div className="flex items-center justify-between gap-3">
-      <span className="min-w-0 truncate text-xs font-medium text-content">{label}</span>
-      <span className="shrink-0 font-mono text-xs text-content-secondary">{value}</span>
+  <div className="flex min-w-0 items-center justify-between gap-4 px-4 py-3">
+    <div className="min-w-0">
+      <div className="truncate text-sm font-medium text-content">{label}</div>
+      <div className="mt-0.5 truncate text-xs text-content-muted">{detail}</div>
     </div>
-    <div className="mt-1 truncate text-[11px] text-content-muted">{detail}</div>
+    <span className="shrink-0 font-mono text-sm tabular-nums text-content">{value}</span>
   </div>
 );

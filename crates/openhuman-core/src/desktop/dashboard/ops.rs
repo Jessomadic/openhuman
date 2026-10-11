@@ -1,7 +1,7 @@
 //! Dashboard model-health aggregation.
 
 use crate::config::Config;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use super::types::{ModelHealthConfigView, ModelHealthEntry, ModelHealthResponse};
 
@@ -15,7 +15,7 @@ use super::types::{ModelHealthConfigView, ModelHealthEntry, ModelHealthResponse}
 /// badges to `staging` (under `min_tasks_for_rating`) and keeps the table
 /// useful for cost and vision comparison. When a telemetry source lands,
 /// populate these fields here rather than at the transport layer.
-pub fn model_health(config: &Config) -> Result<RpcOutcome<ModelHealthResponse>, String> {
+pub fn model_health(config: &Config) -> Result<Outcome<ModelHealthResponse>, String> {
     let mh_cfg = &config.dashboard.model_health;
     if !mh_cfg.enabled {
         log::debug!("[dashboard] model_health request rejected — feature disabled");
@@ -48,7 +48,7 @@ pub fn model_health(config: &Config) -> Result<RpcOutcome<ModelHealthResponse>, 
         mh_cfg.evaluation_window_tasks,
     );
 
-    Ok(RpcOutcome::single_log(
+    Ok(Outcome::single_log(
         ModelHealthResponse {
             models,
             config: ModelHealthConfigView {

@@ -81,13 +81,11 @@ describe('FlowRunStatus', () => {
 
     const badge = screen.getByTestId('status');
     expect(badge).toHaveTextContent('Completed with localized warnings');
-    expect(badge).toHaveClass(
-      'inline-flex',
-      'rounded-full',
-      'border',
-      'consumer-badge-class',
-      'bg-amber-50'
-    );
+    // FlowRunStatus's badge presentation now renders through the shared
+    // `Badge` primitive (outline chip + coloured dot), not the old literal
+    // `FLOW_RUN_STATUS_ACCENT` fill classes — see FLOW_RUN_STATUS_VARIANT.
+    expect(badge).toHaveClass('inline-flex', 'rounded-md', 'border', 'consumer-badge-class');
+    expect(badge).toHaveAttribute('data-variant', 'warning');
     expect(badge).not.toHaveAttribute('aria-hidden');
   });
 

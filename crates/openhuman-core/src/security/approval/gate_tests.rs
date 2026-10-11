@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::test_env::EnvVarGuard;
 use tempfile::TempDir;
 
 /// TTL for the tests that assert the *timeout* path — the only ones that
@@ -77,39 +78,14 @@ fn parked_request_id(gate: &ApprovalGate) -> Option<String> {
 /// these tests unnecessarily.
 /// `test_gate_with_ttl` must not take the lock, because the
 /// `effective_ttl_*` tests call it while already holding it.
-struct ExpiryEnvGuard {
-    previous_ttl: Option<String>,
-    _env_lock: std::sync::MutexGuard<'static, ()>,
-}
-
-impl Drop for ExpiryEnvGuard {
-    fn drop(&mut self) {
-        match self.previous_ttl.take() {
-            Some(value) => unsafe { std::env::set_var("OPENHUMAN_APPROVAL_TTL_SECS", value) },
-            None => unsafe { std::env::remove_var("OPENHUMAN_APPROVAL_TTL_SECS") },
-        }
-    }
-}
-
-fn expiry_gate() -> (ApprovalGate, TempDir, ExpiryEnvGuard) {
-    let env = crate::config::TEST_ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+async fn expiry_gate() -> (ApprovalGate, TempDir, EnvVarGuard) {
     // The lock keeps a sibling test from setting the override, but not a
     // developer who exported it in their shell. effective_ttl would then
     // replace EXPIRY_TEST_TTL at park time and the wait would be measuring
     // their value, so clear it while the lock is held.
-    let previous_ttl = std::env::var("OPENHUMAN_APPROVAL_TTL_SECS").ok();
-    unsafe { std::env::remove_var("OPENHUMAN_APPROVAL_TTL_SECS") };
+    let env = EnvVarGuard::locked_unset_async("OPENHUMAN_APPROVAL_TTL_SECS").await;
     let (gate, dir) = test_gate_with_ttl(EXPIRY_TEST_TTL);
-    (
-        gate,
-        dir,
-        ExpiryEnvGuard {
-            previous_ttl,
-            _env_lock: env,
-        },
-    )
+    (gate, dir, env)
 }
 
 /// Decide a row that the test has just seen parked, failing on the expiry
@@ -134,6 +110,7 @@ fn chat_ctx() -> ApprovalChatContext {
     ApprovalChatContext {
         thread_id: "t-test".into(),
         client_id: "c-test".into(),
+        request_id: None,
     }
 }
 
@@ -203,9 +180,37 @@ async fn find_flow_gate_notification(
     }
 }
 
+/// Drain `rx` until an `ApprovalDecided` for `expected_request_id` arrives.
+/// Mirrors [`find_flow_approval_requested`]'s filter-not-first-match
+/// discipline for the same process-wide-bus reason.
+async fn find_approval_decided(
+    rx: &mut tinybus::events::EventReceiver<crate::core::events::DomainEvent>,
+    expected_request_id: &str,
+) -> crate::core::events::DomainEvent {
+    loop {
+        match rx.recv().await {
+            Some(
+                ref ev @ crate::core::events::DomainEvent::ApprovalDecided { ref request_id, .. },
+            ) if request_id == expected_request_id => return ev.clone(),
+            Some(_) => continue,
+            None => panic!("the bus closed before the expected event arrived"),
+        }
+    }
+}
+
+#[path = "gate_agent_tests.rs"]
+mod agent_tests;
 #[path = "gate_core_flow_tests.rs"]
 mod core_flow_tests;
+#[path = "gate_forced_tests.rs"]
+mod forced_tests;
 #[path = "gate_origin_intercept_tests.rs"]
 mod origin_intercept_tests;
+#[path = "gate_subagent_tests.rs"]
+mod subagent_tests;
+#[path = "gate_tenant_tests.rs"]
+mod tenant_tests;
+#[path = "gate_triage_tests.rs"]
+mod triage_tests;
 #[path = "gate_ttl_and_triage_tests.rs"]
 mod ttl_and_triage_tests;

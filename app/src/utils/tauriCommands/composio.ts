@@ -1,5 +1,5 @@
 import { callCoreRpc } from '../../services/coreRpcClient';
-import { type CommandResponse, isTauri } from './common';
+import { type CommandResponse } from './common';
 
 export interface ComposioTriggerHistoryEntry {
   received_at_ms: number;
@@ -19,10 +19,6 @@ export interface ComposioTriggerHistoryResult {
 export async function openhumanComposioListTriggerHistory(
   limit = 100
 ): Promise<CommandResponse<{ result: ComposioTriggerHistoryResult }>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
-
   return await callCoreRpc<CommandResponse<{ result: ComposioTriggerHistoryResult }>>({
     method: 'openhuman.composio_list_trigger_history',
     params: { limit },
@@ -44,9 +40,6 @@ export interface ComposioModeStatus {
 /// Read the current Composio routing mode and whether a direct-mode API
 /// key is stored. The key itself is never returned.
 export async function openhumanComposioGetMode(): Promise<CommandResponse<ComposioModeStatus>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<ComposioModeStatus>>({
     method: 'openhuman.composio_get_mode',
   });
@@ -63,9 +56,6 @@ export async function openhumanComposioSetApiKey(
   apiKey: string,
   activateDirect = true
 ): Promise<CommandResponse<ComposioSetApiKeyResult>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<ComposioSetApiKeyResult>>({
     method: 'openhuman.composio_set_api_key',
     params: { api_key: apiKey, activate_direct: activateDirect },
@@ -77,9 +67,6 @@ export async function openhumanComposioSetApiKey(
 export async function openhumanComposioClearApiKey(): Promise<
   CommandResponse<{ cleared: boolean; mode: string }>
 > {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<{ cleared: boolean; mode: string }>>({
     method: 'openhuman.composio_clear_api_key',
   });

@@ -76,6 +76,23 @@ fn direct_subagent_child_shares_tinyagents_and_host_cancellation_tree() {
 }
 
 #[test]
+fn cancelling_a_direct_child_reaches_host_data_and_spares_the_parent() {
+    let parent = OpenHumanRunContext::new()
+        .into_tinyagents(tinyagents_harness::context::RunConfig::new("root-iso"));
+    let (_, child) = direct_subagent_child(
+        &parent,
+        "iso-task",
+        tinyagents_harness::context::RunConfig::new("child-iso"),
+    )
+    .expect("direct child");
+
+    child.cancellation.cancel();
+    assert!(child.data.cancellation.is_cancelled());
+    assert!(!parent.cancellation.is_cancelled());
+    assert!(!parent.data.cancellation.is_cancelled());
+}
+
+#[test]
 fn child_inherits_tree_handles_but_isolates_observations_and_usage() {
     let mut parent = OpenHumanRunContext::new();
     parent.thread_id = Some("thread-a".to_string());
@@ -153,6 +170,7 @@ fn child_ledgers_are_isolated_and_parent_keeps_completed_child_totals() {
             output_tokens: 2,
             cached_input_tokens: 1,
             charged_amount_usd: 0.01,
+            cost_source: crate::agent::cost::CostSource::Charged,
         },
     });
     assert!(right.subagent_usage_entries().is_empty());
@@ -237,7 +255,6 @@ fn stale_parent_snapshot() -> ParentExecutionContext {
         temperature: 0.0,
         workspace_dir: std::path::PathBuf::from("/tmp/openhuman-attach-parent"),
         workspace_descriptor: None,
-        memory: crate::memory::test_support::noop_memory(),
         agent_config: crate::config::AgentConfig::default(),
         workflows: Arc::new(Vec::new()),
         memory_context: Arc::new(None),
@@ -277,6 +294,7 @@ fn assert_bound_sink_is_this_runs_channel(
         worker_thread_id: None,
         display_name: None,
         prompt: "probe".to_string(),
+        parent_call_id: None,
     })
     .unwrap_or_else(|err| panic!("{case}: the bound sink refused the event: {err}"));
 
@@ -362,5 +380,45 @@ fn attach_parent_keeps_the_snapshot_sink_when_the_run_has_none() {
         &mut rx,
         "a run without its own sink must keep the snapshot's, and keep the \
          CLI/cron receiver that snapshot was carrying",
+    );
+}
+
+#[test]
+fn child_inherits_shared_model_budget_and_narrowed_depth_limit() {
+    use crate::agent::tinyagents::budget::{Budget, CallBudget, ModelBudget, Spend, SpendLimits};
+    let ledger = Budget::new(SpendLimits {
+        tokens: Some(100),
+        cost_micros: None,
+    });
+    let mut parent = OpenHumanRunContext::new();
+    parent.model_budget = Some(ModelBudget {
+        ledger: ledger.clone(),
+        call: CallBudget {
+            input_tokens: 50,
+            output_tokens: 10,
+            cost_micros: 1,
+        },
+    });
+    parent.max_spawn_depth = Some(1);
+    let child = parent.child();
+    assert_eq!(child.max_spawn_depth, Some(1));
+    assert_eq!(child.spawn_depth, 1);
+    let reservation = child
+        .model_budget
+        .unwrap()
+        .ledger
+        .reserve(Spend {
+            tokens: 60,
+            cost_micros: 0,
+        })
+        .unwrap();
+    assert_eq!(ledger.snapshot().reserved.tokens, 60);
+    reservation.settle(Spend {
+        tokens: 10,
+        cost_micros: 0,
+    });
+    assert_eq!(
+        parent.model_budget.unwrap().ledger.snapshot().spent.tokens,
+        10
     );
 }

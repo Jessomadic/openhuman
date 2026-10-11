@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-import { AgentMessageText, BubbleMarkdown, TableCellMarkdown } from './AgentMessageBubble';
+import { BubbleMarkdown } from './AgentMessageBubble';
 
 const mocks = vi.hoisted(() => ({ openUrl: vi.fn(), openWorkspacePath: vi.fn() }));
 
@@ -82,15 +82,6 @@ describe('AgentMessageBubble markdown links', () => {
     }
   });
 
-  test('uses the same workspace link handling inside table cells', async () => {
-    render(<TableCellMarkdown content="[note](openhuman-workspace:/docs/note.md)" />);
-
-    await userEvent.click(screen.getByRole('link', { name: 'note' }));
-
-    await waitFor(() => expect(mocks.openWorkspacePath).toHaveBeenCalledWith('docs/note.md'));
-    expect(mocks.openUrl).not.toHaveBeenCalled();
-  });
-
   test('does not open raw file links from markdown', async () => {
     render(<BubbleMarkdown content="[secret](file:///etc/passwd)" />);
 
@@ -152,28 +143,6 @@ describe('BubbleMarkdown math rendering', () => {
     const { container } = render(<BubbleMarkdown content={'total is $10 versus $20'} />);
     expect(container.textContent).toContain('$10');
     expect(container.textContent).toContain('$20');
-  });
-});
-
-describe('AgentMessageText', () => {
-  test('renders openhuman link pills without assistant bubble chrome', () => {
-    render(
-      <AgentMessageText
-        content={'<openhuman-link path="settings/appearance">Appearance</openhuman-link>'}
-      />
-    );
-
-    expect(screen.getByTestId('agent-message-text')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Appearance/ })).toBeInTheDocument();
-  });
-
-  test('uses the dedicated table renderer in plain text mode', () => {
-    render(<AgentMessageText content={'| Name | Value |\n| --- | --- |\n| OpenHuman | 42 |'} />);
-
-    expect(screen.getByTestId('agent-message-text')).toBeInTheDocument();
-    expect(screen.getByRole('table')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Name' })).toBeInTheDocument();
-    expect(screen.getByRole('cell', { name: 'OpenHuman' })).toBeInTheDocument();
   });
 });
 

@@ -3,47 +3,22 @@
 
 use super::super::dispatch::{run_message_dispatch_loop, RuntimeChannelMessage};
 use super::super::supervision::spawn_supervised_listener;
-use super::chat_workload::{resolve_chat_workload, ChatWorkloadResolution};
 use super::credentials::{hydrate_channel_credentials, RuntimeProxyClients};
-use super::prompt::format_access_context;
 use super::relay::start_relay_runtime;
-use crate::agent::host_runtime;
+use super::turn_parts::{build_channel_turn_parts, runtime_context, PromptToolDescs};
 use crate::channels::context::{
-    effective_channel_message_timeout_secs, ChannelRuntimeContext,
     DEFAULT_CHANNEL_INITIAL_BACKOFF_SECS, DEFAULT_CHANNEL_MAX_BACKOFF_SECS,
 };
-use crate::channels::system_prompt::{ChannelPromptInputs, ChannelSystemPrompt};
 use crate::channels::traits;
 use crate::config::Config;
 use crate::core::bus::BUS;
 use crate::core::events::DomainEvent;
-use crate::inference::provider;
 use crate::security::SecurityPolicy;
-use crate::tools;
 use anyhow::Result;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tinychannels::runtime::compute_max_in_flight_messages;
 use tokio_util::task::AbortOnDropHandle;
-
-/// What the channel-server banner prints on its `🧠 Memory:` line.
-///
-/// This used to call `tinymemory_core::store::effective_memory_backend_name(
-/// &config.memory.backend, Some(&config.storage.provider.config))`, which is
-/// how it reads in `git log` — as if the label were derived from those two
-/// settings. It never was: that function ignores **both** arguments and
-/// returns the literal `"namespace"` unconditionally (`tinymemory-core`
-/// `store/factories.rs`, and its own doc says so — "Currently, this always
-/// returns 'namespace' as the unified memory system is the standard"). Its
-/// engine-side test is named `effective_memory_backend_name_always_returns_
-/// namespace`.
-///
-/// So this is a display constant, not a capability, and it came home rather
-/// than crossing the bus (openhuman#5560): "which label does the banner show"
-/// is not something a second memory driver would answer differently, and
-/// widening the contract for a fixed string would be the worst of both. The
-/// printed line is byte-identical to before.
-const EFFECTIVE_MEMORY_BACKEND_LABEL: &str = "namespace";
 
 pub async fn start_channels(config: Config) -> Result<()> {
     start_channels_with_session(config, super::super::session::channel_session()).await
@@ -63,10 +38,9 @@ async fn start_channels_inner(mut config: Config) -> Result<()> {
     let bus = crate::core::bus::BUS.get().expect("bus initialised");
     let _tracing_handle = bus.subscribe(Arc::new(crate::core::bus::TracingSubscriber));
     crate::platform::health::bus::register_health_subscriber();
-    crate::memory::conversations::register_conversation_persistence_subscriber(
+    crate::threads::store::register_conversation_persistence_subscriber(
         config.workspace_dir.clone(),
     );
-    crate::memory::sync_events_bridge::register_sync_stage_bridge(&config);
     crate::integrations::composio::register_composio_trigger_subscriber();
     // Surface parked ApprovalGate requests as chat messages so the user can
     // answer yes/no in the thread (chat-native approval, issue #1339).
@@ -79,14 +53,17 @@ async fn start_channels_inner(mut config: Config) -> Result<()> {
     // `external_transfer_pending` web-channel events so the frontend can show a
     // per-action "what leaves, to where, why" card (privacy epic S2, #4436).
     crate::web_chat::register_egress_surface_subscriber();
-    // Spawn the per-toolkit provider periodic sync scheduler. This is
-    // a thin tokio task that ticks every minute and dispatches into
-    // any provider whose `sync_interval_secs` has elapsed for an
-    // active Composio connection. Safe to call here even though
-    // `bootstrap_core_runtime` may also start it — `start_periodic_sync`
-    // is intentionally cheap and the loop body no-ops when there are
-    // no connections.
-    crate::integrations::composio::start_periodic_sync();
+    // Surface thread-goal / thread-todo / run-queue lifecycle events
+    // (ThreadGoalUpdated/Cleared, ThreadTodosChanged, RunQueue*) as
+    // `thread_goal_updated`/`thread_goal_cleared`/`thread_todos_changed`/
+    // `queue_item_queued`/`queue_item_delivered` web-channel events so the
+    // desktop goal chip, todo drawer, and message-queue UI stay live (C3).
+    crate::web_chat::register_agent_surface_subscriber();
+    // Surface memory store/recall activity (MemoryStored/MemoryRecalled) as
+    // `memory_activity` web-channel events, routed to the turn's own
+    // thread/client only (C5) — never carries memory content or the raw
+    // recall query, only a short clipped preview.
+    crate::web_chat::register_memory_activity_surface_subscriber();
     // Task-sources: subscribe to Composio connection-created events for
     // one-shot fetches, and spawn the periodic poll that pulls work from
     // configured external sources onto the agent's todo board.
@@ -100,7 +77,7 @@ async fn start_channels_inner(mut config: Config) -> Result<()> {
     crate::agent::bus::register_agent_handlers();
     // The Phase 2/3/4 self-improvement subscribers (email-signature producer,
     // rebuild trigger, ProfileMdRenderer) are registered in
-    // core::jsonrpc::register_domain_subscribers instead. start_channels is
+    // core::runtime::subscribers::register_domain_subscribers instead. start_channels is
     // skipped when no channel is configured, so wiring them here silently
     // dropped user-profile inference for channel-less users (#5003).
 
@@ -117,46 +94,9 @@ async fn start_channels_inner(mut config: Config) -> Result<()> {
         );
     }
     // Note: WebhookRequestSubscriber and ChannelInboundSubscriber are registered
-    // in bootstrap_core_runtime() (crates/openhuman-core/src/core/jsonrpc.rs) to avoid double-registration
+    // in bootstrap_core_runtime() (crates/openhuman-core/src/core/runtime/bootstrap.rs) to avoid double-registration
     // when both startup paths run in the same process.
 
-    let provider_runtime_options = provider::ProviderRuntimeOptions {
-        auth_profile_override: None,
-        openhuman_dir: config.config_path.parent().map(std::path::PathBuf::from),
-        secrets_encrypt: config.secrets.encrypt,
-        reasoning_enabled: config.runtime.reasoning_enabled,
-    };
-    let (model, provider_name) = match resolve_chat_workload(&config) {
-        ChatWorkloadResolution::Cloud => {
-            let (_chat, model) = provider::create_chat_model_with_model_id(
-                "chat",
-                &config,
-                config.default_temperature,
-            )?;
-            (model, provider::INFERENCE_BACKEND_ID.to_string())
-        }
-        ChatWorkloadResolution::Workload {
-            provider_string,
-            slug,
-        } => {
-            tracing::info!(
-                chat_provider = %provider_string,
-                slug = %slug,
-                "[channels][startup] chat workload routed to per-workload provider — building dedicated channel provider"
-            );
-            let (_chat, model_id) = provider::create_chat_model_with_model_id(
-                "chat",
-                &config,
-                config.default_temperature,
-            )?;
-            (model_id, slug)
-        }
-    };
-
-    let runtime: Arc<dyn host_runtime::RuntimeAdapter> = Arc::from(host_runtime::create_runtime(
-        &config.runtime,
-        config.shell.hide_window,
-    )?);
     // Create the agent's action sandbox + default projects home and register the
     // projects dir as a ReadWrite trusted root. Shared with the always-run
     // `bootstrap_core_runtime` boot so a fresh install gets these dirs even with
@@ -178,40 +118,17 @@ async fn start_channels_inner(mut config: Config) -> Result<()> {
         config.action_dir.clone(),
     );
     // NOTE: the live tool-execution timeout seed is done in
-    // `core::jsonrpc::register_domain_subscribers` (unconditional core boot), NOT
+    // `core::runtime::subscribers::register_domain_subscribers` (unconditional core boot), NOT
     // here — `start_channels` is skipped when no channel is configured or
     // `OPENHUMAN_DISABLE_CHANNEL_LISTENERS` is set, which would otherwise leave
     // channel-less / web-chat-only cores running the default timeout instead of the
     // user-configured `[agent].agent_timeout_secs` (#5027).
-    // Phase 1 of #1401: audit logger is wired with defaults so emission paths
-    // are exercised at runtime. A follow-up promotes `SecurityConfig` (and
-    // therefore the `audit` knob) onto the runtime `Config` schema so users
-    // can override `enabled`, `log_path`, and `max_size_mb` via TOML. The
-    // logger is workspace-scoped and shared, so concurrent sessions append to
-    // one `audit.log` without racing on rotation.
-    let audit = crate::security::get_or_create_workspace_audit_logger(
-        crate::config::AuditConfig::default(),
-        config.workspace_dir.clone(),
-    )?;
-    let temperature = config.default_temperature;
-    // Build system prompt from workspace identity files + skills
+    // Model, tools and the identity-refreshing system prompt (`turn_parts`),
+    // shared with the hosted-channel relay.
+    let parts = build_channel_turn_parts(&config, &security, PromptToolDescs::Fixed)?;
+    let model = parts.model.clone();
     let workspace = config.workspace_dir.clone();
-    let tools_registry = Arc::new(tools::ops::all_tools_with_runtime(
-        Arc::new(config.clone()),
-        &security,
-        runtime,
-        audit,
-        // `all_tools_with_runtime` no longer takes a memory handle — the two
-        // tools that needed one resolve the guarded driver per call.
-        &config.browser,
-        &config.http_request,
-        &config.action_dir,
-        &config.agents,
-        &config,
-        None,
-    ));
-
-    let skills = crate::skills::load_workflow_metadata(&workspace);
+    let skills = parts.skills.clone();
 
     // Install the triggered-workflow subscriber now that workflows are
     // discovered — otherwise any workflow declaring `triggers:` is silently
@@ -219,95 +136,6 @@ async fn start_channels_inner(mut config: Config) -> Result<()> {
     // `bootstrap_core_runtime` site, so it registers exactly once regardless of
     // which startup path runs first (web-chat-only cores never reach here).
     crate::skills::bus::ensure_triggered_workflow_subscriber(&workspace);
-
-    // Collect tool descriptions for the prompt
-    let mut tool_descs: Vec<(&str, &str)> = vec![
-        (
-            "shell",
-            "Execute terminal commands. Use when: running local checks, build/test commands, diagnostics. Don't use when: a safer dedicated tool exists, or command is destructive without approval.",
-        ),
-        (
-            "file_read",
-            "Read file contents. Use when: inspecting project files, configs, logs. Don't use when: a targeted search is enough.",
-        ),
-        (
-            "file_write",
-            "Write file contents. Use when: applying focused edits, scaffolding files, updating docs/code. Don't use when: side effects are unclear or file ownership is uncertain.",
-        ),
-        (
-            "memory_store",
-            "Save to memory. Use when: preserving durable preferences, decisions, key context. Don't use when: information is transient/noisy/sensitive without need.",
-        ),
-        (
-            "memory_recall",
-            "Search memory. Use when: retrieving prior decisions, user preferences, historical context. Don't use when: answer is already in current context.",
-        ),
-        (
-            "memory_forget",
-            "Delete a memory entry. Use when: memory is incorrect/stale or explicitly requested for removal. Don't use when: impact is uncertain.",
-        ),
-    ];
-
-    if config.browser.enabled {
-        tool_descs.push((
-            "browser_open",
-            "Open approved HTTPS URLs in Brave Browser (allowlist-only, no scraping)",
-        ));
-    }
-    // Composio tool descriptions are intentionally excluded from the main
-    // agent prompt — those tools are only available to the integrations_agent
-    // subagent via category_filter = "skill".
-    tool_descs.push((
-        "schedule",
-        "Manage scheduled tasks (create/list/get/cancel/pause/resume). Supports recurring cron and one-shot delays.",
-    ));
-    tool_descs.push((
-        "pushover",
-        "Send a Pushover notification to your device. Requires PUSHOVER_TOKEN and PUSHOVER_USER_KEY in .env file.",
-    ));
-    if !config.agents.is_empty() {
-        tool_descs.push((
-            "delegate",
-            "Delegate a subtask to a specialized agent. Use when: a task benefits from a different model (e.g. fast summarization, deep reasoning, code generation). The sub-agent runs a single prompt and returns its response.",
-        ));
-    }
-
-    let bootstrap_max_chars = if config.agent.compact_context {
-        Some(6000)
-    } else {
-        None
-    };
-    // Filter out Workflow-category tools (e.g. Composio, Apify) from the
-    // main agent prompt — those are only available to the integrations_agent
-    // subagent via category_filter = "skill".
-    let non_skill_tools: Vec<&Box<dyn tinytools::Tool>> = tools_registry
-        .iter()
-        .filter(|t| t.category() != tinytools::ToolCategory::Workflow)
-        .collect();
-    // Everything after the rendered prompt is fixed for the process: the
-    // tool-instruction block, then the model's current filesystem access
-    // boundaries so it self-limits (advisory only — the SecurityPolicy
-    // enforces these regardless).
-    let non_skill_specs: Vec<tinytools::ToolSpec> =
-        non_skill_tools.iter().map(|tool| tool.spec()).collect();
-    let mut prompt_suffix = tinytools_agent::dialect::XmlDialect::instructions(&non_skill_specs);
-    prompt_suffix.push_str(&format_access_context(&security));
-    // The prompt itself is rendered here for the current identity and
-    // re-rendered whenever the active profile or an identity file changes
-    // (#6027, #6028). `channel_name = None`: the runtime wires up multiple
-    // providers in parallel, so the capability block keeps its
-    // platform-agnostic "messaging bot" phrasing.
-    let system_prompt = ChannelSystemPrompt::refreshing(ChannelPromptInputs {
-        workspace_dir: workspace.clone(),
-        model: model.clone(),
-        tool_descs: tool_descs
-            .iter()
-            .map(|(name, desc)| ((*name).to_string(), (*desc).to_string()))
-            .collect(),
-        skills: skills.clone(),
-        bootstrap_max_chars,
-        suffix: prompt_suffix,
-    });
 
     if !skills.is_empty() {
         println!(
@@ -355,9 +183,12 @@ async fn start_channels_inner(mut config: Config) -> Result<()> {
     println!("🦀 OpenHuman Channel Server");
     println!("  🤖 Model:    {model}");
     println!(
-        "  🧠 Memory:   {} (auto-save: {})",
-        EFFECTIVE_MEMORY_BACKEND_LABEL,
-        if config.memory.auto_save { "on" } else { "off" }
+        "  🧠 Memory:   {}",
+        if crate::memory::memory_is_on(&config) {
+            config.memory.engine.as_str()
+        } else {
+            "off"
+        }
     );
     println!(
         "  📡 Channels: {}",
@@ -438,7 +269,7 @@ async fn start_channels_inner(mut config: Config) -> Result<()> {
         crate::cron::bus::CronDeliverySubscriber::new(Arc::clone(&channels_by_name)),
     ));
     // NOTE: the flows `FlowTriggerSubscriber` is registered in
-    // `jsonrpc.rs::register_domain_subscribers` (unconditional core boot), NOT
+    // `runtime/subscribers.rs::register_domain_subscribers` (unconditional core boot), NOT
     // here — `start_channels` is skipped when no channel is configured or
     // `OPENHUMAN_DISABLE_CHANNEL_LISTENERS` is set, which would otherwise leave
     // schedule/app-event workflows undispatched (issue B2 review).
@@ -455,75 +286,34 @@ async fn start_channels_inner(mut config: Config) -> Result<()> {
         proactive_sub.active_channel_handle(),
     );
     let _proactive_handle = bus.subscribe(Arc::new(proactive_sub));
-    let _telegram_remote_handle = if channels_by_name.contains_key("telegram") {
-        let handle = bus.subscribe(Arc::new(
-            crate::channels::providers::telegram::TelegramRemoteSubscriber::new(
-                config.workspace_dir.clone(),
-            ),
-        ));
-        tracing::debug!("[telegram-remote] registered TelegramRemoteSubscriber");
-        Some(handle)
-    } else {
-        None
-    };
-    // Sub-issue 2 of #3098: when Telegram is enabled, register the
-    // approval-surface subscriber so `Prompt`-class tool calls actually
-    // get gated for the user instead of silently allowed (the legacy
-    // behavior when `ApprovalChatContext` is unset). The dispatch loop
-    // pairs this by scoping each Telegram turn in an `ApprovalChatContext`
-    // and intercepting `yes`/`no` replies for parked approvals.
-    let _telegram_approval_surface_handle = if channels_by_name.contains_key("telegram") {
-        let handle = bus.subscribe(Arc::new(
-            crate::channels::providers::telegram::TelegramApprovalSurfaceSubscriber::new(
-                Arc::clone(&channels_by_name),
-            ),
-        ));
-        tracing::debug!("[telegram-approval] registered TelegramApprovalSurfaceSubscriber");
-        Some(handle)
-    } else {
-        None
-    };
-    // Register the tree summarizer event subscriber for observability logging.
-    let _tree_summarizer_handle = bus.subscribe(Arc::new(
-        crate::memory::tree::tree_runtime::bus::TreeSummarizerEventSubscriber::new(),
+    // Remote-control turn state (`/status` shows "in progress") for every
+    // channel with the `remote_control` capability.
+    let _turn_state_handle = bus.subscribe(Arc::new(
+        crate::channels::host::ChannelTurnStateSubscriber::new(config.workspace_dir.clone()),
     ));
+    // In-chat approvals (sub-issue 2 of #3098) for every channel with the
+    // `chat_approvals` capability: `Prompt`-class tool calls are gated for the
+    // user instead of silently allowed. The dispatch loop pairs this by scoping
+    // each such turn in an `ApprovalChatContext` and intercepting `yes`/`no`
+    // replies for parked approvals.
+    let _approval_surface_handle = bus.subscribe(Arc::new(
+        crate::channels::host::ChannelApprovalSurfaceSubscriber::new(Arc::clone(&channels_by_name)),
+    ));
+    tracing::debug!("[channels] registered turn-state and approval-surface subscribers");
 
     let listener_count = channels.len() + relay_config.as_ref().map(|_| 1).unwrap_or_default();
     let max_in_flight_messages = compute_max_in_flight_messages(listener_count);
 
     println!("  🚦 In-flight message limit: {max_in_flight_messages}");
 
-    let message_timeout_secs =
-        effective_channel_message_timeout_secs(config.channels_config.message_timeout_secs);
-
-    let runtime_ctx = Arc::new(ChannelRuntimeContext {
-        channels_by_name,
-        turn_model_source: None,
-        default_provider: Arc::new(provider_name),
-        memory: crate::memory::ops::guard::active_memory_guard()
-            .await
-            .map_err(|e| anyhow::anyhow!("channels startup: memory unavailable: {e}"))?,
-        tools_registry: Arc::clone(&tools_registry),
-        system_prompt,
-        model: Arc::new(model.clone()),
-        temperature,
-        auto_save_memory: config.memory.auto_save,
-        max_tool_iterations: config.agent.max_tool_iterations,
-        min_relevance_score: config.memory.min_relevance_score,
-        conversation_histories: Arc::new(Mutex::new(HashMap::new())),
-        turn_model_source_cache: Arc::new(Mutex::new(HashMap::new())),
-        route_overrides: Arc::new(Mutex::new(HashMap::new())),
-        api_url: config.api_url.clone(),
-        inference_url: config.inference_url.clone(),
-        reliability: Arc::new(config.reliability.clone()),
-        provider_runtime_options,
-        workspace_dir: Arc::new(config.workspace_dir.clone()),
-        message_timeout_secs,
-        multimodal: config.multimodal.clone(),
-        multimodal_files: config.multimodal_files.clone(),
-        // Crate-native turn models for the channel turn (Phase 3 P3-B).
-        config: Some(std::sync::Arc::new(config.clone())),
-    });
+    let runtime_ctx = Arc::new(runtime_context(&config, parts, channels_by_name));
+    // Let cron jobs created from a channel chat read that chat's history, send
+    // into it and append their replies to it.
+    crate::cron::channel_bridge::register_channel_bridge(
+        Arc::clone(&runtime_ctx.conversation_histories),
+        Arc::clone(&runtime_ctx.channels_by_name),
+        crate::channels::context::MAX_CHANNEL_HISTORY,
+    );
 
     run_message_dispatch_loop(rx, runtime_ctx, max_in_flight_messages).await;
 

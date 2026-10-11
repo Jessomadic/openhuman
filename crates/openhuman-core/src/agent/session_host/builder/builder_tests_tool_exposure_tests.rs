@@ -1,15 +1,21 @@
 use super::*;
 
 fn visible_names(agent_id: &str) -> std::collections::HashSet<String> {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let config = test_config(&tmp);
     let definition = crate::agent::harness::AgentDefinitionRegistry::builtins_only()
         .get(agent_id)
         .cloned()
         .unwrap_or_else(|| panic!("built-in agent definition not found: {agent_id}"));
+    visible_names_for(&definition)
+}
+
+fn visible_names_for(
+    definition: &crate::agent::harness::definition::AgentDefinition,
+) -> std::collections::HashSet<String> {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config = test_config(&tmp);
     let agent =
-        crate::agent::OpenHumanSessionHost::from_config_with_definition(&config, &definition)
-            .unwrap_or_else(|e| panic!("{agent_id} session build: {e}"));
+        crate::agent::OpenHumanSessionHost::from_config_with_definition(&config, definition)
+            .unwrap_or_else(|e| panic!("{} session build: {e}", definition.id));
     agent
         .visible_tool_specs_arc()
         .iter()
@@ -21,73 +27,59 @@ fn visible_names(agent_id: &str) -> std::collections::HashSet<String> {
 fn resetting_wildcard_visibility_keeps_collapsed_exposure() {
     let tmp = tempfile::TempDir::new().unwrap();
     let config = test_config(&tmp);
-    let definition = crate::agent::harness::AgentDefinitionRegistry::builtins_only()
-        .get("tools_agent")
-        .cloned()
-        .expect("tools_agent built-in definition");
+    let definition = super::wildcard_probe_def();
     let mut agent =
         crate::agent::OpenHumanSessionHost::from_config_with_definition(&config, &definition)
-            .expect("build tools agent");
+            .expect("build wildcard agent");
 
     agent.set_visible_tool_names(std::collections::HashSet::new());
 
     let visible = agent.visible_tool_specs_arc();
-    assert!(visible
-        .iter()
-        .any(|spec| spec.name == crate::memory::tools::MEMORY_TOOL_NAME));
-    assert!(!visible.iter().any(|spec| spec.name == "memory_store"));
+    assert!(visible.iter().any(|spec| spec.name == "todo"));
+    assert!(!visible.iter().any(|spec| spec.name.starts_with("todo_")));
 }
 
 #[test]
 fn hiding_and_reseeding_wildcard_visibility_keeps_collapsed_exposure() {
     let tmp = tempfile::TempDir::new().unwrap();
     let config = test_config(&tmp);
-    let definition = crate::agent::harness::AgentDefinitionRegistry::builtins_only()
-        .get("tools_agent")
-        .cloned()
-        .expect("tools_agent built-in definition");
+    let definition = super::wildcard_probe_def();
     let mut agent =
         crate::agent::OpenHumanSessionHost::from_config_with_definition(&config, &definition)
-            .expect("build tools agent");
+            .expect("build wildcard agent");
 
     agent.set_visible_tool_names(std::collections::HashSet::new());
-    agent.hide_tools(&[crate::memory::tools::MEMORY_TOOL_NAME]);
+    agent.hide_tools(&["todo"]);
 
     let visible = agent.visible_tool_specs_arc();
-    assert!(!visible
-        .iter()
-        .any(|spec| spec.name == crate::memory::tools::MEMORY_TOOL_NAME));
-    assert!(!visible.iter().any(|spec| spec.name == "memory_store"));
+    assert!(!visible.iter().any(|spec| spec.name == "todo"));
+    assert!(!visible.iter().any(|spec| spec.name.starts_with("todo_")));
 }
 
 /// A wildcard belt advertises the collapsed tool, never its `Hidden` members.
 ///
 /// Both halves are asserted: the members gone AND the replacement present. A
-/// belt that lost the memory surface entirely would pass a members-only check.
-/// Regressed silently once already — `4efbea728` unregistered `memory` and
-/// dropped the only production call to `strip_deferred_from_visible`, so every
-/// wildcard agent shipped all eleven `memory_*` schemas plus `todo` beside the
-/// eight `todo_*` tools it replaces.
+/// belt that lost the surface entirely would pass a members-only check.
+/// Regressed silently once already — `4efbea728` dropped the only production
+/// call to `strip_deferred_from_visible`, so every wildcard agent shipped
+/// `todo` beside the eight `todo_*` tools it replaces. The v1 `memory_*` tool
+/// family is gone for good (memory v2 has one `memory` tool, registered only
+/// while an engine is usable); none of it may come back.
 #[test]
 fn wildcard_belt_advertises_collapsed_tools_not_their_hidden_members() {
-    let visible = visible_names("tools_agent");
+    let visible = visible_names_for(&super::wildcard_probe_def());
 
-    for collapsed in [crate::memory::tools::MEMORY_TOOL_NAME, "todo"] {
-        assert!(
-            visible.contains(collapsed),
-            "wildcard belt must advertise `{collapsed}`; got {visible:?}"
-        );
-    }
+    assert!(
+        visible.contains("todo"),
+        "wildcard belt must advertise `todo`; got {visible:?}"
+    );
     let leaked: Vec<&String> = visible
         .iter()
-        .filter(|name| {
-            (name.starts_with("memory_") && name.as_str() != "memory_tree")
-                || name.starts_with("todo_")
-        })
+        .filter(|name| name.starts_with("memory_") || name.starts_with("todo_"))
         .collect();
     assert!(
         leaked.is_empty(),
-        "Hidden members of `memory`/`todo` must not ship beside them: {leaked:?}"
+        "`todo_*` members and v1 `memory_*` tools must not ship: {leaked:?}"
     );
 }
 
@@ -122,7 +114,6 @@ fn build_with(
         .chat_model(model)
         .tools(tools)
         .visible_tool_names(visible)
-        .memory(crate::memory::test_support::noop_memory())
         .tool_dispatcher(Box::new(tinytools_agent::dialect::XmlDialect))
         .build()
         .expect("session build")
@@ -201,17 +192,67 @@ fn named_belt_without_tool_search_reaches_no_deferred_tool() {
 }
 
 /// A hand-written `[tools] named` belt is left exactly as written: exposure is
-/// only for the wildcard belt. `flow_memory_agent` names three read-only
-/// `memory_*` tools; swapping them for `memory` would hand it `store`/`forget`.
+/// only for the wildcard belt. `critic` names `file_read` among its tools; it
+/// must keep it and gain nothing a wildcard would add.
 #[test]
-fn named_belt_keeps_its_legacy_members() {
-    let visible = visible_names("flow_memory_agent");
+fn named_belt_keeps_its_listed_members() {
+    let visible = visible_names("critic");
     assert!(
-        visible.contains("memory_recall"),
+        visible.contains("file_read"),
         "named belt must keep the members it lists; got {visible:?}"
     );
     assert!(
-        !visible.contains(crate::memory::tools::MEMORY_TOOL_NAME),
-        "named belt must not gain the collapsed tool; got {visible:?}"
+        !visible.contains("shell"),
+        "named belt must not gain unlisted tools; got {visible:?}"
     );
+    assert!(
+        !visible.contains(crate::memory::tools::MEMORY_TOOL_NAME),
+        "named belt must not gain the memory tool; got {visible:?}"
+    );
+}
+
+/// The tools of the specialists the inline skills replaced are `Deferred`:
+/// off the orchestrator's wire, in its deferred set (so `tool_search` finds
+/// them), and callable once found. This is the whole bargain that let
+/// `settings_agent`, `scheduler_agent`, `help`, `code_executor` and `critic`
+/// go — a regression here silently takes those capabilities from chat.
+#[test]
+fn orchestrator_reaches_the_replaced_specialists_tools_through_discovery() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config = test_config(&tmp);
+    let definition = crate::agent::harness::AgentDefinitionRegistry::builtins_only()
+        .get("orchestrator")
+        .cloned()
+        .expect("orchestrator built-in definition");
+    let agent =
+        crate::agent::OpenHumanSessionHost::from_config_with_definition(&config, &definition)
+            .expect("orchestrator session build");
+    let deferred = agent.deferred_tool_names_for_test();
+    let visible = agent.visible_tool_names_for_test();
+    let policy = agent.tool_policy_session_for_test();
+    // Unconditionally registered members only: language commands run through shell and need
+    // host Node runtime and the wallet family needs the `web3`
+    // feature, so a test profile without them cannot see them either way.
+    for tool in [
+        "cron",
+        "config_snapshot",
+        "service_restart",
+        "gitbooks_search",
+        "edit",
+        "curl",
+        "read_diff",
+        "run_linter",
+        "run_tests",
+        "mcp_registry_installed_list",
+    ] {
+        assert!(
+            deferred.contains(tool),
+            "`{tool}` must be deferred; got {deferred:?}"
+        );
+        assert!(!visible.contains(tool), "`{tool}` must stay off the wire");
+        assert!(
+            policy.is_allowed(tool),
+            "`{tool}` must be callable once found"
+        );
+    }
 }

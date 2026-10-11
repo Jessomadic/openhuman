@@ -8,66 +8,46 @@
 //! `bootstrap_core_runtime` path calls [`init_global`] at startup, and any
 //! later call is a no-op. Callers that run before bootstrap (e.g. unit
 //! tests) see `None` from [`try_global`] and skip recording — never a panic.
+//!
+//! The tracker is bound to one workspace. Signing in or out switches the
+//! active workspace (`users/local` <-> `users/<id>`), so the credential path
+//! calls [`rebind_global`] to move it; otherwise usage recorded after login
+//! would keep landing in the pre-login ledger.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use once_cell::sync::OnceCell;
+use parking_lot::RwLock;
 
 use crate::config::CostConfig;
-use crate::inference::provider::types::UsageInfo;
+use crate::inference::provider::types::BilledUsage;
 
 use super::tracker::CostTracker;
-use super::types::{CostSource, TokenUsage};
+use super::types::{CostSource, TokenUsage, UsageScope};
 
-static GLOBAL_TRACKER: OnceCell<Arc<CostTracker>> = OnceCell::new();
+static GLOBAL_TRACKER: RwLock<Option<Arc<CostTracker>>> = RwLock::new(None);
 
 /// Initialise the global cost tracker. Idempotent — subsequent calls are
 /// no-ops and the original tracker is preserved. Logs (but does not panic)
 /// when construction fails so a bad workspace path never blocks core boot.
 ///
-/// **Semantics note (changed in the cost-dashboard PR):**
-///
-/// - `cost.enabled = true` (the new default) — budget enforcement and
-///   dashboard telemetry are both active.
-/// - `cost.enabled = false` — budget enforcement is **off**, but the
-///   dashboard telemetry path still appends to `costs.jsonl` (see
-///   [`record_provider_usage`]). The flag now gates enforcement only;
-///   observability is independent. This is a deliberate trade-off so
-///   operators can review historical spend before opting into hard
-///   budget caps. A `warn` is emitted below so the change is visible
-///   in logs for anyone upgrading from a prior build where
-///   `cost.enabled = false` blocked recording too.
+/// The agent telemetry path appends to `costs.jsonl` through
+/// [`record_provider_usage`] regardless of `cost.enabled`. That flag only
+/// affects direct calls to `CostTracker::record_usage`; it does not enforce a
+/// spend cap. The local ledger remains available when the flag is false.
 ///
 /// The first-boot `info` log records `enabled` and the resolved
 /// workspace so the default-on behaviour shows up in startup logs for
 /// existing deployments that omit the `[cost]` block.
 pub fn init_global(config: CostConfig, workspace_dir: &Path) {
-    if GLOBAL_TRACKER.get().is_some() {
+    if GLOBAL_TRACKER.read().is_some() {
         return;
     }
     let cost_enabled = config.enabled;
     match CostTracker::new(config, workspace_dir) {
-        Ok(tracker) => match GLOBAL_TRACKER.set(Arc::new(tracker)) {
-            Ok(()) => {
-                log::info!(
-                    "[cost] global CostTracker initialised at workspace {} (cost.enabled={}, \
-                     dashboard telemetry always-on). Set cost.dashboard.enabled=false in \
-                     config.toml to hide the panel.",
-                    workspace_dir.display(),
-                    cost_enabled
-                );
-                if !cost_enabled {
-                    log::warn!(
-                        "[cost] cost.enabled=false: budget enforcement is OFF, but dashboard \
-                         telemetry will still append to costs.jsonl. This is a behavioural \
-                         change from prior builds where cost.enabled=false also blocked \
-                         recording. Set cost.dashboard.enabled=false to disable the panel; \
-                         the JSONL is local and never leaves the workspace."
-                    );
-                }
-            }
-            Err(_) => {
+        Ok(tracker) => {
+            let mut slot = GLOBAL_TRACKER.write();
+            if slot.is_some() {
                 // Another caller won a concurrent init race; the original
                 // tracker is kept. Avoid logging a misleading "initialised"
                 // line — the winner already did so.
@@ -75,8 +55,25 @@ pub fn init_global(config: CostConfig, workspace_dir: &Path) {
                     "[cost] global CostTracker already initialised by another caller; \
                      discarding duplicate instance"
                 );
+                return;
             }
-        },
+            *slot = Some(Arc::new(tracker));
+            drop(slot);
+            log::info!(
+                "[cost] global CostTracker initialised at workspace {} (cost.enabled={}, \
+                 dashboard telemetry always-on). Set cost.dashboard.enabled=false in \
+                 config.toml to hide the panel.",
+                workspace_dir.display(),
+                cost_enabled
+            );
+            if !cost_enabled {
+                log::warn!(
+                    "[cost] cost.enabled=false: dashboard telemetry will still append to \
+                     costs.jsonl. Set cost.dashboard.enabled=false to disable the panel; \
+                     the JSONL is local and never leaves the workspace."
+                );
+            }
+        }
         Err(err) => {
             log::warn!(
                 "[cost] failed to initialise global CostTracker at {}: {err} \
@@ -87,33 +84,136 @@ pub fn init_global(config: CostConfig, workspace_dir: &Path) {
     }
 }
 
+/// Point the global tracker at `workspace_dir` when it is bound elsewhere.
+///
+/// Called when the active workspace changes (sign-in, sign-out). A no-op when
+/// the tracker already serves `workspace_dir`. Old ledgers are not migrated:
+/// each workspace keeps its own `costs.jsonl`. The session-scoped in-memory
+/// figures start over with the new tracker. A failed construction keeps the
+/// previous tracker rather than leaving the process with none.
+pub fn rebind_global(config: CostConfig, workspace_dir: &Path) {
+    // In SaaS every profile owns its tracker (see `seed_tenant_tracker`); the
+    // process-wide slot is never read, so rebinding it would only mislead.
+    if crate::core::runtime::is_saas() {
+        log::debug!("[cost] rebind_global ignored in SaaS mode");
+        return;
+    }
+    if let Some(current) = try_global() {
+        if current.workspace_dir() == workspace_dir {
+            log::debug!(
+                "[cost] rebind_global: tracker already bound to workspace {}",
+                workspace_dir.display()
+            );
+            return;
+        }
+    }
+    match CostTracker::new(config, workspace_dir) {
+        Ok(tracker) => {
+            let previous = GLOBAL_TRACKER.write().replace(Arc::new(tracker));
+            log::info!(
+                "[cost] global CostTracker rebound from workspace {} to {}",
+                previous
+                    .as_ref()
+                    .map(|t| t.workspace_dir().display().to_string())
+                    .unwrap_or_else(|| "<unbound>".to_string()),
+                workspace_dir.display()
+            );
+        }
+        Err(err) => {
+            log::warn!(
+                "[cost] failed to rebind global CostTracker to {}: {err}; keeping the \
+                 previous tracker",
+                workspace_dir.display()
+            );
+        }
+    }
+}
+
 /// Fetch the global tracker if it has been initialised. Returns `None`
 /// before bootstrap or after an init failure — callers must treat the
 /// absence as a soft no-op.
+///
+/// In SaaS this is the calling tenant's own tracker
+/// ([`seed_tenant_tracker`]), never the process-wide one: one user's spend
+/// must not land in, or be read from, another's ledger. A SaaS task with no
+/// scope, or the operator, gets `None`.
 pub fn try_global() -> Option<Arc<CostTracker>> {
-    GLOBAL_TRACKER.get().cloned()
+    let saas = crate::core::runtime::is_saas();
+    if saas {
+        return tracker_in(crate::core::runtime::tenant::context_in(saas).as_deref());
+    }
+    GLOBAL_TRACKER.read().clone()
+}
+
+/// A SaaS tenant's cost tracker, held in its context's state slots.
+#[derive(Default)]
+pub(crate) struct TenantTracker(RwLock<Option<Arc<CostTracker>>>);
+
+/// Give `ctx` (a SaaS profile's context) a cost tracker over the profile's
+/// own workspace. Called when the profile opens; a failure leaves it without
+/// one (its usage goes unrecorded) rather than borrowing another ledger.
+pub fn seed_tenant_tracker(
+    ctx: &crate::core::runtime::CoreContext,
+    config: &crate::config::Config,
+) {
+    match CostTracker::new(config.cost.clone(), &config.workspace_dir) {
+        Ok(tracker) => {
+            *ctx.agent_state().slot::<TenantTracker>().0.write() = Some(Arc::new(tracker));
+            log::debug!(
+                "[cost] tenant tracker seeded workspace={}",
+                config.workspace_dir.display()
+            );
+        }
+        Err(err) => {
+            // Never keep a tracker over a previous workspace.
+            *ctx.agent_state().slot::<TenantTracker>().0.write() = None;
+            log::warn!(
+                "[cost] could not seed the tenant tracker at {}: {err}",
+                config.workspace_dir.display()
+            );
+        }
+    }
+}
+
+/// The tracker `ctx` was seeded with; `None` without a context.
+pub(crate) fn tracker_in(
+    ctx: Option<&crate::core::runtime::CoreContext>,
+) -> Option<Arc<CostTracker>> {
+    ctx.and_then(|ctx| ctx.agent_state().slot::<TenantTracker>().0.read().clone())
 }
 
 /// Convenience hook used by the agent turn loop: translates a provider
-/// [`UsageInfo`] into a [`TokenUsage`] record and persists it via the
+/// [`BilledUsage`] into a [`TokenUsage`] record and persists it via the
 /// global tracker. Silently skipped when the tracker is uninitialised.
 /// Errors are logged but never propagated — cost tracking must never
 /// break a turn.
 ///
 /// Note: this path uses
 /// [`crate::platform::cost::tracker::CostTracker::record_usage_unconditional`],
-/// so dashboard telemetry is captured even when `cost.enabled = false` —
-/// the `cost.enabled` flag gates budget enforcement (refusing requests),
-/// not observability. This lets users see history first and decide
-/// whether to switch on enforcement.
+/// so dashboard telemetry is captured even when `cost.enabled = false`.
 ///
 /// `model` is the model identifier the request was routed to (e.g.
 /// `"anthropic/claude-sonnet-4-20250514"`) and is used as the bucket key
 /// in per-model aggregates.
-pub fn record_provider_usage(model: &str, usage: &UsageInfo) {
-    let Some(token_usage) = build_token_usage(model, usage) else {
+pub fn record_provider_usage(model: &str, usage: &BilledUsage) {
+    record_provider_usage_scoped(model, usage, UsageScope::ambient(None, None));
+}
+
+/// [`record_provider_usage`] with the call's attribution. The event bridge
+/// passes its provider and, for a delegated child, the sub-agent; everything
+/// else comes from the recording task (see [`UsageScope::ambient`]).
+pub fn record_provider_usage_scoped(model: &str, usage: &BilledUsage, scope: UsageScope) {
+    let Some(mut token_usage) = build_token_usage(model, usage) else {
         return;
     };
+    log::trace!(
+        "[cost] attributing usage model={model} thread={:?} agent={:?} origin={:?} provider={:?}",
+        scope.thread_id,
+        scope.agent_id,
+        scope.origin,
+        scope.provider
+    );
+    token_usage.scope = scope;
     let Some(tracker) = try_global() else {
         return;
     };
@@ -122,26 +222,32 @@ pub fn record_provider_usage(model: &str, usage: &UsageInfo) {
     }
 }
 
-/// Translate a provider [`UsageInfo`] into a [`TokenUsage`] record.
+/// Translate a provider [`BilledUsage`] into a [`TokenUsage`] record.
 ///
 /// Returns `None` for an all-zero payload so the caller can skip the
-/// write — providers that don't echo usage produce `UsageInfo::default()`
+/// write — providers that don't echo usage produce `BilledUsage::default()`
 /// values, and persisting those would inflate the request count with
 /// non-events. Non-finite or negative cost is clamped to `0.0`. Extracted
 /// from [`record_provider_usage`] so the translation can be unit-tested
 /// independently of the process-global tracker singleton.
-pub(super) fn build_token_usage(model: &str, usage: &UsageInfo) -> Option<TokenUsage> {
+pub(super) fn build_token_usage(model: &str, usage: &BilledUsage) -> Option<TokenUsage> {
     if usage.input_tokens == 0 && usage.output_tokens == 0 && usage.charged_amount_usd == 0.0 {
         return None;
     }
     let total_tokens = usage.input_tokens.saturating_add(usage.output_tokens);
-    let provider_charged = usage.charged_amount_usd.is_finite() && usage.charged_amount_usd > 0.0;
+    let cost_source = if usage.cost_is_estimate {
+        CostSource::Estimated
+    } else if usage.charge_reported {
+        CostSource::ProviderCharged
+    } else {
+        CostSource::Unknown
+    };
     Some(TokenUsage {
         model: model.to_string(),
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         total_tokens,
-        cached_input_tokens: usage.cached_input_tokens.min(usage.input_tokens),
+        cached_input_tokens: usage.cached_input_tokens().min(usage.input_tokens),
         cache_creation_tokens: usage.cache_creation_tokens,
         reasoning_tokens: usage.reasoning_tokens,
         cost_usd: if usage.charged_amount_usd.is_finite() && usage.charged_amount_usd >= 0.0 {
@@ -149,11 +255,7 @@ pub(super) fn build_token_usage(model: &str, usage: &UsageInfo) -> Option<TokenU
         } else {
             0.0
         },
-        cost_source: if provider_charged {
-            CostSource::ProviderCharged
-        } else {
-            CostSource::Estimated
-        },
+        cost_source,
         // Lineage groundwork (06-cost step 3): the provider-usage build site
         // does not yet carry a run_id/root_run_id from the observation stream.
         // Leave `None` until the run-tree rollup (06.3, gated) threads run
@@ -161,6 +263,7 @@ pub(super) fn build_token_usage(model: &str, usage: &UsageInfo) -> Option<TokenU
         // `tinyagents/observability.rs`.
         run_id: None,
         root_run_id: None,
+        scope: UsageScope::default(),
         timestamp: chrono::Utc::now(),
     })
 }
@@ -223,6 +326,10 @@ pub fn record_embedding_usage(
         cost_source: CostSource::Estimated,
         run_id: None,
         root_run_id: None,
+        scope: UsageScope {
+            origin: Some(super::report::EMBEDDING_ORIGIN.to_string()),
+            ..UsageScope::ambient(Some(provider), None)
+        },
         timestamp: chrono::Utc::now(),
     };
     log::debug!(

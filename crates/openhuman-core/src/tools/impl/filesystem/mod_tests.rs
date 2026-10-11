@@ -1,15 +1,14 @@
-//! Tests for [`super::security_for_tool_context`] — the per-tool-call policy
-//! clone that carries a run's `WorkspaceDescriptor` into the filesystem tools.
-//!
-//! Split out of `mod.rs` to keep the module root export-focused. Declared via
-//! `#[path = "mod_tests.rs"] mod tests;` so `super::*` resolves to the
-//! `filesystem` module.
+//! Tests for the per-tool-call policy scoping that carries a run's
+//! `WorkspaceDescriptor` into the filesystem tools
+//! ([`super::gate::security_scoped_to_root`]).
 
-use super::*;
+use super::gate::security_scoped_to_root;
 use crate::security::policy::TrustedAccess;
+use crate::security::SecurityPolicy;
 use std::path::Path;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::tool::ToolExecutionContext;
+use tinytools::ToolRunContext;
 use tinytools::WorkspaceDescriptor;
 
 /// A run context carrying a workspace descriptor rooted at `root`, exactly as
@@ -18,6 +17,20 @@ fn tool_context_with_workspace(root: &Path) -> ToolExecutionContext {
     let ws = WorkspaceDescriptor::new(root.to_path_buf()).with_policy_id("test-descriptor");
     let ctx: RunContext = RunContext::new(RunConfig::new("test-run"), ()).with_workspace(ws);
     ToolExecutionContext::from_run_context(&ctx, tinyagents_harness::ids::CallId::new("test-call"))
+}
+
+/// The policy the tools validate against for a call: scoped to the run's
+/// workspace descriptor when there is one, otherwise untouched. This is what
+/// `tinytools_std::filesystem` does through `FsGate::scoped_to_workspace`.
+fn security_for_tool_context(
+    security: &SecurityPolicy,
+    context: Option<&dyn ToolRunContext>,
+    _tool: &str,
+) -> SecurityPolicy {
+    match context.and_then(|ctx| ctx.workspace()) {
+        Some(workspace) => security_scoped_to_root(security, &workspace.root),
+        None => security.clone(),
+    }
 }
 
 /// A policy whose `workspace_dir`/`action_dir` are the OpenHuman home — i.e. a

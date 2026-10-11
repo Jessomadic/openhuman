@@ -5,33 +5,16 @@
  * identical (Connected / Connecting / Disconnected / Error).
  */
 import { useT } from '../../../lib/i18n/I18nContext';
+import Badge, { type BadgeVariant } from '../../ui/Badge';
 import type { ServerStatus } from './types';
 
-const STATUS_META: Record<ServerStatus, { i18nKey: string; className: string }> = {
-  connected: {
-    i18nKey: 'channels.status.connected',
-    className: 'bg-sage-500/10 text-sage-700 border-sage-500/30 dark:text-sage-300',
-  },
-  connecting: {
-    i18nKey: 'channels.status.connecting',
-    className: 'bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300',
-  },
-  disconnected: {
-    i18nKey: 'channels.status.disconnected',
-    className: 'bg-surface-subtle text-content-muted border-line',
-  },
-  unauthorized: {
-    i18nKey: 'mcp.status.unauthorized',
-    className: 'bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300',
-  },
-  error: {
-    i18nKey: 'channels.status.error',
-    className: 'bg-coral-500/10 text-coral-700 border-coral-500/30 dark:text-coral-300',
-  },
-  disabled: {
-    i18nKey: 'mcp.status.disabled',
-    className: 'bg-surface-subtle text-content-faint border-line italic',
-  },
+const STATUS_META: Record<ServerStatus, { i18nKey: string; variant: BadgeVariant }> = {
+  connected: { i18nKey: 'channels.status.connected', variant: 'success' },
+  connecting: { i18nKey: 'channels.status.connecting', variant: 'warning' },
+  disconnected: { i18nKey: 'channels.status.disconnected', variant: 'neutral' },
+  unauthorized: { i18nKey: 'mcp.status.unauthorized', variant: 'warning' },
+  error: { i18nKey: 'channels.status.error', variant: 'danger' },
+  disabled: { i18nKey: 'mcp.status.disabled', variant: 'neutral' },
 };
 
 interface McpStatusBadgeProps {
@@ -43,12 +26,13 @@ const McpStatusBadge = ({ status, className = '' }: McpStatusBadgeProps) => {
   const { t } = useT();
   const meta = STATUS_META[status] ?? STATUS_META.disconnected;
   return (
-    <span
+    <Badge
+      variant={meta.variant}
       role="status"
       aria-live="polite"
-      className={`shrink-0 px-2 py-1 text-[11px] border rounded-full ${meta.className} ${className}`}>
+      className={`shrink-0 ${status === 'disabled' ? 'italic' : ''} ${className}`}>
       {t(meta.i18nKey)}
-    </span>
+    </Badge>
   );
 };
 

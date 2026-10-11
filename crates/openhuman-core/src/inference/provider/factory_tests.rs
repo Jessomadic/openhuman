@@ -167,6 +167,7 @@ fn routed_config(endpoint: &str, api_key: &str, model: &str) -> Config {
         EphemeralRoute {
             endpoint: endpoint.to_string(),
             api_key: api_key.to_string(),
+            headers: Vec::new(),
         },
     );
     config
@@ -182,6 +183,8 @@ fn only_library_hosts_are_exempt_from_app_login() {
     }
 }
 
+#[path = "factory_crate_native_diagnostics_tests.rs"]
+mod crate_native_diagnostics_tests;
 #[path = "factory_crate_native_tests.rs"]
 mod crate_native_tests;
 #[path = "factory_egress_fallback_tests.rs"]

@@ -6,7 +6,7 @@
 //! closes both gaps.
 //!
 //! Each running async sub-agent registers in TinyAgents'
-//! [`DetachedTaskRegistry`](tinyagents_graph::orchestration::DetachedTaskRegistry),
+//! [`DetachedTaskRegistry`](tinyagents_tasks::DetachedTaskRegistry),
 //! keyed by its `task_id`, with:
 //! - an `Arc<RunQueue>` — the same steering channel the steering forwarder in
 //!   `run_turn_via_tinyagents_shared` drains mid-turn, so `steer_subagent` can
@@ -14,7 +14,7 @@
 //! - a TinyAgents `SteeringHandle` in the process-local
 //!   `SteeringRegistry` while the child TinyAgents run is active, so
 //!   steer/collect controls can deliver directly to the crate queue;
-//! - a `watch::Receiver<SubagentStatus>` — so `wait_subagent` can block until the
+//! - a `watch::Receiver<DetachedSubagentStatus>` — so `wait_subagent` can block until the
 //!   child reaches a terminal status;
 //! - an `AbortHandle` — used by `subagent_cancel`/`close_subagent` paths to stop
 //!   detached work.
@@ -28,7 +28,7 @@
 //!
 //! Alongside the executor plumbing (abort handle + steering queue + watch
 //! status), every detached sub-agent is also recorded in a process-wide
-//! [`tinyagents` orchestration `TaskStore`](tinyagents_graph::orchestration)
+//! [`tinyagents` orchestration `TaskStore`](tinyagents_tasks)
 //! as an `OrchestrationTaskKind::SubAgent` task. `register` inserts it
 //! (`Pending` → `Running`) and spawns a watcher that mirrors the child's
 //! terminal status into the store (`Completed`/`Failed`/`Awaiting`); the cancel
@@ -37,7 +37,7 @@
 //!
 //! ## Module layout
 //!
-//! - [`registry`] — the in-process table itself: [`SubagentStatus`],
+//! - [`registry`] — the in-process table itself: [`DetachedSubagentStatus`],
 //!   registration, and status channels.
 //! - [`task_ledger`] — the durable per-workspace task store and the typed
 //!   lifecycle records mirrored into it.
@@ -55,6 +55,7 @@ mod resolve;
 mod roster;
 mod steering;
 mod task_ledger;
+mod task_ledger_documents;
 mod wait;
 
 #[cfg(test)]
@@ -63,10 +64,13 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use cancel::prune;
+#[cfg(test)]
+pub(crate) use cancel::{caller_workspace_in, CallerWorkspace};
 pub(crate) use cancel::{
-    cancel_all, cancel_by_session_in_workspace, cancel_by_task, cancel_for_thread,
+    cancel_all, cancel_by_session_in_workspace, cancel_by_task, cancel_for_thread, stop_for_thread,
+    CancelledSubagent,
 };
-pub(crate) use registry::{register, status_channel, SubagentResumeRef, SubagentStatus};
+pub(crate) use registry::{register, status_channel};
 pub(crate) use resolve::{resume_ref_for_task_in_workspace, task_id_for_session_in_workspace};
 pub(crate) use roster::active_subagents_context_block;
 pub(crate) use steering::steer_control;
@@ -74,4 +78,4 @@ pub use steering::{steer, SteerError};
 #[cfg(test)]
 pub(crate) use task_ledger::task_records;
 pub(crate) use task_ledger::{reconcile_orphaned_tasks_on_boot, task_record_for_task_in_workspace};
-pub(crate) use wait::{wait_in_workspace, WaitError, WaitOutcome};
+pub(crate) use wait::wait_in_workspace;

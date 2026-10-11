@@ -3,7 +3,7 @@
 //! The store itself — run ledger rows, child lineage, events, and telemetry —
 //! lives in [`tinyagents::session::run_ledger`]. Only the controller schemas and
 //! their handlers stay here, because the RPC envelope, config resolution, and
-//! `RpcOutcome` shape are host concerns the runtime crate has no business
+//! `Outcome` shape are host concerns the runtime crate has no business
 //! knowing about.
 //!
 //! Call the store directly (`tinyagents_session::run_ledger::…`) rather

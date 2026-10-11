@@ -2,8 +2,6 @@
 
 use crate::config::Config;
 
-use super::super::client::{build_composio_client, ComposioClient};
-
 /// Toolkits that honour the `tags` query param on the backend tool-list endpoint.
 /// Expand this list when a new toolkit gains tag support.
 const TAG_QUERYABLE_TOOLKITS: &[&str] = &["github"];
@@ -30,19 +28,13 @@ pub(crate) fn should_forward_tags(toolkits: Option<&[String]>) -> bool {
 /// Result alias used by every `composio_*` op in this module.
 pub(super) type OpResult<T> = std::result::Result<T, String>;
 
-/// The answer every backend-mode member gives while there is no app-session
-/// JWT. Shared so the members agree on the wording, and because the wording is
+/// The answer every backend-mode member gives while there is no backend
+/// credential (neither an app-session JWT nor a TinyHumans API key). Shared so the members agree on the wording, and because the wording is
 /// load-bearing: `is_session_expired_message` recognises "no backend session
 /// token", so the JSON-RPC boundary demotes this to an expected user-state
 /// error instead of paging Sentry.
 pub(crate) const COMPOSIO_NO_SESSION: &str =
-    "composio unavailable: no backend session token. Sign in first (auth_store_session).";
-
-/// Resolve a backend-mode [`ComposioClient`] from the root config, or
-/// return an error string that the caller can surface over RPC.
-pub(crate) fn resolve_client(config: &Config) -> OpResult<ComposioClient> {
-    build_composio_client(config).ok_or_else(|| COMPOSIO_NO_SESSION.to_string())
-}
+    "composio unavailable: no backend session token. Sign in or set a TinyHumans API key.";
 
 /// True when the user has selected Composio **direct** mode but has not yet
 /// configured an API key (neither in the keychain nor `config.toml`).
@@ -55,7 +47,7 @@ pub(crate) fn resolve_client(config: &Config) -> OpResult<ComposioClient> {
 /// Sentry on every tick (TAURI-RUST-R4).
 ///
 /// Key presence MUST mirror the factory's own resolution in
-/// [`create_composio_client`] (`client.rs`): a key counts if it is in the
+/// [`resolve_composio_route`](super::super::client::resolve_composio_route) (`client/factory.rs`): a key counts if it is in the
 /// keychain (`credentials::get_composio_api_key`) **or** in `config.toml`
 /// (`config.composio.api_key`). Checking only the keychain would wrongly
 /// short-circuit to an empty list for a user who configured their key via
@@ -79,28 +71,27 @@ pub(crate) fn direct_mode_without_key(config: &Config) -> OpResult<bool> {
 }
 
 /// True when the user is in Composio **backend** mode (the default) but has no
-/// app-session JWT yet — a fresh install before sign-in, or signed out.
+/// backend credential yet — a fresh install before sign-in, or signed out, and
+/// no TinyHumans API key stored.
 ///
 /// Like [`direct_mode_without_key`], this is a valid *setup* state, not an
 /// operation failure. Without a session there is no proxy route to give the
 /// connector module: `modules::connectors::module_config` fails, `ensure_routed`
 /// reconfigures the module with `{"route": "none"}`, and every routed member
 /// answers "this module was loaded without a connector route" — which the op
-/// layer then reported at error level (and to Sentry) once at boot from the
-/// memory-source reconcile and again on every periodic tick, for a user who
-/// simply has not signed in (#6176). Callers answer with the quiet
+/// layer then reported at error level (and to Sentry) on every periodic tick,
+/// for a user who simply has not signed in (#6176). Callers answer with the quiet
 /// [`COMPOSIO_NO_SESSION`] error instead — deliberately not an empty list,
 /// unlike the direct-mode guard: no key means no tenant and truly no
 /// connections, whereas no session only means the connections cannot be
-/// reached yet, and `memory::sources::reconcile` /
-/// `flows::validate_connection_refs` rely on `Err` meaning "unknown" (fail
-/// open) rather than "none".
+/// reached yet, and `flows::validate_connection_refs` relies on `Err` meaning
+/// "unknown" (fail open) rather than "none".
 ///
-/// Session presence MUST mirror the module route's own resolution:
-/// `module_config` calls `integrations::build_client`, whose only token source
-/// is the app-session JWT (`crate::api::jwt::get_session_token`). Read that
-/// same source — not `build_client` itself, which logs a warning per call and
-/// would recreate the noise this guard removes.
+/// Credential presence MUST mirror the module route's own resolution:
+/// `module_config` calls `integrations::build_client`, which takes the stored
+/// API key first and the app-session JWT otherwise. Read those same sources —
+/// not `build_client` itself, which logs per call and would recreate the noise
+/// this guard removes.
 ///
 /// A *failed* token lookup (store unreadable) deliberately returns `false`:
 /// that is a real fault, and it must keep surfacing through the normal error
@@ -110,8 +101,14 @@ pub(crate) fn backend_mode_without_session(config: &Config) -> bool {
     if !(mode.is_empty() || mode == crate::config::schema::COMPOSIO_MODE_BACKEND) {
         return false;
     }
-    match crate::api::jwt::get_session_token(config) {
-        Ok(token) => token.as_deref().map(str::trim).is_none_or(str::is_empty),
+    if crate::security::credentials::api_key::has_api_key(config) {
+        return false;
+    }
+    match crate::security::credentials::jwt::get_session_token(config) {
+        Ok(token) => token.as_deref().map(str::trim).is_none_or(|token| {
+            token.is_empty()
+                || crate::security::credentials::session_support::is_local_session_token(token)
+        }),
         Err(error) => {
             tracing::warn!(
                 "[composio] backend_mode_without_session: session lookup failed ({error}); \

@@ -320,23 +320,14 @@ async fn apply_memory_settings_updates_all_provided_fields() {
     let tmp = tempdir().unwrap();
     let mut cfg = tmp_config(&tmp);
     let patch = MemorySettingsPatch {
-        backend: Some("sqlite".into()),
-        auto_save: Some(true),
         embedding_provider: Some("ollama".into()),
         embedding_model: Some("nomic".into()),
         embedding_dimensions: Some(768),
-        memory_window: Some("extended".into()),
     };
     let _ = apply_memory_settings(&mut cfg, patch).await.expect("apply");
-    assert_eq!(cfg.memory.backend, "sqlite");
-    assert!(cfg.memory.auto_save);
     assert_eq!(cfg.memory.embedding_provider, "ollama");
     assert_eq!(cfg.memory.embedding_model, "nomic");
     assert_eq!(cfg.memory.embedding_dimensions, 768);
-    assert_eq!(
-        cfg.agent.memory_window,
-        Some(crate::config::schema::MemoryContextWindow::Extended)
-    );
 }
 
 #[tokio::test]
@@ -367,53 +358,72 @@ async fn apply_autonomy_settings_updates_action_budget() {
 }
 
 #[tokio::test]
-async fn apply_memory_settings_ignores_unknown_memory_window_label() {
-    let tmp = tempdir().unwrap();
-    let mut cfg = tmp_config(&tmp);
-    cfg.agent.memory_window = Some(crate::config::schema::MemoryContextWindow::Balanced);
-    let original = cfg.agent.memory_window;
-    let patch = MemorySettingsPatch {
-        memory_window: Some("ginormous".into()),
-        ..MemorySettingsPatch::default()
-    };
-    let _ = apply_memory_settings(&mut cfg, patch).await.expect("apply");
-    assert_eq!(cfg.agent.memory_window, original);
-}
-
-#[tokio::test]
-async fn apply_memory_settings_round_trips_all_window_labels() {
-    use crate::config::schema::MemoryContextWindow;
-    let tmp = tempdir().unwrap();
-    let mut cfg = tmp_config(&tmp);
-    let windows: [MemoryContextWindow; 4] = [
-        MemoryContextWindow::Minimal,
-        MemoryContextWindow::Balanced,
-        MemoryContextWindow::Extended,
-        MemoryContextWindow::Maximum,
-    ];
-    for window in windows {
-        let patch = MemorySettingsPatch {
-            memory_window: Some(window.as_str().to_string()),
-            ..MemorySettingsPatch::default()
-        };
-        apply_memory_settings(&mut cfg, patch).await.expect("apply");
-        assert_eq!(cfg.agent.memory_window, Some(window));
-    }
-}
-
-#[tokio::test]
 async fn apply_runtime_settings_updates_kind_and_reasoning() {
     let tmp = tempdir().unwrap();
     let mut cfg = tmp_config(&tmp);
     let patch = RuntimeSettingsPatch {
         kind: Some("desktop".into()),
         reasoning_enabled: Some(true),
+        reasoning_effort: Some("max".into()),
+        ..RuntimeSettingsPatch::default()
     };
     let _ = apply_runtime_settings(&mut cfg, patch)
         .await
         .expect("apply");
     assert_eq!(cfg.runtime.kind, "desktop");
     assert_eq!(cfg.runtime.reasoning_enabled, Some(true));
+    // Aliases are stored as the canonical wire token.
+    assert_eq!(cfg.runtime.reasoning_effort.as_deref(), Some("xhigh"));
+
+    let cleared = RuntimeSettingsPatch {
+        reasoning_effort: Some(String::new()),
+        ..RuntimeSettingsPatch::default()
+    };
+    let _ = apply_runtime_settings(&mut cfg, cleared)
+        .await
+        .expect("apply clear");
+    assert_eq!(cfg.runtime.reasoning_effort, None);
+
+    let bogus = RuntimeSettingsPatch {
+        reasoning_effort: Some("turbo".into()),
+        ..RuntimeSettingsPatch::default()
+    };
+    assert!(apply_runtime_settings(&mut cfg, bogus).await.is_err());
+}
+
+#[tokio::test]
+async fn apply_runtime_settings_keeps_a_level_per_model() {
+    let tmp = tempdir().unwrap();
+    let mut cfg = tmp_config(&tmp);
+    cfg.runtime.reasoning_effort = Some("low".into());
+    let per_model = RuntimeSettingsPatch {
+        reasoning_effort: Some("max".into()),
+        reasoning_effort_model: Some("anthropic/claude-opus".into()),
+        ..RuntimeSettingsPatch::default()
+    };
+    let _ = apply_runtime_settings(&mut cfg, per_model)
+        .await
+        .expect("apply per-model");
+    assert_eq!(
+        cfg.runtime
+            .reasoning_effort_by_model
+            .get("anthropic/claude-opus")
+            .map(String::as_str),
+        Some("xhigh")
+    );
+    // The global level is untouched by a per-model write.
+    assert_eq!(cfg.runtime.reasoning_effort.as_deref(), Some("low"));
+
+    let cleared = RuntimeSettingsPatch {
+        reasoning_effort: Some(String::new()),
+        reasoning_effort_model: Some("anthropic/claude-opus".into()),
+        ..RuntimeSettingsPatch::default()
+    };
+    let _ = apply_runtime_settings(&mut cfg, cleared)
+        .await
+        .expect("clear per-model");
+    assert!(cfg.runtime.reasoning_effort_by_model.is_empty());
+    assert_eq!(cfg.runtime.reasoning_effort.as_deref(), Some("low"));
 }
 
 #[tokio::test]
@@ -426,11 +436,38 @@ async fn apply_browser_settings_updates_enabled_flag() {
         BrowserSettingsPatch {
             enabled: Some(true),
             backend: None,
+            ..Default::default()
         },
     )
     .await
     .expect("apply");
     assert!(cfg.browser.enabled);
+}
+
+#[tokio::test]
+async fn apply_browser_settings_switches_learning_from_tasks() {
+    let tmp = tempdir().unwrap();
+    let mut cfg = tmp_config(&tmp);
+    assert!(cfg.browser.learn_from_tasks, "on by default");
+
+    apply_browser_settings(
+        &mut cfg,
+        BrowserSettingsPatch {
+            learn_from_tasks: Some(false),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("apply");
+    assert!(!cfg.browser.learn_from_tasks);
+
+    apply_browser_settings(&mut cfg, BrowserSettingsPatch::default())
+        .await
+        .expect("apply");
+    assert!(
+        !cfg.browser.learn_from_tasks,
+        "left as it was when not named"
+    );
 }
 
 #[tokio::test]
@@ -444,6 +481,7 @@ async fn apply_browser_settings_updates_backend() {
         BrowserSettingsPatch {
             enabled: None,
             backend: Some("playwright".into()),
+            ..Default::default()
         },
     )
     .await
@@ -464,6 +502,7 @@ async fn apply_browser_settings_rejects_unknown_backend() {
         BrowserSettingsPatch {
             enabled: Some(true),
             backend: Some("netscape".into()),
+            ..Default::default()
         },
     )
     .await
@@ -472,6 +511,26 @@ async fn apply_browser_settings_rejects_unknown_backend() {
     assert!(err.contains("Unsupported browser backend"));
     assert!(!cfg.browser.enabled);
     assert_eq!(cfg.browser.backend, "agent_browser");
+}
+
+#[tokio::test]
+async fn apply_browser_settings_rejects_invalid_profile_without_partial_update() {
+    let tmp = tempdir().unwrap();
+    let mut cfg = tmp_config(&tmp);
+    let before = cfg.browser.enabled;
+    let err = apply_browser_settings(
+        &mut cfg,
+        BrowserSettingsPatch {
+            enabled: Some(!before),
+            profile_mode: Some("persistent".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("profile path is required");
+    assert!(err.contains("profile_path"));
+    assert_eq!(cfg.browser.enabled, before);
+    assert_eq!(cfg.browser.profile_mode, "fresh");
 }
 
 #[tokio::test]
@@ -489,9 +548,6 @@ async fn apply_local_ai_settings_updates_lm_studio_provider_fields() {
         model_id: Some(" local-default ".into()),
         chat_model_id: Some(" local-chat ".into()),
         usage_embeddings: Some(true),
-        usage_heartbeat: Some(true),
-        usage_learning_reflection: Some(false),
-        usage_subconscious: Some(true),
         api_key: None,
     };
 
@@ -509,9 +565,6 @@ async fn apply_local_ai_settings_updates_lm_studio_provider_fields() {
     assert_eq!(cfg.local_ai.model_id, "local-default");
     assert_eq!(cfg.local_ai.chat_model_id, "local-chat");
     assert!(cfg.local_ai.usage.embeddings);
-    assert!(cfg.local_ai.usage.heartbeat);
-    assert!(!cfg.local_ai.usage.learning_reflection);
-    assert!(cfg.local_ai.usage.subconscious);
     assert_eq!(outcome.value["config"]["local_ai"]["provider"], "lm_studio");
 
     let clear_and_fallback = LocalAiSettingsPatch {
@@ -638,4 +691,52 @@ async fn apply_analytics_settings_updates_enabled() {
     .await
     .expect("apply");
     assert!(!cfg.observability.analytics_enabled);
+}
+
+#[tokio::test]
+async fn apply_user_timezone_stores_the_canonical_name_refuses_junk_and_clears() {
+    let tmp = tempdir().unwrap();
+    let mut cfg = tmp_config(&tmp);
+
+    apply_user_timezone(&mut cfg, Some(" asia/kolkata ".into()))
+        .await
+        .expect("an IANA zone in any case is accepted");
+    assert_eq!(cfg.user_timezone.as_deref(), Some("Asia/Kolkata"));
+    assert_eq!(cfg.time_zone(), "Asia/Kolkata");
+    let saved = std::fs::read_to_string(&cfg.config_path).expect("config was saved");
+    assert!(saved.contains("Asia/Kolkata"), "{saved}");
+
+    let error = apply_user_timezone(&mut cfg, Some("IST".into()))
+        .await
+        .expect_err("an abbreviation is not a zone");
+    assert!(error.contains("IST"), "{error}");
+    assert_eq!(
+        cfg.user_timezone.as_deref(),
+        Some("Asia/Kolkata"),
+        "unchanged"
+    );
+
+    apply_user_timezone(&mut cfg, Some("  ".into()))
+        .await
+        .expect("blank clears");
+    assert_eq!(cfg.user_timezone, None);
+    let json = user_timezone_json(&cfg);
+    assert!(json["timezone"].is_null());
+    assert_eq!(json["effective"], cfg.time_zone());
+}
+
+#[tokio::test]
+async fn apply_user_timezone_restores_the_value_when_the_save_fails() {
+    let tmp = tempdir().unwrap();
+    let mut cfg = tmp_config(&tmp);
+    cfg.user_timezone = Some("Europe/Berlin".into());
+    // A config path inside a regular file cannot be written.
+    let blocker = tmp.path().join("not-a-dir");
+    std::fs::write(&blocker, "x").unwrap();
+    cfg.config_path = blocker.join("config.toml");
+
+    apply_user_timezone(&mut cfg, Some("Asia/Kolkata".into()))
+        .await
+        .expect_err("the save cannot succeed");
+    assert_eq!(cfg.user_timezone.as_deref(), Some("Europe/Berlin"));
 }

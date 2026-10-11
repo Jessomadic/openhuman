@@ -5,15 +5,11 @@
 //! name, description, and parameter JSON schema so the LLM's native
 //! tool-calling path can validate arguments before they hit the wire.
 //!
-//! These are constructed **dynamically at spawn time** by the sub-agent
-//! runner when `integrations_agent` is spawned with a `toolkit` argument —
-//! one tool per action in the chosen toolkit. The generic
-//! [`ComposioExecuteTool`](super::tools::ComposioExecuteTool) dispatcher
-//! is deliberately excluded from `integrations_agent`'s tool list in that
-//! path so the model doesn't see two ways to call the same action.
+//! [`ComposioActionTool::new`] builds a `ToolExposure::Direct` instance
+//! anchored to a config snapshot.
 //!
-//! A second constructor, [`ComposioActionTool::deferred`], builds the same
-//! tool as a `ToolExposure::Deferred` registration for a parent session:
+//! [`ComposioActionTool::deferred`] builds the same tool as a
+//! `ToolExposure::Deferred` registration for a parent session:
 //! every action of every connected toolkit is synthesised beside the
 //! delegation tools (`tools::orchestrator_tools`), stays off the wire, and
 //! is found through the harness's `tool_search` bridge — so one clear action
@@ -21,13 +17,12 @@
 //! run. Those instances have no spawn-time config to anchor to and resolve
 //! the live config through the core's read path instead.
 //!
-//! Lifetime: these tools live for the duration of a single sub-agent
-//! spawn. Rather than baking a `ComposioClient` at construction time
+//! Rather than baking a pre-resolved route at construction time
 //! (which would silently bypass a mid-session
 //! [`crate::config::ComposioConfig::mode`] toggle — see
 //! issue #1710), each tool keeps an [`Arc<Config>`] and resolves the
 //! client per call through
-//! [`create_composio_client`] so a user flip from
+//! [`resolve_composio_route`] so a user flip from
 //! `mode = "backend"` to `mode = "direct"` is honoured on the next
 //! tool invocation without restarting the session. Mirrors the agent-
 //! tool migration in
@@ -48,18 +43,18 @@ use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult};
 
 /// A single Composio action exposed as a first-class tool.
 pub struct ComposioActionTool {
-    /// Held instead of a pre-baked [`super::client::ComposioClient`] so
+    /// Held instead of a pre-baked a pre-resolved route so
     /// the [`crate::config::ComposioConfig::mode`] toggle is
     /// honoured on every invocation.
     ///
-    /// Pre-fix this field was `client: ComposioClient`, which captured
+    /// Pre-fix this field was `client: ComposioClient` (the since-removed in-process client), which captured
     /// the backend-bound handle at sub-agent spawn time. Toggling
     /// `composio.mode = "direct"` mid-session invalidated other caches
     /// but left these per-action tools still routing through
     /// `staging-api.tinyhumans.ai/agent-integrations/composio/execute`
     /// — silently bypassing the direct-mode user's personal Composio
     /// tenant. Resolving the client per call via
-    /// [`create_composio_client`] keeps dispatch in lockstep with the
+    /// [`resolve_composio_route`] keeps dispatch in lockstep with the
     /// live config, matching
     /// [`super::tools::ComposioExecuteTool`]. See issue #1710.
     ///
@@ -84,10 +79,10 @@ pub struct ComposioActionTool {
     /// gate surfaces the action's FULL live input schema/description so the
     /// model composes well-formed arguments (e.g. correctly-quoted Gmail
     /// queries) instead of guessing from the thin spawn-time schema; the retry
-    /// executes normally. Held per tool instance, which lives for one
-    /// `integrations_agent` spawn, so "seen" is scoped to that turn.
+    /// executes normally. Held per tool instance, so "seen" is scoped to that
+    /// instance's lifetime.
     gate: super::contract_gate::ContractGate,
-    /// `Direct` for the sub-agent's spawn-time set, `Deferred` for the
+    /// `Direct` for a config-anchored instance, `Deferred` for the
     /// parent-session catalogue reached through `tool_search`.
     exposure: tinytools::ToolExposure,
     /// The toolkit slug (`gmail`, `slack`) for a deferred instance, so the
@@ -169,7 +164,7 @@ impl ComposioActionTool {
     /// snapshot when there is one, else the core's read path.
     async fn live_config(&self) -> Result<Config, String> {
         match self.config.as_deref() {
-            Some(snapshot) => config_rpc::reload_config_snapshot_with_timeout(snapshot).await,
+            Some(snapshot) => super::tools::live_composio_config(snapshot).await,
             None => config_rpc::load_config_with_timeout().await,
         }
     }
@@ -244,17 +239,30 @@ impl Tool for ComposioActionTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+        let (config, outcome) = Box::pin(self.execute_unredacted(args)).await;
+        super::tools::redact_composio_outcome(&config, outcome)
+    }
+}
+
+impl ComposioActionTool {
+    /// Returns the config actually used for this call alongside the
+    /// outcome, so [`Tool::execute`] always redacts against the same
+    /// credential that dispatched — for both a spawn-time config and a
+    /// deferred instance with none.
+    async fn execute_unredacted(&self, args: Value) -> (Box<Config>, anyhow::Result<ToolResult>) {
+        // Boxed from the moment it exists, not just at the return: this
+        // local is held across every await point below, and `Config` is a
+        // large top-level struct — inlining it by value in the generated
+        // async state machine was enough to blow a 2 MiB worker-thread
+        // stack (the default for both `cargo test` and tokio).
+        let fallback_config = || Box::new(self.config.as_deref().cloned().unwrap_or_default());
         // Agent-level sandbox gate (issue #685, CodeRabbit follow-up on
         // PR #904) — mirrors the check in
         // [`super::tools::ComposioExecuteTool::execute`] so a read-only
         // agent cannot slip a mutating call through the per-action
         // surface. The dispatcher path (`composio_execute`) and this
         // per-action path are the only two routes to the Composio
-        // backend; both must honour the same invariant. Today no
-        // read-only agent spawns per-action tools (only
-        // `integrations_agent` registers them and it is
-        // `sandbox_mode = "none"`), so this is strict defense-in-depth
-        // for any future configuration that pairs the two.
+        // backend; both must honour the same invariant.
         if matches!(current_sandbox_mode(), Some(SandboxMode::ReadOnly)) {
             let scope = resolve_action_scope(&self.action_name).await;
             if matches!(scope, ToolScope::Write | ToolScope::Admin) {
@@ -264,13 +272,16 @@ impl Tool for ComposioActionTool {
                     "[composio][sandbox] per-action execute blocked: agent is read-only, action is {}",
                     scope.as_str()
                 );
-                return Ok(ToolResult::error(format!(
-                    "{}: action is classified `{}` and is refused because the calling \
-                     agent is in strict read-only mode. Only `read`-scoped actions are \
-                     available to this agent.",
-                    self.action_name,
-                    scope.as_str()
-                )));
+                return (
+                    fallback_config(),
+                    Ok(ToolResult::error(format!(
+                        "{}: action is classified `{}` and is refused because the calling \
+                         agent is in strict read-only mode. Only `read`-scoped actions are \
+                         available to this agent.",
+                        self.action_name,
+                        scope.as_str()
+                    ))),
+                );
             }
         }
 
@@ -284,17 +295,20 @@ impl Tool for ComposioActionTool {
         // re-resolving process-global `OPENHUMAN_WORKSPACE` (the tool is scoped to
         // the user/workspace it was created for).
         let live_config = match self.live_config().await {
-            Ok(c) => c,
+            Ok(c) => Box::new(c),
             Err(e) => {
                 tracing::warn!(
                     tool = %self.action_name,
                     error = %e,
                     "[composio] per-action execute: load_config failed"
                 );
-                return Ok(ToolResult::error(format!(
-                    "{}: failed to load live config: {e}",
-                    self.action_name
-                )));
+                return (
+                    fallback_config(),
+                    Ok(ToolResult::error(format!(
+                        "{}: failed to load live config: {e}",
+                        self.action_name
+                    ))),
+                );
             }
         };
 
@@ -316,7 +330,7 @@ impl Tool for ComposioActionTool {
                     tool = %self.action_name,
                     "[composio][contract-gate] returning full contract before first execute"
                 );
-                return Ok(ToolResult::error(contract));
+                return (live_config, Ok(ToolResult::error(contract)));
             }
             super::contract_gate::GateDecision::Proceed => {}
         }
@@ -333,7 +347,7 @@ impl Tool for ComposioActionTool {
             iana = %iana,
             "[composio][per-action] applying calendar query defaults pre-dispatch"
         );
-        let args = super::googlecalendar_args::apply_calendar_query_defaults(
+        let args = tinyconnectors::execute::apply_calendar_query_defaults(
             &self.action_name,
             Some(args),
             &iana,
@@ -368,7 +382,7 @@ impl Tool for ComposioActionTool {
         .await;
         let elapsed_ms = started.elapsed().as_millis() as u64;
 
-        match res {
+        let outcome = match res {
             Ok(resp) => {
                 crate::core::bus::BUS.publish(
                     crate::core::events::DomainEvent::ComposioActionExecuted {
@@ -385,7 +399,7 @@ impl Tool for ComposioActionTool {
                 // envelope on absence or non-success. Keeps both routes
                 // (dispatcher + per-action) consistent so the model sees
                 // the same compact transcript regardless of which tool
-                // surface integrations_agent picked.
+                // surface the agent picked.
                 let body = if resp.successful {
                     match resp
                         .markdown_formatted
@@ -413,7 +427,8 @@ impl Tool for ComposioActionTool {
                 );
                 Ok(ToolResult::error(e))
             }
-        }
+        };
+        (live_config, outcome)
     }
 }
 

@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ToolTimelineEntry } from '../../store/chatRuntimeSlice';
+import { CHAT_ERROR_METADATA_KEY } from '../../store/threadSlice';
 import type { ThreadMessage } from '../../types/thread';
 import {
   buildRuntimeMessages,
   STREAMING_TAIL_ID,
+  streamingMessageId,
   streamingTailMessage,
   toThreadMessageLike,
 } from '../assistantUiMessages';
@@ -31,6 +33,47 @@ function tool(over: Partial<ToolTimelineEntry> = {}): ToolTimelineEntry {
 }
 
 describe('toThreadMessageLike', () => {
+  it('renders durable uploads as file chips without raw reference JSON or inline bytes', () => {
+    const references = [
+      { path: 'uploads/t/id/scan.png', name: 'scan.png', mime: 'image/png', size_bytes: 3 },
+      {
+        path: 'uploads/t/id/archive.zip',
+        name: 'archive.zip',
+        mime: 'application/zip',
+        size_bytes: 8,
+      },
+    ]
+      .map(file => `[ATTACHMENT:${encodeURIComponent(JSON.stringify(file))}]`)
+      .join(' ');
+    expect(toThreadMessageLike(msg({ content: `inspect ${references}` })).content).toEqual([
+      { type: 'text', text: 'inspect' },
+      { type: 'file', filename: 'scan.png', data: '', mimeType: 'image/png' },
+      { type: 'file', filename: 'archive.zip', data: '', mimeType: 'application/zip' },
+    ]);
+  });
+
+  it('keeps malformed or unsafe durable markers as ordinary text', () => {
+    for (const path of ['../escape', '/etc/passwd', 'C:\\secret', 'uploads/../secret']) {
+      const content = `[ATTACHMENT:${encodeURIComponent(JSON.stringify({ path, name: 'file', mime: 'image/png', size_bytes: 1 }))}]`;
+      expect(toThreadMessageLike(msg({ content })).content).toEqual([
+        { type: 'text', text: content },
+      ]);
+    }
+    const content = '[ATTACHMENT:%invalid]';
+    expect(toThreadMessageLike(msg({ content })).content).toEqual([
+      { type: 'text', text: content },
+    ]);
+  });
+
+  it('continues to render legacy inline image previews', () => {
+    expect(
+      toThreadMessageLike(msg({ content: 'photo [IMAGE:data:image/png;base64,old]' })).content
+    ).toEqual([
+      { type: 'text', text: 'photo' },
+      { type: 'image', image: 'data:image/png;base64,old', filename: undefined },
+    ]);
+  });
+
   it('maps sender to role', () => {
     expect(toThreadMessageLike(msg({ id: 'u' })).role).toBe('user');
     expect(toThreadMessageLike(msg({ id: 'a', sender: 'agent' })).role).toBe('assistant');
@@ -63,6 +106,26 @@ describe('toThreadMessageLike', () => {
     });
   });
 
+  it('shows a failed turn through assistant-ui error status without raw link markup', () => {
+    const content =
+      'Something went wrong. Please try again.\n<openhuman-link path="community/discord-report">Report on Discord</openhuman-link>\n\n> Provider detail';
+    const converted = toThreadMessageLike(
+      msg({
+        id: 'failed-turn',
+        sender: 'agent',
+        content,
+        extraMetadata: { [CHAT_ERROR_METADATA_KEY]: { errorType: 'inference' } },
+      })
+    );
+
+    expect(converted.content).toEqual([]);
+    expect(converted.status).toEqual({
+      type: 'incomplete',
+      reason: 'error',
+      error: 'Something went wrong. Please try again.\n\n> Provider detail',
+    });
+  });
+
   it('returns the identical object for the same source message', () => {
     const m = msg({ id: 'cached' });
     expect(toThreadMessageLike(m)).toBe(toThreadMessageLike(m));
@@ -78,7 +141,7 @@ describe('streamingTailMessage', () => {
   it('is a running assistant message when tokens have landed', () => {
     const tail = streamingTailMessage({ requestId: 'r', content: 'partial', thinking: '' });
     expect(tail).toMatchObject({
-      id: STREAMING_TAIL_ID,
+      id: streamingMessageId('r'),
       role: 'assistant',
       status: { type: 'running' },
       content: [{ type: 'text', text: 'partial' }],
@@ -117,7 +180,7 @@ describe('streamingTailMessage', () => {
     // status line carried the whole burden of showing the turn was alive.
     const tail = streamingTailMessage({ requestId: 'r', content: '', thinking: 'still working' });
     expect(tail).toMatchObject({
-      id: STREAMING_TAIL_ID,
+      id: streamingMessageId('r'),
       status: { type: 'running' },
       content: [{ type: 'reasoning', text: 'still working' }],
     });
@@ -144,10 +207,14 @@ describe('streamingTailMessage', () => {
     const complete = streamingTailMessage(null, [
       tool({ id: 'sub-1', name: 'subagent:researcher', status: 'success', subagent }),
     ]);
+    // `result` is `{status, activity}`, not the bare activity: the outer row's
+    // OWN `entry.status` is what settles reliably (`subagentDone` never
+    // touches `activity.status` itself), so `SubagentTaskCard` reads that
+    // rather than the activity's possibly-stale `status` field.
     expect(complete?.content[0]).toMatchObject({
       type: 'tool-call',
       toolName: 'task',
-      result: subagent,
+      result: { status: 'success', activity: subagent },
     });
   });
 });
@@ -165,7 +232,7 @@ describe('buildRuntimeMessages', () => {
       content: 'tok',
       thinking: '',
     }).map(m => m.id);
-    expect(ids).toEqual(['a', STREAMING_TAIL_ID]);
+    expect(ids).toEqual(['a', streamingMessageId('r')]);
   });
 
   it('does not keep a synthetic thinking/tool tail running after lifecycle completion', () => {
@@ -185,7 +252,29 @@ describe('buildRuntimeMessages', () => {
     ]);
   });
 
-  it('replays a settled turn with its reasoning and tools, but without its narration', () => {
+  it("hands the live rows to the settled reply they belong to, never to another request's", () => {
+    const reply = (requestId: string) =>
+      msg({ id: `agent:${requestId}`, sender: 'agent', extraMetadata: { requestId } });
+    const liveTimeline = [tool({ id: 'call-1', status: 'success' })];
+    const toolIds = (liveTimelineRequestId: string | undefined, requestId: string) => {
+      const [message] = buildRuntimeMessages([reply(requestId)], null, {
+        isRunning: false,
+        liveTimeline,
+        liveTimelineRequestId,
+      });
+      return typeof message.content === 'string'
+        ? []
+        : message.content.flatMap(part => (part.type === 'tool-call' ? [part.toolCallId] : []));
+    };
+    // The just-settled turn's own rows, and rows of unknown owner: unchanged.
+    expect(toolIds('req-1', 'req-1')).toEqual(['call-1']);
+    expect(toolIds(undefined, 'req-1')).toEqual(['call-1']);
+    // A reply that settled without an `inference_start` (a background
+    // delivery) does not show the previous turn's cards again.
+    expect(toolIds('req-1', 'bgdeliver-1')).toEqual([]);
+  });
+
+  it('replays a settled turn with its reasoning, narration and tools in the order they happened', () => {
     const answer = msg({
       id: 'answer',
       sender: 'agent',
@@ -205,10 +294,11 @@ describe('buildRuntimeMessages', () => {
         turnTranscripts: { 'req-1': transcript },
       })[0]?.content
     ).toEqual([
-      // Reasoning comes back inline, in the transcript's own order. Narration
-      // does NOT: it is the turn's running commentary, it duplicates the answer
-      // on the final round, and it stays in the rail behind the turn footer.
+      // Everything comes back inline, in the transcript's own order. Narration
+      // before a tool call is what the live turn showed while it streamed, so
+      // a reload shows it too (the answer is not narration: it closes the turn).
       { type: 'reasoning', text: 'need to search' },
+      { type: 'text', text: 'I will check the sources.' },
       expect.objectContaining({
         type: 'tool-call',
         toolCallId: 'call-1',
@@ -216,6 +306,59 @@ describe('buildRuntimeMessages', () => {
         result: 'found it',
       }),
       { type: 'text', text: 'finished' },
+    ]);
+  });
+
+  it('settles a frozen trail’s running row from the core projection, keeping its id', () => {
+    const answer = msg({
+      id: 'answer',
+      sender: 'agent',
+      content: 'Done.',
+      extraMetadata: { requestId: 'req-f' },
+    });
+    const frozenTimeline = [tool({ id: 'call-1', status: 'running' })];
+    const frozenTranscript = [{ kind: 'toolCall' as const, round: 1, seq: 0, callId: 'call-1' }];
+    const build = (settledRows?: ReturnType<typeof tool>[]) =>
+      buildRuntimeMessages([answer], null, {
+        isRunning: false,
+        settledTurns: { 'req-f': { timeline: frozenTimeline, transcript: frozenTranscript } },
+        ...(settledRows ? { turnTimelines: { 'req-f': settledRows } } : {}),
+      })[0]?.content;
+
+    const before = build();
+    const toolBefore = Array.isArray(before) ? before[0] : undefined;
+    expect(toolBefore).toMatchObject({ toolCallId: 'call-1' });
+    expect(toolBefore && 'result' in toolBefore ? toolBefore.result : undefined).toBeUndefined();
+
+    const after = build([tool({ id: 'call-1', status: 'cancelled' })]);
+    const toolAfter = Array.isArray(after) ? after[0] : undefined;
+    expect(toolAfter).toMatchObject({
+      toolCallId: 'call-1',
+      result: expect.objectContaining({ status: 'cancelled' }),
+    });
+  });
+
+  it('never renders the answer twice when a transcript records it as narration', () => {
+    // An older core projects a prompt-guided turn's answer as an interim step
+    // with every call after it. The answer must still render once, last.
+    const answer = msg({
+      id: 'answer',
+      sender: 'agent',
+      content: 'The setting is on.',
+      extraMetadata: { requestId: 'req-p' },
+    });
+    const content = buildRuntimeMessages([answer], null, {
+      turnTimelines: { 'req-p': [tool({ id: 'call-1', status: 'success', result: 'ok' })] },
+      turnTranscripts: {
+        'req-p': [
+          { kind: 'narration', round: 3, seq: 0, text: 'The setting is on.' },
+          { kind: 'toolCall', round: 3, seq: 1, callId: 'call-1' },
+        ],
+      },
+    })[0]?.content;
+    expect(Array.isArray(content) ? content.map(part => part.type) : content).toEqual([
+      'tool-call',
+      'text',
     ]);
   });
 
@@ -304,11 +447,6 @@ describe('buildRuntimeMessages', () => {
       }),
       { type: 'text', text: finalText },
     ]);
-    // The trail still belongs to the coalesced bubble.
-    expect(
-      (projected[1]?.metadata as { custom?: { processTrail?: unknown } } | undefined)?.custom
-        ?.processTrail
-    ).toMatchObject({ steps: 1, tools: 1 });
   });
 
   it('does not coalesce adjacent assistant turns with different request ids', () => {
@@ -459,8 +597,7 @@ describe('buildRuntimeMessages', () => {
   });
 
   it('re-converts only the tail as tokens land, never the settled transcript', () => {
-    // The projection-level statement of the property `ChatThreadView.renderPerf`
-    // pins for the render tree: streaming must not sweep the transcript.
+    // Streaming must not sweep the transcript: only the live tail re-converts.
     const settled = Array.from({ length: 40 }, (_, i) =>
       msg({ id: `m-${i}`, sender: i % 2 ? 'agent' : 'user', content: `prose ${i}` })
     );
@@ -671,39 +808,89 @@ describe('part ordering', () => {
   });
 });
 
-describe('turn process footer metadata', () => {
-  const trailOf = (message: { metadata?: unknown }) =>
-    (message.metadata as { custom?: { processTrail?: unknown } } | undefined)?.custom?.processTrail;
+describe('one copy of the turn', () => {
+  const custom = (message: { metadata?: unknown }) =>
+    (message.metadata as { custom?: Record<string, unknown> } | undefined)?.custom ?? {};
 
-  it('counts every process step and the tool rows behind them', () => {
+  it('carries reasoning and tools only as parts, with no second trail in metadata', () => {
+    // A settled answer used to carry its reasoning and tools twice: inline as
+    // parts, and again as `metadata.custom.processTrail`, which a footer under
+    // the answer summarised as "N steps · M tools".
     const converted = toThreadMessageLike(
       msg({ id: 'a', sender: 'agent', content: 'done' }),
       [tool({ id: 'c1', name: 'file_read', status: 'success' })],
       [
         { kind: 'thinking', round: 1, seq: 0, text: 'think' },
-        { kind: 'narration', round: 1, seq: 1, text: 'narrate' },
-        { kind: 'toolCall', round: 1, seq: 2, callId: 'c1' },
+        { kind: 'toolCall', round: 1, seq: 1, callId: 'c1' },
       ]
     );
-    expect(trailOf(converted)).toMatchObject({ steps: 3, tools: 1 });
-  });
-
-  it('falls back to the tool rows for a legacy snapshot with no transcript', () => {
-    const converted = toThreadMessageLike(msg({ id: 'a', sender: 'agent', content: 'done' }), [
-      tool({ id: 'c1', status: 'success' }),
-      tool({ id: 'c2', seq: 1, status: 'success' }),
+    expect(converted.content).toEqual([
+      { type: 'reasoning', text: 'think' },
+      expect.objectContaining({ type: 'tool-call', toolCallId: 'c1' }),
+      { type: 'text', text: 'done' },
     ]);
-    expect(trailOf(converted)).toMatchObject({ steps: 2, tools: 2 });
+    expect(custom(converted)).not.toHaveProperty('processTrail');
   });
 
-  it('is null for a plain answer, so the footer renders no door', () => {
-    expect(trailOf(toThreadMessageLike(msg({ id: 'a', sender: 'agent', content: 'hi' })))).toBe(
-      null
-    );
+  it('emits the pages the turn fetched as url source parts after the answer', () => {
+    const converted = toThreadMessageLike(msg({ id: 'a', sender: 'agent', content: 'done' }), [
+      tool({
+        id: 'f1',
+        name: 'web_fetch',
+        status: 'success',
+        argsBuffer: '{"url":"https://example.com/a"}',
+      }),
+      tool({
+        id: 'f2',
+        seq: 1,
+        name: 'web_fetch',
+        status: 'success',
+        argsBuffer: '{"url":"javascript:alert(1)"}',
+      }),
+    ]);
+    const parts = converted.content as unknown as { type: string }[];
+    expect(parts.at(-1)).toEqual({
+      type: 'source',
+      sourceType: 'url',
+      id: 'f1',
+      url: 'https://example.com/a',
+      title: 'example.com',
+    });
+    expect(parts.filter(part => part.type === 'source')).toHaveLength(1);
+  });
+});
+
+describe('tool label on the part', () => {
+  const artifactOf = (converted: { content: unknown }) =>
+    (converted.content as { type: string; artifact?: unknown }[]).find(
+      part => part.type === 'tool-call'
+    )?.artifact;
+
+  it('carries the row label and detail the store resolved', () => {
+    const converted = toThreadMessageLike(msg({ id: 'a', sender: 'agent', content: 'done' }), [
+      tool({
+        id: 'c1',
+        name: 'GMAIL_SEND_EMAIL',
+        status: 'success',
+        displayName: 'Gmail send email',
+        detail: 'me@example.com',
+      }),
+    ]);
+    expect(artifactOf(converted)).toEqual({
+      kind: 'openhuman-tool',
+      displayName: 'Gmail send email',
+      detail: 'me@example.com',
+    });
   });
 
-  it('is absent on a user message', () => {
-    expect(trailOf(toThreadMessageLike(msg({ id: 'u' })))).toBeUndefined();
+  it('carries no artifact when the row has no server label — the renderer derives the label from tool identity', () => {
+    // `tool_search` is a client-known tool (an exact `toolSpecs.ts` entry), so
+    // `AssistantUiToolCall` resolves its own label through `describeToolCall`
+    // and never needs the artifact. Emitting one here would be pure noise.
+    const converted = toThreadMessageLike(msg({ id: 'a', sender: 'agent', content: 'done' }), [
+      tool({ id: 'c1', name: 'tool_search', status: 'success', argsBuffer: '{"query":"gmail"}' }),
+    ]);
+    expect(artifactOf(converted)).toBeUndefined();
   });
 });
 
@@ -770,4 +957,70 @@ describe('feedback round-trip (Defect A)', () => {
     );
     expect(converted.metadata?.submittedFeedback).toBeUndefined();
   });
+});
+
+describe('next-turn history stability', () => {
+  it('keeps a merged assistant reply unchanged when a new user turn streams', () => {
+    const history = [
+      msg({ id: 'user-1' }),
+      msg({
+        id: 'segment-1',
+        sender: 'agent',
+        content: 'First step',
+        extraMetadata: { requestId: 'r1' },
+      }),
+      msg({
+        id: 'segment-2',
+        sender: 'agent',
+        content: 'Final answer',
+        extraMetadata: { requestId: 'r1' },
+      }),
+    ];
+    const before = buildRuntimeMessages(history, null, { isRunning: false });
+    const after = buildRuntimeMessages(
+      [...history, msg({ id: 'user-2', content: 'try now' })],
+      { requestId: 'r2', content: 'New response', thinking: '' },
+      { isRunning: true, liveRequestId: 'r2' }
+    );
+    expect(after.map(message => message.id)).toEqual([
+      before[0]!.id,
+      before[1]!.id,
+      'user-2',
+      streamingMessageId('r2'),
+    ]);
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
+  });
+});
+
+it('simulates repeated next turns without changing settled part order or identities', () => {
+  const history: ThreadMessage[] = [];
+  let previous: ReturnType<typeof buildRuntimeMessages> = [];
+  for (let turn = 0; turn < 12; turn++) {
+    history.push(msg({ id: `user-${turn}`, content: turn ? 'try now' : 'first turn' }));
+    for (const text of ['Thinking', 'Working', 'Finished']) {
+      const running = buildRuntimeMessages(
+        history,
+        { requestId: `r${turn}`, content: text, thinking: '' },
+        { isRunning: true, liveRequestId: `r${turn}` }
+      );
+      previous.forEach((message, index) => expect(running[index]).toBe(message));
+      expect(running.at(-2)?.id).toBe(`user-${turn}`);
+      expect(running.at(-1)?.id).toBe(streamingMessageId(`r${turn}`));
+    }
+    history.push(
+      msg({
+        id: `agent-${turn}`,
+        sender: 'agent',
+        content: `Completed turn ${turn}`,
+        extraMetadata: { requestId: `r${turn}` },
+      })
+    );
+    const settled = buildRuntimeMessages(history, null, { isRunning: false });
+    previous.forEach((message, index) => expect(settled[index]).toBe(message));
+    expect(settled.map(message => message.role)).toEqual(
+      Array.from({ length: turn + 1 }, () => ['user', 'assistant']).flat()
+    );
+    previous = settled;
+  }
 });

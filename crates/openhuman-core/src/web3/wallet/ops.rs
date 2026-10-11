@@ -17,7 +17,7 @@ pub use types::{
 use log::debug;
 
 use crate::config::rpc as config_rpc;
-use crate::rpc::RpcOutcome;
+use crate::core::Outcome;
 
 use state::{
     keychain_load_mnemonic, load_stored_wallet_state_unlocked, save_stored_wallet_state_unlocked,
@@ -92,7 +92,7 @@ fn validate_setup(params: &WalletSetupParams) -> Result<Vec<WalletAccount>, Stri
     Ok(normalized)
 }
 
-pub async fn status() -> Result<RpcOutcome<WalletStatus>, String> {
+pub async fn status() -> Result<Outcome<WalletStatus>, String> {
     let config = config_rpc::load_config_with_timeout().await?;
     let _guard = WALLET_STATE_FILE_LOCK.lock();
     let status = to_status(&config, load_stored_wallet_state_unlocked(&config)?);
@@ -104,13 +104,13 @@ pub async fn status() -> Result<RpcOutcome<WalletStatus>, String> {
         status.accounts.len()
     );
 
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         status,
         vec!["wallet status fetched".to_string()],
     ))
 }
 
-pub async fn setup(params: WalletSetupParams) -> Result<RpcOutcome<WalletStatus>, String> {
+pub async fn setup(params: WalletSetupParams) -> Result<Outcome<WalletStatus>, String> {
     let config = config_rpc::load_config_with_timeout().await?;
     let accounts = validate_setup(&params)?;
     let encrypted_mnemonic = params
@@ -154,10 +154,7 @@ pub async fn setup(params: WalletSetupParams) -> Result<RpcOutcome<WalletStatus>
         status.secret_stored
     );
 
-    Ok(RpcOutcome::new(
-        status,
-        vec!["wallet setup saved".to_string()],
-    ))
+    Ok(Outcome::new(status, vec!["wallet setup saved".to_string()]))
 }
 
 /// Decrypt and return the stored recovery phrase for the current wallet.
@@ -165,7 +162,7 @@ pub async fn setup(params: WalletSetupParams) -> Result<RpcOutcome<WalletStatus>
 /// This is a read-only operation — it never writes to disk or the keychain.
 /// The plaintext phrase is returned only in the RPC response and must be kept
 /// in transient React state on the frontend; it must never be logged or persisted.
-pub async fn reveal_recovery_phrase() -> Result<RpcOutcome<RevealRecoveryPhraseResult>, String> {
+pub async fn reveal_recovery_phrase() -> Result<Outcome<RevealRecoveryPhraseResult>, String> {
     debug!("{LOG_PREFIX} reveal_recovery_phrase ENTRY");
 
     let config = config_rpc::load_config_with_timeout().await.map_err(|e| {
@@ -237,7 +234,7 @@ pub async fn reveal_recovery_phrase() -> Result<RpcOutcome<RevealRecoveryPhraseR
         word_count
     );
 
-    Ok(RpcOutcome::new(
+    Ok(Outcome::new(
         RevealRecoveryPhraseResult { phrase, word_count },
         vec!["recovery phrase revealed".to_string()],
     ))

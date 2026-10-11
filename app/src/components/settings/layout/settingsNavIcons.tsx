@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 
 // ---------------------------------------------------------------------------
 // Sidebar icons, keyed by settings registry entry id. Consolidates the SVGs
@@ -24,11 +24,6 @@ export const SETTINGS_NAV_ICONS: Record<string, ReactNode> = {
     )
   ),
   appearance: icon(stroke('M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z')),
-  notifications: icon(
-    stroke(
-      'M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9'
-    )
-  ),
   llm: icon(
     stroke(
       'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z'
@@ -37,6 +32,26 @@ export const SETTINGS_NAV_ICONS: Record<string, ReactNode> = {
   voice: icon(
     stroke(
       'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z'
+    )
+  ),
+  // Agent OS access — a key: what the agent is allowed to touch.
+  'agent-access': icon(
+    stroke(
+      'M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z'
+    )
+  ),
+  // Sandbox execution — a box.
+  'sandbox-settings': icon(
+    stroke('M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4')
+  ),
+  theme: icon(
+    stroke(
+      'M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01'
+    )
+  ),
+  face: icon(
+    stroke(
+      'M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z'
     )
   ),
   personality: icon(
@@ -53,9 +68,6 @@ export const SETTINGS_NAV_ICONS: Record<string, ReactNode> = {
     stroke(
       'M5.121 17.804A13 13 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z'
     )
-  ),
-  devices: icon(
-    stroke('M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z')
   ),
   tools: icon(
     stroke(
@@ -114,25 +126,13 @@ export const SETTINGS_NAV_ICONS: Record<string, ReactNode> = {
       'M9 17v-5a2 2 0 012-2h2a2 2 0 012 2v5m-8 0h8m-8 0H7a2 2 0 01-2-2V7a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2h-2'
     )
   ),
-  'skills-runner': icon(
-    <Fragment>
-      {stroke(
-        'M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z'
-      )}
-      {stroke('M21 12a9 9 0 11-18 0 9 9 0 0118 0z')}
-    </Fragment>
-  ),
   // Automation & Integrations
   tasks: icon(
     stroke(
       'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-6 0h.01M12 16h3m-6 0h.01'
     )
   ),
-  'mcp-server': icon(
-    stroke('M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z')
-  ),
   search: icon(stroke('M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z')),
   // Diagnostics & Logs
   'event-log': icon(stroke('M4 6h16M4 10h16M4 14h16M4 18h16')),
-  'build-info': icon(stroke('M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z')),
 };

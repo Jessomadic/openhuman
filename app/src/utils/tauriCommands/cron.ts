@@ -2,7 +2,7 @@
  * Cron job commands.
  */
 import { callCoreRpc } from '../../services/coreRpcClient';
-import { CommandResponse, isTauri } from './common';
+import { CommandResponse } from './common';
 
 export interface CoreCronScheduleCron {
   kind: 'cron';
@@ -68,16 +68,10 @@ export interface CronAddParams {
 export async function openhumanCronAdd(
   params: CronAddParams
 ): Promise<CommandResponse<CoreCronJob>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<CoreCronJob>>({ method: 'openhuman.cron_add', params });
 }
 
 export async function openhumanCronList(): Promise<CommandResponse<CoreCronJob[]>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<CoreCronJob[]>>({ method: 'openhuman.cron_list' });
 }
 
@@ -85,9 +79,6 @@ export async function openhumanCronUpdate(
   jobId: string,
   patch: Record<string, unknown>
 ): Promise<CommandResponse<CoreCronJob>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<CoreCronJob>>({
     method: 'openhuman.cron_update',
     params: { job_id: jobId, patch },
@@ -97,9 +88,6 @@ export async function openhumanCronUpdate(
 export async function openhumanCronRemove(
   jobId: string
 ): Promise<CommandResponse<{ job_id: string; removed: boolean }>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<{ job_id: string; removed: boolean }>>({
     method: 'openhuman.cron_remove',
     params: { job_id: jobId },
@@ -116,9 +104,6 @@ export async function openhumanCronRun(
     output?: string;
   }>
 > {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<
     CommandResponse<{
       job_id: string;
@@ -133,9 +118,6 @@ export async function openhumanCronRuns(
   jobId: string,
   limit = 20
 ): Promise<CommandResponse<CoreCronRun[]>> {
-  if (!isTauri()) {
-    throw new Error('Not running in Tauri');
-  }
   return await callCoreRpc<CommandResponse<CoreCronRun[]>>({
     method: 'openhuman.cron_runs',
     params: { job_id: jobId, limit },

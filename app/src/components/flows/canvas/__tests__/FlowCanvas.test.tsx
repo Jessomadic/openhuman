@@ -88,10 +88,13 @@ describe('FlowCanvas', () => {
     expect(screen.queryByText('main')).not.toBeInTheDocument();
   });
 
-  it('renders the minimap and zoom/pan controls', () => {
+  it('renders the minimap, custom toolbar, and background', () => {
+    // The stock `<Controls>` chrome was replaced by `CanvasToolbar` (undo/redo
+    // + zoom/fit), so this now asserts the toolbar's own testid instead of
+    // `.react-flow__controls`.
     const { container } = render(<FlowCanvas nodes={sampleNodes()} edges={sampleEdges()} />);
     expect(container.querySelector('.react-flow__minimap')).not.toBeNull();
-    expect(container.querySelector('.react-flow__controls')).not.toBeNull();
+    expect(screen.getByTestId('flow-canvas-toolbar')).toBeInTheDocument();
     expect(container.querySelector('.react-flow__background')).not.toBeNull();
   });
 

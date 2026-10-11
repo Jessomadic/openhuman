@@ -50,6 +50,10 @@ impl Default for LspTool {
 
 #[async_trait]
 impl Tool for LspTool {
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
     fn name(&self) -> &str {
         "lsp"
     }

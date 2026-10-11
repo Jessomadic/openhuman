@@ -13,7 +13,7 @@ pub async fn list_definition_metadata() -> Result<Vec<AgentDefinitionDisplay>, S
         AgentDefinitionRegistry::init_global(&config.workspace_dir)
             .map_err(|e| format!("failed to initialise AgentDefinitionRegistry: {e}"))?;
     }
-    let registry = AgentDefinitionRegistry::global()
+    let registry = AgentDefinitionRegistry::current()
         .ok_or_else(|| "AgentDefinitionRegistry not initialised".to_string())?;
     let definitions = registry
         .list()
@@ -52,8 +52,6 @@ pub fn metadata_from_definition(def: &AgentDefinition) -> AgentDefinitionDisplay
         direct_tool_names,
         uses_wildcard_tools,
         subagent_ids,
-        includes_profile: !def.omit_profile,
-        includes_memory_md: !def.omit_memory_md,
         includes_memory_context: !def.omit_memory_context,
         can_run_as_user_facing_worker,
         write_capable: is_write_capable(def),
