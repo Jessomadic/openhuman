@@ -217,9 +217,7 @@ The compiled capability report describes this build:
     "runtimes",
     "platform"
   ],
-  "services": [
-    "harness_init"
-  ],
+  "services": [],
   "tool_groups": {
     "audio": "withheld",
     "coding": "withheld",
